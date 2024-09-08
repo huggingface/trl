@@ -209,55 +209,161 @@ What color is the sky?<|end|>
 | From \ To                       | Language Modeling                                                                   | Prompt-completion                                                                   | Prompt-only                                                                   | Preference with implicit prompt                                              | Preference                                                 | Unpaired preference                                                                   |
 | ------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Language Modeling               | N/A                                                                                 | N/A                                                                                 | N/A                                                                           | N/A                                                                          | N/A                                                        | N/A                                                                                   |
-| Prompt-completion               | [Go to section](#from-prompt-completion-to-language-modeling-dataset)               | N/A                                                                                 | [Go to section](#from-prompt-completion-to-prompt-only-dataset)               | N/A                                                                          | N/A                                                        | N/A                                                                                   |
+| Prompt-completion               | [🔗⬇️](#from-prompt-completion-to-language-modeling-dataset)               | N/A                                                                                 | [🔗⬇️](#from-prompt-completion-to-prompt-only-dataset)               | N/A                                                                          | N/A                                                        | N/A                                                                                   |
 | Prompt-only                     | N/A                                                                                 | N/A                                                                                 | N/A                                                                           | N/A                                                                          | N/A                                                        | N/A                                                                                   |
-| Preference with implicit prompt | [Go to section](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [Go to section](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [Go to section](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A                                                                          | [Go to section](#from-implicit-to-explicit-prompt-dataset) | [Go to section](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) |
-| Preference                      | [Go to section](#from-preference-to-language-modeling-dataset)                      | [Go to section](#from-preference-to-prompt-completion-dataset)                      | [Go to section](#from-preference-to-prompt-only-dataset)                      | [Go to section](#from-preference-to-preference-with-implicit-prompt-dataset) | N/A                                                        | [Go to section](#from-preference-to-unpaired-preference-dataset)                      |
-| Unpaired preference             | [Go to section](#from-unpaired-preference-to-language-modeling-dataset)             | [Go to section](#from-unpaired-preference-to-prompt-completion-dataset)             | [Go to section](#from-unpaired-preference-to-prompt-only-dataset)             | N/A                                                                          | N/A                                                        | N/A                                                                                   |
+| Preference with implicit prompt | [🔗⬇️](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [🔗⬇️](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [🔗⬇️](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A                                                                          | [🔗⬇️](#from-implicit-to-explicit-prompt-dataset) | [🔗⬇️](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) |
+| Preference                      | [🔗⬇️](#from-preference-to-language-modeling-dataset)                      | [🔗⬇️](#from-preference-to-prompt-completion-dataset)                      | [🔗⬇️](#from-preference-to-prompt-only-dataset)                      | [🔗⬇️](#from-preference-to-preference-with-implicit-prompt-dataset) | N/A                                                        | [🔗⬇️](#from-preference-to-unpaired-preference-dataset)                      |
+| Unpaired preference             | [🔗⬇️](#from-unpaired-preference-to-language-modeling-dataset)             | [🔗⬇️](#from-unpaired-preference-to-prompt-completion-dataset)             | [🔗⬇️](#from-unpaired-preference-to-prompt-only-dataset)             | N/A                                                                          | N/A                                                        | N/A                                                                                   |
 
 
 
 #### From prompt-completion to language modeling dataset
 
-To convert a prompt-completion dataset into a language modeling dataset, you can just concatenate the prompt and the completion.
+To convert a prompt-completion dataset into a language modeling dataset, you can concatenate the prompt and the completion.
 
 ```python
 from datasets import Dataset
 
 dataset = Dataset.from_dict({
     "prompt": ["The sky is", "The sun is"],
-    "completion": [" blue.", " yellow."]
+    "completion": [" blue.", " in the sky."]
 })
 
 def concat_prompt_completion(example):
     return {"text": example["prompt"] + example["completion"]}
 
-dataset = dataset.map(concat_prompt_completion)
+dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 ```
 
-just concat the prompt and the completion
+```python
+>>> dataset[0]
+{'text': 'The sky is blue.'}
+```
 
 #### From prompt-completion to prompt-only dataset
 
-just remove the completion
+To convert a prompt-completion dataset into a prompt-only dataset, you can remove the completion.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["The sky is", "The sun is"],
+    "completion": [" blue.", " in the sky."]
+})
+
+dataset = dataset.remove_columns("completion")
+```
+
+```python
+>>> dataset[0]
+{'prompt': 'The sky is'}
+```
 
 #### From preference with implicit prompt to language modeling dataset
 
-remove the rejected, rename the chosen to text
+To convert a preference with implicit prompt dataset into a language modeling dataset, you can remove the rejected rename the `chosen` to `text`.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "chosen": ["The sky is blue.", "The sun is in the sky."],
+    "rejected": ["The sky is green.", "The sun is in the sea."]
+})
+
+dataset = dataset.rename_column("chosen", "text").remove_columns("rejected")
+```
+
+```python
+>>> dataset[0]
+{'text': 'The sky is blue.'}
+```
 
 #### From preference with implicit prompt to prompt-completion dataset
 
-extract the prompt, remove the rejected, rename the chosen to completion
+To convert a preference dataset with implicit prompt into a prompt-completion dataset, you can extract the prompt with [`extract_prompt`], remove the rejected, and rename the column `"chosen"` to `"completion"`.
+
+```python
+from datasets import Dataset
+from trl.data_utils import extract_prompt
+
+dataset = Dataset.from_dict({
+    "chosen": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sky."}],
+    ],
+    "rejected": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sea."}],
+    ],
+})
+dataset = dataset.map(extract_prompt).remove_columns("rejected").rename_column("chosen", "completion")
+```
+
+```python
+>>> dataset[0]
+{'prompt': [{'role': 'user', 'content': 'What color is the sky?'}], 'completion': [{'role': 'assistant', 'content': 'It is blue.'}]}
+```
 
 #### From preference with implicit prompt to prompt-only dataset
 
-extract the prompt, remove the rejected and the chosen
+To convert a preference dataset with implicit prompt into a prompt-only dataset, you can extract the prompt with [`extract_prompt`], and remove the rejected and the chosen.
+
+```python
+from datasets import Dataset
+from trl.data_utils import extract_prompt
+
+dataset = Dataset.from_dict({
+    "chosen": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sky."}],
+    ],
+    "rejected": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sea."}],
+    ],
+})
+dataset = dataset.map(extract_prompt).remove_columns(["chosen", "rejected"])
+```
+
+```python
+>>> dataset[0]
+{'prompt': [{'role': 'user', 'content': 'What color is the sky?'}]}
+```
 
 #### From implicit to explicit prompt dataset
 
-extract the prompt
+To convert a preference dataset with implicit prompt into a preference dataset with explicit prompt, you can extract the prompt with [`extract_prompt`].
+
+```python
+from datasets import Dataset
+from trl.data_utils import extract_prompt
+
+dataset = Dataset.from_dict({
+    "chosen": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sky."}],
+    ],
+    "rejected": [
+        [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}],
+        [{"role": "user", "content": "Where is the sun?"}, {"role": "assistant", "content": "In the sea."}],
+    ],
+})
+
+dataset = dataset.map(extract_prompt)
+```
+
+```python
+>>> dataset[0]
+{'prompt': [{'role': 'user', 'content': 'What color is the sky?'}],
+ 'chosen': [{'role': 'assistant', 'content': 'It is blue.'}],
+ 'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
+```
 
 #### From preference with implicit prompt to unpaired preference dataset
+
+
 
 extract the prompt, and unpair the dataset
 
