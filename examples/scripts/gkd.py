@@ -127,6 +127,10 @@ if __name__ == "__main__":
         eval_dataset = None
         prompts = train_dataset["messages"][:8]
 
+    # apply chat template to the prompts if tokenizer is a chat model
+    if tokenizer.is_chat_model:
+        prompts = tokenizer.apply_chat_template(prompts, tokenize=False)
+
     ################
     # Optional rich context managers
     ###############

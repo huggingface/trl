@@ -27,7 +27,7 @@ from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
-from .utils import DataCollatorForChatML, disable_dropout_in_model
+from .utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache
 
 
 if is_deepspeed_available():
@@ -169,6 +169,9 @@ class GKDTrainer(SFTTrainer):
             teacher_logits=teacher_logits,
             beta=self.beta,
         )
+
+        # empty cache
+        empty_cache()
 
         # Return loss
         return (loss, outputs_student) if return_outputs else loss
