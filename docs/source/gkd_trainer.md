@@ -1,7 +1,6 @@
 # Generalized Knowledge Distillation Trainer
 
-TRL supports Generalized Knowledge Distillation (GKD), which is a new approach to distill a student model from a larger teacher model, as described in the paper [On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes
-](https://arxiv.org/abs/2306.13649).  The key aspects of GKD are:
+TRL supports Generalized Knowledge Distillation (GKD), which is a new approach to distill a student model from a larger teacher model, as described in the paper [On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes](https://huggingface.co/papers/2306.13649).  The key aspects of GKD are:
 1. It addresses the train-inference distribution mismatch in auto-regressive sequence models by training the student model on its self-generated output sequences.
 2. GKD allows flexibility in choosing different divergence measures between student and teacher models via the generalized Jensen-Shannon Divergence (JSD), which can be useful when the student lacks the capacity to fully mimic the teacher.
 
