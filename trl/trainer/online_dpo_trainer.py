@@ -26,6 +26,7 @@ from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
+    disable_dropout_in_model,
     empty_cache,
     get_reward,
     prepare_deepspeed,
@@ -132,6 +133,9 @@ class OnlineDPOTrainer(Trainer):
         self.ref_model.eval()
         if self.reward_model is not None:
             self.reward_model.eval()
+
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
 
         # Define the collator is not provided
         if data_collator is None:
