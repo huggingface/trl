@@ -27,19 +27,6 @@ from transformers import (
 from trl import GKDConfig, GKDTrainer
 
 
-def formatting_prompts_func(example):
-    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
-    return text
-
-
-def formatting_prompts_func_batched(example):
-    output_text = []
-    for i, question in enumerate(example["question"]):
-        text = f"### Question: {question}\n ### Answer: {example['answer'][i]}"
-        output_text.append(text)
-    return output_text
-
-
 class TestGKDTrainer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -263,6 +250,5 @@ class GKDTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
-            assert trainer.state.log_history[0]["eval_loss"] is not None
-
-            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
+            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))
