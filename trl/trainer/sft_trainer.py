@@ -99,23 +99,6 @@ class SFTTrainer(Trainer):
 
     _tag_names = ["trl", "sft"]
 
-    @_deprecate_arguments(
-        version="1.0.0",
-        deprecated_args=[
-            "dataset_text_field",
-            "packing",
-            "max_seq_length",
-            "dataset_num_proc",
-            "dataset_batch_size",
-            "neftune_noise_alpha",
-            "model_init_kwargs",
-            "dataset_kwargs",
-            "eval_packing",
-            "num_of_sequences",
-            "chars_per_token",
-        ],
-        custom_message="Deprecated positional argument(s) used in SFTTrainer, please use the SFTConfig to set these arguments instead.",
-    )
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
@@ -130,19 +113,7 @@ class SFTTrainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
-        dataset_text_field: Optional[str] = None,
-        packing: Optional[bool] = False,
         formatting_func: Optional[Callable] = None,
-        max_seq_length: Optional[int] = None,
-        infinite: Optional[bool] = None,
-        num_of_sequences: Optional[int] = None,
-        chars_per_token: Optional[float] = None,
-        dataset_num_proc: Optional[int] = None,
-        dataset_batch_size: Optional[int] = None,
-        neftune_noise_alpha: Optional[float] = None,
-        model_init_kwargs: Optional[Dict] = None,
-        dataset_kwargs: Optional[Dict] = None,
-        eval_packing: Optional[bool] = None,
     ):
         if args is None:
             output_dir = "tmp_trainer"
@@ -176,10 +147,6 @@ class SFTTrainer(Trainer):
                     )
                 model_init_kwargs["torch_dtype"] = torch_dtype
 
-        if infinite is not None:
-            warnings.warn(
-                "The `infinite` argument is deprecated and will be removed in a future version of TRL. Use `TrainingArguments.max_steps` or `TrainingArguments.num_train_epochs` instead to control training length."
-            )
 
         if isinstance(model, str):
             warnings.warn(
@@ -191,16 +158,6 @@ class SFTTrainer(Trainer):
             else:
                 model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
-        if packing:
-            warnings.warn(
-                "You passed a `packing` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.packing = packing
-        if eval_packing is not None:
-            warnings.warn(
-                "You passed a `eval_packing` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.eval_packing = eval_packing
 
         if args.packing and data_collator is not None and isinstance(data_collator, DataCollatorForCompletionOnlyLM):
             raise ValueError(
@@ -279,12 +236,6 @@ class SFTTrainer(Trainer):
             if getattr(tokenizer, "pad_token", None) is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-        if max_seq_length is not None:
-            warnings.warn(
-                "You passed a `max_seq_length` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.max_seq_length = max_seq_length
-
         if args.max_seq_length is None:
             # to overcome some issues with broken tokenizers
             args.max_seq_length = min(tokenizer.model_max_length, 1024)
@@ -293,41 +244,11 @@ class SFTTrainer(Trainer):
                 f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {args.max_seq_length}"
             )
 
-        if dataset_num_proc is not None:
-            warnings.warn(
-                "You passed a `dataset_num_proc` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.dataset_num_proc = dataset_num_proc
         self.dataset_num_proc = args.dataset_num_proc
-
-        if dataset_batch_size is not None:
-            warnings.warn(
-                "You passed a `dataset_batch_size` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.dataset_batch_size = dataset_batch_size
         self.dataset_batch_size = args.dataset_batch_size
 
-        self._trainer_supports_neftune = hasattr(args, "neftune_noise_alpha")
-        if neftune_noise_alpha is not None and self._trainer_supports_neftune:
-            args.neftune_noise_alpha = neftune_noise_alpha
-            warnings.warn(
-                "You passed a `neftune_noise_alpha` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            # self.neftune_noise_alpha is done at Trainer level
-        elif not self._trainer_supports_neftune:
-            self.neftune_noise_alpha = neftune_noise_alpha
+        self.neftune_noise_alpha = args.neftune_noise_alpha
 
-        if dataset_text_field is not None:
-            warnings.warn(
-                "You passed a `dataset_text_field` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.dataset_text_field = dataset_text_field
-
-        if dataset_kwargs is not None:
-            warnings.warn(
-                "You passed a `dataset_kwargs` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.dataset_kwargs = dataset_kwargs
         if args.dataset_kwargs is None:
             args.dataset_kwargs = {}
 
@@ -353,18 +274,6 @@ class SFTTrainer(Trainer):
 
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
-
-        if num_of_sequences is not None:
-            warnings.warn(
-                "You passed a `num_of_sequences` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.num_of_sequences = num_of_sequences
-
-        if chars_per_token is not None:
-            warnings.warn(
-                "You passed a `chars_per_token` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            args.chars_per_token = chars_per_token
 
         # Pre-process the datasets only once per node. The remaining processes will use the cache.
         with PartialState().local_main_process_first():
@@ -444,14 +353,14 @@ class SFTTrainer(Trainer):
     @wraps(Trainer.train)
     def train(self, *args, **kwargs):
         # Activate neftune right before training.
-        if self.neftune_noise_alpha is not None and not self._trainer_supports_neftune:
+        if self.neftune_noise_alpha is not None:
             self.model = self._trl_activate_neftune(self.model)
 
         output = super().train(*args, **kwargs)
 
         # After training we make sure to retrieve back the original forward pass method
         # for the embedding layer by removing the forward post hook.
-        if self.neftune_noise_alpha is not None and not self._trainer_supports_neftune:
+        if self.neftune_noise_alpha is not None:
             unwrapped_model = unwrap_model(self.model)
             if is_peft_available() and isinstance(unwrapped_model, PeftModel):
                 embeddings = unwrapped_model.base_model.model.get_input_embeddings()
