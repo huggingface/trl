@@ -48,6 +48,8 @@
       title: Iterative SFT
     - local: reward_trainer
       title: Reward Model
+    - local: gkd_trainer
+      title: GKD Trainer
     title: Trainers
   - local: models
     title: Model Classes
@@ -59,8 +61,6 @@
     title: Callbacks
   - local: text_environments
     title: Text Environments
-  - local: gkd_trainer
-    title: GKD Trainer
   title: API
 - sections:
   - local: example_overview
