@@ -22,6 +22,7 @@ from ..import_utils import (
     OptionalDependencyNotAvailable,
 )
 
+
 _import_structure = {
     "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
     "utils": [
@@ -79,7 +80,6 @@ except OptionalDependencyNotAvailable:
     pass
 else:
     _import_structure["ddpo_trainer"] = ["DDPOTrainer"]
-
 
 if TYPE_CHECKING:
     # isort: off

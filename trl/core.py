@@ -114,20 +114,6 @@ def stack_dicts(stats_dicts: List[Dict]) -> Dict:
     return results
 
 
-def add_suffix(input_dict: Dict, suffix: str) -> Dict:
-    """Add suffix to dict keys."""
-    return {k + suffix: v for k, v in input_dict.items()}
-
-
-def pad_to_size(tensor: torch.Tensor, size: int, dim: int = 1, padding: int = 50256) -> torch.Tensor:
-    """Pad tensor to size."""
-    t_size = tensor.size()[dim]
-    if t_size == size:
-        return tensor
-    else:
-        return torch.nn.functional.pad(tensor, (0, size - t_size), "constant", padding)
-
-
 def logprobs_from_logits(logits: torch.Tensor, labels: torch.Tensor, gather: bool = True) -> torch.Tensor:
     """
     See: https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591
@@ -199,14 +185,6 @@ def entropy_from_logits(logits: torch.Tensor) -> torch.Tensor:
     pd = torch.nn.functional.softmax(logits, dim=-1)
     entropy = torch.logsumexp(logits, axis=-1) - torch.sum(pd * logits, axis=-1)
     return entropy
-
-
-def average_torch_dicts(list_of_dicts: List[Dict]) -> Dict:
-    """Average values of a list of dicts with torch tensors."""
-    average_dict = dict()
-    for key in list_of_dicts[0].keys():
-        average_dict[key] = torch.mean(torch.stack([d[key] for d in list_of_dicts]), axis=0)
-    return average_dict
 
 
 def stats_to_np(stats_dict: Dict) -> Dict:

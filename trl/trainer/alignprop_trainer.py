@@ -29,7 +29,6 @@ from . import AlignPropConfig, BaseTrainer
 
 logger = get_logger(__name__)
 
-
 MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
 library_name: transformers
@@ -56,12 +55,16 @@ class AlignPropTrainer(BaseTrainer):
     As of now only Stable Diffusion based pipelines are supported
 
     Attributes:
-        **config** (`AlignPropConfig`) -- Configuration object for AlignPropTrainer. Check the documentation of `PPOConfig` for more
-         details.
-        **reward_function** (Callable[[torch.Tensor, Tuple[str], Tuple[Any]], torch.Tensor]) -- Reward function to be used
-        **prompt_function** (Callable[[], Tuple[str, Any]]) -- Function to generate prompts to guide model
-        **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
-        **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
+        config (`AlignPropConfig`):
+            Configuration object for AlignPropTrainer. Check the documentation of `PPOConfig` for more details.
+        reward_function (`Callable[[torch.Tensor, Tuple[str], Tuple[Any]], torch.Tensor]`):
+            Reward function to be used
+        prompt_function (`Callable[[], Tuple[str, Any]]`):
+            Function to generate prompts to guide model
+        sd_pipeline (`DDPOStableDiffusionPipeline`):
+            Stable Diffusion pipeline to be used for training.
+        image_samples_hook (`Optional[Callable[[Any, Any, Any], Any]]`):
+            Hook to be called to log images
     """
 
     _tag_names = ["trl", "alignprop"]
@@ -215,7 +218,6 @@ class AlignPropTrainer(BaseTrainer):
 
         Returns:
             global_step (int): The updated global step.
-
         """
         info = defaultdict(list)
 
@@ -281,6 +283,7 @@ class AlignPropTrainer(BaseTrainer):
         Args:
             rewards (torch.Tensor):
                 Differentiable reward scalars for each generated image, shape: [batch_size]
+
         Returns:
             loss (torch.Tensor)
             (all of these are of shape (1,))
