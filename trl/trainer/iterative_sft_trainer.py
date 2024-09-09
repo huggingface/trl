@@ -42,22 +42,31 @@ class IterativeSFTTrainer(Trainer):
     """
     The IterativeSFTTrainer can be used to finetune models with methods that requires some steps between optimization.
 
-    Attributes:
-        **model** (`PreTrainedModel`) -- Model to be optimized, either an 'AutoModelForCausalLM' or an 'AutoModelForSeq2SeqLM'.
+    Args:
+        model (`PreTrainedModel`):
+            Model to be optimized, either an 'AutoModelForCausalLM' or an 'AutoModelForSeq2SeqLM'.
             Check the documentation of `PreTrainedModel` for more details.
-        **args** (`transformers.TrainingArguments`): -- The arguments to use for training.
-        **tokenizer** (`PreTrainedTokenizerBase`) -- Tokenizer to be used for encoding the
-            data. Check the documentation of `transformers.PreTrainedTokenizer` and
+        args (`transformers.TrainingArguments`):
+            The arguments to use for training.
+        tokenizer (`PreTrainedTokenizerBase`):
+            Tokenizer to be used for encoding the data. Check the documentation of `transformers.PreTrainedTokenizer` and
             `transformers.PreTrainedTokenizerFast` for more details.
-        **optimizers** (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`): -- The optimizer and scheduler to use for training.
-        **data_collator** (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*) -- Data collator to be used for training and
-            passed along the dataloader.
-        **eval_dataset** (`datasets.Dataset`): The dataset to use for evaluation.
-        **max_length** (`int`, defaults to `None`): -- The maximum length of the input.
-        **truncation_mode** (`str`, defaults to `keep_end`): -- The truncation mode to use, either `keep_end` or `keep_start`.
-        **preprocess_logits_for_metrics** (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`): -- The function to use to preprocess the logits before computing the metrics.
-        **compute_metrics** (`Callable[[EvalPrediction], Dict]`, *optional*): -- The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
-        **optimize_device_cache ** (`bool`, *optional*, defaults to `False`) -- Optimize CUDA cache for slightly more memory-efficient training.
+        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            The optimizer and scheduler to use for training.
+        data_collator (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*):
+            Data collator to be used for training and passed along the dataloader.
+        eval_dataset (`datasets.Dataset`):
+            The dataset to use for evaluation.
+        max_length (`int`, defaults to `None`):
+            The maximum length of the input.
+        truncation_mode (`str`, defaults to `keep_end`):
+            The truncation mode to use, either `keep_end` or `keep_start`.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
+            The function to use to preprocess the logits before computing the metrics.
+        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
+        optimize_device_cache (`bool`, *optional*, defaults to `False`):
+            Optimize CUDA cache for slightly more memory-efficient training.
     """
 
     _tag_names = ["trl", "iterative-sft"]
@@ -199,6 +208,7 @@ class IterativeSFTTrainer(Trainer):
                 List of string containing the text input.
             texts_labels (List[`str`]):
                 List of string containing the text labels.
+
         Returns:
             `tuple`: The input data.
         """
@@ -252,6 +262,7 @@ class IterativeSFTTrainer(Trainer):
                 List of strings containing the text input (if not provided, input_ids will directly be used)
             texts_labels (List[`str`], *optional*):
                 List of strings containing the text labels (if set to None, will default to text)
+
         Returns:
             `dict[str, Any]`: A summary of the training statistics
         """
