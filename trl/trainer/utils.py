@@ -457,9 +457,9 @@ class ConstantLengthDataset(IterableDataset):
             The processor used for processing the data.
         dataset (`dataset.Dataset`):
             Dataset with text files.
-        dataset_text_field (`str`, **optional**):
+        dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
             Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
-        formatting_func (`Callable`, **optional**):
+        formatting_func (`Callable`, *optional*):
             Function that formats the text before tokenization. Usually it is recommended to have follows a certain
             pattern such as `"### Question: {question} ### Answer: {answer}"`
         infinite (`bool`, *optional*, defaults to `False`):
@@ -472,11 +472,11 @@ class ConstantLengthDataset(IterableDataset):
             Number of characters per token used to estimate number of tokens in text buffer.
         eos_token_id (`int`, *optional*, defaults to `0`):
             Id of the end of sequence token if the passed tokenizer does not have an EOS token.
-        shuffle (`bool`, *optional*, defaults to True)
+        shuffle (`bool`, *optional*, defaults to `True`)
             Shuffle the examples before they are returned
-        append_concat_token (`bool`, *optional*, defaults to True)
+        append_concat_token (`bool`, *optional*, defaults to `True`)
             If true, appends `eos_token_id` at the end of each sample being packed.
-        add_special_tokens (`bool`, *optional*, defaults to True)
+        add_special_tokens (`bool`, *optional*, defaults to `True`)
             If true, tokenizers adds special tokens to each sample being packed.
     """
 
@@ -900,7 +900,7 @@ class OnPolicyConfig(TrainingArguments):
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
-    Args:
+    Parameters:
         run_name (`Optional[str]`, *optional*, defaults to `None`):
             Name of the run.
         sanity_check (`bool`, *optional*, defaults to `False`):
