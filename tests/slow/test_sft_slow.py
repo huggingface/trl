@@ -25,7 +25,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from trl import SFTConfig, SFTTrainer, is_peft_available
 from trl.models.utils import setup_chat_format
 
-from ..testing_utils import require_bitsandbytes, require_peft, require_non_cpu, require_torch_multi_gpu
+from ..testing_utils import require_bitsandbytes, require_peft, require_non_cpu, require_multi_accelerator
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 
 
@@ -264,7 +264,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
     @parameterized.expand(
         list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, DEVICE_MAP_OPTIONS))
     )
-    @require_torch_multi_gpu
+    @require_multi_accelerator
     def test_sft_trainer_transformers_mp_gc_device_map(
         self, model_name, packing, gradient_checkpointing_kwargs, device_map
     ):
