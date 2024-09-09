@@ -11,7 +11,7 @@ Each TRL trainer supports a specific dataset format. In this document, we provid
     <th>Conversational</th>
   </tr>
   <tr>
-    <td>Language Modeling</td>
+    <td>Language modeling</td>
     <td>
       <pre><code>{"text": "The sky is blue."}</code></pre>
     </td>
@@ -78,22 +78,31 @@ Each TRL trainer supports a specific dataset format. In this document, we provid
 
 ## Which dataset format to use?
 
-TRL trainers only support standard datasets. Conversational datasets need to be formatted first to match the standard dataset format. To more info, see above
+The dataset format you should use depends on the task you're working on. Here's a brief overview of the dataset formats supported by each TRL trainer:
 
-| Trainer    | Expected dataset format |
-| ---------- | ----------------------- |
-| SFT        | Prompt-completion       |
-| DPO        | Preference              |
-| KTO        | Unpaired preference     |
-| Online-DPO | Prompt-only             |
+| Trainer                 | Expected dataset format      |
+| ----------------------- | ---------------------------- |
+| [`BCOTrainer`]          | Unpaired preference          |
+| [`CPOTrainer`]          | Preference (explicit prompt) |
+| [`DPOTrainer`]          | Preference (explicit prompt) |
+| [`IterativeSFTTrainer`] | Unpaired preference          |
+| [`KTOTrainer`]          | Unpaired preference          |
+| [`OnlineDPOTrainer`]    | Prompt-only                  |
+| [`ORPOTrainer`]         | Preference (explicit prompt) |
+| [`PPOv2Trainer`]        | Tokenized language modeling  |
+| [`RewardTrainer`]       | Preference (implicit prompt) |
+| [`SFTTrainer`]          | Language modeling            |
 
-## Conversational dataset
+> [!NOTE]
+> TRL trainers only support standard dataset formats. If you have a conversational dataset, you must first convert it into a standard format.
+> For more information on how to work with conversational datasets, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
-Conversational dataset are very common.
+## Working with conversational datasets in TRL
 
-Important: TRL trainer  don't support conversational datasets as is. They need to be converted into a standard dataset format. But don't worry, be provide tools to easily convert them, see below.
+Conversational datasets are increasingly common, especially for training chat models. However, TRL trainers don't support conversational datasets in their raw format. These datasets must first be converted into a standard format. 
+Fortunately, TRL offers tools to easily handle this conversion, which are detailed below.
 
-### A brief Introduction to conversational datasets
+### A brief introduction to conversational datasets
 
 A conversational dataset is structured as a list of messages, unlike standard datasets which are typically formatted as single strings. These datasets are particularly useful for training conversational models, as they more accurately represent the flow of a conversation.
 
@@ -124,11 +133,7 @@ example = {
 
 A conversational dataset is not meant to be used directly with TRL trainers. Instead, it should be converted into a standard dataset format before training. This conversion is done by applying a chat template to the dataset.
 
-Here’s an improved version of this section:
-
----
-
-### Converting a Conversational Dataset into a Standard Dataset
+### Converting a conversational dataset into a standard dataset
 
 TRL trainers do not support conversational datasets in their raw format. To use them, you need to convert them into a standard dataset format using a chat template. This template is provided by the tokenizer of the model you plan to use.
 
@@ -184,7 +189,7 @@ apply_chat_template(example, AutoTokenizer.from_pretrained("meta-llama/Meta-Llam
 > [!WARNING]
 > Always use the chat template associated with the model you're working with. Chat templates are model-specific, and using the wrong template can lead to inaccurate or unexpected results.
 
-## Dataset conversion for TRL compatibility
+## Using any dataset with TRL: preprocessing and conversion
 
 Many datasets come in formats tailored to specific tasks, which might not be directly compatible with TRL. To use such datasets with TRL, you may need to preprocess and convert them into the required format.
 
@@ -219,6 +224,8 @@ Once converted, the dataset will look like this:
 ></iframe>
 
 Now, you can use this dataset with TRL!
+
+By adapting the provided scripts or creating your own, you can convert any dataset into a format compatible with TRL.
 
 ## Utilities for converting dataset types
 
