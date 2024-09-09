@@ -25,7 +25,10 @@ The authors find that on-policy data (high `lmbda`) performs better and the opti
 
 ### Expected dataset format
 
-The dataset should be formatted as a list of "messages" where each message has had the appropriate chat template applied.
+The dataset should be formatted as a list of "messages" where each message is a list of dictionaries with the following keys:
+* `role`: either `system` or `user`
+* `content`: the message content
+
 
 ## GKDTrainer
 
