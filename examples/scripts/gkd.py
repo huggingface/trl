@@ -29,7 +29,7 @@ python examples/scripts/gkd.py \
 
 # LoRA:
 python examples/scripts/gkd.py \
-    --model_name_or_path="Qwen/Qwen2-0.5B-Instruct" \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --teacher_model_name_or_path="Qwen/Qwen2-1.5B-Instruct" \
     --dataset_name="andito/chatbot_arena_completions" \
     --report_to="wandb" \
