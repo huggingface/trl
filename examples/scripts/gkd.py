@@ -35,7 +35,7 @@ python examples/scripts/gkd.py \
     --report_to="wandb" \
     --learning_rate=2e-4 \
     --per_device_train_batch_size=16 \
-    --gradient_accumulation_steps=2 \
+    --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
     --logging_steps 10 \
     --num_train_epochs 1 \
