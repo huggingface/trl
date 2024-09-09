@@ -43,7 +43,7 @@ python examples/scripts/gkd.py \
     --gradient_checkpointing \
     --use_peft \
     --lora_r 64 \
-    --lora_alpha=16
+    --lora_alpha 16
 """
 
 import logging
