@@ -9,7 +9,7 @@ class OnlineDPOConfig(TrainingArguments):
     r"""
     Configuration class for the [`OnlineDPOTrainer`].
 
-    Using [`~transformers.HfArgumentParser`] we can turn this data class into
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
