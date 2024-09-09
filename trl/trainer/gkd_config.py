@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from .sft_config import SFTConfig
 
@@ -23,22 +23,24 @@ class GKDConfig(SFTConfig):
     Configuration class for GKDTrainer.
 
     Args:
-        temperature (:obj:`float`, `optional`, defaults to 1.0):
-            The temperature to use in the generation when sampling from the model.
-        lmbda (:obj:`float`, `optional`, defaults to 0.5):
-            The lambda parameter that controls the student data fraction (i.e., the proportion of on-policy student-generated outputs).
-        beta (:obj:`float`, `optional`, defaults to 0.5):
-            Interpolation coefficient between 0 and 1 of the Generalized Jensen-Shannon Divergence loss. When beta is 0, the loss is the KL divergence. When beta is 1, the loss is the Inverse KL Divergence.
-        max_new_tokens (:obj:`int`, `optional`, defaults to 128):
-            The maximum number of tokens to generate in the response.
-        teacher_model_name_or_path (:obj:`str`, `optional`, defaults to `None`):
-            The model name or path of the teacher model. If `None`, the teacher model will be the same as the model
+        temperature (`float`, *optional*, defaults to `0.9`):
+            Temperature for sampling. The higher the temperature, the more random the completions.
+        lmbda (`float`, *optional*, defaults to `0.5`):
+            Lambda parameter that controls the student data fraction (i.e., the proportion of on-policy
+            student-generated outputs).
+        beta (`float`, *optional*, defaults to `0.5`):
+            Interpolation coefficient between `0.0` and `1.0` of the Generalized Jensen-Shannon Divergence loss. When
+            beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
+        max_new_tokens (`int`, *optional*, defaults to `128`):
+            Maximum number of tokens to generate per completion.
+        teacher_model_name_or_path (`Optional[str]`, *optional*, defaults to `None`):
+            Model name or path of the teacher model. If `None`, the teacher model will be the same as the model
             being trained.
-        teacher_model_init_kwargs (:obj:`Dict`, `optional`, defaults to `None`):
-            The initialization kwargs to use when creating the teacher model. If `None`, the teacher model will be
-            instantiated with the default initialization kwargs.
-        disable_dropout (:obj:`bool`, `optional`, defaults to `True`):
-            Whether to disable dropout in the model being trained.
+        teacher_model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
+            from a string.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether or not to disable dropouts in `model`.
     """
 
     temperature: float = 1.0
@@ -46,13 +48,13 @@ class GKDConfig(SFTConfig):
     beta: float = 0.5
     max_new_tokens: int = 128
     teacher_model_name_or_path: Optional[str] = None
-    teacher_model_init_kwargs: Optional[Dict] = None
+    teacher_model_init_kwargs: Optional[Dict[str, Any]] = None
     disable_dropout: bool = True
 
     def __post_init__(self):
         super().__post_init__()
         # check lmbda and beta are in the range [0, 1]
-        if self.lmbda < 0 or self.lmbda > 1:
-            raise ValueError("lmbda must be in the range [0, 1].")
-        if self.beta < 0 or self.beta > 1:
-            raise ValueError("beta must be in the range [0, 1].")
+        if self.lmbda < 0.0 or self.lmbda > 1.0:
+            raise ValueError("lmbda must be in the range [0.0, 1.0].")
+        if self.beta < 0.0 or self.beta > 1.0:
+            raise ValueError("beta must be in the range [0.0, 1.0].")

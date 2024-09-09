@@ -32,10 +32,12 @@
       title: DPO
     - local: online_dpo_trainer
       title: Online DPO
-    - local: orpo_trainer
-      title: ORPO
+    - local: gkd_trainer
+      title: GKD Trainer
     - local: kto_trainer
       title: KTO
+    - local: orpo_trainer
+      title: ORPO
     - local: ppo_trainer
       title: PPO
     - local: ppov2_trainer
@@ -48,8 +50,6 @@
       title: Iterative SFT
     - local: reward_trainer
       title: Reward Model
-    - local: gkd_trainer
-      title: GKD Trainer
     title: Trainers
   - local: models
     title: Model Classes
