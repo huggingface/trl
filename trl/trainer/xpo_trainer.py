@@ -110,10 +110,13 @@ class XPOTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Initialize the stats dictionary for XPO
+        # Overwrite the stats dictionary to include XPO specific statistics
         self.stats = {
+            # Remove "kl", "entropy", "non_score_reward", "rlhf_reward", "scores"
+            # Add "loss/dpo", "loss/xpo"
             "loss/dpo": [],
             "loss/xpo": [],
+            # Replace "scores" by "model_scores" and "ref_scores"
             "objective/model_scores": [],
             "objective/ref_scores": [],
             "objective/scores_margin": [],
@@ -123,6 +126,7 @@ class XPOTrainer(OnlineDPOTrainer):
             "rewards/margins": [],
             "logps/chosen": [],
             "logps/rejected": [],
+            # Replace "contain_eos_token" by "model_contain_eos_token" and "ref_contain_eos_token"
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
         }
