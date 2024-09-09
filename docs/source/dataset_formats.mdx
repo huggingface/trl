@@ -187,6 +187,40 @@ What color is the sky?<|end|>
 <|assistant|>
 ```
 
+## Dataset conversion for TRL compatibility
+
+Many datasets come in formats tailored to specific tasks, which might not be directly compatible with TRL. To use such datasets with TRL, you may need to preprocess and convert them into the required format.
+
+To make this easier, we provide a set of [example scripts](https://github.com/huggingface/trl/tree/main/examples/datasets) that cover common dataset conversions.
+
+### Example: UltraFeedback Dataset
+
+Let’s take the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback) as an example. Here's a preview of the dataset:
+
+<iframe
+  src="https://huggingface.co/datasets/openbmb/UltraFeedback/embed/viewer/default/train"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
+As shown above, the dataset format does not match the expected structure. It’s not in a conversational format, the column names differ, and the results pertain to different models (e.g., Bard, GPT-4) and aspects (e.g., "helpfulness", "honesty").
+
+By using the provided conversion script `examples/datasets/ultrafeedback.py`, you can transform this dataset into an unpaired preference format, and push it to the Hub:
+
+```sh
+python examples/datasets/ultrafeedback.py --push_to_hub --repo_id trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness
+```
+
+Once converted, the dataset will look like this:
+
+<iframe
+  src="https://huggingface.co/datasets/qgallouedec/ultrafeedback-gpt-3.5-turbo-helpfulness/embed/viewer/default/train?row=0"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
 ## Utilities for converting dataset types
 
 This section provides example code to help you convert between different dataset types. While some conversions can be performed after applying the chat template (i.e., in the standard format), we recommend performing the conversion before applying the chat template to ensure it works consistently.
