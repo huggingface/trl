@@ -64,11 +64,11 @@ class PreTrainedModelWrapper(nn.Module):
     (`~transformers.PreTrainedModel`) class.
 
     Attributes:
-        pretrained_model: (`transformers.PreTrainedModel`)
+        pretrained_model (`transformers.PreTrainedModel`):
             The model to be wrapped.
-        parent_class: (`transformers.PreTrainedModel`)
+        parent_class (`transformers.PreTrainedModel`):
             The parent class of the model to be wrapped.
-        supported_args: (`list`)
+        supported_args (`list`):
             The list of arguments that are supported by the wrapper class.
     """
 
@@ -117,7 +117,6 @@ class PreTrainedModelWrapper(nn.Module):
         `transformers.PreTrainedModel` class. The arguments that are specific to the
         `transformers.PreTrainedModel` class are passed along this method and filtered
         out from the `kwargs` argument.
-
 
         Args:
             pretrained_model_name_or_path (`str` or `transformers.PreTrainedModel`):
@@ -617,7 +616,7 @@ def create_reference_model(
         pattern (`str`, *optional*): The shared layers are selected with a string pattern
             (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
 
-    Returns
+    Returns:
         `PreTrainedModelWrapper`
     """
     if is_deepspeed_zero3_enabled():

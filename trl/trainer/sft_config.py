@@ -31,8 +31,7 @@ class SFTConfig(TrainingArguments):
             Name of the text field of the dataset. If provided, the trainer will automatically create a
             [`ConstantLengthDataset`] based on `dataset_text_field`.
         packing (`bool`, *optional*, defaults to `False`):
-            Used only when `dataset_text_field` is provided. Controls whether the [`ConstantLengthDataset`] packs
-            the sequences of the dataset.
+            Controls whether the [`ConstantLengthDataset`] packs the sequences of the dataset.
         max_seq_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum sequence length for the [`ConstantLengthDataset`] and for automatically creating the dataset. If
             `None`, it uses the smaller value between `tokenizer.model_max_length` and `1024`.
