@@ -14,9 +14,9 @@ class ScriptArguments:
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the dataset to the Hugging Face Hub.
         repo_id (`str`, *optional*, defaults to `"trl-lib/lm-human-preferences-sentiment"`):
-            The Hugging Face repository ID to push the dataset to.
+            Hugging Face repository ID to push the dataset to.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
-            The number of workers to use for dataset processing.
+            Number of workers to use for dataset processing.
     """
 
     push_to_hub: bool = False
