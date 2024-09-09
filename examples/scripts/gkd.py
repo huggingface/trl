@@ -33,7 +33,7 @@ python examples/scripts/gkd.py \
     --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
     --dataset_name andito/chatbot_arena_completions \
     --learning_rate=2e-4 \
-    --per_device_train_batch_size=16 \
+    --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
     --logging_steps 10 \
