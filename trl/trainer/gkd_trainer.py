@@ -184,7 +184,6 @@ class GKDTrainer(SFTTrainer):
             attention_mask=inputs.get("prompt_attention_mask", None),
             generation_config=generation_config,
             return_dict_in_generate=True,
-            output_scores=True,
         )
 
         # Get the generated token IDs
