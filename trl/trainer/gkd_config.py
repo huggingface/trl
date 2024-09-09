@@ -43,7 +43,7 @@ class GKDConfig(SFTConfig):
             Whether or not to disable dropouts in `model`.
     """
 
-    temperature: float = 1.0
+    temperature: float = 0.9
     lmbda: float = 0.5
     beta: float = 0.5
     max_new_tokens: int = 128
