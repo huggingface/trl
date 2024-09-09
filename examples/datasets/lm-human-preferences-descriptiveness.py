@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
-from transformers import HfArgumentParser, AutoTokenizer
+from transformers import AutoTokenizer, HfArgumentParser
 
 
 @dataclass
@@ -22,6 +22,7 @@ class ScriptArguments:
     push_to_hub: bool = False
     repo_id: str = "trl-lib/lm-human-preferences-descriptiveness"
     dataset_num_proc: Optional[int] = None
+
 
 # Edge cases handling: remove the cases where all samples are the same
 def samples_not_all_same(example):

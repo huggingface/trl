@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
-from transformers import HfArgumentParser, AutoTokenizer
+from transformers import AutoTokenizer, HfArgumentParser
 
 
 @dataclass
