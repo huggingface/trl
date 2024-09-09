@@ -25,7 +25,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from trl import SFTConfig, SFTTrainer, is_peft_available
 from trl.models.utils import setup_chat_format
 
-from ..testing_utils import require_bitsandbytes, require_peft, require_torch_gpu, require_torch_multi_gpu
+from ..testing_utils import require_bitsandbytes, require_peft, require_non_cpu, require_torch_multi_gpu
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 
 
@@ -33,7 +33,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-@require_torch_gpu
+@require_non_cpu
 class SFTTrainerSlowTester(unittest.TestCase):
     def setUp(self):
         self.train_dataset = load_dataset("imdb", split="train[:10%]")
