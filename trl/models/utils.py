@@ -14,7 +14,6 @@ SUPPORTED_ARCHITECTURES = (
     AutoModelForSeq2SeqLMWithValueHead,
 )
 
-
 if is_deepspeed_available():
     import deepspeed
 
@@ -72,13 +71,14 @@ def setup_chat_format(
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
     Args:
-      model (`~transformers.PreTrainedModel`): The model to be modified.
-      tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
-      format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
-      resize_to_multiple_of (`Optional[int]`): Number to resize the embedding layer to. Defaults to None.
+        model (`~transformers.PreTrainedModel`): The model to be modified.
+        tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
+        format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
+        resize_to_multiple_of (`Optional[int]`): Number to resize the embedding layer to. Defaults to None.
+
     Returns:
-      model (`~transformers.PreTrainedModel`): The modified model.
-      tokenizer (`~transformers.PreTrainedTokenizer`): The modified tokenizer.
+        model (`~transformers.PreTrainedModel`): The modified model.
+        tokenizer (`~transformers.PreTrainedTokenizer`): The modified tokenizer.
     """
     # check if format available and retrieve
     if format not in FORMAT_MAPPING:

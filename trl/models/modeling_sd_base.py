@@ -556,13 +556,19 @@ def pipeline_step_with_grad(
     guidance_rescale: float = 0.0,
 ):
     r"""
-    Function to get RGB image with gradients attached to the model weights.  Args: prompt (`str` or `List[str]`, *optional*): The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.  instead.  height (`int`, *optional*, defaults to pipeline.unet.config.sample_size * pipeline.vae_scale_factor): The height in pixels of the generated image.
-        width (`int`, *optional*, defaults to pipeline.unet.config.sample_size * pipeline.vae_scale_factor):
+    Function to get RGB image with gradients attached to the model weights.
+
+    Args:
+        prompt (`str` or `List[str]`, *optional*, defaults to `None`):
+            The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds` instead.
+        height (`int`, *optional*, defaults to `pipeline.unet.config.sample_size * pipeline.vae_scale_factor`):
+            The height in pixels of the generated image.
+        width (`int`, *optional*, defaults to `pipeline.unet.config.sample_size * pipeline.vae_scale_factor`):
             The width in pixels of the generated image.
-        num_inference_steps (`int`, *optional*, defaults to 50):
+        num_inference_steps (`int`, *optional*, defaults to `50`):
             The number of denoising steps. More denoising steps usually lead to a higher quality image at the
             expense of slower inference.
-        guidance_scale (`float`, *optional*, defaults to 7.5):
+        guidance_scale (`float`, *optional*, defaults to `7.5`):
             Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://huggingface.co/papers/2207.12598).
             `guidance_scale` is defined as `w` of equation 2. of [Imagen
             Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting `guidance_scale >
