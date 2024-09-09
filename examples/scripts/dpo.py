@@ -13,45 +13,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-# regular:
+# Full training
 python examples/scripts/dpo.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
+    --dataset_name trl-lib/ultrafeedback_binarized \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --learning_rate 5.0e-7 \
+    --num_train_epochs 1 \
     --per_device_train_batch_size 4 \
-    --learning_rate 1e-3 \
-    --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="dpo_anthropic_hh" \
-    --warmup_steps 150 \
-    --report_to wandb \
-    --bf16 \
-    --logging_first_step \
+    --gradient_accumulation_steps 4 \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --output_dir Qwen2-0.5B-DPO \
     --no_remove_unused_columns
 
-# peft:
+# LoRA:
 python examples/scripts/dpo.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
+    --dataset_name trl-lib/ultrafeedback_binarized \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --learning_rate 5.0e-6 \
+    --num_train_epochs 1 \
     --per_device_train_batch_size 4 \
-    --learning_rate 1e-3 \
-    --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="dpo_anthropic_hh" \
-    --optim rmsprop \
-    --warmup_steps 150 \
-    --report_to wandb \
-    --bf16 \
-    --logging_first_step \
+    --gradient_accumulation_steps 4 \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --output_dir Qwen2-0.5B-DPO \
     --no_remove_unused_columns \
     --use_peft \
-    --lora_r=16 \
-    --lora_alpha=16
+    --lora_r 32 \
+    --lora_alpha 16
 """
 
 import logging
-import multiprocessing
 import os
 from contextlib import nullcontext
 
@@ -95,9 +89,9 @@ if __name__ == "__main__":
         training_args.disable_tqdm = True
         console = Console()
 
-    ################
+    ###################
     # Model & Tokenizer
-    ################
+    ###################
     torch_dtype = (
         model_config.torch_dtype
         if model_config.torch_dtype in ["auto", None]
@@ -145,13 +139,10 @@ if __name__ == "__main__":
         else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
     )
 
-    ################
-    # Dataset
-    ################
+    #############################
+    # Load and preprocess dataset
+    #############################
     ds = load_dataset(args.dataset_name)
-    if args.sanity_check:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
 
     def process(row):
         row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
@@ -159,17 +150,15 @@ if __name__ == "__main__":
         row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
         return row
 
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
         ds = ds.map(process, num_proc=training_args.dataset_num_proc)
 
     train_dataset = ds[args.dataset_train_split]
     eval_dataset = ds[args.dataset_test_split]
 
-    ################
+    ##########
     # Training
-    ################
+    ##########
     with init_context:
         trainer = DPOTrainer(
             model,
@@ -183,6 +172,10 @@ if __name__ == "__main__":
         )
 
     trainer.train()
+    metrics = trainer.evaluate()
+    trainer.log_metrics("eval", metrics)
+    trainer.save_metrics("eval", metrics)
 
     with save_context:
         trainer.save_model(training_args.output_dir)
+        trainer.push_to_hub()
