@@ -343,7 +343,7 @@ class SFTTrainer(Trainer):
         if (
             args.dataset_text_field is None
             and formatting_func is None
-            and not args.dataset_kwargs.get("skip_prepare_dataset", False)
+            and args.dataset_kwargs.get("skip_prepare_dataset", True)
         ):
             raise ValueError(
                 "You need to provide either `dataset_text_field` or `formatting_func` argument. Alternatively, you "
