@@ -1043,7 +1043,7 @@ class DPOTrainer(Trainer):
                         _,
                         _,
                         _,
-                    ) = self.concatenated_forward(self.model, padded_batch)
+                    ) = self.concatenated_forward(self.model, padded_batch)[:5]
             else:
                 (
                     reference_chosen_logps,
@@ -1051,7 +1051,7 @@ class DPOTrainer(Trainer):
                     _,
                     _,
                     _,
-                ) = self.concatenated_forward(self.ref_model, padded_batch)
+                ) = self.concatenated_forward(self.ref_model, padded_batch)[:5]
 
         return reference_chosen_logps, reference_rejected_logps
 
@@ -1466,7 +1466,7 @@ class DPOTrainer(Trainer):
                             _,
                             _,
                             _,
-                        ) = self.concatenated_forward(self.model, batch)
+                        ) = self.concatenated_forward(self.model, batch)[:5]
                 else:
                     (
                         reference_chosen_logps,
@@ -1474,7 +1474,7 @@ class DPOTrainer(Trainer):
                         _,
                         _,
                         _,
-                    ) = self.concatenated_forward(self.ref_model, batch)
+                    ) = self.concatenated_forward(self.ref_model, batch)[:5]
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,
