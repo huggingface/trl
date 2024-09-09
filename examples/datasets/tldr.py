@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
-from huggingface_hub import HfApi
 from transformers import HfArgumentParser
 
 
@@ -51,5 +50,4 @@ if __name__ == "__main__":
     )
 
     if args.push_to_hub:
-        api = HfApi()
         dataset.push_to_hub(args.repo_id)

@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from datasets import load_dataset
-from huggingface_hub import HfApi
 from transformers import HfArgumentParser
 
 
@@ -80,5 +79,4 @@ if __name__ == "__main__":
     dataset = dataset.map(extract_dialogue, num_proc=args.dataset_num_proc)
 
     if args.push_to_hub:
-        api = HfApi()
         dataset.push_to_hub(args.repo_id)
