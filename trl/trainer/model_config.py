@@ -1,95 +1,80 @@
-from dataclasses import dataclass, field
-from typing import List, Optional
-
-from ..core import flatten_dict
+from dataclasses import dataclass
+from typing import List, Literal, Optional
 
 
 @dataclass
 class ModelConfig:
     """
-    Arguments which define the model and tokenizer to load.
+    Configuration class for the models.
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
+
+    Parameters:
+        model_name_or_path (`Optional[str]`, *optional*, defaults to `None`):
+            Model checkpoint for weights initialization.
+        model_revision (`str`, *optional*, defaults to `"main"`):
+            Specific model version to use. It can be a branch name, a tag name, or a commit id.
+        torch_dtype (`Optional[Literal["auto", "bfloat16", "float16", "float32"]]`, *optional*, defaults to `None`):
+            Override the default `torch.dtype` and load the model under this dtype. Possible values are
+
+                - `"bfloat16"`: `torch.bfloat16`
+                - `"float16"`: `torch.float16`
+                - `"float32"`: `torch.float32`
+                - `"auto"`: Automatically derive the dtype from the model's weights.
+
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow for custom models defined on the Hub in their own modeling files. This option should only
+            be set to `True` for repositories you trust and in which you have read the code, as it will execute code
+            present on the Hub on your local machine.
+        attn_implementation (`Optional[str]`, *optional*, defaults to `None`):
+            Which attention implementation to use. You can run `--attn_implementation=flash_attention_2`, in which case
+            you must install this manually by running `pip install flash-attn --no-build-isolation`.
+        use_peft (`bool`, *optional*, defaults to `False`):
+            Whether to use PEFT for training.
+        lora_r (`int`, *optional*, defaults to `16`):
+            LoRA R value.
+        lora_alpha (`int`, *optional*, defaults to `32`):
+            LoRA alpha.
+        lora_dropout (`float`, *optional*, defaults to `0.05`):
+            LoRA dropout.
+        lora_target_modules (`Optional[Union[str, List[str]]]`, *optional*, defaults to `None`):
+            LoRA target modules.
+        lora_modules_to_save (`Optional[List[str]]`, *optional*, defaults to `None`):
+            Model layers to unfreeze & train.
+        lora_task_type (`str`, *optional*, defaults to `"CAUSAL_LM"`):
+            Task type to pass for LoRA (use `"SEQ_CLS"` for reward modeling).
+        use_rslora (`bool`, *optional*, defaults to `False`):
+            Whether to use Rank-Stabilized LoRA, which sets the adapter scaling factor to `lora_alpha/√r`, instead of
+            the original default value of `lora_alpha/r`.
+        load_in_8bit (`bool`, *optional*, defaults to `False`):
+            Whether to use 8 bit precision for the base model. Works only with LoRA.
+        load_in_4bit (`bool`, *optional*, defaults to `False`):
+            Whether to use 4 bit precision for the base model. Works only with LoRA.
+        bnb_4bit_quant_type (`str`, *optional*, defaults to `"nf4"`):
+            Quantization type (`"fp4"` or `"nf4"`).
+        use_bnb_nested_quant (`bool`, *optional*, defaults to `False`):
+            Whether to use nested quantization.
     """
 
-    model_name_or_path: Optional[str] = field(
-        default=None,
-        metadata={"help": ("The model checkpoint for weights initialization.")},
-    )
-    model_revision: str = field(
-        default="main",
-        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
-    )
-    torch_dtype: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": (
-                "Override the default `torch.dtype` and load the model under this dtype. If `auto` is passed, the "
-                "dtype will be automatically derived from the model's weights."
-            ),
-            "choices": ["auto", "bfloat16", "float16", "float32"],
-        },
-    )
-    trust_remote_code: bool = field(default=False, metadata={"help": "Trust remote code when loading a model."})
-    attn_implementation: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": (
-                "Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in which case you must install this manually by running `pip install flash-attn --no-build-isolation`"
-            )
-        },
-    )
-    use_peft: bool = field(
-        default=False,
-        metadata={"help": ("Whether to use PEFT or not for training.")},
-    )
-    lora_r: Optional[int] = field(
-        default=16,
-        metadata={"help": ("LoRA R value.")},
-    )
-    lora_alpha: Optional[int] = field(
-        default=32,
-        metadata={"help": ("LoRA alpha.")},
-    )
-    lora_dropout: Optional[float] = field(
-        default=0.05,
-        metadata={"help": ("LoRA dropout.")},
-    )
-    lora_target_modules: Optional[List[str]] = field(
-        default=None,
-        metadata={"help": ("LoRA target modules.")},
-    )
-    lora_modules_to_save: Optional[List[str]] = field(
-        default=None,
-        metadata={"help": ("Model layers to unfreeze & train")},
-    )
-    lora_task_type: str = field(
-        default="CAUSAL_LM", metadata={"help": "The task_type to pass for LoRA (use SEQ_CLS for reward modeling)"}
-    )
-    use_rslora: bool = field(
-        default=False,
-        metadata={
-            "help": (
-                "Use Rank-Stabilized LoRA (https://huggingface.co/papers/2312.03732), which sets the adapter "
-                "scaling factor to lora_alpha/√r, instead of the original default value of `lora_alpha/r`."
-            )
-        },
-    )
-    load_in_8bit: bool = field(
-        default=False, metadata={"help": "use 8 bit precision for the base model - works only with LoRA"}
-    )
-    load_in_4bit: bool = field(
-        default=False, metadata={"help": "use 4 bit precision for the base model - works only with LoRA"}
-    )
-
-    bnb_4bit_quant_type: Optional[str] = field(
-        default="nf4", metadata={"help": "precise the quantization type (fp4 or nf4)"}
-    )
-    use_bnb_nested_quant: bool = field(default=False, metadata={"help": "use nested quantization"})
-
-    def to_dict(self):
-        output_dict = {}
-        for key, value in self.__dict__.items():
-            output_dict[key] = value
-        return flatten_dict(output_dict)
+    model_name_or_path: Optional[str] = None
+    model_revision: str = "main"
+    torch_dtype: Optional[Literal["auto", "bfloat16", "float16", "float32"]] = None
+    trust_remote_code: bool = False
+    attn_implementation: Optional[str] = None
+    use_peft: bool = False
+    lora_r: int = 16
+    lora_alpha: int = 32
+    lora_dropout: float = 0.05
+    lora_target_modules: Optional[List[str]] = None
+    lora_modules_to_save: Optional[List[str]] = None
+    lora_task_type: str = "CAUSAL_LM"
+    use_rslora: bool = False
+    load_in_8bit: bool = False
+    load_in_4bit: bool = False
+    bnb_4bit_quant_type: Literal["fp4", "nf4"] = "nf4"
+    use_bnb_nested_quant: bool = False
 
     def __post_init__(self):
         if self.load_in_8bit and self.load_in_4bit:

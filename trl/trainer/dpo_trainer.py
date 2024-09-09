@@ -254,8 +254,10 @@ def _tokenize_encoder_decoder(
     args: DPOConfig,
     model: Optional[PreTrainedModel],
 ) -> None:
-    chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_target_length, add_special_tokens=True)
-    rejected_tokens = tokenizer(rejected, truncation=True, max_length=args.max_target_length, add_special_tokens=True)
+    chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_completion_length, add_special_tokens=True)
+    rejected_tokens = tokenizer(
+        rejected, truncation=True, max_length=args.max_completion_length, add_special_tokens=True
+    )
     prompt_tokens = tokenizer(prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True)
 
     batch["chosen_labels"] = chosen_tokens["input_ids"]
@@ -692,14 +694,14 @@ class DPOTrainer(Trainer):
             warnings.warn(
                 "You passed `max_target_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
-            args.max_target_length = max_target_length
-        if args.max_target_length is None and self.is_encoder_decoder:
+            args.max_completion_length = max_target_length
+        if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
-                "When using an encoder decoder architecture, you should set `max_target_length` in the DPOConfig's init"
+                "When using an encoder decoder architecture, you should set `max_completion_length` in the DPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            args.max_target_length = 128
+            args.max_completion_length = 128
 
         if label_pad_token_id != -100:
             warnings.warn(
@@ -752,7 +754,7 @@ class DPOTrainer(Trainer):
             )
             args.truncation_mode = truncation_mode
         self.truncation_mode = args.truncation_mode
-        self.max_target_length = args.max_target_length
+        self.max_completion_length = args.max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
@@ -1035,21 +1037,13 @@ class DPOTrainer(Trainer):
         with torch.no_grad(), compte_ref_context_manager:
             if self.ref_model is None:
                 with self.null_ref_context():
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.model, padded_batch)
+                    reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                        self.model, padded_batch
+                    )[:2]
             else:
-                (
-                    reference_chosen_logps,
-                    reference_rejected_logps,
-                    _,
-                    _,
-                    _,
-                ) = self.concatenated_forward(self.ref_model, padded_batch)
+                reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                    self.ref_model, padded_batch
+                )[:2]
 
         return reference_chosen_logps, reference_rejected_logps
 
@@ -1458,21 +1452,13 @@ class DPOTrainer(Trainer):
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            _,
-                            _,
-                            _,
-                        ) = self.concatenated_forward(self.model, batch)
+                        reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                            self.model, batch
+                        )[:2]
                 else:
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.ref_model, batch)
+                    reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                        self.ref_model, batch
+                    )[:2]
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,

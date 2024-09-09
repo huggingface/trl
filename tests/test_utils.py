@@ -1,10 +1,11 @@
 import unittest
 
 import torch
+from transformers import AutoTokenizer
 
 from trl import is_peft_available
 from trl.trainer.model_config import ModelConfig
-from trl.trainer.utils import get_peft_config, pad
+from trl.trainer.utils import decode_and_strip_padding, get_peft_config, pad
 
 
 if is_peft_available():
@@ -97,3 +98,18 @@ class TestGetPEFTConfig(unittest.TestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             self.assertEqual(getattr(peft_config, arg), value)
+
+
+class TestDecodeAndStripPadding(unittest.TestCase):
+    def setUp(self):
+        self.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+
+    def test_example_with_padding(self):
+        inputs = self.tokenizer(["Hello world", "Hello"], padding=True, return_tensors="pt")
+        decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
+        self.assertEqual(decoded, ["Hello world", "Hello"])
+
+    def test_example_without_padding(self):
+        inputs = self.tokenizer(["Hello", "Hello"], padding=False, return_tensors="pt")
+        decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
+        self.assertEqual(decoded, ["Hello", "Hello"])

@@ -24,6 +24,7 @@ python examples/scripts/ddpo.py \
     --tracker_project_name="stable_diffusion_training" \
     --log_with="wandb"
 """
+
 import os
 from dataclasses import dataclass, field
 
