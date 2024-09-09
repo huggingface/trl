@@ -26,7 +26,7 @@ The authors find that on-policy data (high `lmbda`) performs better and the opti
 ### Expected dataset format
 
 The dataset should be formatted as a list of "messages" where each message is a list of dictionaries with the following keys:
-* `role`: either `system` or `user`
+* `role`: either `system`, `assistant` or `user`
 * `content`: the message content
 
 
