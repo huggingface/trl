@@ -46,6 +46,8 @@
       title: SFT
     - local: iterative_sft_trainer
       title: Iterative SFT
+    - local: nash_md_trainer
+      title: Nash MD Trainer
     - local: reward_trainer
       title: Reward Model
     title: Trainers
@@ -59,8 +61,6 @@
     title: Callbacks
   - local: text_environments
     title: Text Environments
-  - local: nash_md_trainer
-    title: Nash MD Trainer
   title: API
 - sections:
   - local: example_overview
