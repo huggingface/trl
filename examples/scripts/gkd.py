@@ -36,7 +36,7 @@ python examples/scripts/gkd.py \
     --learning_rate=2e-4 \
     --per_device_train_batch_size=16 \
     --gradient_accumulation_steps=2 \
-    --output_dir="gkd-model" \
+    --output_dir gkd-model \
     --logging_steps 10 \
     --num_train_epochs 1 \
     --push_to_hub \
