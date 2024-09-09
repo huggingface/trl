@@ -59,12 +59,10 @@ DIFFUSERS_OLD_TO_DIFFUSERS = {
     ".to_out_lora.down": ".out_proj.lora_linear_layer.down",
 }
 
-
 DIFFUSERS_STATE_DICT_MAPPINGS = {
     StateDictType.DIFFUSERS_OLD: DIFFUSERS_OLD_TO_DIFFUSERS,
     StateDictType.PEFT: PEFT_TO_DIFFUSERS,
 }
-
 
 KEYS_TO_ALWAYS_REPLACE = {
     ".processor.": ".",
