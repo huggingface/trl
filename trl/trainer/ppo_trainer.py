@@ -188,10 +188,6 @@ class PPOTrainer(BaseTrainer):
             training_data_collator (Optional[function]):
                 Custom data collator used for training.
         """
-        warnings.warn(
-            "`PPOTrainer` is deprecated and will be removed in trl v0.12. Please use `PPOv2Trainer` instead.",
-            DeprecationWarning,
-        )
         super().__init__(config)
 
         # initial seed for reproducible experiments
