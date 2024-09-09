@@ -129,7 +129,7 @@ if __name__ == "__main__":
 
     # remove the last assistant message from the prompts messages and then apply chat template to the prompts
     prompts = [prompts[i][:-1] for i in range(len(prompts))]
-    prompts = [tokenizer.apply_chat_template(prompt, tokenize=False) for prompt in prompts]
+    prompts = [tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True) for prompt in prompts]
 
     ################
     # Optional rich context managers
