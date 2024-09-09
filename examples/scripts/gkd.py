@@ -42,7 +42,7 @@ python examples/scripts/gkd.py \
     --push_to_hub \
     --gradient_checkpointing \
     --use_peft \
-    --lora_r=64 \
+    --lora_r 64 \
     --lora_alpha=16
 """
 
