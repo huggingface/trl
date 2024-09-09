@@ -105,6 +105,17 @@ if __name__ == "__main__":
     )
     training_args.model_init_kwargs = model_kwargs
 
+    teacher_model_kwargs = dict(
+        revision=model_config.model_revision,
+        trust_remote_code=model_config.trust_remote_code,
+        attn_implementation=model_config.attn_implementation,
+        torch_dtype=model_config.torch_dtype,
+        use_cache=True,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        quantization_config=quantization_config,
+    )
+    training_args.teacher_model_init_kwargs = teacher_model_kwargs
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         trust_remote_code=model_config.trust_remote_code,
