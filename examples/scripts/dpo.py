@@ -19,8 +19,10 @@ python examples/scripts/dpo.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-7 \
     --num_train_epochs 1 \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 4 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --gradient_checkpointing_use_reentrant \
     --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 50 \
@@ -33,8 +35,10 @@ python examples/scripts/dpo.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-6 \
     --num_train_epochs 1 \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 4 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --gradient_checkpointing_use_reentrant \
     --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 50 \
@@ -83,6 +87,7 @@ if TRL_USE_RICH:
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, DPOConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
+    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=args.gradient_checkpointing_use_reentrant)
 
     # Force use our print callback
     if TRL_USE_RICH:
