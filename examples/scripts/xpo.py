@@ -16,15 +16,15 @@
 Usage:
 
 python examples/scripts/xpo.py \
-    --model_name_or_path EleutherAI/pythia-14m  \
-    --reward_model_path EleutherAI/pythia-14m \
+    --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
+    --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
     --learning_rate 5.0e-7 \
     --output_dir pythia-1b-tldr-xpo \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 32 \
     --num_train_epochs 3 \
-    --max_new_tokens 53 \
+    --max_new_tokens 64 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
     --push_to_hub
