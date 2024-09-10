@@ -86,14 +86,14 @@ class IsConversationalTester(unittest.TestCase):
 class ApplyChatTemplateTester(unittest.TestCase):
     tokenizers = [
         "Qwen/Qwen2-7B-Instruct",
-        "meta-llama/Meta-Llama-3.1-8B-Instruct",
-        "meta-llama/Meta-Llama-3-8B-Instruct",
+        # "meta-llama/Meta-Llama-3.1-8B-Instruct", # gated repository. TODO: find a way to test this
+        # "meta-llama/Meta-Llama-3-8B-Instruct",
         "deepseek-ai/DeepSeek-Coder-V2-Instruct",
         "microsoft/Phi-3-mini-128k-instruct",
-        "google/gemma-2-9b-it",
-        "mistralai/Mistral-7B-Instruct-v0.1",
-        "mistralai/Mistral-7B-Instruct-v0.2",
-        "mistralai/Mistral-7B-Instruct-v0.3",
+        # "google/gemma-2-9b-it",
+        # "mistralai/Mistral-7B-Instruct-v0.1",
+        # "mistralai/Mistral-7B-Instruct-v0.2",
+        # "mistralai/Mistral-7B-Instruct-v0.3",
     ]
 
     conversational_examples = [
