@@ -336,7 +336,7 @@ class OnlineDPOTrainer(Trainer):
             )
 
         # Filter completion. Ensure that the sample contains stop_token_id
-        # Completions not passing that filter will receive a low (fixed) score
+        # Completions not passing that filter will receive a lower score.
         contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
         if self.args.missing_eos_penalty is not None:
             scores[~contain_eos_token] -= self.args.missing_eos_penalty
