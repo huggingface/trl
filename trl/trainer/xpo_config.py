@@ -24,8 +24,9 @@ class XPOConfig(OnlineDPOConfig):
 
     Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 
-    Args:
-        alpha: The weight of the XPO loss term.
+    Parameters:
+        alpha (`float`, *optional*, defaults to `1e-5`):
+            Weight of the XPO loss term.
     """
 
     alpha: float = 1e-5

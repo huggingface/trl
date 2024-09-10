@@ -324,7 +324,6 @@ class OnlineDPOTrainer(Trainer):
         # Take the completion tokens logprob
         logprobs = torch.take_along_dim(all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         del output, logits, all_logprobs  # free memory
-        empty_cache()
 
         # Same for the reference model
         with torch.no_grad():
@@ -333,7 +332,6 @@ class OnlineDPOTrainer(Trainer):
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
         ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         del ref_output, ref_logits, ref_all_logprobs  # free memory
-        empty_cache()
 
         # Get the reward from the reward model
         with torch.no_grad():
