@@ -117,6 +117,8 @@ class XPOTrainer(OnlineDPOTrainer):
             "objective/model_scores": [],
             "objective/ref_scores": [],
             "objective/scores_margin": [],
+            "objective/kl": [],
+            "objective/entropy": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
             "rewards/accuracies": [],
@@ -310,18 +312,25 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["rewards/chosen"].append(gather_mean(chosen_rewards.mean()))
         self.stats["rewards/rejected"].append(gather_mean(rejected_rewards.mean()))
 
-        # Calculate margins correctly
-        if chosen_rewards.numel() > 0 and rejected_rewards.numel() > 0:
-            # Compute average margin
-            margin = chosen_rewards.mean() - rejected_rewards.mean()
-        else:
-            margin = torch.tensor(0.0, device=chosen_rewards.device)
+        # Calculate KL divergence for model and ref data
+        kl_model_data = model_logprobs_model_data - ref_logprobs_model_data
+        kl_ref_data = model_logprobs_ref_data - ref_logprobs_ref_data
+        mean_kl = (kl_model_data.sum(1) + kl_ref_data.sum(1)).mean() / 2
+        self.stats["objective/kl"].append(gather_mean(mean_kl))
 
-        self.stats["rewards/margins"].append(gather_mean(margin))
+        # Calculate entropy for model and ref data
+        entropy_model_data = -model_logprobs_model_data.sum(1)
+        entropy_ref_data = -model_logprobs_ref_data.sum(1)
+        mean_entropy = (entropy_model_data.mean() + entropy_ref_data.mean()) / 2
+        self.stats["objective/entropy"].append(gather_mean(mean_entropy))
+
+        # Calculate margins
+        margin = chosen_rewards - rejected_rewards
+        self.stats["rewards/margins"].append(gather_mean(margin.mean()))
 
         # Calculate accuracy
         accuracy = (margin > 0).float()
-        self.stats["rewards/accuracies"].append(gather_mean(accuracy))
+        self.stats["rewards/accuracies"].append(gather_mean(accuracy.mean()))
 
         # Log EOS token statistics
         model_eos = (model_data["input_ids"][:, context_length:] == self.tokenizer.eos_token_id).any(dim=1)

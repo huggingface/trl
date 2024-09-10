@@ -32,6 +32,8 @@ The logged metrics are as follows:
 * `objective/model_scores`: The mean scores (according to the reward model) of the model completions.
 * `objective/ref_scores`: The mean scores (according to the reward model) of the reference completions.
 * `objective/scores_margin`: The mean score margin (according to the external reward model) between the chosen and rejected completions.
+* `objective/kl`: The mean KL divergence between the model and reference data.
+* `objective/entropy`: The mean entropy of the model and reference data.
 * `rewards/accuracies`: The accuracies of the XPO's implicit reward model.
 * `rewards/chosen`: The mean reward (according to XPO's DPO implicit reward model) of the chosen completions.
 * `rewards/rejected`: The mean reward (according to XPO's DPO implicit reward model) of the rejected completions.
