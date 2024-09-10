@@ -122,8 +122,8 @@ apply_chat_template(lm_example, tokenizer)
 # Output: {'text': '<|user|>\nWhat color is the sky?<|end|>\n<|endoftext|>'}
 ```
 
-- The prompt-only output includes a placeholder for the assistant’s response, indicated by `'<|assistant|>\n'`, expecting a continuation.
-- In contrast, the language modeling output treats the input as a full sequence and terminates it with `'<|endoftext|>'`, without expecting an additional response.
+- The prompt-only output includes a `'<|assistant|>\n'`, indicating the beginning of the assistant’s turn and expecting the model to generate a completion.
+- In contrast, the language modeling output treats the input as a complete sequence and terminates it with `'<|endoftext|>'`, signaling the end of the text and not expecting any additional content.
 
 </Tip>
 
