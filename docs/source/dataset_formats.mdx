@@ -372,7 +372,7 @@ To convert a preference dataset with implicit prompt into a prompt-completion da
 
 ```python
 from datasets import Dataset
-from trl.data_utils import extract_prompt
+from trl import extract_prompt
 
 dataset = Dataset.from_dict({
     "chosen": [
@@ -398,7 +398,7 @@ To convert a preference dataset with implicit prompt into a prompt-only dataset,
 
 ```python
 from datasets import Dataset
-from trl.data_utils import extract_prompt
+from trl import extract_prompt
 
 dataset = Dataset.from_dict({
     "chosen": [
@@ -424,7 +424,7 @@ To convert a preference dataset with implicit prompt into a preference dataset w
 
 ```python
 from datasets import Dataset
-from trl.data_utils import extract_prompt
+from trl import extract_prompt
 
 dataset = Dataset.from_dict({
     "chosen": [
@@ -453,7 +453,7 @@ To convert a preference dataset with implicit prompt into an unpaired preference
 
 ```python
 from datasets import Dataset
-from trl.data_utils import extract_prompt, unpair_preference_dataset
+from trl import extract_prompt, unpair_preference_dataset
 
 dataset = Dataset.from_dict({
     "chosen": [
@@ -583,7 +583,7 @@ To convert dataset into an unpaired preference dataset, unpair the dataset with 
 
 ```python
 from datasets import Dataset
-from trl.data_utils import unpair_preference_dataset
+from trl import unpair_preference_dataset
 
 dataset = Dataset.from_dict({
     "prompt": [

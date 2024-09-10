@@ -341,7 +341,7 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
     Or, with the `map` method of `datasets.Dataset`:
 
     ```python
-    >>> from trl.data_utils import extract_prompt
+    >>> from trl import extract_prompt
     >>> from datasets import Dataset
     >>> dataset_dict = {
     ...     "chosen": [

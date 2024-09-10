@@ -84,11 +84,12 @@ _import_structure = {
         "MultitaskPromptTuningInit",
     ],
     "data_utils": [
+        "apply_chat_template",
+        "extract_prompt",
+        "is_conversational",
         "maybe_apply_chat_template",
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
-        "apply_chat_template",
-        "extract_prompt",
         "unpair_preference_dataset",
     ],
 }
@@ -175,11 +176,12 @@ if TYPE_CHECKING:
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
     from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser
     from .data_utils import (
+        apply_chat_template,
+        extract_prompt,
+        is_conversational,
         maybe_apply_chat_template,
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
-        apply_chat_template,
-        extract_prompt,
         unpair_preference_dataset,
     )
 
