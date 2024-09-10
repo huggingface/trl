@@ -141,7 +141,9 @@ A preference dataset is used for tasks where the model is trained to choose betw
 Some dataset may not include the `"prompt"` column, in which case the prompt is implicit and directly included in the `"chosen"` and `"rejected"` completions. We recommend using explicit prompts whenever possible.
 
 ```python
-preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}
+preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}  # recommended
+# or,
+preference_example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
 ```
 
 ### Unpaired preference
@@ -154,7 +156,7 @@ unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "
 
 ## Which dataset format to use?
 
-The dataset format you should use depends on the task you're working on. Here's a brief overview of the dataset formats supported by each TRL trainer:
+Choosing the right dataset format depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset formats supported by each TRL trainer.
 
 | Trainer                 | Expected dataset format      |
 | ----------------------- | ---------------------------- |
@@ -182,42 +184,11 @@ For more information on how to work with conversational datasets, refer to the [
 Conversational datasets are increasingly common, especially for training chat models. However, TRL trainers don't support conversational datasets in their raw format. These datasets must first be converted into a standard format. 
 Fortunately, TRL offers tools to easily handle this conversion, which are detailed below.
 
-### A brief introduction to conversational datasets
-
-A conversational dataset is structured as a list of messages, unlike standard datasets which are typically formatted as single strings. These datasets are particularly useful for training conversational models, as they more accurately represent the flow of a conversation.
-
-In a conversational dataset, each message has a role (e.g., `"user"` or `"assistant"`) and content (e.g., `"Hello, how are you?"`). Here's an example:
-
-```python
-messages = [
-    {"role": "user", "content": "Hello, how are you?"},
-    {"role": "assistant", "content": "I'm doing great. How can I help you today?"},
-    {"role": "user", "content": "I'd like to show off how chat templating works!"},
-]
-```
-
-Just like standard datasets, the columns in conversational datasets vary depending on the task. For instance, a preference dataset would include columns like `"chosen"` and `"rejected"` to compare responses:
-
-```python
-example = {
-    "chosen": [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
-    ],
-    "rejected": [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is green."},
-    ],
-}
-```
-
-A conversational dataset is not meant to be used directly with TRL trainers. Instead, it should be converted into a standard dataset format before training. This conversion is done by applying a chat template to the dataset.
-
 ### Converting a conversational dataset into a standard dataset
 
-TRL trainers do not support conversational datasets in their raw format. To use them, you need to convert them into a standard dataset format using a chat template. This template is provided by the tokenizer of the model you plan to use.
+TRL trainers do not support conversational datasets in their raw format. To use them, you need to convert them into a standard dataset format using a chat template. This template is provided by the tokenizer of the model you use.
 
-For detailed instructions on using chat datasets, refer to the [Chat templating section in the `transformers` documentation](https://huggingface.co/docs/transformers/en/chat_templating).
+For detailed instructions on using chat templating, refer to the [Chat templating section in the `transformers` documentation](https://huggingface.co/docs/transformers/en/chat_templating).
 
 In TRL, the method you apply to convert the dataset will vary depending on the task. Fortunately, TRL provides a helper function called [`apply_chat_template`] to simplify this process. Here's an example of how to use it:
 
@@ -258,7 +229,15 @@ dataset = dataset.map(apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 #  'completion': ['It is blue.<|end|>\n<|endoftext|>', 'In the sky.<|end|>\n<|endoftext|>']}
 ```
 
-It's important to note that chat templates are model-specific. For example, if you use the chat template from the [meta-llama/Meta-Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct) model, you get a different structure:
+<Tip warning={true}>
+
+We recommend using the [`apply_chat_template`] function rather than directly calling `tokenizer.apply_chat_template`. Handling chat templates nonlanguage modeling datasets can be tricky and may lead to issues, such as inserting a system prompt in the middle of a conversation. For additional examples, see [#1930 (comment)](https://github.com/huggingface/trl/pull/1930#issuecomment-2292908614). The [`apply_chat_template`] is designed to handle these intricacies and ensure the correct application of chat templates for various tasks.
+
+</Tip>
+
+<Tip warning={true}>
+
+It's important to note that chat templates are model-specific. For example, if you use the chat template from [meta-llama/Meta-Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct) with the above example, you get a different output:
 
 ```python
 apply_chat_template(example, AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct"))
@@ -267,9 +246,7 @@ apply_chat_template(example, AutoTokenizer.from_pretrained("meta-llama/Meta-Llam
 #  'completion': 'It is blue.<|im_end|>\n'}
 ```
 
-<Tip warning={true}>
-
-Always use the chat template associated with the model you're working with. Chat templates are model-specific, and using the wrong template can lead to inaccurate or unexpected results.
+Always use the chat template associated with the model you're working with. Using the wrong template can lead to inaccurate or unexpected results.
 
 </Tip>
 
@@ -279,7 +256,7 @@ Many datasets come in formats tailored to specific tasks, which might not be dir
 
 To make this easier, we provide a set of [example scripts](https://github.com/huggingface/trl/tree/main/examples/datasets) that cover common dataset conversions.
 
-### Example: UltraFeedback Dataset
+### Example: UltraFeedback dataset
 
 Let’s take the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback) as an example. Here's a preview of the dataset:
 
