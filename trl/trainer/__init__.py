@@ -18,6 +18,7 @@
 from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
+
 _import_structure = {
     "callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
     "utils": [
@@ -73,7 +74,6 @@ except OptionalDependencyNotAvailable:
     pass
 else:
     _import_structure["ddpo_trainer"] = ["DDPOTrainer"]
-
 
 if TYPE_CHECKING:
     # isort: off
