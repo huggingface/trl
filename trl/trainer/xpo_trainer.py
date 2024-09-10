@@ -112,16 +112,16 @@ class XPOTrainer(OnlineDPOTrainer):
 
         # Overwrite the stats dictionary to include XPO specific statistics
         self.stats = {
-            # Remove "kl", "entropy", "non_score_reward", "rlhf_reward", "scores"
+            # Remove "non_score_reward", "rlhf_reward", "scores"
             # Add "loss/dpo", "loss/xpo"
             "loss/dpo": [],
             "loss/xpo": [],
+            "objective/kl": [],
+            "objective/entropy": [],
             # Replace "scores" by "model_scores" and "ref_scores"
             "objective/model_scores": [],
             "objective/ref_scores": [],
             "objective/scores_margin": [],
-            "objective/kl": [],
-            "objective/entropy": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
             "rewards/accuracies": [],
