@@ -620,6 +620,7 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the scores.
             masks (List[`torch.LongTensor`], *optional*):
                 list of optional tensors containing the masks of shape (`response_length`)
+
         Returns:
             `tuple`: The input processed data.
         """
@@ -992,6 +993,7 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses, shape (`batch_size`, `response_length`)
             return_logits (`bool`, *optional*, defaults to `False`):
                 Whether to return all_logits. Set to `False` if logits are not needed to reduce memory consumption.
+
         Returns:
             (tuple):
                 - all_logprobs (`torch.FloatTensor`): Log probabilities of the responses,

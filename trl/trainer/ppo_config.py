@@ -148,7 +148,7 @@ class PPOConfig:
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     task_name: Optional[str] = None
     model_name: str = "gpt2"
-    query_dataset: str = "imdb"
+    query_dataset: str = "stanfordnlp/imdb"
     reward_model: str = "sentiment-analysis:lvwerra/distilbert-imdb"
     remove_unused_columns: bool = True
     tracker_kwargs: JSONDict = field(default_factory=dict)

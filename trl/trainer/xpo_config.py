@@ -1,5 +1,3 @@
-# flake8: noqa
-
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,19 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# flake8: noqa
 
-from typing import TYPE_CHECKING
-from ..import_utils import _LazyModule, OptionalDependencyNotAvailable
+from dataclasses import dataclass
+
+from trl.trainer.online_dpo_config import OnlineDPOConfig
 
 
-_import_structure = {
-    "cli_utils": ["SFTScriptArguments", "init_zero_verbose", "DPOScriptArguments", "TrlParser", "YamlConfigParser"],
-}
+@dataclass
+class XPOConfig(OnlineDPOConfig):
+    r"""
+    Configuration class for the [`XPOTrainer`].
 
-if TYPE_CHECKING:
-    from .cli_utils import SFTScriptArguments, init_zero_verbose, DPOScriptArguments, TrlParser, YamlConfigParser
-else:
-    import sys
+    Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 
-    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
+    Parameters:
+        alpha (`float`, *optional*, defaults to `1e-5`):
+            Weight of the XPO loss term.
+    """
+
+    alpha: float = 1e-5

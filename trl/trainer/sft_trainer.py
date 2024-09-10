@@ -340,17 +340,6 @@ class SFTTrainer(Trainer):
                 args.dataset_kwargs["add_special_tokens"] = False
 
         if not args.packing:
-            # If we aren't skipping data preparation, then a dataset_text_field
-            # or formatting_func must be provided.
-            if (
-                args.dataset_text_field is None
-                and formatting_func is None
-                and not args.dataset_kwargs.get("skip_prepare_dataset", False)
-            ):
-                raise ValueError(
-                    "You passed `packing=False` to the SFTTrainer/SFTConfig, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
-                )
-
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
@@ -518,6 +507,13 @@ class SFTTrainer(Trainer):
             dataset, (torch.utils.data.IterableDataset, torch.utils.data.Dataset, ConstantLengthDataset)
         ) and not isinstance(dataset, datasets.IterableDataset):
             return dataset
+
+        # If we aren't skipping data preparation, then a dataset_text_field or formatting_func must be provided.
+        if dataset_text_field is None and formatting_func is None:
+            raise ValueError(
+                "You need to provide either `dataset_text_field` or `formatting_func` argument. Alternatively, you "
+                "can skip the dataset preparation by using `SFTConfig(dataset_kwargs={'skip_prepare_dataset': True})`."
+            )
 
         if not packing:
             return self._prepare_non_packed_dataloader(
