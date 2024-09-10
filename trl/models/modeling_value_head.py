@@ -84,7 +84,6 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 - **`None`** -- Initializes the weights of the `ValueHead` with a random distribution. This is the default
                     strategy.
                 - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.
-
     """
 
     transformers_parent_class = AutoModelForCausalLM
