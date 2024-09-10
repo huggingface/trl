@@ -83,7 +83,7 @@ if __name__ == "__main__":
         training_args.reward_model_path,
         trust_remote_code=model_config.trust_remote_code,
         **model_kwargs,
-    )#.to("cuda")
+    )  # .to("cuda")
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
