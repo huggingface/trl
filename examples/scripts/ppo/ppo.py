@@ -22,7 +22,7 @@ python -i examples/scripts/ppo/ppo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --non_eos_penalty \
+    --missing_eos_penalty 1.0
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/ppo/ppo.py \
@@ -38,7 +38,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --reward_model_path EleutherAI/pythia-1b-deduped \
     --local_rollout_forward_batch_size 1 \
     --deepspeed3 \
-    --non_eos_penalty \
+    --missing_eos_penalty 1.0
 """
 
 

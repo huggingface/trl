@@ -50,6 +50,8 @@ _import_structure = {
     "nash_md_trainer": ["NashMDTrainer"],
     "online_dpo_config": ["OnlineDPOConfig"],
     "online_dpo_trainer": ["OnlineDPOTrainer"],
+    "xpo_config": ["XPOConfig"],
+    "xpo_trainer": ["XPOTrainer"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
@@ -119,6 +121,8 @@ if TYPE_CHECKING:
     from .nash_md_trainer import NashMDTrainer
     from .online_dpo_config import OnlineDPOConfig
     from .online_dpo_trainer import OnlineDPOTrainer
+    from .xpo_config import XPOConfig
+    from .xpo_trainer import XPOTrainer
     from .orpo_config import ORPOConfig
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig

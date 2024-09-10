@@ -32,6 +32,8 @@
       title: DPO
     - local: online_dpo_trainer
       title: Online DPO
+    - local: xpo_trainer
+      title: XPO Trainer
     - local: orpo_trainer
       title: ORPO
     - local: kto_trainer
