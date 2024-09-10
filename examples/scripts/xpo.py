@@ -122,4 +122,8 @@ if __name__ == "__main__":
     )
     log_completions_callback = LogCompletionsCallback(prompts)
     trainer.add_callback(log_completions_callback)
+    # train the model
     trainer.train()
+
+    # save the model
+    trainer.save_model(training_args.output_dir)
