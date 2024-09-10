@@ -24,7 +24,7 @@ We also recommend you passing a YAML config file to configure your training prot
 model_name_or_path:
   trl-internal-testing/tiny-random-LlamaForCausalLM
 dataset_name:
-  imdb
+  stanfordnlp/imdb
 dataset_text_field:
   text
 report_to:
@@ -56,7 +56,7 @@ You can pass any of these arguments either to the CLI or the YAML file.
 Follow the basic instructions above and run `trl sft --output_dir <output_dir> <*args>`: 
 
 ```bash
-trl sft --model_name_or_path facebook/opt-125m --dataset_name imdb --output_dir opt-sft-imdb
+trl sft --model_name_or_path facebook/opt-125m --dataset_name stanfordnlp/imdb --output_dir opt-sft-imdb
 ```
 
 The SFT CLI is based on the `examples/scripts/sft.py` script.
