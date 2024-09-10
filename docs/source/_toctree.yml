@@ -61,6 +61,8 @@
     title: Judges
   - local: callbacks
     title: Callbacks
+  - local: data_utils
+    title: Data Utilities
   - local: text_environments
     title: Text Environments
   title: API
@@ -79,6 +81,4 @@
     title: Learning to Use Tools
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
-  - local: data_utils
-    title: Data Utilities
   title: Examples
