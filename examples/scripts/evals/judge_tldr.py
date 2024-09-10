@@ -48,7 +48,7 @@ parser = HfArgumentParser(ScriptArguments)
 args = parser.parse_args_into_dataclasses()[0]
 
 # Load the dataset
-raw_dataset = load_dataset("qgallouedec/tldr", split="validation")
+raw_dataset = load_dataset("trl-lib/tldr", split="validation")
 if args.num_examples is not None:
     raw_dataset = raw_dataset.select(range(args.num_examples))
 
