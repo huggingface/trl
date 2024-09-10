@@ -79,11 +79,43 @@ Each TRL trainer supports a specific dataset format. In this document, we provid
 
 ### Standard dataset format
 
-The standard dataset format typically consists of plain text strings. The columns in the dataset vary depending on the task. This is the format expected by TRL trainers.
+The standard dataset format typically consists of plain text strings. The columns in the dataset vary depending on the task. This is the format expected by TRL trainers. Below are examples of standard dataset formats for different tasks:
+
+```python
+# Language modeling
+example = {"text": "The sky is blue."}
+# Preference
+example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
+```
 
 ### Conversational dataset format
 
-Conversational datasets are used for tasks involving dialogues or chat interactions between users and assistants. Unlike standard datasets format, these contain sequences of messages where each message has a `role` (e.g., `"user"` or `"assistant"`) and `content` (the message text). Conversational datasets are useful for training chat-based models but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
+Conversational datasets are used for tasks involving dialogues or chat interactions between users and assistants. Unlike standard datasets format, these contain sequences of messages where each message has a `role` (e.g., `"user"` or `"assistant"`) and `content` (the message text).
+
+```python
+messages = [
+    {"role": "user", "content": "Hello, how are you?"},
+    {"role": "assistant", "content": "I'm doing great. How can I help you today?"},
+    {"role": "user", "content": "I'd like to show off how chat templating works!"},
+]
+```
+
+Just like standard datasets, the columns in conversational datasets vary depending on the task. For instance, a preference dataset would include columns like `"chosen"` and `"rejected"` to compare responses:
+
+```python
+example = {
+    "chosen": [
+        {"role": "user", "content": "What color is the sky?"},
+        {"role": "assistant", "content": "It is blue."},
+    ],
+    "rejected": [
+        {"role": "user", "content": "What color is the sky?"},
+        {"role": "assistant", "content": "It is green."},
+    ],
+}
+```
+
+Conversational datasets are useful for training chat-based models but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
 ### Language modeling
 
