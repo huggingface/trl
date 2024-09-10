@@ -101,28 +101,31 @@ In a prompt-only dataset, only the initial prompt (the question or partial sente
 prompt_only_example = {"prompt": "The sky is"}
 ```
 
-> [!NOTE]
-> While both the prompt-only and language modeling formats are similar, they differ in how the input is handled. In the prompt-only format, the prompt represents a partial input that expects the model to complete or continue, while in the language modeling format, the input is treated as a complete sentence or sequence. These two formats are processed differently by TRL. Below is an example showing the difference in the output of the `apply_chat_template` function for each format:
-> 
-> ```python
-> from transformers import AutoTokenizer
-> from trl import apply_chat_template
-> 
-> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
-> 
-> # Example for prompt-only format
-> prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
-> apply_chat_template(prompt_only_example, tokenizer)
-> # Output: {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n'}
-> 
-> # Example for language modeling format
-> lm_example = {"messages": [{"role": "user", "content": "What color is the sky?"}]}
-> apply_chat_template(lm_example, tokenizer)
-> # Output: {'text': '<|user|>\nWhat color is the sky?<|end|>\n<|endoftext|>'}
-> ```
->
-> - The prompt-only output includes a placeholder for the assistant’s response, indicated by `'<|assistant|>\n'`, expecting a continuation.
-> - In contrast, the language modeling output treats the input as a full sequence and terminates it with `'<|endoftext|>'`, without expecting an additional response.
+<Tip>
+
+While both the prompt-only and language modeling formats are similar, they differ in how the input is handled. In the prompt-only format, the prompt represents a partial input that expects the model to complete or continue, while in the language modeling format, the input is treated as a complete sentence or sequence. These two formats are processed differently by TRL. Below is an example showing the difference in the output of the `apply_chat_template` function for each format:
+
+```python
+from transformers import AutoTokenizer
+from trl import apply_chat_template
+
+tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
+
+# Example for prompt-only format
+prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
+apply_chat_template(prompt_only_example, tokenizer)
+# Output: {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n'}
+
+# Example for language modeling format
+lm_example = {"messages": [{"role": "user", "content": "What color is the sky?"}]}
+apply_chat_template(lm_example, tokenizer)
+# Output: {'text': '<|user|>\nWhat color is the sky?<|end|>\n<|endoftext|>'}
+```
+
+- The prompt-only output includes a placeholder for the assistant’s response, indicated by `'<|assistant|>\n'`, expecting a continuation.
+- In contrast, the language modeling output treats the input as a full sequence and terminates it with `'<|endoftext|>'`, without expecting an additional response.
+
+</Tip>
 
 ### Prompt-completion
 
@@ -167,9 +170,12 @@ The dataset format you should use depends on the task you're working on. Here's 
 | [`SFTTrainer`]          | Language modeling            |
 | [`XPOTrainer`]          | Prompt-only                  |
 
-> [!NOTE]
-> TRL trainers only support standard dataset formats. If you have a conversational dataset, you must first convert it into a standard format.
-> For more information on how to work with conversational datasets, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
+<Tip>
+
+TRL trainers only support standard dataset formats. If you have a conversational dataset, you must first convert it into a standard format.
+For more information on how to work with conversational datasets, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
+
+</Tip>
 
 ## Working with conversational datasets in TRL
 
@@ -261,8 +267,11 @@ apply_chat_template(example, AutoTokenizer.from_pretrained("meta-llama/Meta-Llam
 #  'completion': 'It is blue.<|im_end|>\n'}
 ```
 
-> [!WARNING]
-> Always use the chat template associated with the model you're working with. Chat templates are model-specific, and using the wrong template can lead to inaccurate or unexpected results.
+<Tip warning={true}>
+
+Always use the chat template associated with the model you're working with. Chat templates are model-specific, and using the wrong template can lead to inaccurate or unexpected results.
+
+</Tip>
 
 ## Using any dataset with TRL: preprocessing and conversion
 
