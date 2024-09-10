@@ -63,7 +63,7 @@ You can use TRL Command Line Interface (CLI) to quickly get started with Supervi
 **SFT:**
 
 ```bash
-trl sft --model_name_or_path facebook/opt-125m --dataset_name imdb --output_dir opt-sft-imdb
+trl sft --model_name_or_path facebook/opt-125m --dataset_name stanfordnlp/imdb --output_dir opt-sft-imdb
 ```
 
 **DPO:**
@@ -94,7 +94,7 @@ from datasets import load_dataset
 from trl import SFTTrainer
 
 # get dataset
-dataset = load_dataset("imdb", split="train")
+dataset = load_dataset("stanfordnlp/imdb", split="train")
 
 # get trainer
 trainer = SFTTrainer(

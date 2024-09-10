@@ -98,12 +98,12 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(
 tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_auth_token=True)
 tokenizer.pad_token = tokenizer.eos_token
 
-ds = load_dataset("gsm8k", "main", split="train")
+ds = load_dataset("openai/gsm8k", "main", split="train")
 ds = ds.rename_columns({"question": "query"})
 ds = ds.map(lambda x: {"answer": x["answer"].split("#### ")[1]})
 ds = ds.select(range(1, len(ds)))  # skip the first sample which is used in prompt
 
-ds_test = load_dataset("gsm8k", "main", split="test")
+ds_test = load_dataset("openai/gsm8k", "main", split="test")
 ds_test = ds_test.rename_columns({"question": "query"})
 ds_test = ds_test.map(lambda x: {"answer": x["answer"].split("#### ")[1]})
 
