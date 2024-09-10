@@ -26,6 +26,7 @@ from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
+    disable_dropout_in_model,
     empty_cache,
     get_reward,
     prepare_deepspeed,
@@ -133,6 +134,10 @@ class OnlineDPOTrainer(Trainer):
         if self.reward_model is not None:
             self.reward_model.eval()
 
+        # Disable dropout in the model if specified
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+
         # Define the collator is not provided
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(pad_token_id=tokenizer.pad_token_id)
@@ -161,6 +166,16 @@ class OnlineDPOTrainer(Trainer):
             "logps/rejected": [],
             "val/contain_eos_token": [],
         }
+
+        self.generation_config = GenerationConfig(
+            max_new_tokens=args.max_new_tokens,
+            min_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=0,
+            top_p=1.0,
+            do_sample=True,
+            use_cache=False if args.gradient_checkpointing else True,
+        )
 
         super().__init__(
             model=model,
@@ -282,15 +297,6 @@ class OnlineDPOTrainer(Trainer):
 
         # Sample 2 completations per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
-        generation_config = GenerationConfig(
-            max_new_tokens=self.args.max_new_tokens,
-            min_new_tokens=self.args.max_new_tokens,
-            temperature=self.args.temperature,
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-            use_cache=False if self.args.gradient_checkpointing else True,
-        )
         num_examples, context_length = inputs["prompt_input_ids"].shape
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
         prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
@@ -298,7 +304,7 @@ class OnlineDPOTrainer(Trainer):
             output = unwrapped_model.generate(
                 input_ids=prompt_ids,
                 attention_mask=prompt_mask,
-                generation_config=generation_config,
+                generation_config=self.generation_config,
             )
         del inputs
 
@@ -318,7 +324,6 @@ class OnlineDPOTrainer(Trainer):
         # Take the completion tokens logprob
         logprobs = torch.take_along_dim(all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         del output, logits, all_logprobs  # free memory
-        empty_cache()
 
         # Same for the reference model
         with torch.no_grad():
@@ -327,7 +332,6 @@ class OnlineDPOTrainer(Trainer):
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
         ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         del ref_output, ref_logits, ref_all_logprobs  # free memory
-        empty_cache()
 
         # Get the reward from the reward model
         with torch.no_grad():
