@@ -680,7 +680,7 @@ def create_reference_model(
 
 class GeometricMixtureWrapper(GenerationMixin):
     r"""
-    Geometric Mixture module that samples from the logits of two model's geometric mixture.
+    Geometric Mixture generation wrapper that samples from the logits of two model's geometric mixture.
 
     Args:
         model (`PreTrainedModel`): The model to be wrapped.
@@ -719,6 +719,7 @@ class GeometricMixtureWrapper(GenerationMixin):
         return model_outputs
 
     def prepare_inputs_for_generation(self, *args, **kwargs):
+        # turn off cache in the generation config
         kwargs["use_cache"] = False
         model_inputs = self.model.prepare_inputs_for_generation(*args, **kwargs)
         _ = self.ref_model.prepare_inputs_for_generation(*args, **kwargs)
