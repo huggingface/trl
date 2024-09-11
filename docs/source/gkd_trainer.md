@@ -23,6 +23,58 @@ The GKD Trainer is a wrapper around the [`SFTTrainer`] class that takes in a tea
 
 The authors find that on-policy data (high `lmbda`) performs better and the optimal `beta` varied depending on the task and evaluation method.
 
+The basic API is as follows:
+
+```python
+from datasets import Dataset
+from trl import GKDConfig, GKDTrainer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+)
+
+NUM_DUMMY_SAMPLES = 100
+
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+# The model to optimise
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+# The teacher model to calculate the KL divergence against
+teacher_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+
+train_dataset = Dataset.from_dict(
+    {
+        "messages": [
+            [
+                {"role": "user", "content": "Hi, how are you?"},
+                {"role": "assistant", "content": "I'm great thanks"},
+            ]
+        ]
+        * NUM_DUMMY_SAMPLES
+    }
+)
+eval_dataset = Dataset.from_dict(
+    {
+        "messages": [
+            [
+                {"role": "user", "content": "What colour is the sky?"},
+                {"role": "assistant", "content": "The sky is blue"},
+            ]
+        ]
+        * NUM_DUMMY_SAMPLES
+    }
+)
+
+args = GKDConfig(output_dir="gkd-model", per_device_train_batch_size=1)
+trainer = GKDTrainer(
+    model=model,
+    teacher_model=teacher_model,
+    args=args,
+    tokenizer=tokenizer,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+)
+trainer.train()
+
 ### Expected dataset format
 
 The dataset should be formatted as a list of "messages" where each message is a list of dictionaries with the following keys:
