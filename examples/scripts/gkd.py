@@ -22,7 +22,7 @@ python examples/scripts/gkd.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --output_dir= gkd-model \
-    --logging_steps=1 \
+    --logging_steps 10 \
     --num_train_epochs 1 \
     --push_to_hub \
     --gradient_checkpointing
