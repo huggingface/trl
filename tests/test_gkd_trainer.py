@@ -30,7 +30,7 @@ from trl import GKDConfig, GKDTrainer
 class TestGKDTrainer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+        cls.tokenizer = AutoTokenizer.from_pretrained("gpt2")
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
         cls.model = AutoModelForCausalLM.from_pretrained("gpt2")
         cls.generation_config = GenerationConfig(
@@ -38,6 +38,54 @@ class TestGKDTrainer(unittest.TestCase):
             num_return_sequences=1,
             pad_token_id=cls.tokenizer.pad_token_id,
             eos_token_id=cls.tokenizer.eos_token_id,
+        )
+
+    def test_generate_on_policy_outputs_deterministic(self):
+        prompts = ["Hello, how are you?", "What's the weather like today?"]
+        tokenized_prompts = self.tokenizer(prompts, return_tensors="pt", padding=True)
+
+        inputs = {
+            "prompts": tokenized_prompts["input_ids"],
+            "prompt_attention_mask": tokenized_prompts["attention_mask"],
+        }
+
+        # Set temperature to 0 for deterministic output
+        deterministic_generation_config = GenerationConfig(
+            max_length=30,
+            num_return_sequences=1,
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+            temperature=0.0,
+        )
+
+        outputs = GKDTrainer.generate_on_policy_outputs(
+            self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
+        )
+
+        new_input_ids, new_attention_mask = outputs
+
+        # Decode the generated outputs
+        generated_texts = self.tokenizer.batch_decode(new_input_ids, skip_special_tokens=True)
+
+        # Check if the generated texts start with the original prompts
+        for prompt, generated_text in zip(prompts, generated_texts):
+            self.assertTrue(
+                generated_text.startswith(prompt),
+                f"Generated text '{generated_text}' does not start with prompt '{prompt}'",
+            )
+
+        # Run the generation twice and check if the outputs are identical
+        outputs2 = GKDTrainer.generate_on_policy_outputs(
+            self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
+        )
+
+        new_input_ids2, new_attention_mask2 = outputs2
+
+        # Check if the two generations are identical
+        self.assertTrue(torch.all(new_input_ids.eq(new_input_ids2)), "Deterministic generations are not identical")
+        self.assertTrue(
+            torch.all(new_attention_mask.eq(new_attention_mask2)),
+            "Attention masks for deterministic generations are not identical",
         )
 
     def test_generate_on_policy_outputs(self):
