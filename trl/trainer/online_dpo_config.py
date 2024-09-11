@@ -36,6 +36,8 @@ class OnlineDPOConfig(TrainingArguments):
 
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model.
     """
 
     reward_model_path: Optional[str] = None
@@ -45,3 +47,4 @@ class OnlineDPOConfig(TrainingArguments):
     beta: float = 0.1
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
     dataset_num_proc: Optional[int] = None
+    disable_dropout: bool = True

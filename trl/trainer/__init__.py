@@ -44,10 +44,14 @@ _import_structure = {
     "model_config": ["ModelConfig"],
     "online_dpo_config": ["OnlineDPOConfig"],
     "online_dpo_trainer": ["OnlineDPOTrainer"],
+    "xpo_config": ["XPOConfig"],
+    "xpo_trainer": ["XPOTrainer"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
+    "ppov2_config": ["PPOv2Config"],
+    "ppov2_trainer": ["PPOv2Trainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer", "compute_accuracy"],
     "sft_config": ["SFTConfig"],
@@ -110,10 +114,14 @@ if TYPE_CHECKING:
     from .model_config import ModelConfig
     from .online_dpo_config import OnlineDPOConfig
     from .online_dpo_trainer import OnlineDPOTrainer
+    from .xpo_config import XPOConfig
+    from .xpo_trainer import XPOTrainer
     from .orpo_config import ORPOConfig
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
+    from .ppov2_config import PPOv2Config
+    from .ppov2_trainer import PPOv2Trainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
     from .sft_config import SFTConfig

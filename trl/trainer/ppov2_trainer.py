@@ -369,12 +369,11 @@ class PPOv2Trainer(Trainer):
                 torch.cuda.empty_cache()
                 gc.collect()
 
-                # Response Processing 3. filter response. Ensure that the sample contains stop_token_id
-                # responses not passing that filter will receive a low (fixed) score
-                # only query humans on responses that pass that filter
-                contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
-                if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
+                # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
+                # Completions not passing that filter will receive a lower score.
+                contain_eos_token = torch.any(postprocessed_responses == self.tokenizer.eos_token_id, dim=-1)
+                if self.args.missing_eos_penalty is not None:
+                    scores[~contain_eos_token] -= self.args.missing_eos_penalty
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
