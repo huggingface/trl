@@ -30,8 +30,6 @@ python examples/scripts/xpo.py \
     --push_to_hub
 """
 
-from dataclasses import dataclass, field
-
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
@@ -49,16 +47,8 @@ from trl.trainer.callbacks import LogCompletionsCallback
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
-@dataclass
-class ExtendedDPOScriptArguments(DPOScriptArguments):
-    max_samples: int = field(
-        default=None,
-        metadata={"help": "Maximum number of samples to use for training and evaluation. Use for sanity checking."},
-    )
-
-
 if __name__ == "__main__":
-    parser = TrlParser((ExtendedDPOScriptArguments, XPOConfig, ModelConfig))
+    parser = TrlParser((DPOScriptArguments, XPOConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
     args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
@@ -104,10 +94,6 @@ if __name__ == "__main__":
 
     with PartialState().local_main_process_first():
         dataset = dataset.map(prepare_dataset, num_proc=training_args.dataset_num_proc)
-
-    if args.max_samples is not None:
-        for split in dataset:
-            dataset[split] = dataset[split].select(range(min(args.max_samples, len(dataset[split]))))
 
     prompts = dataset[args.dataset_test_split]["prompt"][:8]
 
