@@ -105,6 +105,8 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
+    ds = load_dataset(args.dataset_name)
+
     def process(row):
         row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
         row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
