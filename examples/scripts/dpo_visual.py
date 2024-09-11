@@ -106,9 +106,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     ds = load_dataset(args.dataset_name)
-    if args.sanity_check:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
 
     def process(row):
         row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
