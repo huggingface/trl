@@ -77,6 +77,7 @@ trainer = GKDTrainer(
     eval_dataset=eval_dataset,
 )
 trainer.train()
+```
 
 ### Expected dataset format
 
