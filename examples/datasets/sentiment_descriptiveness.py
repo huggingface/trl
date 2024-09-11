@@ -9,9 +9,6 @@ from transformers import AutoTokenizer, HfArgumentParser
 
 
 """
-# debug
-python -i examples/datasets/sentiment_descriptiveness.py  --push_to_hub
-# actual push
 python examples/datasets/sentiment_descriptiveness.py \
     --hf_repo_id sentiment-trl-style \
     --task sentiment \
@@ -30,7 +27,6 @@ api = HfApi()
 
 @dataclass
 class ScriptArguments:
-    debug: Optional[bool] = field(default=False, metadata={"help": "Enable debug mode"})
     hf_entity: Optional[str] = field(default=None, metadata={"help": "The Hugging Face entity to use"})
     hf_repo_id: Optional[str] = field(
         default="sentiment-trl-style", metadata={"help": "The Hugging Face repository ID"}
@@ -90,11 +86,6 @@ if __name__ == "__main__":
             "test": individual_ds.select(range(MAGIC_TRAIN_NUMBER, len(individual_ds))),
         }
     )
-
-    MAX_DEBUG_SAMPLES = 50
-    if args.debug:
-        for key in ds:
-            ds[key] = ds[key].select(range(min(MAX_DEBUG_SAMPLES, len(ds[key]))))
 
     # columns are `['sample2', 'sample3', 'sample0', 'query', 'sample1', 'best']`
     NUM_SAMPLES = 4
