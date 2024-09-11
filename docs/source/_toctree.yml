@@ -50,6 +50,8 @@
       title: Iterative SFT
     - local: reward_trainer
       title: Reward Model
+    - local: gkd_trainer
+      title: GKD Trainer
     title: Trainers
   - local: models
     title: Model Classes
