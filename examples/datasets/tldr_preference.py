@@ -55,5 +55,4 @@ if __name__ == "__main__":
     )
 
     if args.push_to_hub:
-        # api = HfApi()
         dataset.push_to_hub(args.repo_id)
