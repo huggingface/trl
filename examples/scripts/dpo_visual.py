@@ -27,21 +27,8 @@ accelerate launch examples/scripts/dpo_visual.py \
     --lora_target_modules=all-linear
 """
 
-import logging
-import os
-from contextlib import nullcontext
-
-TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
-
-from trl.commands.cli_utils import DPOScriptArguments, init_zero_verbose, TrlParser
+from trl.commands.cli_utils import DPOScriptArguments, TrlParser
 from accelerate import PartialState
-
-if TRL_USE_RICH:
-    init_zero_verbose()
-    FORMAT = "%(message)s"
-
-    from rich.console import Console
-    from rich.logging import RichHandler
 
 import torch
 from datasets import load_dataset
@@ -51,25 +38,15 @@ from trl import (
     DPOConfig,
     DPOTrainer,
     ModelConfig,
-    RichProgressCallback,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
 
 
-if TRL_USE_RICH:
-    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
-
-
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, DPOConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
-
-    # Force use our print callback
-    if TRL_USE_RICH:
-        training_args.disable_tqdm = True
-        console = Console()
 
     ################
     # Model & Tokenizer
@@ -126,16 +103,6 @@ if __name__ == "__main__":
         ]
 
     ################
-    # Optional rich context managers
-    ###############
-    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the DPOTrainer...")
-    save_context = (
-        nullcontext()
-        if not TRL_USE_RICH
-        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
-    )
-
-    ################
     # Dataset
     ################
     ds = load_dataset(args.dataset_name)
@@ -160,19 +127,15 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    with init_context:
-        trainer = DPOTrainer(
-            model,
-            ref_model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            tokenizer=processor,
-            peft_config=peft_config,
-            callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-        )
+    trainer = DPOTrainer(
+        model,
+        ref_model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=processor,
+        peft_config=peft_config,
+    )
 
     trainer.train()
-
-    with save_context:
-        trainer.save_model(training_args.output_dir)
+    trainer.save_model(training_args.output_dir)
