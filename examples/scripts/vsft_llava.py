@@ -37,9 +37,8 @@ import os
 from contextlib import nullcontext
 
 from trl.commands.cli_utils import init_zero_verbose, SFTScriptArguments, TrlParser
-from trl.env_utils import strtobool
 
-TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
+TRL_USE_RICH = os.environ.get("TRL_USE_RICH", False)
 
 if TRL_USE_RICH:
     init_zero_verbose()
