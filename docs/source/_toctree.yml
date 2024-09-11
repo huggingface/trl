@@ -38,8 +38,6 @@
       title: ORPO
     - local: kto_trainer
       title: KTO
-    - local: orpo_trainer
-      title: ORPO
     - local: ppo_trainer
       title: PPO
     - local: ppov2_trainer
