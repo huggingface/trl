@@ -232,7 +232,7 @@ class WinRateCallback(TrainerCallback):
         # At every evaluation step, we generate completions for the model and compare them with the reference
         # completions that have been generated at the beginning of training. We then compute the win rate and log it to
         # the trainer.
-        model = kwargs["model"]
+        model = self.trainer.model_wrapped #kwargs["model"]
         tokenizer = kwargs["tokenizer"]
         accelerator = self.trainer.accelerator
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
