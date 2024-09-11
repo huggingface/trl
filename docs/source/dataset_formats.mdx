@@ -1,12 +1,12 @@
 # Dataset formats
 
-Each TRL trainer supports a specific dataset format. In this document, we provide an overview of the dataset formats supported by each trainer. Additionally, since conversational datasets are very common, we also provide a guide on how to use them, and how to convert them into a standard dataset format for TRL trainers.
+This guide provides an overview of the dataset formats supported by each trainer in TRL. Since conversational datasets are very common, we also provide a guide on how to use them, and how to convert them into a standard dataset format for TRL trainers.
 
 ## Overview of the dataset formats
 
 <table>
   <tr>
-    <th>Dataset type \ Dataset format</th>
+    <th>Dataset type \ format</th>
     <th>Standard</th>
     <th>Conversational</th>
   </tr>
@@ -90,7 +90,7 @@ example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
 
 ### Conversational dataset format
 
-Conversational datasets are used for tasks involving dialogues or chat interactions between users and assistants. Unlike standard datasets format, these contain sequences of messages where each message has a `role` (e.g., `"user"` or `"assistant"`) and `content` (the message text).
+Conversational datasets are used for tasks involving dialogues or chat interactions between users and assistants. Unlike standard dataset formats, these contain sequences of messages where each message has a `role` (e.g., `"user"` or `"assistant"`) and `content` (the message text).
 
 ```python
 messages = [
@@ -115,7 +115,7 @@ example = {
 }
 ```
 
-Conversational datasets are useful for training chat-based models but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
+Conversational datasets are useful for training chat models, but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
 ### Language modeling
 
