@@ -65,7 +65,6 @@ class ScriptArguments:
     )
 
     # instrumentation
-    sanity_check: Optional[bool] = field(default=False, metadata={"help": "only train on 1000 samples"})
     report_to: Optional[str] = field(
         default="wandb",
         metadata={
@@ -89,7 +88,6 @@ class ScriptArguments:
 
 def get_stack_exchange_paired(
     data_dir: str = "data/rl",
-    sanity_check: bool = False,
     cache_dir: Optional[str] = None,
     num_proc=24,
 ) -> Dataset:
@@ -113,9 +111,6 @@ def get_stack_exchange_paired(
         verification_mode="no_checks",
     )
     original_columns = dataset.column_names
-
-    if sanity_check:
-        dataset = dataset.select(range(min(len(dataset), 1000)))
 
     def return_prompt_and_responses(samples) -> Dict[str, str]:
         return {
@@ -164,7 +159,7 @@ if __name__ == "__main__":
     tokenizer.pad_token = tokenizer.eos_token
 
     # 2. Load the Stack-exchange paired dataset
-    train_dataset = get_stack_exchange_paired(data_dir="data/rl", sanity_check=script_args.sanity_check)
+    train_dataset = get_stack_exchange_paired(data_dir="data/rl")
     train_dataset = train_dataset.filter(
         lambda x: len(x["prompt"]) + len(x["chosen"]) <= script_args.max_length
         and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length,
@@ -172,7 +167,7 @@ if __name__ == "__main__":
     )
 
     # 3. Load evaluation dataset
-    eval_dataset = get_stack_exchange_paired(data_dir="data/evaluation", sanity_check=True)
+    eval_dataset = get_stack_exchange_paired(data_dir="data/evaluation")
     eval_dataset = eval_dataset.filter(
         lambda x: len(x["prompt"]) + len(x["chosen"]) <= script_args.max_length
         and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length,
