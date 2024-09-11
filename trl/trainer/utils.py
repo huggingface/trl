@@ -906,8 +906,6 @@ class OnPolicyConfig(TrainingArguments):
     Parameters:
         run_name (`Optional[str]`, *optional*, defaults to `None`):
             Name of the run.
-        sanity_check (`bool`, *optional*, defaults to `False`):
-            Whether to run in debug mode.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
@@ -926,10 +924,10 @@ class OnPolicyConfig(TrainingArguments):
             Truncation token id.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
-        penalty_reward_value (`int`, *optional*, defaults to `-1`):
-            Reward value for responses that do not contain `stop_token_id`.
-        non_eos_penalty (`bool`, *optional*, defaults to `False`):
-            Whether to penalize responses that do not contain `stop_token_id`.
+        missing_eos_penalty (`Optional[float]`, *optional*, defaults to `None`):
+            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
+            to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
+            value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
         world_size (`Optional[int]`, *optional*, defaults to `None`):
@@ -949,7 +947,6 @@ class OnPolicyConfig(TrainingArguments):
     """
 
     run_name: Optional[str] = None
-    sanity_check: bool = False
     dataset_num_proc: Optional[int] = None
     num_mini_batches: int = 1
     total_episodes: Optional[int] = None
@@ -959,8 +956,7 @@ class OnPolicyConfig(TrainingArguments):
     stop_token: Optional[Literal["eos"]] = None
     stop_token_id: Optional[int] = None
     temperature: float = 0.7
-    penalty_reward_value: int = -1
-    non_eos_penalty: bool = False
+    missing_eos_penalty: Optional[float] = None
     sft_model_path: str = "EleutherAI/pythia-160m"
     world_size: Optional[int] = None
     num_total_batches: Optional[int] = None
