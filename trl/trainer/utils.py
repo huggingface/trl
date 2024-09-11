@@ -903,8 +903,6 @@ class OnPolicyConfig(TrainingArguments):
     Parameters:
         run_name (`Optional[str]`, *optional*, defaults to `None`):
             Name of the run.
-        sanity_check (`bool`, *optional*, defaults to `False`):
-            Whether to run in debug mode.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
@@ -946,7 +944,6 @@ class OnPolicyConfig(TrainingArguments):
     """
 
     run_name: Optional[str] = None
-    sanity_check: bool = False
     dataset_num_proc: Optional[int] = None
     num_mini_batches: int = 1
     total_episodes: Optional[int] = None

@@ -543,7 +543,6 @@ class SFTTrainer(Trainer):
         remove_unused_columns=True,
     ):
         use_formatting_func = formatting_func is not None and dataset_text_field is None
-        self._dataset_sanity_checked = False
 
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
@@ -557,13 +556,10 @@ class SFTTrainer(Trainer):
                 return_length=False,
             )
 
-            if use_formatting_func and not self._dataset_sanity_checked:
-                if not isinstance(formatting_func(element), list):
-                    raise ValueError(
-                        "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
-                    )
-                else:
-                    self._dataset_sanity_checked = True
+            if use_formatting_func and not isinstance(formatting_func(element), list):
+                raise ValueError(
+                    "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
+                )
 
             return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
 
