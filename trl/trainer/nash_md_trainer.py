@@ -1,194 +1,323 @@
-import gc
-import math
-import os
-import time
-from typing import Dict, List, Optional, Tuple, Union
+# Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-import numpy as np
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import Accelerator
-from accelerate.utils import broadcast
-from datasets import Dataset
-from torch.utils.data import DataLoader
-from transformers import (
-    DataCollatorWithPadding,
-    GenerationConfig,
-    PreTrainedTokenizer,
-    TrainerCallback,
-    TrainerControl,
-)
-from transformers.integrations import get_reporting_integration_callbacks
-from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
-from transformers.trainer_callback import CallbackHandler, PrinterCallback
+from datasets import Dataset, IterableDataset
+from transformers import PreTrainedTokenizerBase, TrainerCallback
+from transformers.modeling_utils import PreTrainedModel
+from transformers.trainer_utils import EvalPrediction
+from transformers.utils import is_apex_available
 
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
-from ..trainer.utils import (
-    OnlineTrainerState,
-    batch_generation,
-    disable_dropout_in_model,
-    exact_div,
-    first_true_indices,
-    forward,
-    get_reward,
-    prepare_deepspeed,
-    truncate_response,
-)
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
+from .utils import (
+    get_reward,
+    truncate_right,
+)
 
 
-INVALID_LOGPROB = 1.0
-
-
-@staticmethod
-def logits_to_logprobs(logits, response_ids, temperature=1.0):
-    logits /= temperature + 1e-7
-    logprobs = F.log_softmax(logits, dim=-1)
-    return torch.gather(logprobs, -1, response_ids.unsqueeze(-1)).squeeze(-1)
+if is_apex_available():
+    pass
 
 
 class NashMDTrainer(OnlineDPOTrainer):
+    r"""
+    Initialize NashMDTrainer as a subclass of [`OnlineDPOConfig`].
+
+    Args:
+        model (`transformers.PreTrainedModel`):
+            The model to train, preferably an `AutoModelForCausalLM`.
+        ref_model (`PreTrainedModelWrapper`):
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
+            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
+        reward_model (`transformers.PreTrainedModel`):
+            The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
+        judge (`BasePairwiseJudge`):
+            The judge to use for pairwise comparison of model completions.
+        args (`NashMDConfig`):
+            The NashMD config arguments to use for training.
+        data_collator (`transformers.DataCollator`):
+            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
+            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+        train_dataset (`datasets.Dataset`):
+            The dataset to use for training.
+        eval_dataset (`datasets.Dataset`):
+            The dataset to use for evaluation.
+        tokenizer (`transformers.PreTrainedTokenizerBase`):
+            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        model_init (`Callable[[], transformers.PreTrainedModel]`):
+            The model initializer to use for training. If None is specified, the default model initializer will be used.
+        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return
+            a dictionary string to metric values.
+        callbacks (`List[transformers.TrainerCallback]`):
+            The callbacks to use for training.
+        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            The optimizer and scheduler to use for training.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
+            The function to use to preprocess the logits before computing the metrics.
+    """
+
+    _tag_names = ["trl", "nash-md"]
+
     def __init__(
         self,
-        config: NashMDConfig,
-        tokenizer: PreTrainedTokenizer,
-        model: nn.Module,
-        ref_model: nn.Module,
-        reward_model: nn.Module,
-        train_dataset: Dataset,
-        data_collator: Optional[DataCollatorWithPadding] = None,
+        model: Union[PreTrainedModel, nn.Module] = None,
+        ref_model: Union[PreTrainedModel, nn.Module] = None,
+        reward_model: Optional[nn.Module] = None,
+        args: Optional[NashMDConfig] = None,
+        data_collator: Optional[Callable] = None,
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        # less commonly used
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        model_init: Optional[Callable[[], PreTrainedModel]] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ) -> None:
-        self.args = config
-        args = config
-        self.tokenizer = tokenizer
-        self.model = model
-
-        self.model.generation_config.eos_token_id = (
-            None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        super().__init__(
+            model=model,
+            ref_model=ref_model,
+            reward_model=reward_model,
+            args=args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            tokenizer=tokenizer,
+            model_init=model_init,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-        self.model.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
-        self.ref_model = ref_model
-        self.reward_model = reward_model
-        self.train_dataset = train_dataset
-        self.train_dataset_len = len(train_dataset)
-        self.data_collator = data_collator
-        self.eval_dataset = eval_dataset
-        self.optimizer, self.lr_scheduler = optimizers
+        self.mixture_coeff = args.mixture_coeff
 
-        #########
-        # calculate various batch sizes
-        #########
-        if args.total_episodes is None:  # allow the users to define episodes in terms of epochs.
-            args.total_episodes = int(args.num_train_epochs * self.train_dataset_len)
-        accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
-        self.accelerator = accelerator
-        args.world_size = accelerator.num_processes
-        args.local_batch_size = (
-            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
-        )
-        args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
-        args.batch_size = int(args.local_batch_size * args.world_size)
-        args.mini_batch_size = exact_div(
-            args.batch_size, args.num_mini_batches, "`batch_size` must be a multiple of `num_mini_batches`"
-        )
-        args.local_mini_batch_size = exact_div(
-            args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
-        )
-        args.num_updates = args.total_episodes // args.batch_size
-        time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
-        time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
-        self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
-        if args.num_sample_generations > 0:
-            self.sample_generations_freq = max(1, args.num_updates // args.num_sample_generations)
-        self.local_dataloader_batch_size = exact_div(
-            args.local_batch_size,
-            args.num_generation_per_prompt,
-            "`local_batch_size` must be a multiple of `num_generation_per_prompt`",
-        )  # DPO logic: repeats the same prompt args.rloo_k times
+        # Overwrite the stats dictionary to include NashMD specific statistics
+        self.stats = {
+            # Remove "non_score_reward", "rlhf_reward", "scores"
+            # Add "loss/dpo"
+            "loss/dpo": [],
+            "objective/kl": [],
+            "objective/entropy": [],
+            # Replace "scores" by "model_scores" and "ref_scores"
+            "objective/model_scores": [],
+            "objective/ref_scores": [],
+            "objective/scores_margin": [],
+            "rewards/chosen": [],
+            "rewards/rejected": [],
+            "rewards/accuracies": [],
+            "rewards/margins": [],
+            "logps/chosen": [],
+            "logps/rejected": [],
+            # Replace "contain_eos_token" by "model_contain_eos_token" and "ref_contain_eos_token"
+            "val/model_contain_eos_token": [],
+            "val/ref_contain_eos_token": [],
+        }
 
-        ### hyperparams stuff
-        self.beta = config.beta
-        self.loss_type = config.loss_type
-
-        #########
-        # setup model, optimizer, and others
-        #########
-        if args.disable_dropout:
-            disable_dropout_in_model(self.model)
-        self.reward_model.eval()
-
-        if args.stop_token and args.stop_token == "eos":
-            args.stop_token_id = tokenizer.eos_token_id
-        self.create_optimizer_and_scheduler(num_training_steps=args.num_updates)
-
-        #########
-        ### trainer specifics
-        #########
-        self.state = OnlineTrainerState(
-            is_local_process_zero=self.is_local_process_zero(),
-            is_world_process_zero=self.is_world_process_zero(),
-        )
-        default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
-        self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
-        self.callback_handler = CallbackHandler(
-            self.callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
-        )
-        self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
-        self.control = TrainerControl()
-        self.current_flos = 0
-        self.hp_search_backend = None
-        self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
-        self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
-        # Create distant repo and output directory if needed
-        self.hub_model_id = None
-        if self.args.push_to_hub:
-            self.init_hf_repo()
-        if self.args.should_save:
-            os.makedirs(self.args.output_dir, exist_ok=True)
-        self.backup_model = None
-
-        #########
-        ### setup dataloader
-        #########
-        self.dataloader = DataLoader(
-            self.train_dataset,
-            batch_size=self.local_dataloader_batch_size,
-            shuffle=True,
-            collate_fn=DataCollatorWithPadding(tokenizer),
-            drop_last=True,  # needed; otherwise the last batch will be of ragged shape
-        )
-        # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
-        # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
-        torch.manual_seed(args.seed)
-        self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
-        torch.manual_seed(self.local_seed)  # reset the local seed again
-
-        self.eval_dataloader = DataLoader(
-            self.eval_dataset,
-            batch_size=args.per_device_eval_batch_size,
-            collate_fn=DataCollatorWithPadding(self.tokenizer),
-            drop_last=True,
-        )  # no need to shuffle eval dataset
-        self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
-
-        if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
+    def _generate_completions(self, model, prompts):
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+            model_output = unwrapped_model.generate(
+                input_ids=prompts["input_ids"],
+                attention_mask=prompts["attention_mask"],
+                generation_config=self.generation_config,
             )
-            self.ref_model = prepare_deepspeed(self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16)
-            self.deepspeed = self.model
+
+            with torch.no_grad(), unwrap_model_for_generation(self.ref_model, self.accelerator) as unwrapped_ref_model:
+                mixture_model = GeometricMixtureWrapper(
+                    model=unwrapped_model,
+                    ref_model=unwrapped_ref_model,
+                    generation_config=self.generation_config,
+                    mixture_coeff=self.mixture_coeff,
+                    device=self.accelerator.device,
+                )
+
+                mixture_output = mixture_model.generate(
+                    input_ids=prompts["input_ids"],
+                    attention_mask=prompts["attention_mask"],
+                    generation_config=self.generation_config,
+                )
+
+        return model_output, mixture_output
+
+    def _process_completions(self, model_output, ref_output, prompts):
+        context_length = prompts["input_ids"].shape[1]
+
+        # Process model completions
+        model_completion_ids = model_output[:, context_length:]
+        model_completion_ids, model_completion_mask = truncate_right(
+            model_completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+        )
+        model_data = {
+            "input_ids": torch.cat((prompts["input_ids"], model_completion_ids), dim=1),
+            "attention_mask": torch.cat((prompts["attention_mask"], model_completion_mask), dim=1),
+        }
+
+        # Process reference model completions
+        ref_completion_ids = ref_output[:, context_length:]
+        ref_completion_ids, ref_completion_mask = truncate_right(
+            ref_completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+        )
+        ref_data = {
+            "input_ids": torch.cat((prompts["input_ids"], ref_completion_ids), dim=1),
+            "attention_mask": torch.cat((prompts["attention_mask"], ref_completion_mask), dim=1),
+        }
+
+        return model_data, ref_data
+
+    def _compute_rewards(self, model_data, ref_data, context_length):
+        all_input_ids = torch.cat([model_data["input_ids"], ref_data["input_ids"]], dim=0)
+
+        with torch.no_grad():
+            _, all_scores, _ = get_reward(
+                self.reward_model, all_input_ids, self.tokenizer.pad_token_id, context_length
+            )
+
+        model_scores, ref_scores = all_scores.chunk(2)
+
+        # Apply EOS penalty if needed
+        if self.args.missing_eos_penalty is not None:
+            model_contain_eos = torch.any(model_data["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
+            ref_contain_eos = torch.any(ref_data["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
+            model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
+            ref_scores[~ref_contain_eos] -= self.args.missing_eos_penalty
+
+        return model_scores, ref_scores
+
+    def _compute_logprobs(self, model, model_data, mixture_data, context_length):
+        def compute_logprobs_for_data(m, data, return_logits=False, model_logits=None):
+            output = m(data["input_ids"], attention_mask=data["attention_mask"])
+            logits = output.logits[:, context_length - 1 : -1]
+            if model_logits is not None:
+                # geometric mixture of logits
+                logits = logits * self.mixture_coeff + model_logits * (1 - self.mixture_coeff)
+            logprobs = F.log_softmax(logits, dim=-1)
+            token_logprobs = torch.gather(logprobs, 2, data["input_ids"][:, context_length:].unsqueeze(-1)).squeeze(-1)
+            return token_logprobs, logits if return_logits else token_logprobs
+
+        # Compute logprobs for model completions
+        model_logprobs_model_data, model_logits_model_data = compute_logprobs_for_data(
+            model, model_data, return_logits=True
+        )
+        # Compute logprobs for model on reference completions (for XPO loss)
+        model_logprobs_mixture_data, model_logits_mixture_data = compute_logprobs_for_data(
+            model, mixture_data, return_logits=True
+        )
+
+        # Compute logprobs for reference model completions
+        with torch.no_grad():
+            mixture_logprobs_model_data = compute_logprobs_for_data(
+                self.ref_model, model_data, model_logits=model_logits_model_data.detach()
+            )
+            mixture_logprobs_mixture_data = compute_logprobs_for_data(
+                self.ref_model, mixture_data, model_logits=model_logits_mixture_data.detach()
+            )
+
+        # Mask padding tokens
+        model_padding_mask = model_data["attention_mask"][:, context_length:] == 0
+        ref_padding_mask = mixture_data["attention_mask"][:, context_length:] == 0
+        model_logprobs_model_data = model_logprobs_model_data.masked_fill(model_padding_mask, 0.0)
+        model_logprobs_mixture_data = model_logprobs_mixture_data.masked_fill(ref_padding_mask, 0.0)
+        mixture_logprobs_mixture_data = mixture_logprobs_mixture_data.masked_fill(ref_padding_mask, 0.0)
+        mixture_logprobs_model_data = mixture_logprobs_model_data.masked_fill(model_padding_mask, 0.0)
+
+        return (
+            model_logprobs_model_data,
+            model_logprobs_mixture_data,
+            mixture_logprobs_mixture_data,
+            mixture_logprobs_model_data,
+        )
+
+    def _compute_losses(
+        self,
+        model_logprobs_model_data,
+        model_logprobs_mixture_data,
+        mixture_logprobs_mixture_data,
+        mixture_logprobs_model_data,
+        model_data_scores,
+        mixture_data_scores,
+    ):
+        # Compute log probs
+        model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
+        model_logprobs_ref_data_sum = model_logprobs_mixture_data.sum(1)
+        mixture_logprobs_mixture_data_sum = mixture_logprobs_mixture_data.sum(1)
+        mixture_logprobs_model_data_sum = mixture_logprobs_model_data.sum(1)
+
+        chosen_model_logprobs = torch.where(chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        chosen_ref_logprobs = torch.where(chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        chosen_log_ratios = chosen_model_logprobs - chosen_ref_logprobs
+
+        rejected_model_logprobs = torch.where(~chosen_mask, model_logprobs_model_data_sum, model_logprobs_ref_data_sum)
+        rejected_ref_logprobs = torch.where(~chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
+        rejected_log_ratios = rejected_model_logprobs - rejected_ref_logprobs
+
+        # Compute logits as the difference between chosen and rejected log ratios
+        logits = chosen_log_ratios - rejected_log_ratios
+
+        if self.args.loss_type == "sigmoid":
+            dpo_losses = -F.logsigmoid(self.args.beta * logits)
+        elif self.args.loss_type == "ipo":
+            dpo_losses = (logits - 1 / (2 * self.args.beta)) ** 2
         else:
-            self.ref_model = self.ref_model.to(self.accelerator.device)
-            self.reward_model = self.reward_model.to(self.accelerator.device)
+            raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
+
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+        model.train()
+        self.ref_model.eval()
+
+        # need the prompt_ only
+        inputs = self._prepare_inputs(inputs)
+        context_length = inputs["prompt_input_ids"].shape[1]
+        prompts = {
+            "input_ids": inputs["prompt_input_ids"],
+            "attention_mask": inputs["prompt_attention_mask"],
+        }
+        del inputs
+
+        # Sample completions from both the model and the reference model
+        model_output, mixture_output = self._generate_completions(model, prompts)
+
+        # Process model completions
+        model_data, mixture_data = self._process_completions(model_output, mixture_output, prompts)
+
+        # Compute rewards
+        model_data_scores, mixture_data_scores = self._compute_rewards(model_data, mixture_data, context_length)
+
+        # Compute logprobs
+        (
+            model_logprobs_model_data,
+            model_logprobs_mixture_data,
+            mixture_logprobs_mixture_data,
+            mixture_logprobs_model_data,
+        ) = self._compute_logprobs(model, model_data, mixture_data, context_length)
+
+        # Compute loss
+        loss = self._compute_losses(
+            model_logprobs_model_data,
+            model_logprobs_mixture_data,
+            mixture_logprobs_mixture_data,
+            mixture_logprobs_model_data,
+            model_data_scores,
+            mixture_data_scores,
+        )
 
     def train(self):
         args = self.args
