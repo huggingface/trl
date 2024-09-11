@@ -26,8 +26,7 @@ python examples/scripts/rloo/rloo_tldr.py \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --missing_eos_penalty 1.0 \
     --stop_token eos \
-    --response_length 53 \
-    --sanity_check
+    --response_length 53
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/rloo/rloo_tldr.py \
@@ -77,9 +76,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
-    if config.sanity_check:
-        for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].select(range(1000))
     train_dataset = raw_datasets["train"]
     eval_dataset = raw_datasets["validation"]
 
@@ -97,7 +93,6 @@ if __name__ == "__main__":
         return dataset.map(
             tokenize,
             remove_columns=dataset.column_names,
-            load_from_cache_file=not config.sanity_check,
             num_proc=config.dataset_num_proc,
         )
 
