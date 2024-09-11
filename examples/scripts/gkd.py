@@ -45,50 +45,24 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
-import logging
-import os
-from contextlib import nullcontext
-
 from datasets import load_dataset
-from tqdm.rich import tqdm
 from transformers import AutoTokenizer
 
 from trl import (
     GKDConfig,
     GKDTrainer,
     ModelConfig,
-    RichProgressCallback,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
-from trl.commands.cli_utils import SFTScriptArguments, TrlParser, init_zero_verbose
-from trl.env_utils import strtobool
+from trl.commands.cli_utils import SFTScriptArguments, TrlParser
 from trl.trainer.callbacks import LogCompletionsCallback
-
-
-TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
-
-if TRL_USE_RICH:
-    init_zero_verbose()
-    FORMAT = "%(message)s"
-
-    from rich.console import Console
-    from rich.logging import RichHandler
-
-    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
-
-tqdm.pandas()
 
 
 if __name__ == "__main__":
     parser = TrlParser((SFTScriptArguments, GKDConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
-
-    # Force use our print callback
-    if TRL_USE_RICH:
-        training_args.disable_tqdm = True
-        console = Console()
 
     ################
     # Model & Tokenizer
@@ -141,32 +115,19 @@ if __name__ == "__main__":
     prompts = [tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True) for prompt in prompts]
 
     ################
-    # Optional rich context managers
-    ###############
-    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the SFTTrainer...")
-    save_context = (
-        nullcontext()
-        if not TRL_USE_RICH
-        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
-    )
-
-    ################
     # Training
     ################
-    with init_context:
-        trainer = GKDTrainer(
-            model=model_config.model_name_or_path,
-            teacher_model=training_args.teacher_model_name_or_path,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
-            peft_config=get_peft_config(model_config),
-            callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-        )
+    trainer = GKDTrainer(
+        model=model_config.model_name_or_path,
+        teacher_model=training_args.teacher_model_name_or_path,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer,
+        peft_config=get_peft_config(model_config),
+    )
     log_completions_callback = LogCompletionsCallback(prompts)
     trainer.add_callback(log_completions_callback)
     trainer.train()
 
-    with save_context:
-        trainer.save_model(training_args.output_dir)
+    trainer.save_model(training_args.output_dir)
