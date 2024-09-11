@@ -1324,7 +1324,7 @@ class KTOTrainer(Trainer):
             "eval_logits/chosen": metrics["logits/chosen"],
             "eval_logits/rejected": metrics["logits/rejected"],
         }
-        logits = torch.tensor([v for k, v in logits_dict.items() if k not in ignore_keys]).to(self.accelerator.device)
+        logits = torch.tensor([v for k, v in logits_dict.items() if k not in ignore_keys], device=self.accelerator.device)
         labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
