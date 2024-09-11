@@ -30,7 +30,7 @@ jobs:
         python -m pip install --upgrade pip
         # install PEFT & transformers from source
         pip install -U git+https://github.com/huggingface/peft.git
-        pip install -U git+https://github.com/huggingface/transformers.git@25d1d3862086f76741b150682d27c19e8b69c828
+        pip install -U git+https://github.com/huggingface/transformers.git
         # cpu version of pytorch
         pip install ".[test, diffusers]"
     - name: Test with pytest
