@@ -223,3 +223,11 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --output-filename benchmark/trl/pr-1540/ppov2 \
     --scan-history
 ```
+
+## PPOv2Trainer
+
+[[autodoc]] PPOv2Trainer
+
+## PPOv2Config
+
+[[autodoc]] PPOv2Config
