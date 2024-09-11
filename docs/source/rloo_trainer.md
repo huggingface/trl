@@ -263,3 +263,12 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --output-filename benchmark/trl/pr-1540/rloo \
     --scan-history
 ```
+
+
+## RLOOTrainer
+
+[[autodoc]] RLOOTrainer
+
+## RLOOConfig
+
+[[autodoc]] RLOOConfig
