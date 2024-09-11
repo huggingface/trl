@@ -42,7 +42,7 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 # The model to optimise
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 # The teacher model to calculate the KL divergence against
-teacher_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+teacher_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-1.5B-Instruct")
 
 train_dataset = Dataset.from_dict(
     {
