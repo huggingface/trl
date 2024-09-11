@@ -40,7 +40,6 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_liger_available, is_peft_available
-from .callbacks import RichProgressCallback
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -423,12 +422,6 @@ class SFTTrainer(Trainer):
             self.train_dataset.infinite = True
         elif self.args.max_steps == -1 and args.packing:
             self.train_dataset.infinite = False
-
-        if any(isinstance(callback, RichProgressCallback) for callback in self.callback_handler.callbacks):
-            for callback in self.callback_handler.callbacks:
-                # Remove the PrinterCallback to avoid duplicated prints in case we passed a `RichProgressCallback`
-                if callback.__class__.__name__ == "PrinterCallback":
-                    self.callback_handler.pop_callback(callback)
 
     @wraps(Trainer.train)
     def train(self, *args, **kwargs):
