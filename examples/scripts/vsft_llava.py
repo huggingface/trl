@@ -32,43 +32,22 @@ For LLaVA-NeXT, use: (requires transformers>=4.45)
     --model_name_or_path llava-hf/llava-v1.6-mistral-7b-hf
 """
 
-import logging
-import os
-from contextlib import nullcontext
-
-from trl.commands.cli_utils import init_zero_verbose, SFTScriptArguments, TrlParser
-from trl.env_utils import strtobool
-
-TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
-
-if TRL_USE_RICH:
-    init_zero_verbose()
-    FORMAT = "%(message)s"
-
-    from rich.console import Console
-    from rich.logging import RichHandler
+from trl.commands.cli_utils import SFTScriptArguments, TrlParser
 
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset
 
-from tqdm.rich import tqdm
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
 from trl import (
     ModelConfig,
-    RichProgressCallback,
     SFTConfig,
     SFTTrainer,
     get_peft_config,
     get_quantization_config,
     get_kbit_device_map,
 )
-
-tqdm.pandas()
-
-if TRL_USE_RICH:
-    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
 if __name__ == "__main__":
@@ -78,10 +57,6 @@ if __name__ == "__main__":
     training_args.dataset_text_field = ""  # need a dummy field
     training_args.remove_unused_columns = False
     training_args.dataset_kwargs = {"skip_prepare_dataset": True}
-    # Force use our print callback
-    if TRL_USE_RICH:
-        training_args.disable_tqdm = True
-        console = Console()
 
     ################
     # Model, Tokenizer & Processor
@@ -133,34 +108,21 @@ if __name__ == "__main__":
     eval_dataset = raw_datasets[sft_script_args.dataset_test_split]
 
     ################
-    # Optional rich context managers
-    ###############
-    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the SFTTrainer...")
-    save_context = (
-        nullcontext()
-        if not TRL_USE_RICH
-        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
-    )
-
-    ################
     # Training
     ################
-    with init_context:
-        trainer = SFTTrainer(
-            model=model,
-            args=training_args,
-            data_collator=collate_fn,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            tokenizer=processor.tokenizer,
-            peft_config=get_peft_config(model_config),
-            callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-        )
+    trainer = SFTTrainer(
+        model=model,
+        args=training_args,
+        data_collator=collate_fn,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=processor.tokenizer,
+        peft_config=get_peft_config(model_config),
+    )
 
     trainer.train()
 
-    with save_context:
-        trainer.save_model(training_args.output_dir)
-        trainer.push_to_hub()
-        if Accelerator().is_main_process:
-            processor.push_to_hub(training_args.hub_model_id)
+    trainer.save_model(training_args.output_dir)
+    trainer.push_to_hub()
+    if Accelerator().is_main_process:
+        processor.push_to_hub(training_args.hub_model_id)
