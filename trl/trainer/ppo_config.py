@@ -148,7 +148,7 @@ class PPOConfig:
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     task_name: Optional[str] = None
     model_name: str = "gpt2"
-    query_dataset: str = "imdb"
+    query_dataset: str = "stanfordnlp/imdb"
     reward_model: str = "sentiment-analysis:lvwerra/distilbert-imdb"
     remove_unused_columns: bool = True
     tracker_kwargs: JSONDict = field(default_factory=dict)
@@ -204,6 +204,10 @@ class PPOConfig:
         optimize_device_cache = optimize_cuda_cache
 
     def __post_init__(self):
+        warnings.warn(
+            "`PPOConfig` is deprecated and will be removed in the future. Please use `PPOv2Config` with `PPOv2Trainer` instead.",
+            FutureWarning,
+        )
         if self.forward_batch_size is not None:
             warnings.warn(
                 "Note that using `forward_batch_size` is deprecated, use `mini_batch_size` instead. By setting it you overwrite `mini_batch_size` which affects both the batch size during forward passes and also the mini batch size for PPO optimization."

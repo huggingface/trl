@@ -2,6 +2,7 @@
 from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule
 
+
 _import_structure = {
     "base_environment": ["TextEnvironment", "TextHistory"],
 }

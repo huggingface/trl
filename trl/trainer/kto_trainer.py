@@ -138,11 +138,11 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
 
     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
     in case the prompt + completion responses is/are too long. First
-        we truncate the prompt; if we're still too long, we truncate the completion.
+    we truncate the prompt; if we're still too long, we truncate the completion.
 
     We also create the labels for the completion responses, which are of length equal to
-        the sum of the length of the prompt and the completion response, with
-        label_pad_token_id  for the prompt tokens.
+    the sum of the length of the prompt and the completion response, with
+    label_pad_token_id  for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -1324,8 +1324,9 @@ class KTOTrainer(Trainer):
             "eval_logits/chosen": metrics["logits/chosen"],
             "eval_logits/rejected": metrics["logits/rejected"],
         }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
+        logits = torch.tensor(
+            [v for k, v in logits_dict.items() if k not in ignore_keys], device=self.accelerator.device
+        )
         labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
