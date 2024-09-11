@@ -9,9 +9,6 @@ from transformers import HfArgumentParser
 
 
 """
-# debug
-python -i examples/datasets/tldr_preference.py --debug --push_to_hub
-# actual push
 python examples/datasets/tldr_preference.py --push_to_hub --hf_entity trl-internal-testing
 """
 
@@ -21,7 +18,6 @@ api = HfApi()
 
 @dataclass
 class ScriptArguments:
-    debug: Optional[bool] = field(default=False, metadata={"help": "Enable debug mode"})
     hf_entity: Optional[str] = field(default=None, metadata={"help": "The Hugging Face entity to use"})
     hf_repo_id: Optional[str] = field(
         default="tldr-preference-trl-style", metadata={"help": "The Hugging Face repository ID"}
@@ -50,14 +46,10 @@ if __name__ == "__main__":
     # Preference dataset
     ################
     ds = load_dataset("openai/summarize_from_feedback", "comparisons")
-    if args.debug:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
     cnndm_batches = ["batch0_cnndm", "cnndm0", "cnndm2"]
-    if not args.debug:
-        ds["validation_cnndm"] = ds["validation"].filter(
-            lambda x: x["batch"] in cnndm_batches, num_proc=args.dataset_num_proc
-        )
+    ds["validation_cnndm"] = ds["validation"].filter(
+        lambda x: x["batch"] in cnndm_batches, num_proc=args.dataset_num_proc
+    )
     ds["validation"] = ds["validation"].filter(
         lambda x: x["batch"] not in cnndm_batches, num_proc=args.dataset_num_proc
     )
@@ -129,9 +121,6 @@ We take the dataset from https://huggingface.co/datasets/openai/summarize_from_f
     # SFT dataset
     ################
     sft_ds = load_dataset("vwxyzjn/summarize_from_feedback_tldr_3_filtered")
-    if args.debug:
-        for key in sft_ds:
-            sft_ds[key] = sft_ds[key].select(range(50))
 
     def sft_process(row):
         row["prompt"] = tldr_format_str.format(**row)

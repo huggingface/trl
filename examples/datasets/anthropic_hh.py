@@ -9,9 +9,6 @@ from transformers import HfArgumentParser
 
 
 """
-# debug
-python -i examples/datasets/anthropic_hh.py --debug --push_to_hub
-# actual push
 python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity trl-internal-testing
 """
 
@@ -21,7 +18,6 @@ api = HfApi()
 
 @dataclass
 class ScriptArguments:
-    debug: Optional[bool] = field(default=False, metadata={"help": "Enable debug mode"})
     hf_entity: Optional[str] = field(default=None, metadata={"help": "The Hugging Face entity to use"})
     hf_repo_id: Optional[str] = field(
         default="hh-rlhf-helpful-base-trl-style", metadata={"help": "The Hugging Face repository ID"}
@@ -69,9 +65,6 @@ if __name__ == "__main__":
         args.hf_entity = api.whoami()["name"]
     full_repo_id = f"{args.hf_entity}/{args.hf_repo_id}"
     ds = load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
-    if args.debug:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
 
     def process(row):
         row["chosen"] = extract_dialogue(row["chosen"])
