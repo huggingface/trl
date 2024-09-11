@@ -30,7 +30,7 @@ from trl import GKDConfig, GKDTrainer
 class TestGKDTrainer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        cls.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
         cls.model = AutoModelForCausalLM.from_pretrained("gpt2")
         cls.generation_config = GenerationConfig(
