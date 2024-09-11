@@ -107,6 +107,10 @@ class OnlineDPOTrainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ) -> None:
+
+        if ref_policy is policy:
+            raise ValueError("`policy` and `ref_policy` are the same Python object but should not be. You probably want two copies of the same model.")
+
         self.ref_model = ref_model
 
         if reward_model is not None and judge is not None:
