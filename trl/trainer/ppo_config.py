@@ -52,7 +52,7 @@ class PPOConfig:
             Name of task to use - used only for tracking purposes.
         model_name (`Optional[str]`, *optional*, defaults to `"gpt2"`):
             Name of model to use - used only for tracking purposes.
-        query_dataset (`Optional[str]`, *optional*, defaults to `"imdb"`):
+        query_dataset (`Optional[str]`, *optional*, defaults to `"stanfordnlp/imdb"`):
             Name of dataset to query - used only for tracking purposes.
         reward_model (`Optional[str]`, *optional*, defaults to `"sentiment-analysis:lvwerra/distilbert-imdb"`):
             Reward model to use - used only for tracking purposes.
