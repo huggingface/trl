@@ -77,7 +77,6 @@ from trl import (
     get_quantization_config,
 )
 
-
 if TRL_USE_RICH:
     logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
@@ -167,9 +166,9 @@ if __name__ == "__main__":
             ref_model,
             args=training_args,
             train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
+            eval_dataset=eval_dataset.select(range(8)),
             tokenizer=tokenizer,
-            peft_config=peft_config,
+            peft_config=get_peft_config(model_config),
             callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
         )
 
