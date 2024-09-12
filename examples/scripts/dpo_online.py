@@ -42,6 +42,7 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
+    maybe_apply_chat_template,
 )
 
 from trl.commands.cli_utils import TrlParser
@@ -71,19 +72,12 @@ if __name__ == "__main__":
     model = AutoModelForCausalLM.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
-    peft_config = get_peft_config(model_config)
-    if peft_config is None:
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
-        )
-    else:
-        ref_model = None
 
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         training_args.reward_model_path,
         trust_remote_code=model_config.trust_remote_code,
         **model_kwargs,
-    )  # .to("cuda")
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
@@ -96,33 +90,22 @@ if __name__ == "__main__":
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # prompt = 'What are some synonyms for the word "beautiful"?'
-    # response = "Nicely, Beautifully, Handsome, Stunning, Wonderful, Gorgeous, Pretty, Stunning, Elegant"
-    # messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": response}]
-    # input_ids = tokenizer.apply_chat_template(messages, return_tensors="pt").to("cuda")
-    # output = reward_model(input_ids)
-
     dataset = load_dataset(args.dataset_name)
 
-    def prepare_dataset(row):
-        prompt = tokenizer.apply_chat_template(row["prompt"], tokenize=False, add_generation_prompt=True)
-        return {"prompt": prompt}
-
     with PartialState().local_main_process_first():
-        dataset = dataset.map(prepare_dataset, num_proc=training_args.dataset_num_proc, load_from_cache_file=False)
-
-    prompts = dataset[args.dataset_test_split]["prompt"][:8]
+        dataset = dataset.map(
+            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
+        )
 
     trainer = OnlineDPOTrainer(
         model=model,
-        ref_model=ref_model,
         reward_model=reward_model,
         args=training_args,
         train_dataset=dataset[args.dataset_train_split],
         eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
-        peft_config=peft_config,
+        peft_config=get_peft_config(model_config),
     )
-    # log_completions_callback = LogCompletionsCallback(prompts)
-    # trainer.add_callback(log_completions_callback)
+    log_completions_callback = LogCompletionsCallback(dataset[args.dataset_test_split]["prompt"][:8], freq=100)
+    trainer.add_callback(log_completions_callback)
     trainer.train()

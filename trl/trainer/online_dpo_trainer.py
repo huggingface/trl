@@ -132,7 +132,7 @@ class OnlineDPOTrainer(Trainer):
         if tokenizer is None:
             raise ValueError("`tokenizer` must be provided.")
 
-        # PEFT
+        # Convert to PEFT model if peft_config is provided
         if peft_config is not None:
             # Check if PEFT is available
             if not is_peft_available():
@@ -144,6 +144,10 @@ class OnlineDPOTrainer(Trainer):
             # Get peft model with the given config
             model = get_peft_model(model, peft_config)
 
+        # Disable dropout in the model if specified
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+
         # Handle the ref_model
         if ref_model is None:
             if peft_config is None:
@@ -154,9 +158,12 @@ class OnlineDPOTrainer(Trainer):
         else:
             self.ref_model = create_reference_model(ref_model)
 
-        # Disable dropout in the model if specified
-        if args.disable_dropout:
-            disable_dropout_in_model(model)
+
+        # Disable the gradient and set the reward model in eval mode
+        if self.reward_model is not None:
+            self.reward_model.eval()
+            for param in self.reward_model.parameters():
+                param.requires_grad = False
 
         # Define the collator is not provided
         if data_collator is None:
