@@ -291,10 +291,6 @@ class LogCompletionsCallback(WandbCallback):
             self.eval_dataset = self.eval_dataset.select(range(num_samples))
 
     def on_step_end(self, args, state, control, **kwargs):
-        # Only log from the main process
-        if not state.is_world_process_zero:
-            return
-
         # Only log once per step (this method may be called multiple times)
         if state.global_step == self._last_logged_step:
             return
@@ -317,6 +313,7 @@ class LogCompletionsCallback(WandbCallback):
                 self.generation_config,
                 args.per_device_eval_batch_size,
             )
+            completions = gather_object(completions)
 
         # Build the data to log
         if self.trainer.accelerator.is_main_process:
