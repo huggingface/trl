@@ -42,6 +42,28 @@ if is_deepspeed_available():
     import deepspeed
 
 
+def _generate_completions(
+    prompts: List[str], model, tokenizer, accelerator, generation_config, batch_size: int = None
+) -> List[str]:
+    completions = []
+    with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+        unwrapped_model.eval()
+        for idx in range(0, len(prompts), batch_size):
+            batch = prompts[idx : idx + batch_size]
+            tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
+            generations = unwrapped_model.generate(
+                **tokenized_batch,
+                generation_config=generation_config,
+            )
+            for prompt, generation in zip(tokenized_batch.input_ids, generations):
+                # Remove prompt from generation
+                generation = generation[len(prompt) :]
+                completion = tokenizer.decode(generation, skip_special_tokens=True)
+                completions.append(completion)
+        unwrapped_model.train()
+    return completions
+
+
 class SyncRefModelCallback(TrainerCallback):
     def __init__(
         self,
@@ -181,8 +203,6 @@ class WinRateCallback(TrainerCallback):
             otherwise, it defaults to using the initial model.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        batch_size (`int`, *optional*):
-            The batch size to use for generating completions. Defaults to 4.
     """
 
     def __init__(
@@ -190,34 +210,17 @@ class WinRateCallback(TrainerCallback):
         judge: BasePairwiseJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        batch_size: int = 4,
+        num_samples: int = None,
     ):
-        self.generation_config = generation_config
         self.judge = judge
-        self.ref_completions = []
         self.trainer = trainer
+        self.generation_config = generation_config
+        self.num_samples = num_samples
+        self.ref_completions = []
         self.eval_dataset = self.trainer.eval_dataset
-        self.batch_size = batch_size
 
-    def generate_completions_for_model(self, model, tokenizer, prompts):
-        completions = []
-        with unwrap_model_for_generation(model, self.trainer.accelerator) as unwrapped_model:
-            unwrapped_model.eval()
-            for idx in range(0, len(prompts), self.batch_size):
-                batch = prompts[idx : idx + self.batch_size]
-                tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
-                generations = unwrapped_model.generate(
-                    **tokenized_batch,
-                    generation_config=self.generation_config,
-                )
-                for prompt, generation in zip(tokenized_batch.input_ids, generations):
-                    # Remove prompt from generation
-                    generation = generation[len(prompt) :]
-                    completion = tokenizer.decode(generation, skip_special_tokens=True)
-                    completions.append(completion)
-
-            unwrapped_model.train()
-        return completions
+        if num_samples is not None:
+            self.eval_dataset = self.eval_dataset.select(range(num_samples))
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # When the trainer is initialized, we generate completions for the reference model.
@@ -226,19 +229,24 @@ class WinRateCallback(TrainerCallback):
         accelerator = self.trainer.accelerator
         model = getattr(self.trainer, "ref_model", kwargs["model"])  # get the ref model if any, else use the model
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
-            self.ref_completions = self.generate_completions_for_model(model, tokenizer, prompts)
+            self.ref_completions = _generate_completions(
+                prompts, model, tokenizer, accelerator, self.generation_config, args.per_device_eval_batch_size
+            )
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # At every evaluation step, we generate completions for the model and compare them with the reference
         # completions that have been generated at the beginning of training. We then compute the win rate and log it to
         # the trainer.
-        model = self.trainer.model_wrapped #kwargs["model"]
         tokenizer = kwargs["tokenizer"]
+        tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
+        model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
-            completions = self.generate_completions_for_model(model, tokenizer, prompts)
+            completions = _generate_completions(
+                prompts, model, tokenizer, accelerator, self.generation_config, args.per_device_eval_batch_size
+            )
             completions = list(zip(self.ref_completions, completions))
-            winner_indices = self.judge.judge(self.eval_dataset["prompt"], completions)
+            winner_indices = self.judge.judge(prompts, completions)
             winner_indices = gather_object(winner_indices)
 
         # Logging
@@ -290,13 +298,20 @@ class LogCompletionsCallback(WandbCallback):
         if state.global_step % freq != 0:
             return
 
+        model = self.trainer.model_wrapped
+        tokenizer = kwargs["tokenizer"]
+        accelerator = self.trainer.accelerator
+        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
+            completions = _generate_completions(
+                prompts, model, tokenizer, accelerator, self.generation_config, self.batch_size
+            )
         # Get the model and tokenizer
         model = kwargs["model"]
         tokenizer = kwargs["tokenizer"]
         model.eval()
 
         # Generate completions
-        generation_config = GenerationConfig(max_new_tokens=args.max_new_tokens, min_new_tokens=args.max_new_tokens)
+        generation_config = GenerationConfig(max_new_tokens=32)
         inputs = self.inputs.to(args.device)
         _, context_length = inputs["input_ids"].shape
         output = model.generate(**inputs, generation_config=generation_config)
