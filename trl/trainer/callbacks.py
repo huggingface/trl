@@ -35,7 +35,6 @@ from transformers.trainer_utils import has_length
 
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
-from .utils import decode_and_strip_padding, truncate_right
 
 
 if is_deepspeed_available():
@@ -272,17 +271,24 @@ class LogCompletionsCallback(WandbCallback):
             The frequency at which to log completions. If not provided, defaults to `logging_steps`.
     """
 
-    def __init__(self, prompts: List[str], freq: int = None):
+    def __init__(
+        self,
+        trainer: Trainer,
+        generation_config: Optional[GenerationConfig] = None,
+        num_samples: int = None,
+        freq: int = None,
+    ):
         super().__init__()
-        self.prompts = prompts
-        self.inputs = None  # will be tokenized in on_train_begin
+        self.trainer = trainer
+        self.generation_config = generation_config
+        self.num_samples = num_samples
+        self.freq = freq
         self.table = []
         self._last_logged_step = -1
-        self.freq = freq
+        self.eval_dataset = self.trainer.eval_dataset
 
-    def on_train_begin(self, args, state, control, **kwargs):
-        tokenizer = kwargs["tokenizer"]
-        self.inputs = tokenizer(self.prompts, return_tensors="pt", padding=True, truncation=True)
+        if num_samples is not None:
+            self.eval_dataset = self.eval_dataset.select(range(num_samples))
 
     def on_step_end(self, args, state, control, **kwargs):
         # Only log from the main process
@@ -298,40 +304,28 @@ class LogCompletionsCallback(WandbCallback):
         if state.global_step % freq != 0:
             return
 
-        model = self.trainer.model_wrapped
         tokenizer = kwargs["tokenizer"]
+        tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
+        model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             completions = _generate_completions(
-                prompts, model, tokenizer, accelerator, self.generation_config, self.batch_size
+                prompts,
+                model,
+                tokenizer,
+                accelerator,
+                self.generation_config,
+                args.per_device_eval_batch_size,
             )
-        # Get the model and tokenizer
-        model = kwargs["model"]
-        tokenizer = kwargs["tokenizer"]
-        model.eval()
-
-        # Generate completions
-        generation_config = GenerationConfig(max_new_tokens=32)
-        inputs = self.inputs.to(args.device)
-        _, context_length = inputs["input_ids"].shape
-        output = model.generate(**inputs, generation_config=generation_config)
-
-        # Get only the completions
-        completion_ids = output[:, context_length:]
-
-        # After the first EOS token, replace all tokens with padding tokens
-        completion_ids, _ = truncate_right(completion_ids, tokenizer.eos_token_id, tokenizer.pad_token_id)
-
-        # Decode the prompts and completions
-        prompts = decode_and_strip_padding(inputs["input_ids"], tokenizer)
-        completions = decode_and_strip_padding(completion_ids, tokenizer)
 
         # Build the data to log
-        global_step = [str(state.global_step)] * len(prompts)
-        data = list(zip(global_step, prompts, completions))
-        self.table.extend(data)
-        table = self._wandb.Table(columns=["step", "prompt", "completion"], data=self.table)
-        self._wandb.log({"completions": table})
+        if self.trainer.accelerator.is_main_process:
+            prompts = self.eval_dataset["prompt"][:]
+            global_step = [str(state.global_step)] * len(prompts)
+            data = list(zip(global_step, prompts, completions))
+            self.table.extend(data)
+            table = self._wandb.Table(columns=["step", "prompt", "completion"], data=self.table)
+            self._wandb.log({"completions": table})
 
         # Save the last logged step, so we don't log the same completions multiple times
         self._last_logged_step = state.global_step
