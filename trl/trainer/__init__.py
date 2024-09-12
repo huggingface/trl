@@ -54,10 +54,14 @@ _import_structure = {
     "ppov2_trainer": ["PPOv2Trainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer", "compute_accuracy"],
+    "rloo_config": ["RLOOConfig"],
+    "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "base": ["BaseTrainer"],
     "ddpo_config": ["DDPOConfig"],
+    "gkd_trainer": ["GKDTrainer"],
+    "gkd_config": ["GKDConfig"],
     "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
     "judges": [
         "BaseJudge",
@@ -122,8 +126,12 @@ if TYPE_CHECKING:
     from .ppov2_trainer import PPOv2Trainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
+    from .rloo_config import RLOOConfig
+    from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
+    from .gkd_trainer import GKDTrainer
+    from .gkd_config import GKDConfig
     from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
     from .judges import (
         BaseJudge,

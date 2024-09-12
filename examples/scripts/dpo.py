@@ -13,45 +13,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-# regular:
+# Full training
 python examples/scripts/dpo.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
-    --per_device_train_batch_size 4 \
-    --learning_rate 1e-3 \
-    --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="dpo_anthropic_hh" \
-    --warmup_steps 150 \
-    --report_to wandb \
-    --bf16 \
-    --logging_first_step \
+    --dataset_name trl-lib/ultrafeedback_binarized \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --learning_rate 5.0e-7 \
+    --num_train_epochs 1 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --output_dir Qwen2-0.5B-DPO \
     --no_remove_unused_columns
 
-# peft:
+# LoRA:
 python examples/scripts/dpo.py \
-    --dataset_name=trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
-    --per_device_train_batch_size 4 \
-    --learning_rate 1e-3 \
-    --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
-    --eval_steps 500 \
-    --output_dir="dpo_anthropic_hh" \
-    --optim rmsprop \
-    --warmup_steps 150 \
-    --report_to wandb \
-    --bf16 \
-    --logging_first_step \
+    --dataset_name trl-lib/ultrafeedback_binarized \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --learning_rate 5.0e-6 \
+    --num_train_epochs 1 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --output_dir Qwen2-0.5B-DPO \
     --no_remove_unused_columns \
     --use_peft \
-    --lora_r=16 \
-    --lora_alpha=16
+    --lora_r 32 \
+    --lora_alpha 16
 """
 
 from trl.commands.cli_utils import DPOScriptArguments, TrlParser
-
+from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -63,6 +60,8 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
+    maybe_extract_prompt,
+    maybe_apply_chat_template,
 )
 
 
@@ -72,7 +71,7 @@ if __name__ == "__main__":
 
     ################
     # Model & Tokenizer
-    ################
+    ###################
     torch_dtype = (
         model_config.torch_dtype
         if model_config.torch_dtype in ["auto", None]
@@ -103,7 +102,7 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
+        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
     if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -114,25 +113,17 @@ if __name__ == "__main__":
     # Dataset
     ################
     ds = load_dataset(args.dataset_name)
-    if args.sanity_check:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
 
-    def process(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
-        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
-        return row
-
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        ds = ds.map(process, num_proc=training_args.dataset_num_proc)
+        ds = ds.map(maybe_extract_prompt, num_proc=training_args.dataset_num_proc)
+        ds = ds.map(
+            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
+        )
 
     train_dataset = ds[args.dataset_train_split]
     eval_dataset = ds[args.dataset_test_split]
 
-    ################
+    ##########
     # Training
     ################
     trainer = DPOTrainer(
@@ -146,4 +137,7 @@ if __name__ == "__main__":
     )
 
     trainer.train()
+    metrics = trainer.evaluate()
+    trainer.log_metrics("eval", metrics)
+    trainer.save_metrics("eval", metrics)
     trainer.save_model(training_args.output_dir)
