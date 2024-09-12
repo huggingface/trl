@@ -209,17 +209,16 @@ class WinRateCallback(TrainerCallback):
         judge: BasePairwiseJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_samples: int = None,
+        num_completions: int = None,
     ):
         self.judge = judge
         self.trainer = trainer
         self.generation_config = generation_config
-        self.num_samples = num_samples
         self.ref_completions = []
         self.eval_dataset = self.trainer.eval_dataset
 
-        if num_samples is not None:
-            self.eval_dataset = self.eval_dataset.select(range(num_samples))
+        if num_completions is not None:
+            self.eval_dataset = self.eval_dataset.select(range(num_completions))
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # When the trainer is initialized, we generate completions for the reference model.
@@ -275,20 +274,19 @@ class LogCompletionsCallback(WandbCallback):
         self,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_samples: int = None,
+        num_completions: int = None,
         freq: int = None,
     ):
         super().__init__()
         self.trainer = trainer
         self.generation_config = generation_config
-        self.num_samples = num_samples
         self.freq = freq
         self.table = []
         self._last_logged_step = -1
         self.eval_dataset = self.trainer.eval_dataset
 
-        if num_samples is not None:
-            self.eval_dataset = self.eval_dataset.select(range(num_samples))
+        if num_completions is not None:
+            self.eval_dataset = self.eval_dataset.select(range(num_completions))
 
     def on_step_end(self, args, state, control, **kwargs):
         # Only log once per step (this method may be called multiple times)
@@ -314,10 +312,11 @@ class LogCompletionsCallback(WandbCallback):
                 args.per_device_eval_batch_size,
             )
             completions = gather_object(completions)
+            prompts = gather_object(prompts)
 
         # Build the data to log
         if self.trainer.accelerator.is_main_process:
-            prompts = self.eval_dataset["prompt"][:]
+            # prompts = self.eval_dataset["prompt"][:]
             global_step = [str(state.global_step)] * len(prompts)
             data = list(zip(global_step, prompts, completions))
             self.table.extend(data)
