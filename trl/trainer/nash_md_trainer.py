@@ -28,11 +28,7 @@ from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import (
-    empty_cache,
-    get_reward,
-    truncate_right,
-)
+from .utils import empty_cache, get_reward, truncate_right
 
 
 if is_apex_available():
@@ -235,8 +231,6 @@ class NashMDTrainer(OnlineDPOTrainer):
     ):
         # Compute log probs
         model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
-        # model_logprobs_ref_data_sum = model_logprobs_mixture_data.sum(1)
-        # mixture_logprobs_mixture_data_sum = mixture_logprobs_mixture_data.sum(1)
         ref_logprobs_model_data_sum = ref_logprobs_model_data.sum(1)
 
         # probability of the model data vs the mixture data
