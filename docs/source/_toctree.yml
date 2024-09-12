@@ -1,12 +1,14 @@
 - sections:
   - local: index
     title: TRL
-  - local: quickstart
-    title: Quickstart
   - local: installation
     title: Installation
+  - local: quickstart
+    title: Quickstart
   - local: clis
     title: Get started with Command Line Interfaces (CLIs)
+  - local: dataset_formats
+    title: Dataset Formats
   - local: how_to_train
     title: PPO Training FAQ
   - local: use_model
@@ -33,7 +35,7 @@
     - local: online_dpo_trainer
       title: Online DPO
     - local: xpo_trainer
-      title: XPO Trainer
+      title: XPO
     - local: orpo_trainer
       title: ORPO
     - local: kto_trainer
@@ -61,6 +63,8 @@
     title: Judges
   - local: callbacks
     title: Callbacks
+  - local: data_utils
+    title: Data Utilities
   - local: text_environments
     title: Text Environments
   title: API

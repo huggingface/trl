@@ -971,7 +971,8 @@ def print_rich_table(df: pd.DataFrame) -> Table:
 SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
 # SIMPLE_SFT_CHAT_TEMPLATE simply ends things with an EOS token, this helps the SFT model learn to end the completions with EOS tokens
 
-SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}"
+SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
+
 # SIMPLE_QUERY_CHAT_TEMPLATE is a variant of SIMPLE_SFT_CHAT_TEMPLATE, which does not end the content with EOS token. The idea
 # is to have the generated response to end with an EOS token, but the query itself should not end with EOS tokens.
 
