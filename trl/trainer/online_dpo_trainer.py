@@ -1,10 +1,8 @@
-import inspect
 import warnings
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import datasets
-import deepspeed
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,14 +22,13 @@ from transformers.utils import (
 )
 
 from ..import_utils import is_peft_available
-from ..models import PreTrainedModelWrapper, create_reference_model
+from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     empty_cache,
-    peft_module_casting_to_bf16,
     prepare_deepspeed,
     trl_sanitze_kwargs_for_tagging,
     truncate_right,
@@ -39,7 +36,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import get_peft_model
 
 if is_apex_available():
     from apex import amp
@@ -134,71 +131,27 @@ class OnlineDPOTrainer(Trainer):
         if tokenizer is None:
             raise ValueError("`tokenizer` must be provided.")
 
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_config, we merge and unload it first
-            if isinstance(model, PeftModel):
-                model = model.merge_and_unload()
-
-            if ref_model is not None:
-                raise ValueError(
-                    "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
-                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters."
+        # PEFT
+        if peft_config is not None:
+            # Check if PEFT is available
+            if not is_peft_available():
+                raise ImportError(
+                    "PEFT is not available and passed `peft_config`. Please install PEFT with "
+                    "`pip install peft` to use it."
                 )
 
-            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                _support_gc_kwargs = hasattr(
-                    args, "gradient_checkpointing_kwargs"
-                ) and "gradient_checkpointing_kwargs" in list(
-                    inspect.signature(prepare_model_for_kbit_training).parameters
-                )
-
-                prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
-
-                if _support_gc_kwargs:
-                    prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
-
-                model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-            elif getattr(args, "gradient_checkpointing", False):
-                # For backward compatibility with older versions of transformers
-                if hasattr(model, "enable_input_require_grads"):
-                    model.enable_input_require_grads()
-                else:
-
-                    def make_inputs_require_grad(module, input, output):
-                        output.requires_grad_(True)
-
-                    model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-            # get peft model with the given config
+            # Get peft model with the given config
             model = get_peft_model(model, peft_config)
-            if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
-                peft_module_casting_to_bf16(model)
-                # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
-                self._peft_has_been_casted_to_bf16 = True
 
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
-
-        if ref_model:
-            self.ref_model = ref_model
-        elif self.is_peft_model or args.precompute_ref_log_probs:
-            # The `model` with adapters turned off will be used as the reference model
-            self.ref_model = None
+        # Handle the ref_model
+        if ref_model is None:
+            if peft_config is None:
+                self.ref_model = create_reference_model(model)
+            else:
+                # We don't need a ref model here, as the ref model will just be the model with a disabled adaptater.
+                self.ref_model
         else:
-            self.ref_model = create_reference_model(model)
-
-        # if self.is_deepspeed_enabled:
-        #     self.ref_model = self._prepare_deepspeed(self.ref_model)
-        # else:
-        #     self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-
-        # We don't optimize the reward model model nor the ref model, so we can set them to eval mode
-        # self.ref_model.eval()
-        # if self.reward_model is not None:
-        #     self.reward_model.eval()
+            self.ref_model = create_reference_model(ref_model)
 
         # Define the collator is not provided
         if data_collator is None:
@@ -254,37 +207,6 @@ class OnlineDPOTrainer(Trainer):
             self.ref_model = self.ref_model.to(self.accelerator.device)
             if self.reward_model is not None:
                 self.reward_model = self.reward_model.to(self.accelerator.device)
-
-    def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
-        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
-
-        if model is not None:
-            if hasattr(model, "config"):
-                hidden_size = (
-                    max(model.config.hidden_sizes)
-                    if getattr(model.config, "hidden_sizes", None)
-                    else getattr(model.config, "hidden_size", None)
-                )
-                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                    # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                    # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                    config_kwargs.update(
-                        {
-                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
-                        }
-                    )
-
-        # If ZeRO-3 is used, we shard both the active and reference model.
-        # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
-        if config_kwargs["zero_optimization"]["stage"] != 3:
-            config_kwargs["zero_optimization"]["stage"] = 0
-        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-        model.eval()
-        return model
 
     @staticmethod
     def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> Dict[str, Any]:
