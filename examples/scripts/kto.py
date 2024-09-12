@@ -59,7 +59,7 @@ from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_reformat_dpo_to_kto, setup_chat_format
+from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_unpair_preference_dataset, setup_chat_format
 
 
 # Define and parse arguments.
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     dataset = load_dataset(script_args.dataset_name)
 
     # If needed, reformat a DPO-formatted dataset (prompt, chosen, rejected) to a KTO-format (prompt, completion, label)
-    dataset = maybe_reformat_dpo_to_kto(dataset, num_proc=kto_args.dataset_num_proc)
+    dataset = maybe_unpair_preference_dataset(dataset, num_proc=kto_args.dataset_num_proc)
 
     # Apply chat template
     def format_dataset(example):
