@@ -34,7 +34,7 @@ class TestGKDTrainer(unittest.TestCase):
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
         cls.model = AutoModelForCausalLM.from_pretrained("gpt2")
         cls.generation_config = GenerationConfig(
-            max_length=20,
+            max_new_tokens=20,
             num_return_sequences=1,
             pad_token_id=cls.tokenizer.pad_token_id,
             eos_token_id=cls.tokenizer.eos_token_id,
@@ -51,7 +51,7 @@ class TestGKDTrainer(unittest.TestCase):
 
         # Set temperature to 0 for deterministic output
         deterministic_generation_config = GenerationConfig(
-            max_length=30,
+            max_new_tokens=30,
             num_return_sequences=1,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
@@ -120,7 +120,7 @@ class TestGKDTrainer(unittest.TestCase):
         # Check types
         self.assertIsInstance(new_input_ids, torch.Tensor)
         self.assertIsInstance(new_attention_mask, torch.Tensor)
-        self.assertEqual(new_labels.shape[0], torch.Tensor)
+        self.assertEqual(new_labels.shape[0], batch_size)
 
         # Check that new_input_ids and new_attention_mask have the same shape
         self.assertEqual(new_input_ids.shape, new_attention_mask.shape)

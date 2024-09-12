@@ -107,6 +107,7 @@ class GKDTrainer(SFTTrainer):
         Args:
             student_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
             teacher_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
+            labels: Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing loss
             beta: Interpolation coefficient between 0 and 1 (default: 0.5)
             temperature: Softmax temperature (default: 1.0)
             reduction: Specifies the reduction to apply to the output (default: 'batchmean')
@@ -166,15 +167,15 @@ class GKDTrainer(SFTTrainer):
 
         # slice the logits for the generated tokens using the inputs["prompts"] lengths
         prompt_lengths = inputs["prompts"].shape[1]
-        student_logits = outputs_student.logits[:, prompt_lengths:, :]
-        teacher_logits = outputs_teacher.logits[:, prompt_lengths:, :]
-        labels = inputs["labels"][:, prompt_lengths:]
+        shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
+        shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
+        shifted_labels = inputs["labels"][:, prompt_lengths:]
 
         # compute loss
         loss = self.generalized_jsd_loss(
-            student_logits=student_logits,
-            teacher_logits=teacher_logits,
-            labels=labels,
+            student_logits=shifted_student_logits,
+            teacher_logits=shifted_teacher_logits,
+            labels=shifted_labels,
             beta=self.beta,
         )
 
@@ -185,7 +186,7 @@ class GKDTrainer(SFTTrainer):
         return (loss, outputs_student) if return_outputs else loss
 
     @staticmethod
-    def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None, eos_token_id=None):
+    def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
         # Generate output with respect to the prompt only
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
@@ -200,7 +201,6 @@ class GKDTrainer(SFTTrainer):
         new_attention_mask = torch.ones_like(generated_tokens)
         new_labels = generated_tokens.clone()
 
-        new_labels[new_labels == eos_token_id] = -100
         # If there's pad_token_id, set attention mask to 0 for padding tokens
         if pad_token_id is not None:
             new_labels[new_labels == pad_token_id] = -100
@@ -219,11 +219,7 @@ class GKDTrainer(SFTTrainer):
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model,
-                    inputs,
-                    self.generation_config,
-                    self.tokenizer.pad_token_id,
-                    self.tokenizer.eos_token_id,
+                    unwrapped_model, inputs, self.generation_config, self.tokenizer.pad_token_id
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
