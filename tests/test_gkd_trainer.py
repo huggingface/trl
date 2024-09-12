@@ -120,7 +120,7 @@ class TestGKDTrainer(unittest.TestCase):
         # Check types
         self.assertIsInstance(new_input_ids, torch.Tensor)
         self.assertIsInstance(new_attention_mask, torch.Tensor)
-        self.assertEqual(new_labels.shape[0], torch.Tensor)
+        self.assertIsInstance(new_labels, torch.Tensor)
 
         # Check that new_input_ids and new_attention_mask have the same shape
         self.assertEqual(new_input_ids.shape, new_attention_mask.shape)
