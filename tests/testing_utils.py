@@ -26,6 +26,7 @@ from trl import (
     is_xpu_available,
 )
 
+
 torch_device, device_count, memory_allocated_func = get_backend()
 
 
@@ -118,8 +119,8 @@ def require_liger_kernel(test_case):
     if not (torch.cuda.is_available() and is_liger_available()):
         test_case = unittest.skip("test requires GPU and liger-kernel")(test_case)
     return test_case
-  
-  
+
+
 def require_non_cpu(test_case):
     """
     Decorator marking a test that requires a hardware accelerator backend. These tests are skipped when there are no

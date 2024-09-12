@@ -28,11 +28,9 @@ from trl.models.utils import setup_chat_format
 from ..testing_utils import (
     require_bitsandbytes,
     require_liger_kernel,
-    require_peft,
-    require_torch_gpu,
-    require_non_cpu, 
     require_multi_accelerator,
-    require_torch_multi_gpu,
+    require_non_cpu,
+    require_peft,
 )
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 

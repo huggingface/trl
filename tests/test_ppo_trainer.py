@@ -30,7 +30,7 @@ from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValu
 from trl.core import respond_to_batch
 
 from .testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER
-from .testing_utils import require_peft, require_multi_accelerator
+from .testing_utils import require_multi_accelerator, require_peft
 
 
 EXPECTED_STATS = [

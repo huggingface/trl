@@ -24,7 +24,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from trl import DPOConfig, DPOTrainer, is_peft_available
 
-from ..testing_utils import require_bitsandbytes, require_peft, require_non_cpu, torch_device
+from ..testing_utils import require_bitsandbytes, require_non_cpu, require_peft, torch_device
 from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST
 
 
