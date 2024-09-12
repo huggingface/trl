@@ -28,6 +28,7 @@ from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
+    disable_dropout_in_model,
     empty_cache,
     prepare_deepspeed,
     trl_sanitze_kwargs_for_tagging,
@@ -153,6 +154,10 @@ class OnlineDPOTrainer(Trainer):
         else:
             self.ref_model = create_reference_model(ref_model)
 
+        # Disable dropout in the model if specified
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+
         # Define the collator is not provided
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(pad_token_id=tokenizer.pad_token_id)
@@ -181,6 +186,16 @@ class OnlineDPOTrainer(Trainer):
             "logps/rejected": [],
             "val/contain_eos_token": [],
         }
+
+        self.generation_config = GenerationConfig(
+            max_new_tokens=args.max_new_tokens,
+            min_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=0,
+            top_p=1.0,
+            do_sample=True,
+            use_cache=False if args.gradient_checkpointing else True,
+        )
 
         super().__init__(
             model=model,
@@ -302,15 +317,6 @@ class OnlineDPOTrainer(Trainer):
 
         # Sample 2 completations per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
-        generation_config = GenerationConfig(
-            max_new_tokens=self.args.max_new_tokens,
-            min_new_tokens=self.args.max_new_tokens,
-            temperature=self.args.temperature,
-            top_k=0.0,
-            top_p=1.0,
-            do_sample=True,
-            use_cache=False if self.args.gradient_checkpointing else True,
-        )
         num_examples, context_length = inputs["prompt_input_ids"].shape
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
         prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
@@ -318,7 +324,7 @@ class OnlineDPOTrainer(Trainer):
             output = unwrapped_model.generate(
                 input_ids=prompt_ids,
                 attention_mask=prompt_mask,
-                generation_config=generation_config,
+                generation_config=self.generation_config,
             )
         del inputs
 
@@ -352,7 +358,7 @@ class OnlineDPOTrainer(Trainer):
             scores = self.reward_model(prompt_completion_ids, attention_mask=prompt_completion_mask).score
 
         # Filter completion. Ensure that the sample contains stop_token_id
-        # Completions not passing that filter will receive a low (fixed) score
+        # Completions not passing that filter will receive a lower score.
         contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
         if self.args.missing_eos_penalty is not None:
             scores[~contain_eos_token] -= self.args.missing_eos_penalty

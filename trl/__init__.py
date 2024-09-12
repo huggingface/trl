@@ -52,16 +52,24 @@ _import_structure = {
         "ModelConfig",
         "OnlineDPOConfig",
         "OnlineDPOTrainer",
+        "XPOConfig",
+        "XPOTrainer",
         "ORPOConfig",
         "ORPOTrainer",
         "PPOConfig",
         "PPOTrainer",
+        "PPOv2Config",
+        "PPOv2Trainer",
         "RewardConfig",
         "RewardTrainer",
+        "RLOOConfig",
+        "RLOOTrainer",
         "SFTConfig",
         "SFTTrainer",
         "FDivergenceConstants",
         "FDivergenceType",
+        "GKDTrainer",
+        "GKDConfig",
         "WinRateCallback",
         "BaseJudge",
         "BaseRankJudge",
@@ -81,7 +89,15 @@ _import_structure = {
         "MultitaskPromptTuningConfig",
         "MultitaskPromptTuningInit",
     ],
-    "data_utils": ["maybe_reformat_dpo_to_kto"],
+    "data_utils": [
+        "apply_chat_template",
+        "extract_prompt",
+        "is_conversational",
+        "maybe_apply_chat_template",
+        "maybe_extract_prompt",
+        "maybe_unpair_preference_dataset",
+        "unpair_preference_dataset",
+    ],
 }
 
 try:
@@ -140,16 +156,24 @@ if TYPE_CHECKING:
         ModelConfig,
         OnlineDPOConfig,
         OnlineDPOTrainer,
+        XPOConfig,
+        XPOTrainer,
         ORPOConfig,
         ORPOTrainer,
         PPOConfig,
         PPOTrainer,
+        PPOv2Config,
+        PPOv2Trainer,
         RewardConfig,
         RewardTrainer,
+        RLOOConfig,
+        RLOOTrainer,
         SFTConfig,
         SFTTrainer,
         FDivergenceConstants,
         FDivergenceType,
+        GKDTrainer,
+        GKDConfig,
         WinRateCallback,
         BaseJudge,
         BaseRankJudge,
@@ -163,7 +187,15 @@ if TYPE_CHECKING:
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
     from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser
-    from .data_utils import maybe_reformat_dpo_to_kto
+    from .data_utils import (
+        apply_chat_template,
+        extract_prompt,
+        is_conversational,
+        maybe_apply_chat_template,
+        maybe_extract_prompt,
+        maybe_unpair_preference_dataset,
+        unpair_preference_dataset,
+    )
 
     try:
         if not is_diffusers_available():

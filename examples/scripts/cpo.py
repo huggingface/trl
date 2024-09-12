@@ -89,9 +89,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     ds = load_dataset(args.dataset)
-    if cpo_args.debug:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
     if tokenizer.chat_template is None:
         tokenizer.chat_template = "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
 

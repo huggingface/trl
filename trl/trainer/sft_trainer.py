@@ -40,7 +40,6 @@ from transformers.trainer_utils import EvalPrediction
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_liger_available, is_peft_available
-from .callbacks import RichProgressCallback
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -424,12 +423,6 @@ class SFTTrainer(Trainer):
         elif self.args.max_steps == -1 and args.packing:
             self.train_dataset.infinite = False
 
-        if any(isinstance(callback, RichProgressCallback) for callback in self.callback_handler.callbacks):
-            for callback in self.callback_handler.callbacks:
-                # Remove the PrinterCallback to avoid duplicated prints in case we passed a `RichProgressCallback`
-                if callback.__class__.__name__ == "PrinterCallback":
-                    self.callback_handler.pop_callback(callback)
-
     @wraps(Trainer.train)
     def train(self, *args, **kwargs):
         # Activate neftune right before training.
@@ -550,7 +543,6 @@ class SFTTrainer(Trainer):
         remove_unused_columns=True,
     ):
         use_formatting_func = formatting_func is not None and dataset_text_field is None
-        self._dataset_sanity_checked = False
 
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
@@ -564,13 +556,10 @@ class SFTTrainer(Trainer):
                 return_length=False,
             )
 
-            if use_formatting_func and not self._dataset_sanity_checked:
-                if not isinstance(formatting_func(element), list):
-                    raise ValueError(
-                        "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
-                    )
-                else:
-                    self._dataset_sanity_checked = True
+            if use_formatting_func and not isinstance(formatting_func(element), list):
+                raise ValueError(
+                    "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
+                )
 
             return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
 
