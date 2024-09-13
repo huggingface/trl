@@ -85,6 +85,7 @@ if __name__ == "__main__":
 
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         training_args.reward_model_path,
+        num_labels=1,
         trust_remote_code=model_config.trust_remote_code,
         **model_kwargs,
     )
