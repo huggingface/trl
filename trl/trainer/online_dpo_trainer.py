@@ -60,7 +60,7 @@ class OnlineDPOTrainer(Trainer):
     Initialize OnlineDPOTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
+        model (`transformers.PreTrainedModel` or `torch.nn.Module`):
             The model to train, preferably an `AutoModelForCausalLM`.
         ref_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
             The reference model to use for training. If None is specified, the reference model will be created from
@@ -80,8 +80,6 @@ class OnlineDPOTrainer(Trainer):
             The dataset to use for evaluation.
         tokenizer (`transformers.PreTrainedTokenizerBase`):
             The tokenizer to use for training. This argument is required if you want to use the default data collator.
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
@@ -97,7 +95,7 @@ class OnlineDPOTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module, None] = None,
+        model: Union[PreTrainedModel, nn.Module],
         ref_model: Union[PreTrainedModel, nn.Module, None] = None,
         reward_model: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
@@ -106,7 +104,6 @@ class OnlineDPOTrainer(Trainer):
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset], "datasets.Dataset"]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -159,12 +156,12 @@ class OnlineDPOTrainer(Trainer):
             else:
                 self.ref_model = None  # we don't need a ref model here, we can just disable the adapter.
         else:  # rare case, the user provided a ref model
-            self.ref_model = create_reference_model(ref_model)  # copy, disable gradients, set eval mode
+            self.ref_model = ref_model
+            self.ref_model.eval()
 
         # Disable the gradient and set the reward model in eval mode
         if self.reward_model is not None:
             self.reward_model.eval()
-
 
         # Define the collator is not provided
         if data_collator is None:
@@ -212,7 +209,6 @@ class OnlineDPOTrainer(Trainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
@@ -355,21 +351,22 @@ class OnlineDPOTrainer(Trainer):
         del output, logits, all_logprobs  # free memory
 
         # Same for the reference model
-        if self.ref_model is not None:
-            ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-        else:  # peft case: we just need to disable the adapter
-            with self.model.disable_adapter():
-                ref_output = self.model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-        ref_logits = ref_output.logits[:, context_length - 1 : -1]
-        ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
-        ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
-        del ref_output, ref_logits, ref_all_logprobs  # free memory
-
-        # Get the reward from the reward model
         with torch.no_grad():
+            if self.ref_model is not None:
+                ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+            else:  # peft case: we just need to disable the adapter
+                with self.model.disable_adapter():
+                    ref_output = self.model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+            ref_logits = ref_output.logits[:, context_length - 1 : -1]
+            ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
+            ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
+            del ref_output, ref_logits, ref_all_logprobs  # free memory
+
+            # Get the reward from the reward model
             _, scores, _ = get_reward(
                 self.reward_model, prompt_completion_ids, self.tokenizer.pad_token_id, context_length
             )
+
         # Filter completion. Ensure that the sample contains stop_token_id
         # Completions not passing that filter will receive a lower score.
         contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
