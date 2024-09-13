@@ -151,13 +151,13 @@ class OnlineDPOTrainer(Trainer):
 
         # Handle the ref_model
         # Usually, the user wants the ref model to be the initial version of the model. When using PEFT, it's easy to
-        # get the ref model, as it's just the model with a disabled adaptater. When not using PEFT, we need to create
+        # get the ref model, as it's just the model with a disabled adapter. When not using PEFT, we need to create
         # the ref model from the model by copying it and disable the gradients and set it in evaluation mode.
         if ref_model is None:  # No ref model provided, the most common case
             if peft_config is None:
                 self.ref_model = create_reference_model(model)  # copy, disable gradients, set eval mode
             else:
-                self.ref_model = None  # we don't need a ref model here, we can just disable the adaptater.
+                self.ref_model = None  # we don't need a ref model here, we can just disable the adapter.
         else:  # rare case, the user provided a ref model
             self.ref_model = create_reference_model(ref_model)  # copy, disable gradients, set eval mode
 
@@ -358,7 +358,7 @@ class OnlineDPOTrainer(Trainer):
         # Same for the reference model
         if self.ref_model is not None:
             ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-        else:  # peft case: we just need to disable the adaptater
+        else:  # peft case: we just need to disable the adapter
             with self.model.disable_adapter():
                 ref_output = self.model(prompt_completion_ids, attention_mask=prompt_completion_mask)
         ref_logits = ref_output.logits[:, context_length - 1 : -1]
