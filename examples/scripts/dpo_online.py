@@ -21,13 +21,23 @@ python examples/scripts/dpo_online.py \
     --dataset_name trl-lib/tldr \
     --learning_rate 5.0e-7 \
     --output_dir pythia-1b-tldr-online-dpo \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 32 \
-    --num_train_epochs 3 \
-    --max_new_tokens 53 \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 16 \
+    --warmup_ratio 0.1 \
+    --missing_eos_penalty 1.0
+
+With LoRA:
+python examples/scripts/dpo_online.py \
+    --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
+    --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
+    --dataset_name trl-lib/tldr \
+    --learning_rate 5.0e-6 \
+    --output_dir pythia-1b-tldr-online-dpo \
+    --per_device_train_batch_size 16 \
+    --gradient_accumulation_steps 8 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
-    --push_to_hub
+    --use_peft
 """
 
 import torch
@@ -40,10 +50,12 @@ from trl import (
     OnlineDPOConfig,
     OnlineDPOTrainer,
     get_kbit_device_map,
+    get_peft_config,
     get_quantization_config,
     maybe_apply_chat_template,
     LogCompletionsCallback,
 )
+
 from trl.commands.cli_utils import TrlParser
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
@@ -70,19 +82,24 @@ if __name__ == "__main__":
     model = AutoModelForCausalLM.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
-    )
+
     reward_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path, num_labels=1, trust_remote_code=model_config.trust_remote_code
+        training_args.reward_model_path,
+        num_labels=1,
+        trust_remote_code=model_config.trust_remote_code,
+        **model_kwargs,
     )
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         padding_side="left",
         trust_remote_code=model_config.trust_remote_code,
+        **model_kwargs,
     )
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     dataset = load_dataset(args.dataset_name)
 
@@ -93,12 +110,12 @@ if __name__ == "__main__":
 
     trainer = OnlineDPOTrainer(
         model=model,
-        ref_model=ref_model,
         reward_model=reward_model,
         args=training_args,
         train_dataset=dataset[args.dataset_train_split],
         eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
+        peft_config=get_peft_config(model_config),
     )
     generation_config = GenerationConfig(
         max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
