@@ -112,7 +112,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
             trainer = OnlineDPOTrainer(
                 model=self.model,
-                ref_model=self.model,
+                ref_model=self.ref_model,
                 reward_model=self.reward_model,
                 args=training_args,
                 tokenizer=self.tokenizer,
@@ -182,7 +182,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
             trainer = OnlineDPOTrainer(
                 model=self.model,
-                ref_model=self.model,
+                ref_model=self.ref_model,
                 reward_model=self.reward_model,
                 args=training_args,
                 tokenizer=self.tokenizer,
