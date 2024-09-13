@@ -635,6 +635,8 @@ class ConstantLengthDataset(IterableDataset):
                     else:
                         more_examples = False
                         break
+            if self.shuffle:
+                random.shuffle(buffer)
             tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
                 "input_ids"
             ]
@@ -649,6 +651,7 @@ class ConstantLengthDataset(IterableDataset):
                 if len(input_ids) == self.seq_length:
                     examples.append(input_ids)
             if self.shuffle:
+                # Shuffle again, otherwise split examples occur in consecutive tensors.
                 random.shuffle(examples)
             for example in examples:
                 self.current_size += 1

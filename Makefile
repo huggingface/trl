@@ -16,6 +16,7 @@ test:
 
 precommit:
 	pre-commit run --all-files
+	python scripts/add_copyrights.py
 
 benchmark_core:
 	bash ./benchmark/benchmark_core.sh
