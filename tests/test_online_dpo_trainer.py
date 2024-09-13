@@ -16,14 +16,21 @@ import unittest
 
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers.testing_utils import require_peft
+from transformers.utils import is_peft_available
 
 from trl import OnlineDPOConfig, OnlineDPOTrainer
+
+
+if is_peft_available():
+    from peft import LoraConfig
 
 
 class TestOnlineDPOTrainer(unittest.TestCase):
     def setUp(self):
         self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -67,15 +74,38 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         # fmt: on
         self.dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
-    def test_online_dpo_trainer_training(self):
+    def test_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+            )
+
+            trainer = OnlineDPOTrainer(
+                model=self.model,
+                reward_model=self.reward_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=self.dummy_dataset,
+                eval_dataset=self.dummy_dataset,
+            )
+
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    def test_training_with_ref_model(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
                 eval_strategy="steps",
                 report_to="none",
             )
@@ -88,6 +118,77 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 tokenizer=self.tokenizer,
                 train_dataset=self.dummy_dataset,
                 eval_dataset=self.dummy_dataset,
+            )
+
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    @require_peft
+    def test_training_with_peft(self):
+        from peft import LoraConfig
+
+        lora_config = LoraConfig(
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+            )
+
+            trainer = OnlineDPOTrainer(
+                model=self.model,
+                reward_model=self.reward_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=self.dummy_dataset,
+                eval_dataset=self.dummy_dataset,
+                peft_config=lora_config,
+            )
+
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    @require_peft
+    def test_training_with_peft_and_ref_model(self):
+        lora_config = LoraConfig(
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+            )
+
+            trainer = OnlineDPOTrainer(
+                model=self.model,
+                ref_model=self.model,
+                reward_model=self.reward_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=self.dummy_dataset,
+                eval_dataset=self.dummy_dataset,
+                peft_config=lora_config,
             )
 
             trainer.train()
