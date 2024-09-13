@@ -14,6 +14,7 @@
 
 import os
 import subprocess
+import sys
 from datetime import datetime
 
 
@@ -62,13 +63,14 @@ def check_and_add_copyright(file_path):
     # Check if the copyright header exists in the first 10 lines
     for line in content[:10]:
         if COPYRIGHT_KEYWORD in line:
-            return
+            return True
 
     # If no copyright notice was found, prepend the header
     print(f"[MODIFY] Adding copyright to {file_path}.")
     with open(file_path, "w", encoding="utf-8") as f:
         # Write the copyright header followed by the original content
         f.write(COPYRIGHT_HEADER + "\n" + "".join(content))
+    return False
 
 
 def main():
@@ -78,9 +80,15 @@ def main():
         print("No Python files are tracked in the repository.")
         return
 
-    print(f"Checking {len(py_files)} Python files for copyright notice...\n")
-    for file_path in py_files:
-        check_and_add_copyright(file_path)
+    print(f"Checking {len(py_files)} Python files for copyright notice...")
+
+    have_copyright = [check_and_add_copyright(file_path) for file_path in py_files]
+    if not all(have_copyright):
+        print("❌ Some files were missing the required copyright and have been updated.")
+        sys.exit(1)
+    else:
+        print("✅ All files have the required copyright.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
