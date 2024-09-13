@@ -108,7 +108,7 @@ class OnlineDPOTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ) -> None:
 
-        if ref_policy is policy:
+        if ref_model is model:
             raise ValueError("`policy` and `ref_policy` are the same Python object but should not be. You probably want two copies of the same model.")
 
         self.ref_model = ref_model
