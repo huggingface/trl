@@ -23,7 +23,7 @@ from trl import OnlineDPOConfig, OnlineDPOTrainer
 
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import LoraConfig, get_peft_model
 
 
 class TestOnlineDPOTrainer(unittest.TestCase):
@@ -127,15 +127,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
     @require_peft
     def test_training_with_peft(self):
-        from peft import LoraConfig
-
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
+        lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
@@ -163,13 +155,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
     @require_peft
     def test_training_with_peft_and_ref_model(self):
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
+        lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
@@ -189,6 +175,36 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 train_dataset=self.dummy_dataset,
                 eval_dataset=self.dummy_dataset,
                 peft_config=lora_config,
+            )
+
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    def test_training_with_peft_model_and_peft_config(self):
+        model_lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
+        model = get_peft_model(self.model, model_lora_config)
+        # we want only the "train adapter" to be trained
+        lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+            )
+
+            trainer = OnlineDPOTrainer(
+                model=model,
+                reward_model=self.reward_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=self.dummy_dataset,
+                eval_dataset=self.dummy_dataset,
+                peft_config=lora_train_config,
             )
 
             trainer.train()

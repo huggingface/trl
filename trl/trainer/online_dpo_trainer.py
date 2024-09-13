@@ -52,7 +52,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import get_peft_model
+    from peft import PeftModel, get_peft_model
 
 if is_apex_available():
     from apex import amp
@@ -152,6 +152,11 @@ class OnlineDPOTrainer(Trainer):
                     "PEFT is not available and passed `peft_config`. Please install PEFT with "
                     "`pip install peft` to use it."
                 )
+
+            # If the model is already a PeftModel, we need to merge and unload it.
+            # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
+            if isinstance(model, PeftModel):
+                model = model.merge_and_unload()
 
             # Get peft model with the given config
             model = get_peft_model(model, peft_config)
