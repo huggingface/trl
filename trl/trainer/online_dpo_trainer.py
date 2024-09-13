@@ -164,8 +164,7 @@ class OnlineDPOTrainer(Trainer):
         # Disable the gradient and set the reward model in eval mode
         if self.reward_model is not None:
             self.reward_model.eval()
-            for param in self.reward_model.parameters():
-                param.requires_grad = False
+
 
         # Define the collator is not provided
         if data_collator is None:
