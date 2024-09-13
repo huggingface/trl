@@ -91,7 +91,6 @@ class GKDTrainer(SFTTrainer):
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
-            min_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
             do_sample=True,
             top_k=0,
@@ -99,13 +98,16 @@ class GKDTrainer(SFTTrainer):
         )
 
     @staticmethod
-    def generalized_jsd_loss(student_logits, teacher_logits, beta=0.5, temperature=1.0, reduction="batchmean"):
+    def generalized_jsd_loss(
+        student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
+    ):
         """
         Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1) of https://arxiv.org/abs/2306.13649 for the definition.
 
         Args:
             student_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
             teacher_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
+            labels: Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing loss
             beta: Interpolation coefficient between 0 and 1 (default: 0.5)
             temperature: Softmax temperature (default: 1.0)
             reduction: Specifies the reduction to apply to the output (default: 'batchmean')
@@ -133,9 +135,14 @@ class GKDTrainer(SFTTrainer):
         # Compute the Generalized Jensen-Shannon Divergence
         jsd = beta * kl_teacher + (1 - beta) * kl_student
 
+        # Masking
+        if labels is not None:
+            mask = labels != -100
+            jsd = jsd[mask]
+
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / (jsd.size(0) * jsd.size(1))
+            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / (jsd.size(0) * jsd.size(1))
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
@@ -160,13 +167,15 @@ class GKDTrainer(SFTTrainer):
 
         # slice the logits for the generated tokens using the inputs["prompts"] lengths
         prompt_lengths = inputs["prompts"].shape[1]
-        student_logits = outputs_student.logits[:, prompt_lengths:, :]
-        teacher_logits = outputs_teacher.logits[:, prompt_lengths:, :]
+        shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
+        shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
+        shifted_labels = inputs["labels"][:, prompt_lengths:]
 
         # compute loss
         loss = self.generalized_jsd_loss(
-            student_logits=student_logits,
-            teacher_logits=teacher_logits,
+            student_logits=shifted_student_logits,
+            teacher_logits=shifted_teacher_logits,
+            labels=shifted_labels,
             beta=self.beta,
         )
 
@@ -190,12 +199,14 @@ class GKDTrainer(SFTTrainer):
         generated_tokens = generated_outputs.sequences
         # Calculate new attention mask
         new_attention_mask = torch.ones_like(generated_tokens)
+        new_labels = generated_tokens.clone()
 
         # If there's pad_token_id, set attention mask to 0 for padding tokens
         if pad_token_id is not None:
+            new_labels[new_labels == pad_token_id] = -100
             new_attention_mask[generated_tokens == pad_token_id] = 0
 
-        return generated_tokens, new_attention_mask
+        return generated_tokens, new_attention_mask, new_labels
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
@@ -207,11 +218,12 @@ class GKDTrainer(SFTTrainer):
         """
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                new_input_ids, new_attention_mask = self.generate_on_policy_outputs(
+                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
                     unwrapped_model, inputs, self.generation_config, self.tokenizer.pad_token_id
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
+            inputs["labels"] = new_labels
 
         loss = super().training_step(model, inputs)
         return loss
