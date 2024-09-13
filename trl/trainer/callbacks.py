@@ -231,7 +231,7 @@ class WinRateCallback(TrainerCallback):
         judge: BasePairwiseJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_completions: int = None,
+        num_completions: int = 1,
     ):
         self.judge = judge
         self.trainer = trainer
@@ -252,7 +252,7 @@ class WinRateCallback(TrainerCallback):
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = getattr(self.trainer, "ref_model", kwargs["model"])  # get the ref model if any, else use the model
-        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
+        with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
             self.ref_completions = _generate_completions(
                 prompts,
                 model=model,
@@ -270,7 +270,7 @@ class WinRateCallback(TrainerCallback):
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
-        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
+        with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
             completions = _generate_completions(
                 prompts,
                 model=model,
@@ -279,6 +279,7 @@ class WinRateCallback(TrainerCallback):
                 generation_config=self.generation_config,
                 batch_size=args.per_device_eval_batch_size,
             )
+
             completions = list(zip(self.ref_completions, completions))
             winner_indices = self.judge.judge(prompts, completions)
             winner_indices = gather_object(winner_indices)
@@ -342,7 +343,7 @@ class LogCompletionsCallback(WandbCallback):
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
-        with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
+        with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
             completions = _generate_completions(
                 prompts,
                 model=model,
