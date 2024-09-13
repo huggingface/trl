@@ -415,13 +415,14 @@ class SFTTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-        if self.args.max_steps > 0 and args.packing:
-            warnings.warn(
-                "You passed `packing=True` to the SFTTrainer/SFTConfig, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
-            )
-            self.train_dataset.infinite = True
-        elif self.args.max_steps == -1 and args.packing:
-            self.train_dataset.infinite = False
+        if self.train_dataset is not None:
+            if self.args.max_steps > 0 and args.packing:
+                warnings.warn(
+                    "You passed `packing=True` to the SFTTrainer/SFTConfig, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
+                )
+                self.train_dataset.infinite = True
+            elif self.args.max_steps == -1 and args.packing:
+                self.train_dataset.infinite = False
 
     @wraps(Trainer.train)
     def train(self, *args, **kwargs):
