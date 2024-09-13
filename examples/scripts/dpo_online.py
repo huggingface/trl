@@ -42,7 +42,7 @@ python examples/scripts/dpo_online.py \
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 from accelerate import PartialState
 from trl import (
     DPOScriptArguments,
@@ -53,10 +53,10 @@ from trl import (
     get_peft_config,
     get_quantization_config,
     maybe_apply_chat_template,
+    LogCompletionsCallback,
 )
 
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.callbacks import LogCompletionsCallback
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 if __name__ == "__main__":
@@ -117,6 +117,9 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )
-    log_completions_callback = LogCompletionsCallback(dataset[args.dataset_test_split]["prompt"][:8], freq=100)
-    trainer.add_callback(log_completions_callback)
+    generation_config = GenerationConfig(
+        max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+    )
+    completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
+    trainer.add_callback(completions_callback)
     trainer.train()
