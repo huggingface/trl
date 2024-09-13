@@ -26,7 +26,7 @@ python examples/scripts/dpo_online.py \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0
 
-With PEFT:
+With LoRA:
 python examples/scripts/dpo_online.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
