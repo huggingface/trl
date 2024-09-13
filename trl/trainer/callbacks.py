@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 from accelerate import Accelerator
@@ -41,9 +41,27 @@ if is_deepspeed_available():
     import deepspeed
 
 
-def _generate_completions(
-    prompts: List[str], model, tokenizer, accelerator, generation_config, batch_size: int = None
-) -> List[str]:
+def _generate_completions(prompts: List[str], **kwargs: Dict[str, Any]) -> List[str]:
+    """
+    Generates text completions for a list of prompts using a specified model and tokenizer. Assumes the prompts are pre-formatted with a chat template.
+
+    Args:
+        prompts (List[str]): A list of input prompts for which completions are to be generated.
+        **kwargs (Dict[str, Any]): Additional keyword arguments including:
+            - model: The model to be used for generation.
+            - tokenizer: The tokenizer to be used for encoding and decoding.
+            - accelerator: The accelerator to be used for model execution.
+            - generation_config (optional): Configuration for text generation.
+            - batch_size (optional, int): The number of prompts to process in each batch. Default is 1.
+
+    Returns:
+        List[str]: A list of generated text completions corresponding to the input prompts.
+    """
+    model = kwargs.pop("model")
+    tokenizer = kwargs.pop("tokenizer")
+    accelerator = kwargs.pop("accelerator")
+    generation_config = kwargs.pop("generation_config", None)
+    batch_size = kwargs.pop("batch_size", 1)
     completions = []
     with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
         unwrapped_model.eval()
@@ -188,7 +206,8 @@ class WinRateCallback(TrainerCallback):
     Usage:
     ```python
     trainer = DPOTrainer(...)
-    win_rate_callback = WinRateCallback(..., trainer=trainer)
+    judge = PairRMJudge()
+    win_rate_callback = WinRateCallback(judge=judge, trainer=trainer)
     trainer.add_callback(win_rate_callback)
     ```
 
@@ -202,6 +221,9 @@ class WinRateCallback(TrainerCallback):
             otherwise, it defaults to using the initial model.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
+        num_completions (`int`, *optional*):
+            The number of completions to generate. If not provided, defaults to the number of examples
+            in the evaluation dataset.
     """
 
     def __init__(
@@ -215,7 +237,11 @@ class WinRateCallback(TrainerCallback):
         self.trainer = trainer
         self.generation_config = generation_config
         self.ref_completions = []
-        self.eval_dataset = self.trainer.eval_dataset
+
+        if self.trainer.eval_dataset is None:
+            raise ValueError("Trainer must have an evaluation dataset to use the WinRateCallback.")
+        else:
+            self.eval_dataset = self.trainer.eval_dataset
 
         if num_completions is not None:
             self.eval_dataset = self.eval_dataset.select(range(num_completions))
@@ -228,7 +254,12 @@ class WinRateCallback(TrainerCallback):
         model = getattr(self.trainer, "ref_model", kwargs["model"])  # get the ref model if any, else use the model
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             self.ref_completions = _generate_completions(
-                prompts, model, tokenizer, accelerator, self.generation_config, args.per_device_eval_batch_size
+                prompts,
+                model=model,
+                tokenizer=tokenizer,
+                accelerator=accelerator,
+                generation_config=self.generation_config,
+                batch_size=args.per_device_eval_batch_size,
             )
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
@@ -241,7 +272,12 @@ class WinRateCallback(TrainerCallback):
         model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             completions = _generate_completions(
-                prompts, model, tokenizer, accelerator, self.generation_config, args.per_device_eval_batch_size
+                prompts,
+                model=model,
+                tokenizer=tokenizer,
+                accelerator=accelerator,
+                generation_config=self.generation_config,
+                batch_size=args.per_device_eval_batch_size,
             )
             completions = list(zip(self.ref_completions, completions))
             winner_indices = self.judge.judge(prompts, completions)
@@ -283,7 +319,11 @@ class LogCompletionsCallback(WandbCallback):
         self.freq = freq
         self.table = []
         self._last_logged_step = -1
-        self.eval_dataset = self.trainer.eval_dataset
+
+        if self.trainer.eval_dataset is None:
+            raise ValueError("Trainer must have an evaluation dataset to use the LogCompletionsCallback.")
+        else:
+            self.eval_dataset = self.trainer.eval_dataset
 
         if num_completions is not None:
             self.eval_dataset = self.eval_dataset.select(range(num_completions))
@@ -305,11 +345,11 @@ class LogCompletionsCallback(WandbCallback):
         with accelerator.split_between_processes(self.eval_dataset["prompt"], apply_padding=True) as prompts:
             completions = _generate_completions(
                 prompts,
-                model,
-                tokenizer,
-                accelerator,
-                self.generation_config,
-                args.per_device_eval_batch_size,
+                model=model,
+                tokenizer=tokenizer,
+                accelerator=accelerator,
+                generation_config=self.generation_config,
+                batch_size=args.per_device_eval_batch_size,
             )
             completions = gather_object(completions)
             prompts = gather_object(prompts)
