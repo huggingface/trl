@@ -30,6 +30,7 @@ from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     empty_cache,
+    get_reward,
     prepare_deepspeed,
     trl_sanitze_kwargs_for_tagging,
     truncate_right,
@@ -59,12 +60,12 @@ class OnlineDPOTrainer(Trainer):
     Initialize OnlineDPOTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
             The model to train, preferably an `AutoModelForCausalLM`.
-        ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
-        reward_model (`transformers.PreTrainedModel`):
+        ref_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
+            The reference model to use for training. If None is specified, the reference model will be created from
+            the model.
+        reward_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.
@@ -96,9 +97,9 @@ class OnlineDPOTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module] = None,
+        model: Union[PreTrainedModel, nn.Module, None] = None,
         ref_model: Union[PreTrainedModel, nn.Module, None] = None,
-        reward_model: Optional[nn.Module] = None,
+        reward_model: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
         args: Optional[OnlineDPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
@@ -149,15 +150,16 @@ class OnlineDPOTrainer(Trainer):
             disable_dropout_in_model(model)
 
         # Handle the ref_model
-        if ref_model is None:
+        # Usually, the user wants the ref model to be the initial version of the model. When using PEFT, it's easy to
+        # get the ref model, as it's just the model with a disabled adaptater. When not using PEFT, we need to create
+        # the ref model from the model by copying it and disable the gradients and set it in evaluation mode.
+        if ref_model is None:  # No ref model provided, the most common case
             if peft_config is None:
-                self.ref_model = create_reference_model(model)
+                self.ref_model = create_reference_model(model)  # copy, disable gradients, set eval mode
             else:
-                # We don't need a ref model here, as the ref model will just be the model with a disabled adaptater.
-                self.ref_model
-        else:
-            self.ref_model = create_reference_model(ref_model)
-
+                self.ref_model = None  # we don't need a ref model here, we can just disable the adaptater.
+        else:  # rare case, the user provided a ref model
+            self.ref_model = create_reference_model(ref_model)  # copy, disable gradients, set eval mode
 
         # Disable the gradient and set the reward model in eval mode
         if self.reward_model is not None:
@@ -226,7 +228,8 @@ class OnlineDPOTrainer(Trainer):
                 )
             self.ref_model = prepare_deepspeed(self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16)
         else:
-            self.ref_model = self.ref_model.to(self.accelerator.device)
+            if self.ref_model is not None:
+                self.ref_model = self.ref_model.to(self.accelerator.device)
             if self.reward_model is not None:
                 self.reward_model = self.reward_model.to(self.accelerator.device)
 
@@ -353,8 +356,11 @@ class OnlineDPOTrainer(Trainer):
         del output, logits, all_logprobs  # free memory
 
         # Same for the reference model
-        with torch.no_grad():
+        if self.ref_model is not None:
             ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+        else: # peft case: we just need to disable the adaptater
+            with self.model.disable_adapter():
+                ref_output = self.model(prompt_completion_ids, attention_mask=prompt_completion_mask)
         ref_logits = ref_output.logits[:, context_length - 1 : -1]
         ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
         ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
@@ -362,8 +368,9 @@ class OnlineDPOTrainer(Trainer):
 
         # Get the reward from the reward model
         with torch.no_grad():
-            scores = self.reward_model(prompt_completion_ids, attention_mask=prompt_completion_mask).score
-
+            _, scores, _ = get_reward(
+                self.reward_model, prompt_completion_ids, self.tokenizer.pad_token_id, context_length
+            )
         # Filter completion. Ensure that the sample contains stop_token_id
         # Completions not passing that filter will receive a lower score.
         contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
