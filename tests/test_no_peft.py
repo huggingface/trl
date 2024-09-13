@@ -19,8 +19,9 @@ from unittest.mock import patch
 import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.utils import is_peft_available
 
-from .testing_utils import is_peft_available, require_peft
+from .testing_utils import require_peft
 
 
 class DummyDataset(torch.utils.data.Dataset):

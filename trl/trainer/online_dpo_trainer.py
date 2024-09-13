@@ -25,12 +25,18 @@ from accelerate import PartialState
 from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
-from transformers import DataCollator, GenerationConfig, PreTrainedTokenizerBase, Trainer, TrainerCallback
+from transformers import (
+    DataCollator,
+    GenerationConfig,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainerCallback,
+    is_apex_available,
+)
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import (
-    is_apex_available,
     is_sagemaker_mp_enabled,
     logging,
 )

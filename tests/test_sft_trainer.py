@@ -26,10 +26,11 @@ from transformers import (
     AutoTokenizer,
     LlavaForConditionalGeneration,
     TrainingArguments,
+    is_vision_available,
 )
+from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.import_utils import is_peft_available, is_pil_available
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
 
 from .testing_utils import require_peft, requires_pil
@@ -51,7 +52,7 @@ def formatting_prompts_func_batched(example):
 if is_peft_available():
     from peft import LoraConfig, PeftModel
 
-if is_pil_available():
+if is_vision_available():
     from PIL import Image as PILImage
 
 
@@ -131,7 +132,7 @@ class SFTTrainerTester(unittest.TestCase):
             ]
         )
 
-        if is_pil_available():
+        if is_vision_available():
             self.dummy_vsft_instruction_dataset = Dataset.from_dict(
                 {
                     "messages": [

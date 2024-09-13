@@ -21,8 +21,9 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.utils import is_peft_available
 
-from trl import DPOConfig, DPOTrainer, is_peft_available
+from trl import DPOConfig, DPOTrainer
 
 from ..testing_utils import require_bitsandbytes, require_non_cpu, require_peft, torch_device
 from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST

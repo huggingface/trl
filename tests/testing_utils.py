@@ -15,16 +15,10 @@ import unittest
 
 import torch
 from accelerate.test_utils.testing import get_backend
+from transformers import is_bitsandbytes_available, is_torch_xpu_available, is_vision_available, is_wandb_available
+from transformers.utils import is_liger_kernel_available, is_peft_available
 
-from trl import (
-    is_bitsandbytes_available,
-    is_diffusers_available,
-    is_liger_available,
-    is_peft_available,
-    is_pil_available,
-    is_wandb_available,
-    is_xpu_available,
-)
+from trl import is_diffusers_available
 
 
 torch_device, device_count, memory_allocated_func = get_backend()
@@ -61,7 +55,7 @@ def requires_pil(test_case):
     """
     Decorator marking a test that requires PIL. Skips the test if pil is not available.
     """
-    if not is_pil_available():
+    if not is_vision_available():
         test_case = unittest.skip("test requires PIL")(test_case)
     return test_case
 
@@ -107,7 +101,7 @@ def require_torch_multi_xpu(test_case):
     """
     Decorator marking a test that requires multiple XPUs. Skips the test if there aren't enough XPUs.
     """
-    if torch.xpu.device_count() < 2 and is_xpu_available():
+    if torch.xpu.device_count() < 2 and is_torch_xpu_available():
         test_case = unittest.skip("test requires multiple XPUs")(test_case)
     return test_case
 
@@ -116,7 +110,7 @@ def require_liger_kernel(test_case):
     """
     Decorator marking a test that requires liger-kernel. Also skip the test if there is no GPU.
     """
-    if not (torch.cuda.is_available() and is_liger_available()):
+    if not (torch.cuda.is_available() and is_liger_kernel_available()):
         test_case = unittest.skip("test requires GPU and liger-kernel")(test_case)
     return test_case
 

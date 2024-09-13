@@ -31,16 +31,8 @@ _import_structure = {
         "BestOfNSampler",
     ],
     "import_utils": [
-        "is_bitsandbytes_available",
         "is_diffusers_available",
-        "is_npu_available",
-        "is_peft_available",
-        "is_pil_available",
-        "is_wandb_available",
-        "is_xpu_available",
         "is_llmblender_available",
-        "is_openai_available",
-        "is_liger_available",
     ],
     "models": [
         "AutoModelForCausalLMWithValueHead",
@@ -134,18 +126,7 @@ if TYPE_CHECKING:
     from .core import set_seed
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
-    from .import_utils import (
-        is_bitsandbytes_available,
-        is_diffusers_available,
-        is_npu_available,
-        is_peft_available,
-        is_pil_available,
-        is_wandb_available,
-        is_xpu_available,
-        is_llmblender_available,
-        is_openai_available,
-        is_liger_available,
-    )
+    from .import_utils import is_diffusers_available, is_llmblender_available
     from .models import (
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,

@@ -16,8 +16,8 @@ import unittest
 
 import torch
 from transformers import AutoTokenizer
+from transformers.utils import is_peft_available
 
-from trl import is_peft_available
 from trl.trainer.model_config import ModelConfig
 from trl.trainer.utils import decode_and_strip_padding, get_peft_config, pad
 

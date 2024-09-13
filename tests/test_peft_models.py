@@ -17,8 +17,9 @@ import unittest
 
 import torch
 from transformers import AutoModelForCausalLM
+from transformers.utils import is_peft_available
 
-from trl import AutoModelForCausalLMWithValueHead, is_peft_available
+from trl import AutoModelForCausalLMWithValueHead
 
 
 if is_peft_available():
