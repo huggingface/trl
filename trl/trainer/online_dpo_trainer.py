@@ -358,7 +358,7 @@ class OnlineDPOTrainer(Trainer):
         # Same for the reference model
         if self.ref_model is not None:
             ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-        else: # peft case: we just need to disable the adaptater
+        else:  # peft case: we just need to disable the adaptater
             with self.model.disable_adapter():
                 ref_output = self.model(prompt_completion_ids, attention_mask=prompt_completion_mask)
         ref_logits = ref_output.logits[:, context_length - 1 : -1]
