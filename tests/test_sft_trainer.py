@@ -28,12 +28,11 @@ from transformers import (
     TrainingArguments,
     is_vision_available,
 )
+from transformers.testing_utils import require_peft, require_vision
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
-
-from .testing_utils import require_peft, requires_pil
 
 
 def formatting_prompts_func(example):
@@ -1185,7 +1184,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert len(trainer.train_dataset["input_ids"]) != 1
             assert len(trainer.eval_dataset["input_ids"]) != 1
 
-    @requires_pil
+    @require_vision
     def test_sft_trainer_skip_prepare_dataset(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -1236,7 +1235,7 @@ class SFTTrainerTester(unittest.TestCase):
             )
             assert trainer.train_dataset.features == self.dummy_dataset.features
 
-    @requires_pil
+    @require_vision
     def test_sft_trainer_llava(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(

@@ -25,12 +25,12 @@ from huggingface_hub import HfApi
 from parameterized import parameterized
 from requests.exceptions import HTTPError
 from transformers import AutoTokenizer
+from transformers.testing_utils import require_peft, require_torch_multi_accelerator
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import respond_to_batch
 
 from .testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER
-from .testing_utils import require_multi_accelerator, require_peft
 
 
 EXPECTED_STATS = [
@@ -1038,7 +1038,7 @@ class PPOTrainerTester(unittest.TestCase):
             )
 
     @require_peft
-    @require_multi_accelerator
+    @require_torch_multi_accelerator
     def test_peft_model_ppo_trainer_multi_gpu(self):
         from peft import LoraConfig, get_peft_model
         from transformers import AutoModelForCausalLM
