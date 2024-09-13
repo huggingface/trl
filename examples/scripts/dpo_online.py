@@ -21,13 +21,23 @@ python examples/scripts/dpo_online.py \
     --dataset_name trl-lib/tldr \
     --learning_rate 5.0e-7 \
     --output_dir pythia-1b-tldr-online-dpo \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 32 \
-    --num_train_epochs 3 \
-    --max_new_tokens 53 \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 16 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
-    --push_to_hub
+
+With PEFT:
+python examples/scripts/dpo_online.py \
+    --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
+    --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
+    --dataset_name trl-lib/tldr \
+    --learning_rate 5.0e-6 \
+    --output_dir pythia-1b-tldr-online-dpo \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 16 \
+    --warmup_ratio 0.1 \
+    --missing_eos_penalty 1.0 \
+    --use_peft
 """
 
 import torch
