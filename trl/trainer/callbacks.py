@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import torch
 from accelerate import Accelerator
@@ -24,6 +24,7 @@ from rich.progress import Progress
 from transformers import (
     GenerationConfig,
     PreTrainedModel,
+    PreTrainedTokenizerBase,
     Trainer,
     TrainerCallback,
     TrainerControl,
@@ -41,27 +42,14 @@ if is_deepspeed_available():
     import deepspeed
 
 
-def _generate_completions(prompts: List[str], **kwargs: Dict[str, Any]) -> List[str]:
-    """
-    Generates text completions for a list of prompts using a specified model and tokenizer. Assumes the prompts are pre-formatted with a chat template.
-
-    Args:
-        prompts (List[str]): A list of input prompts for which completions are to be generated.
-        **kwargs (Dict[str, Any]): Additional keyword arguments including:
-            - model: The model to be used for generation.
-            - tokenizer: The tokenizer to be used for encoding and decoding.
-            - accelerator: The accelerator to be used for model execution.
-            - generation_config (optional): Configuration for text generation.
-            - batch_size (optional, int): The number of prompts to process in each batch. Default is 1.
-
-    Returns:
-        List[str]: A list of generated text completions corresponding to the input prompts.
-    """
-    model = kwargs.pop("model")
-    tokenizer = kwargs.pop("tokenizer")
-    accelerator = kwargs.pop("accelerator")
-    generation_config = kwargs.pop("generation_config", None)
-    batch_size = kwargs.pop("batch_size", 1)
+def _generate_completions(
+    prompts: List[str],
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    accelerator: Accelerator,
+    generation_config: GenerationConfig,
+    batch_size: int = 1,
+) -> List[str]:
     completions = []
     with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
         unwrapped_model.eval()
