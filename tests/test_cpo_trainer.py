@@ -15,7 +15,7 @@ import tempfile
 import unittest
 
 import torch
-from datasets import Dataset
+from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
@@ -35,46 +35,6 @@ class CPOTrainerTester(unittest.TestCase):
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-    def _init_dummy_dataset(self):
-        # fmt: off
-        dummy_dataset_dict = {
-            "prompt": [
-                "hello",
-                "how are you",
-                "What is your name?",
-                "What is your name?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "[INST] How is the stock price? [/INST]",
-                "[INST] How is the stock price? [/INST] ",
-            ],
-            "chosen": [
-                "hi nice to meet you",
-                "I am fine",
-                "My name is Mary",
-                "My name is Mary",
-                "Python",
-                "Python",
-                "Python",
-                "$46 as of 10am EST",
-                "46 as of 10am EST",
-            ],
-            "rejected": [
-                "leave me alone",
-                "I am not fine",
-                "Whats it to you?",
-                "I dont have a name",
-                "Javascript",
-                "C++",
-                "Java",
-                " $46 as of 10am EST",
-                " 46 as of 10am EST",
-            ],
-        }
-        # fmt: on
-        return Dataset.from_dict(dummy_dataset_dict)
 
     @parameterized.expand(
         [
@@ -102,7 +62,7 @@ class CPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             if name == "gpt2":
                 model = self.model
@@ -116,8 +76,8 @@ class CPOTrainerTester(unittest.TestCase):
                 model=model,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -159,14 +119,14 @@ class CPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             trainer = CPOTrainer(
                 model=self.model,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
