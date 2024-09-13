@@ -221,8 +221,8 @@ class WinRateCallback(TrainerCallback):
             otherwise, it defaults to using the initial model.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_completions (`int`, *optional*):
-            The number of completions to generate. If not provided, defaults to the number of examples
+        num_prompts (`int`, *optional*):
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples
             in the evaluation dataset.
     """
 
@@ -231,7 +231,7 @@ class WinRateCallback(TrainerCallback):
         judge: BasePairwiseJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_completions: int = 1,
+        num_prompts: int = None,
     ):
         self.judge = judge
         self.trainer = trainer
@@ -243,8 +243,8 @@ class WinRateCallback(TrainerCallback):
         else:
             self.eval_dataset = self.trainer.eval_dataset
 
-        if num_completions is not None:
-            self.eval_dataset = self.eval_dataset.select(range(num_completions))
+        if num_prompts is not None:
+            self.eval_dataset = self.eval_dataset.select(range(num_prompts))
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # When the trainer is initialized, we generate completions for the reference model.
@@ -296,22 +296,28 @@ class LogCompletionsCallback(WandbCallback):
 
     Usage:
     ```python
-    prompts = ["The capital of France is", "The opposite of up is"]
-    trainer = DPOTrainer(..., callbacks=[LogCompletionsCallback(prompts)])
+    trainer = DPOTrainer(...)
+    completions_callback = LogCompletionsCallback(trainer=trainer)
+    trainer.add_callback(completions_callback)
     ```
 
     Args:
-        prompts (`List[str]`):
-            The prompts to generate completions for.
-        freq (`Optional[int]`, *optional*, defaults to `None`):
-            The frequency at which to log completions. If not provided, defaults to `logging_steps`.
+        trainer (`Trainer`):
+            Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`
+            column containing the prompts for generating completions.
+        generation_config (`GenerationConfig`, *optional*):
+            The generation config to use for generating completions.
+        num_prompts (`int`, *optional*):
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples in the evaluation dataset.
+        freq (`int`, *optional*):
+            The frequency at which to log completions. If not provided, defaults to the trainer's `logging_steps`.
     """
 
     def __init__(
         self,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_completions: int = None,
+        num_prompts: int = None,
         freq: int = None,
     ):
         super().__init__()
@@ -326,8 +332,8 @@ class LogCompletionsCallback(WandbCallback):
         else:
             self.eval_dataset = self.trainer.eval_dataset
 
-        if num_completions is not None:
-            self.eval_dataset = self.eval_dataset.select(range(num_completions))
+        if num_prompts is not None:
+            self.eval_dataset = self.eval_dataset.select(range(num_prompts))
 
     def on_step_end(self, args, state, control, **kwargs):
         # Only log once per step (this method may be called multiple times)
