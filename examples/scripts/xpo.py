@@ -32,7 +32,7 @@ python examples/scripts/xpo.py \
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 from accelerate import PartialState
 from trl import (
     DPOScriptArguments,
@@ -95,8 +95,6 @@ if __name__ == "__main__":
     with PartialState().local_main_process_first():
         dataset = dataset.map(prepare_dataset, num_proc=training_args.dataset_num_proc)
 
-    prompts = dataset[args.dataset_test_split]["prompt"][:8]
-
     trainer = XPOTrainer(
         model=model,
         ref_model=ref_model,
@@ -106,8 +104,11 @@ if __name__ == "__main__":
         eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
     )
-    log_completions_callback = LogCompletionsCallback(prompts)
-    trainer.add_callback(log_completions_callback)
+    generation_config = GenerationConfig(
+        max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+    )
+    completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
+    trainer.add_callback(completions_callback)
     # train the model
     trainer.train()
 

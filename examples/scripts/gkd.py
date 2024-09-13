@@ -127,8 +127,8 @@ if __name__ == "__main__":
     generation_config = GenerationConfig(
         max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
     )
-    log_completions_callback = LogCompletionsCallback(trainer, generation_config, num_completions=8)
-    trainer.add_callback(log_completions_callback)
+    completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
+    trainer.add_callback(completions_callback)
     trainer.train()
 
     trainer.save_model(training_args.output_dir)
