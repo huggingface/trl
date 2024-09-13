@@ -42,9 +42,9 @@ from trl import (
     get_kbit_device_map,
     get_quantization_config,
     maybe_apply_chat_template,
+    LogCompletionsCallback,
 )
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.callbacks import LogCompletionsCallback
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 

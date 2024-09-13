@@ -56,9 +56,9 @@ from trl import (
     get_peft_config,
     get_quantization_config,
     maybe_apply_chat_template,
+    LogCompletionsCallback,
 )
 from trl.commands.cli_utils import SFTScriptArguments, TrlParser
-from trl.trainer.callbacks import LogCompletionsCallback
 from accelerate import PartialState
 
 
@@ -104,11 +104,15 @@ if __name__ == "__main__":
     # Dataset
     ################
     raw_datasets = load_dataset(args.dataset_name)
-    # Format prompt
-    raw_datasets = raw_datasets.map(
-        lambda x: {"prompt": tokenizer.apply_chat_template(x["prompt"], tokenize=False, add_generation_prompt=True)},
-        num_proc=training_args.dataset_num_proc,
-    )
+
+    with PartialState().local_main_process_first():
+        raw_datasets = raw_datasets.map(
+            lambda x: {
+                "prompt": tokenizer.apply_chat_template(x["prompt"], tokenize=False, add_generation_prompt=True)
+            },
+            num_proc=training_args.dataset_num_proc,
+        )
+
     train_dataset = raw_datasets[args.dataset_train_split]
     eval_dataset = raw_datasets[args.dataset_test_split]
 
