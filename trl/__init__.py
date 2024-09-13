@@ -85,6 +85,7 @@ _import_structure = {
         "PairRMJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
+        "LogCompletionsCallback",
     ],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
@@ -178,6 +179,7 @@ if TYPE_CHECKING:
         PairRMJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
+        LogCompletionsCallback,
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
