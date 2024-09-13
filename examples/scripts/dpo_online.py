@@ -41,6 +41,7 @@ from trl import (
     OnlineDPOTrainer,
     get_kbit_device_map,
     get_quantization_config,
+    maybe_apply_chat_template,
 )
 from trl.commands.cli_utils import TrlParser
 from trl.trainer.callbacks import LogCompletionsCallback
@@ -85,12 +86,10 @@ if __name__ == "__main__":
 
     dataset = load_dataset(args.dataset_name)
 
-    def prepare_dataset(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False, add_generation_prompt=True)
-        return row
-
     with PartialState().local_main_process_first():
-        dataset = dataset.map(prepare_dataset, num_proc=training_args.dataset_num_proc)
+        dataset = dataset.map(
+            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
+        )
 
     trainer = OnlineDPOTrainer(
         model=model,
