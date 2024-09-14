@@ -15,7 +15,7 @@
 import tempfile
 import unittest
 
-import datasets
+from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl import (
@@ -39,9 +39,7 @@ from trl import (
 class TrainerArgTester(unittest.TestCase):
     def test_bco(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "completion": ["This is a test completion."], "label": [True]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = BCOConfig(
                 tmp_dir,
@@ -82,9 +80,7 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_cpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "chosen": ["Nice to meet you."], "rejected": ["I don't like you."]}
-        )
+        dataset = dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = CPOConfig(
                 tmp_dir,
@@ -125,9 +121,7 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_dpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "chosen": ["Nice to meet you."], "rejected": ["I don't like you."]}
-        )
+        dataset = dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = DPOConfig(
                 tmp_dir,
@@ -188,9 +182,7 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_kto(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "completion": ["This is a test completion."], "label": [True]}
-        )
+        dataset = dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = KTOConfig(
                 tmp_dir,
@@ -229,9 +221,7 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_online_dpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "completion": ["This is a test completion."], "label": [True]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = OnlineDPOConfig(
                 tmp_dir,
@@ -262,9 +252,7 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_orpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "chosen": ["Nice to meet you."], "rejected": ["I don't like you."]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = ORPOConfig(
                 tmp_dir,
@@ -291,9 +279,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.label_pad_token_id, -99)
 
     def test_sft(self):
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "chosen": ["Nice to meet you."], "rejected": ["I don't like you."]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = SFTConfig(
                 tmp_dir,

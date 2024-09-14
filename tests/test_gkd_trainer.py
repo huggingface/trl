@@ -17,14 +17,11 @@ import unittest
 
 import torch
 import torch.nn.functional as F
-from datasets import Dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    GenerationConfig,
-)
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl import GKDConfig, GKDTrainer
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 class TestGKDTrainer(unittest.TestCase):
@@ -212,75 +209,7 @@ class GKDTrainerTester(unittest.TestCase):
 
         # Ensure the tokenizer has a chat template
         if not hasattr(self.tokenizer, "chat_template") or self.tokenizer.chat_template is None:
-            self.tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}"
-
-        self.dummy_dataset = Dataset.from_dict(
-            {
-                "question": [
-                    "Does llamas know how to code?",
-                    "Does llamas know how to fly?",
-                    "Does llamas know how to talk?",
-                    "Does llamas know how to code?",
-                    "Does llamas know how to fly?",
-                    "Does llamas know how to talk?",
-                    "Does llamas know how to swim?",
-                ],
-                "answer": [
-                    "Yes, llamas are very good at coding.",
-                    "No, llamas can't fly.",
-                    "Yes, llamas are very good at talking.",
-                    "Yes, llamas are very good at coding.",
-                    "No, llamas can't fly.",
-                    "Yes, llamas are very good at talking.",
-                    "No, llamas can't swim.",
-                ],
-                "text": [
-                    "### Question: Does llamas know how to code?\n ### Answer: Yes, llamas are very good at coding.",
-                    "### Question: Does llamas know how to fly?\n ### Answer: No, llamas can't fly.",
-                    "### Question: Does llamas know how to talk?\n ### Answer: Yes, llamas are very good at talking.",
-                    "### Question: Does llamas know how to code?\n ### Answer: Yes, llamas are very good at coding.",
-                    "### Question: Does llamas know how to fly?\n ### Answer: No, llamas can't fly.",
-                    "### Question: Does llamas know how to talk?\n ### Answer: Yes, llamas are very good at talking.",
-                    "### Question: Does llamas know how to swim?\n ### Answer: No, llamas can't swim.",
-                ],
-            }
-        )
-        self.dummy_chatml_dataset = Dataset.from_dict(
-            {
-                "messages": [
-                    [
-                        {"role": "system", "content": "You are helpful"},
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                        {"role": "user", "content": "What is 2+2?"},
-                        {"role": "assistant", "content": "4"},
-                        {"role": "user", "content": "What is 3+3?"},
-                        {"role": "assistant", "content": "6"},
-                    ],
-                    [
-                        {"role": "system", "content": "You are helpful"},
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                ]
-            }
-        )
-        self.dummy_instruction_dataset = Dataset.from_list(
-            [
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-            ]
-        )
+            self.tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     def test_gkd_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -294,13 +223,14 @@ class GKDTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
             )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
             trainer = GKDTrainer(
                 model=self.model_id,
                 teacher_model=self.model_id,
                 args=training_args,
-                train_dataset=self.dummy_chatml_dataset,
-                eval_dataset=self.dummy_chatml_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 tokenizer=self.tokenizer,
             )
 
