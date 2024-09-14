@@ -36,12 +36,8 @@ from transformers import (
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
-from transformers.utils import (
-    is_sagemaker_mp_enabled,
-    logging,
-)
+from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
-from ..import_utils import is_peft_available
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
