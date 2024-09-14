@@ -36,6 +36,8 @@
       title: Online DPO
     - local: xpo_trainer
       title: XPO
+    - local: nash_md_trainer
+      title: Nash MD Trainer
     - local: orpo_trainer
       title: ORPO
     - local: kto_trainer
@@ -50,8 +52,6 @@
       title: SFT
     - local: iterative_sft_trainer
       title: Iterative SFT
-    - local: nash_md_trainer
-      title: Nash MD Trainer
     - local: reward_trainer
       title: Reward Model
     - local: gkd_trainer
