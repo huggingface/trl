@@ -127,44 +127,43 @@ class BCOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                train_dataset = dummy_dataset["train"]
-                tokenized_dataset = train_dataset.map(
-                    _tokenize,
-                    fn_kwargs={"tokenizer": trainer.tokenizer},
-                    batched=True,
-                    batch_size=2,
-                )
-                self.assertListEqual(tokenized_dataset["prompt"], train_dataset["prompt"])
-                self.assertListEqual(tokenized_dataset["completion"], train_dataset["completion"])
-                self.assertListEqual(tokenized_dataset["label"], train_dataset["label"])
-                self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [5377, 11141])
-                self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1])
-                self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [318, 1365, 621, 8253, 13])
-                self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1])
+            train_dataset = dummy_dataset["train"]
+            tokenized_dataset = train_dataset.map(
+                _tokenize,
+                fn_kwargs={"tokenizer": trainer.tokenizer},
+                batched=True,
+                batch_size=2,
+            )
+            self.assertListEqual(tokenized_dataset["prompt"], train_dataset["prompt"])
+            self.assertListEqual(tokenized_dataset["completion"], train_dataset["completion"])
+            self.assertListEqual(tokenized_dataset["label"], train_dataset["label"])
+            self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [5377, 11141])
+            self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1])
+            self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [318, 1365, 621, 8253, 13])
+            self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1])
 
-                fn_kwargs = {
-                    "prefix": "",
-                    "is_encoder_decoder": trainer.is_encoder_decoder,
-                    "tokenizer": trainer.tokenizer,
-                    "max_length": trainer.max_length,
-                    "truncation_mode": trainer.truncation_mode,
-                    "label_pad_token_id": trainer.label_pad_token_id,
-                    "max_prompt_length": trainer.max_prompt_length,
-                }
-                processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
-                self.assertListEqual(processed_dataset["prompt"], train_dataset["prompt"])
-                self.assertListEqual(processed_dataset["completion"], train_dataset["completion"])
-                self.assertListEqual(processed_dataset["label"], train_dataset["label"])
-                self.assertListEqual(processed_dataset["prompt_input_ids"][0], [50256, 5377, 11141])
-                self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1])
-                self.assertListEqual(
-                    processed_dataset["completion_input_ids"][0], [50256, 5377, 11141, 318, 1365, 621, 8253, 13, 50256]
-                )
-                self.assertListEqual(processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1, 1, 1])
-                self.assertListEqual(
-                    processed_dataset["completion_labels"][0], [-100, -100, -100, 318, 1365, 621, 8253, 13, 50256]
-                )
+            fn_kwargs = {
+                "prefix": "",
+                "is_encoder_decoder": trainer.is_encoder_decoder,
+                "tokenizer": trainer.tokenizer,
+                "max_length": trainer.max_length,
+                "truncation_mode": trainer.truncation_mode,
+                "label_pad_token_id": trainer.label_pad_token_id,
+                "max_prompt_length": trainer.max_prompt_length,
+            }
+            processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
+            self.assertListEqual(processed_dataset["prompt"], train_dataset["prompt"])
+            self.assertListEqual(processed_dataset["completion"], train_dataset["completion"])
+            self.assertListEqual(processed_dataset["label"], train_dataset["label"])
+            self.assertListEqual(processed_dataset["prompt_input_ids"][0], [50256, 5377, 11141])
+            self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1])
+            self.assertListEqual(
+                processed_dataset["completion_input_ids"][0], [50256, 5377, 11141, 318, 1365, 621, 8253, 13, 50256]
+            )
+            self.assertListEqual(processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1, 1, 1])
+            self.assertListEqual(
+                processed_dataset["completion_labels"][0], [-100, -100, -100, 318, 1365, 621, 8253, 13, 50256]
+            )
 
     def test_bco_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
