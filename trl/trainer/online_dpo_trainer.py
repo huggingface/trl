@@ -213,7 +213,6 @@ class OnlineDPOTrainer(Trainer):
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
-            min_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
             top_k=0,
             top_p=1.0,
@@ -392,11 +391,6 @@ class OnlineDPOTrainer(Trainer):
         if self.args.missing_eos_penalty is not None:
             scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
-        # Replace the logprobs of the padding tokens by 1.0
-        padding_mask = ~completion_mask.bool()
-        logprobs = logprobs.masked_fill(padding_mask, 1.0)
-        ref_logprobs = ref_logprobs.masked_fill(padding_mask, 1.0)
-
         # Split the scores in 2 (the prompts of the first half are the same as the second half)
         first_half, second_half = scores.split(num_examples)
 
@@ -410,6 +404,9 @@ class OnlineDPOTrainer(Trainer):
         cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)  # cr = chosen and rejected
         cr_logprobs = logprobs[cr_indices]
         cr_ref_logprobs = ref_logprobs[cr_indices]
+
+        # mask out the padding tokens
+        padding_mask = ~completion_mask.bool()
         cr_padding_mask = padding_mask[cr_indices]
 
         cr_logprobs_sum = (cr_logprobs * ~cr_padding_mask).sum(1)

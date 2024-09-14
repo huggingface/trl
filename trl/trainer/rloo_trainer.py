@@ -227,7 +227,6 @@ class RLOOTrainer(Trainer):
         iter_dataloader = iter(repeat_generator())
         generation_config = GenerationConfig(
             max_new_tokens=args.response_length,
-            min_new_tokens=args.response_length,
             temperature=(args.temperature + 1e-7),
             top_k=0.0,
             top_p=1.0,
