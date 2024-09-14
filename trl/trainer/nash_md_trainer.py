@@ -111,22 +111,18 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         # Overwrite the stats dictionary to include NashMD specific statistics
         self.stats = {
-            # Remove "non_score_reward", "rlhf_reward", "scores"
-            # Add "loss/dpo"
             "loss/dpo": [],
-            "objective/kl": [],
-            "objective/entropy": [],
-            # Replace "scores" by "model_scores" and "ref_scores"
             "objective/model_scores": [],
             "objective/ref_scores": [],
             "objective/scores_margin": [],
-            "rewards/chosen": [],
-            "rewards/rejected": [],
-            "rewards/accuracies": [],
-            "rewards/margins": [],
             "logps/chosen": [],
             "logps/rejected": [],
-            # Replace "contain_eos_token" by "model_contain_eos_token" and "ref_contain_eos_token"
+            "rewards/chosen": [],
+            "rewards/rejected": [],
+            "objective/kl": [],
+            "objective/entropy": [],
+            "rewards/margins": [],
+            "rewards/accuracies": [],
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
         }
@@ -247,6 +243,63 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         return loss.mean(), score, kl_div
 
+    def _log_statistics(
+        self,
+        model_data,
+        mixture_data,
+        model_logprobs_model_data,
+        ref_logprobs_model_data,
+        model_scores,
+        mixture_scores,
+        loss,
+        score,
+        kl_div,
+        context_length,
+    ):
+        # Helper function to gather and compute mean
+        def gather_mean(tensor):
+            return self.accelerator.gather(tensor).mean().item()
+
+        # Log loss
+        self.stats["loss/dpo"].append(gather_mean(loss))
+
+        # Log scores
+        self.stats["objective/model_scores"].append(gather_mean(model_scores))
+        self.stats["objective/ref_scores"].append(gather_mean(mixture_scores))
+        self.stats["objective/scores_margin"].append(gather_mean(model_scores - mixture_scores))
+
+        # Log logprobs
+        model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
+        ref_logprobs_model_data_sum = ref_logprobs_model_data.sum(1)
+
+        self.stats["logps/chosen"].append(gather_mean(model_logprobs_model_data_sum))
+        self.stats["logps/rejected"].append(gather_mean(ref_logprobs_model_data_sum))
+
+        # Log rewards
+        self.stats["rewards/chosen"].append(gather_mean(model_scores))
+        self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
+
+        # Log KL divergence
+        self.stats["objective/kl"].append(gather_mean(kl_div))
+
+        # Calculate entropy for model data
+        entropy_model_data = -model_logprobs_model_data.sum(1)
+        self.stats["objective/entropy"].append(gather_mean(entropy_model_data))
+
+        # Calculate margins
+        margin = model_scores - mixture_scores
+        self.stats["rewards/margins"].append(gather_mean(margin))
+
+        # Calculate accuracy
+        accuracy = (margin > 0).float()
+        self.stats["rewards/accuracies"].append(gather_mean(accuracy))
+
+        # Log EOS token statistics
+        model_eos = (model_data["input_ids"][:, context_length:] == self.tokenizer.eos_token_id).any(dim=1)
+        mixture_eos = (mixture_data["input_ids"][:, context_length:] == self.tokenizer.eos_token_id).any(dim=1)
+        self.stats["val/model_contain_eos_token"].append(gather_mean(model_eos.float()))
+        self.stats["val/ref_contain_eos_token"].append(gather_mean(mixture_eos.float()))
+
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
         self.ref_model.eval()
@@ -275,6 +328,20 @@ class NashMDTrainer(OnlineDPOTrainer):
         # Compute loss
         loss, score, kl_div = self._compute_losses(
             model_logprobs_model_data, ref_logprobs_model_data, model_data_scores, mixture_data_scores
+        )
+
+        # Log everything
+        self._log_statistics(
+            model_data,
+            mixture_data,
+            model_logprobs_model_data.detach(),
+            ref_logprobs_model_data,
+            model_data_scores,
+            mixture_data_scores,
+            loss.detach(),
+            score.detach(),
+            kl_div.detach(),
+            context_length,
         )
 
         if (
