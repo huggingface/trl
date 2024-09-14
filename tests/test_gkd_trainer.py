@@ -34,7 +34,7 @@ class TestGKDTrainer(unittest.TestCase):
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
         cls.model = AutoModelForCausalLM.from_pretrained("gpt2")
         cls.generation_config = GenerationConfig(
-            max_length=20,
+            max_new_tokens=20,
             num_return_sequences=1,
             pad_token_id=cls.tokenizer.pad_token_id,
             eos_token_id=cls.tokenizer.eos_token_id,
@@ -51,7 +51,7 @@ class TestGKDTrainer(unittest.TestCase):
 
         # Set temperature to 0 for deterministic output
         deterministic_generation_config = GenerationConfig(
-            max_length=30,
+            max_new_tokens=30,
             num_return_sequences=1,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
@@ -62,7 +62,7 @@ class TestGKDTrainer(unittest.TestCase):
             self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
         )
 
-        new_input_ids, new_attention_mask = outputs
+        new_input_ids, new_attention_mask, new_labels = outputs
 
         # Decode the generated outputs
         generated_texts = self.tokenizer.batch_decode(new_input_ids, skip_special_tokens=True)
@@ -79,13 +79,17 @@ class TestGKDTrainer(unittest.TestCase):
             self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
         )
 
-        new_input_ids2, new_attention_mask2 = outputs2
+        new_input_ids2, new_attention_mask2, new_labels2 = outputs2
 
         # Check if the two generations are identical
         self.assertTrue(torch.all(new_input_ids.eq(new_input_ids2)), "Deterministic generations are not identical")
         self.assertTrue(
             torch.all(new_attention_mask.eq(new_attention_mask2)),
             "Attention masks for deterministic generations are not identical",
+        )
+        self.assertTrue(
+            torch.all(new_labels.eq(new_labels2)),
+            "Labels for deterministic generations are not identical",
         )
 
     def test_generate_on_policy_outputs(self):
@@ -103,21 +107,24 @@ class TestGKDTrainer(unittest.TestCase):
 
         # Check that outputs is a tuple of three tensors
         self.assertIsInstance(outputs, tuple)
-        self.assertEqual(len(outputs), 2)
+        self.assertEqual(len(outputs), 3)
 
-        new_input_ids, new_attention_mask = outputs
+        new_input_ids, new_attention_mask, new_labels = outputs
 
         # Check shapes
         batch_size = len(prompts)
         self.assertEqual(new_input_ids.shape[0], batch_size)
         self.assertEqual(new_attention_mask.shape[0], batch_size)
+        self.assertEqual(new_labels.shape[0], batch_size)
 
         # Check types
         self.assertIsInstance(new_input_ids, torch.Tensor)
         self.assertIsInstance(new_attention_mask, torch.Tensor)
+        self.assertIsInstance(new_labels, torch.Tensor)
 
         # Check that new_input_ids and new_attention_mask have the same shape
         self.assertEqual(new_input_ids.shape, new_attention_mask.shape)
+        self.assertEqual(new_labels.shape, new_attention_mask.shape)
 
 
 class TestGeneralizedJSDLoss(unittest.TestCase):

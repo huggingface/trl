@@ -32,7 +32,7 @@ python examples/scripts/xpo.py \
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 from accelerate import PartialState
 from trl import (
     DPOScriptArguments,
@@ -41,9 +41,10 @@ from trl import (
     XPOTrainer,
     get_kbit_device_map,
     get_quantization_config,
+    maybe_apply_chat_template,
+    LogCompletionsCallback,
 )
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.callbacks import LogCompletionsCallback
 from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
@@ -88,14 +89,10 @@ if __name__ == "__main__":
 
     dataset = load_dataset(args.dataset_name)
 
-    def prepare_dataset(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False, add_generation_prompt=True)
-        return row
-
     with PartialState().local_main_process_first():
-        dataset = dataset.map(prepare_dataset, num_proc=training_args.dataset_num_proc)
-
-    prompts = dataset[args.dataset_test_split]["prompt"][:8]
+        dataset = dataset.map(
+            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
+        )
 
     trainer = XPOTrainer(
         model=model,
@@ -106,8 +103,11 @@ if __name__ == "__main__":
         eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
     )
-    log_completions_callback = LogCompletionsCallback(prompts)
-    trainer.add_callback(log_completions_callback)
+    generation_config = GenerationConfig(
+        max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+    )
+    completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
+    trainer.add_callback(completions_callback)
     # train the model
     trainer.train()
 
