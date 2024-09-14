@@ -17,7 +17,7 @@ from functools import partial
 
 import torch
 from accelerate import Accelerator
-from datasets import Dataset
+from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
@@ -46,40 +46,6 @@ class BCOTrainerTester(unittest.TestCase):
         self.embedding_model = AutoModel.from_pretrained(model_id)
         self.embedding_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    def _init_dummy_dataset(self):
-        # fmt: off
-        dummy_dataset_dict = {
-            "prompt": [
-                "Hey, hello",
-                "How are you",
-                "What is your name?",
-                "What is your name?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-            ],
-            "completion": [
-                "hi nice to meet you",
-                "leave me alone",
-                "I don't have a name",
-                "My name is Mary",
-                "Python",
-                "C++",
-                "Java",
-            ],
-            "label": [
-                True,
-                False,
-                False,
-                True,
-                True,
-                False,
-                False,
-            ],
-        }
-        # fmt: on
-        return Dataset.from_dict(dummy_dataset_dict)
-
     @parameterized.expand(
         [
             ["gpt2", True, True],
@@ -103,7 +69,7 @@ class BCOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
             if name == "gpt2":
                 model = self.model
@@ -119,8 +85,8 @@ class BCOTrainerTester(unittest.TestCase):
                 ref_model=ref_model,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset if eval_dataset else None,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"] if eval_dataset else None,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -150,58 +116,54 @@ class BCOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
             trainer = BCOTrainer(
                 model=self.model,
                 ref_model=self.ref_model,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                tokenized_dataset = dummy_dataset.map(
-                    _tokenize,
-                    fn_kwargs={"tokenizer": trainer.tokenizer},
-                    batched=True,
-                    batch_size=2,
-                )
-                self.assertListEqual(tokenized_dataset["prompt"], dummy_dataset["prompt"])
-                self.assertListEqual(tokenized_dataset["completion"], dummy_dataset["completion"])
-                self.assertListEqual(tokenized_dataset["label"], dummy_dataset["label"])
-                self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [10814, 11])
-                self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1])
-                self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [5968, 1219, 72, 3621, 284, 1826, 345])
-                self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
+            train_dataset = dummy_dataset["train"]
+            tokenized_dataset = train_dataset.map(
+                _tokenize,
+                fn_kwargs={"tokenizer": trainer.tokenizer},
+                batched=True,
+                batch_size=2,
+            )
+            self.assertListEqual(tokenized_dataset["prompt"], train_dataset["prompt"])
+            self.assertListEqual(tokenized_dataset["completion"], train_dataset["completion"])
+            self.assertListEqual(tokenized_dataset["label"], train_dataset["label"])
+            self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [5377, 11141])
+            self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1])
+            self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [318, 1365, 621, 8253, 13])
+            self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1])
 
-                fn_kwargs = {
-                    "prefix": "",
-                    "is_encoder_decoder": trainer.is_encoder_decoder,
-                    "tokenizer": trainer.tokenizer,
-                    "max_length": trainer.max_length,
-                    "truncation_mode": trainer.truncation_mode,
-                    "label_pad_token_id": trainer.label_pad_token_id,
-                    "max_prompt_length": trainer.max_prompt_length,
-                }
-                processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
-                self.assertListEqual(processed_dataset["prompt"], dummy_dataset["prompt"])
-                self.assertListEqual(processed_dataset["completion"], dummy_dataset["completion"])
-                self.assertListEqual(processed_dataset["label"], dummy_dataset["label"])
-                self.assertListEqual(processed_dataset["prompt_input_ids"][0], [50256, 10814, 11])
-                self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1])
-                self.assertListEqual(
-                    processed_dataset["completion_input_ids"][0],
-                    [50256, 10814, 11, 5968, 1219, 72, 3621, 284, 1826, 345, 50256],
-                )
-                self.assertListEqual(
-                    processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-                )
-                self.assertListEqual(
-                    processed_dataset["completion_labels"][0],
-                    [-100, -100, -100, 5968, 1219, 72, 3621, 284, 1826, 345, 50256],
-                )
+            fn_kwargs = {
+                "prefix": "",
+                "is_encoder_decoder": trainer.is_encoder_decoder,
+                "tokenizer": trainer.tokenizer,
+                "max_length": trainer.max_length,
+                "truncation_mode": trainer.truncation_mode,
+                "label_pad_token_id": trainer.label_pad_token_id,
+                "max_prompt_length": trainer.max_prompt_length,
+            }
+            processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
+            self.assertListEqual(processed_dataset["prompt"], train_dataset["prompt"])
+            self.assertListEqual(processed_dataset["completion"], train_dataset["completion"])
+            self.assertListEqual(processed_dataset["label"], train_dataset["label"])
+            self.assertListEqual(processed_dataset["prompt_input_ids"][0], [50256, 5377, 11141])
+            self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1])
+            self.assertListEqual(
+                processed_dataset["completion_input_ids"][0], [50256, 5377, 11141, 318, 1365, 621, 8253, 13, 50256]
+            )
+            self.assertListEqual(processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1, 1, 1])
+            self.assertListEqual(
+                processed_dataset["completion_labels"][0], [-100, -100, -100, 318, 1365, 621, 8253, 13, 50256]
+            )
 
     def test_bco_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -217,15 +179,15 @@ class BCOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
             trainer = BCOTrainer(
                 model=self.model,
                 ref_model=None,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -255,7 +217,7 @@ class BCOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
             def embed_prompt(input_ids, attention_mask, model):
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
@@ -270,8 +232,8 @@ class BCOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 embedding_func=embedding_func,
                 embedding_tokenizer=self.embedding_tokenizer,
             )
@@ -314,15 +276,15 @@ class BCOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
             trainer = BCOTrainer(
                 model=self.model,
                 ref_model=None,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -356,7 +318,7 @@ class BCOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
             with self.assertRaisesRegex(
                 ValueError,
@@ -368,8 +330,8 @@ class BCOTrainerTester(unittest.TestCase):
                     ref_model=None,
                     args=training_args,
                     tokenizer=self.tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=dummy_dataset,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
                 )
 
     @require_peft
@@ -401,7 +363,7 @@ class BCOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
             # bco train lora model with a lora config
             trainer = BCOTrainer(
@@ -409,8 +371,8 @@ class BCOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
