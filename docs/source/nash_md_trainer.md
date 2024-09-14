@@ -5,7 +5,7 @@ This post-training method was contributed by [Kashif Rasul](https://huggingface.
 
 ## Get started
 
-To just run the XPO script to make sure this trainer can run, you can run the following command to train an XPO model with a dummy reward model.
+To just run the Nash MD script to make sure this trainer can run, you can run the following command to train a Nash MD model with a dummy reward model.
 
 ```bash
 python examples/scripts/nash_md.py \
@@ -13,11 +13,11 @@ python examples/scripts/nash_md.py \
     --reward_model_path EleutherAI/pythia-14m \
     --dataset_name trl-lib/tldr \
     --learning_rate 5.0e-7 \
-    --output_dir pythia-1b-tldr-nash-md \
+    --output_dir pythia-14m-tldr-nash-md \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 32 \
     --num_train_epochs 3 \
-    --max_new_tokens 53 \
+    --max_new_tokens 64 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0
 ```
