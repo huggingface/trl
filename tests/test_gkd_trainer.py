@@ -25,6 +25,7 @@ from transformers import (
 )
 
 from trl import GKDConfig, GKDTrainer
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 class TestGKDTrainer(unittest.TestCase):
@@ -212,7 +213,7 @@ class GKDTrainerTester(unittest.TestCase):
 
         # Ensure the tokenizer has a chat template
         if not hasattr(self.tokenizer, "chat_template") or self.tokenizer.chat_template is None:
-            self.tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}"
+            self.tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
         self.dummy_dataset = Dataset.from_dict(
             {

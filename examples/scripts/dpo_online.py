@@ -57,7 +57,7 @@ from trl import (
 )
 
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, OnlineDPOConfig, ModelConfig))
@@ -97,7 +97,7 @@ if __name__ == "__main__":
         **model_kwargs,
     )
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
