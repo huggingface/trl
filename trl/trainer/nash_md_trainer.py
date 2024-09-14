@@ -107,15 +107,12 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         # Overwrite the stats dictionary to include NashMD specific statistics
         self.stats = {
-            "loss/dpo": [],
-            "objective/model_scores": [],
-            "objective/ref_scores": [],
-            "objective/scores_margin": [],
             "logps/chosen": [],
             "logps/rejected": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
-            "objective/kl": [],
+            "loss/score": [],
+            "loss/kl_div": [],
             "objective/entropy": [],
             "rewards/margins": [],
             "rewards/accuracies": [],
@@ -247,7 +244,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         ref_logprobs_model_data,
         model_scores,
         mixture_scores,
-        loss,
         score,
         kl_div,
         context_length,
@@ -256,13 +252,10 @@ class NashMDTrainer(OnlineDPOTrainer):
         def gather_mean(tensor):
             return self.accelerator.gather(tensor).mean().item()
 
-        # Log loss
-        self.stats["loss/dpo"].append(gather_mean(loss))
-
-        # Log scores
-        self.stats["objective/model_scores"].append(gather_mean(model_scores))
-        self.stats["objective/ref_scores"].append(gather_mean(mixture_scores))
-        self.stats["objective/scores_margin"].append(gather_mean(model_scores - mixture_scores))
+        # Log score
+        self.stats["loss/score"].append(gather_mean(score))
+        # Log KL divergence
+        self.stats["loss/kl_div"].append(gather_mean(kl_div))
 
         # Log logprobs
         model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
@@ -274,9 +267,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         # Log rewards
         self.stats["rewards/chosen"].append(gather_mean(model_scores))
         self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
-
-        # Log KL divergence
-        self.stats["objective/kl"].append(gather_mean(kl_div))
 
         # Calculate entropy for model data
         entropy_model_data = -model_logprobs_model_data.sum(1)
@@ -334,7 +324,6 @@ class NashMDTrainer(OnlineDPOTrainer):
             ref_logprobs_model_data,
             model_data_scores,
             mixture_data_scores,
-            loss.detach(),
             score.detach(),
             kl_div.detach(),
             context_length,
