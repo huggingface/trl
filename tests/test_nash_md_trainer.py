@@ -67,7 +67,7 @@ class TestNashMDTrainer(unittest.TestCase):
         # fmt: on
         self.dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
-    def test_xpo_trainer_training(self):
+    def test_nash_md_trainer_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
                 output_dir=tmp_dir,

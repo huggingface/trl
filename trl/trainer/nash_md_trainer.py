@@ -183,7 +183,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         # Apply EOS penalty if needed
         if self.args.missing_eos_penalty is not None:
             model_contain_eos = torch.any(model_data["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
-            mixture_contain_eos = torch.any(mixture_scores["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
+            mixture_contain_eos = torch.any(mixture_data["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
             model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
             mixture_scores[~mixture_contain_eos] -= self.args.missing_eos_penalty
 
