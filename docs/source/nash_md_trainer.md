@@ -1,7 +1,7 @@
 # Nash MD Trainer
 
 
-This post-training method was contributed by [Kashif Rasul](https://huggingface.co/kashif).
+This post-training method was contributed by [Kashif Rasul](https://huggingface.co/kashif) and Daniil Tiapkin, Pierre Ménard, and Daniele Calandriello.
 
 ## Get started
 
