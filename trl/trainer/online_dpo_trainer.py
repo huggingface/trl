@@ -94,6 +94,8 @@ class OnlineDPOTrainer(Trainer):
             The dataset to use for evaluation.
         tokenizer (`transformers.PreTrainedTokenizerBase`):
             The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        peft_config (`Dict`):
+            The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.

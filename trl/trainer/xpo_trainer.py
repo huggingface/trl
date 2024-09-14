@@ -63,6 +63,8 @@ class XPOTrainer(OnlineDPOTrainer):
             The dataset to use for evaluation.
         tokenizer (`transformers.PreTrainedTokenizerBase`):
             The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        peft_config (`Dict`):
+            The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
@@ -86,6 +88,7 @@ class XPOTrainer(OnlineDPOTrainer):
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
@@ -100,6 +103,7 @@ class XPOTrainer(OnlineDPOTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
+            peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
