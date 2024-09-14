@@ -26,7 +26,7 @@ class NashMDConfig(OnlineDPOConfig):
 
     Parameters:
         mixture_coeff (`float`, *optional*, defaults to `0.5`):
-            The logit mixture coefficient for the model and reference model.
+            Logit mixture coefficient for the model and reference model.
     """
 
     mixture_coeff: float = 0.5
