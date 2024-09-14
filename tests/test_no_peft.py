@@ -18,9 +18,8 @@ from unittest.mock import patch
 
 import pytest
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import require_peft
-from transformers.utils import is_peft_available
+from transformers import AutoTokenizer
+from transformers.utils import import_utils
 
 
 class DummyDataset(torch.utils.data.Dataset):
@@ -70,27 +69,13 @@ EXPECTED_STATS = [
 ]
 
 
-@require_peft
 class TestPeftDependancy(unittest.TestCase):
     def setUp(self):
         self.causal_lm_model_id = "trl-internal-testing/tiny-random-GPTNeoXForCausalLM"
         self.seq_to_seq_model_id = "trl-internal-testing/tiny-random-T5ForConditionalGeneration"
 
-        if is_peft_available():
-            from peft import LoraConfig, get_peft_model
-
-            lora_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                lora_dropout=0.05,
-                bias="none",
-                task_type="CAUSAL_LM",
-            )
-
-            causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
-            self.peft_model = get_peft_model(causal_lm_model, lora_config)
-
     def test_no_peft(self):
+        import_utils._peft_available = False  # required so that is_peft_available() returns False
         with patch.dict(sys.modules, {"peft": None}):
             from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
@@ -102,6 +87,7 @@ class TestPeftDependancy(unittest.TestCase):
             _trl_seq2seq_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(self.seq_to_seq_model_id)
 
     def test_imports_no_peft(self):
+        import_utils._peft_available = False  # required so that is_peft_available() returns False
         with patch.dict(sys.modules, {"peft": None}):
             from trl import (  # noqa: F401
                 AutoModelForCausalLMWithValueHead,
@@ -112,6 +98,7 @@ class TestPeftDependancy(unittest.TestCase):
             )
 
     def test_ppo_trainer_no_peft(self):
+        import_utils._peft_available = False  # required so that is_peft_available() returns False
         with patch.dict(sys.modules, {"peft": None}):
             from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 
