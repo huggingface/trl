@@ -16,15 +16,11 @@
 
 # There is a circular import in the PPOTrainer if we let isort sort these
 from typing import TYPE_CHECKING
-from ..import_utils import (
-    _LazyModule,
-    is_diffusers_available,
-    OptionalDependencyNotAvailable,
-)
+from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
 
 _import_structure = {
-    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
+    "callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
     "utils": [
         "AdaptiveKLController",
         "FixedKLController",
@@ -91,11 +87,7 @@ else:
 
 if TYPE_CHECKING:
     # isort: off
-    from .callbacks import (
-        RichProgressCallback,
-        SyncRefModelCallback,
-        WinRateCallback,
-    )
+    from .callbacks import RichProgressCallback, SyncRefModelCallback
     from .utils import (
         AdaptiveKLController,
         FixedKLController,
@@ -106,6 +98,7 @@ if TYPE_CHECKING:
         peft_module_casting_to_bf16,
         empty_cache,
     )
+
     # isort: on
 
     from .base import BaseTrainer
