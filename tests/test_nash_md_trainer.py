@@ -14,7 +14,7 @@
 import tempfile
 import unittest
 
-from datasets import Dataset
+from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl import NashMDConfig, NashMDTrainer
@@ -27,46 +27,7 @@ class TestNashMDTrainer(unittest.TestCase):
         self.reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # fmt: off
-        dummy_dataset_dict = {
-            "prompt": [
-                "hello",
-                "how are you",
-                "What is your name?",
-                "What is your name?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "[INST] How is the stock price? [/INST]",
-                "[INST] How is the stock price? [/INST] ",
-            ],
-            "chosen": [
-                "hi nice to meet you",
-                "I am fine",
-                "My name is Mary",
-                "My name is Mary",
-                "Python",
-                "Python",
-                "Python",
-                "$46 as of 10am EST",
-                "46 as of 10am EST",
-            ],
-            "rejected": [
-                "leave me alone",
-                "I am not fine",
-                "Whats it to you?",
-                "I dont have a name",
-                "Javascript",
-                "C++",
-                "Java",
-                " $46 as of 10am EST",
-                " 46 as of 10am EST",
-            ],
-        }
-        # fmt: on
-        self.dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
-
+        
     def test_nash_md_trainer_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
@@ -79,6 +40,7 @@ class TestNashMDTrainer(unittest.TestCase):
                 eval_strategy="steps",
                 report_to="none",
             )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
             trainer = NashMDTrainer(
                 model=self.model,
@@ -86,8 +48,8 @@ class TestNashMDTrainer(unittest.TestCase):
                 reward_model=self.reward_model,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=self.dummy_dataset,
-                eval_dataset=self.dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             trainer.train()
