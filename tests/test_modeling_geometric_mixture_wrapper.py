@@ -15,6 +15,7 @@ import unittest
 
 import torch
 from transformers import AutoModelForCausalLM, GenerationConfig
+
 from trl.models.modeling_base import GeometricMixtureWrapper, create_reference_model
 
 
