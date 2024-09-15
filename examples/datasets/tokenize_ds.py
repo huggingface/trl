@@ -18,6 +18,8 @@ from typing import Optional
 from datasets import load_dataset
 from transformers import AutoTokenizer, HfArgumentParser
 
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
 
 """
 python -i examples/datasets/tokenize_ds.py --model HuggingFaceH4/zephyr-7b-beta
@@ -41,7 +43,7 @@ if __name__ == "__main__":
     ds = load_dataset(args.dataset)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% for message in messages %}{{message['role'] + ': ' + message['content'] + '\n\n'}}{% endfor %}{{ eos_token }}"
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     def process(row):
         row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)

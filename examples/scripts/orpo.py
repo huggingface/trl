@@ -59,6 +59,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 from trl import ModelConfig, ORPOConfig, ORPOTrainer, get_peft_config
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 @dataclass
@@ -90,7 +91,7 @@ if __name__ == "__main__":
     ################
     ds = load_dataset(args.dataset)
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     def process(row):
         row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)

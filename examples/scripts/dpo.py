@@ -48,7 +48,7 @@ python examples/scripts/dpo.py \
 """
 
 from trl.commands.cli_utils import DPOScriptArguments, TrlParser
-from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     if args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
