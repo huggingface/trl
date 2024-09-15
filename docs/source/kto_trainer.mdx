@@ -64,11 +64,14 @@ The `beta` refers to the hyperparameter of the implicit reward, and the dataset 
 The `desirable_weight` and `undesirable_weight` refer to the weights placed on the losses for desirable/positive and undesirable/negative examples.
 By default, they are both 1. However, if you have more of one or the other, then you should upweight the less common type such that the ratio of (`desirable_weight` \\(\times\\) number of positives) to (`undesirable_weight` \\(\times\\) number of negatives) is in the range 1:1 to 4:3.
 
+It is also recommended to set the `learning_rate` to a smaller value, such as `5e-7` instead of larger values.
+
 ```py
 training_args = KTOConfig(
     beta=0.1,
     desirable_weight=1.0,
     undesirable_weight=1.0,
+    learning_rate=5e-7,
 )
 
 kto_trainer = KTOTrainer(
