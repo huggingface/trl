@@ -108,7 +108,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Add dynamic parameter callback for beta
+        # Add dynamic parameter callback for mixture_coeff
         self.add_callback(DynamicParameterCallback("mixture_coeff", args.mixture_coeff))
 
         # Overwrite the stats dictionary to include NashMD specific statistics
@@ -202,10 +202,10 @@ class NashMDTrainer(OnlineDPOTrainer):
             token_logprobs = torch.gather(logprobs, 2, data["input_ids"][:, context_length:].unsqueeze(-1)).squeeze(-1)
             return token_logprobs
 
-        # Compute logprobs for model completions
+        # Compute logprobs for model completions under the model
         model_logprobs_model_data = compute_logprobs_for_data(model, model_data)
 
-        # Compute logprobs for reference model completions
+        # Compute logprobs of model completions under the reference model
         with torch.no_grad():
             ref_logprobs_model_data = compute_logprobs_for_data(self.ref_model, model_data)
 

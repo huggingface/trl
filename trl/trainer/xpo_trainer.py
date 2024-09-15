@@ -107,7 +107,7 @@ class XPOTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Add the DynamicAlphaCallback to the callbacks
+        # Add the DynamicAlphaCallback to the callbacks for alpha
         self.add_callback(DynamicParameterCallback("alpha", args.alpha))
 
         # Overwrite the stats dictionary to include XPO specific statistics
