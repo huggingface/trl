@@ -64,7 +64,13 @@ _import_structure = {
     "ddpo_config": ["DDPOConfig"],
     "gkd_trainer": ["GKDTrainer"],
     "gkd_config": ["GKDConfig"],
-    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback", "LogCompletionsCallback"],
+    "callbacks": [
+        "RichProgressCallback",
+        "SyncRefModelCallback",
+        "WinRateCallback",
+        "LogCompletionsCallback",
+        "DynamicParameterCallback",
+    ],
     "judges": [
         "BaseJudge",
         "BaseRankJudge",
@@ -136,7 +142,13 @@ if TYPE_CHECKING:
     from .sft_trainer import SFTTrainer
     from .gkd_trainer import GKDTrainer
     from .gkd_config import GKDConfig
-    from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback, LogCompletionsCallback
+    from .callbacks import (
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+        LogCompletionsCallback,
+        DynamicParameterCallback,
+    )
     from .judges import (
         BaseJudge,
         BaseRankJudge,

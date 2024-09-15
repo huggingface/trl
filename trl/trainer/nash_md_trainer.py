@@ -26,6 +26,7 @@ from transformers.utils import is_apex_available
 
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
+from .callbacks import DynamicParameterCallback
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import empty_cache, get_reward, truncate_right
@@ -107,7 +108,8 @@ class NashMDTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        self.mixture_coeff = args.mixture_coeff
+        # Add dynamic parameter callback for beta
+        self.add_callback(DynamicParameterCallback("mixture_coeff", args.mixture_coeff))
 
         # Overwrite the stats dictionary to include NashMD specific statistics
         self.stats = {
@@ -137,7 +139,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                     model=unwrapped_model,
                     ref_model=unwrapped_ref_model,
                     generation_config=self.generation_config,
-                    mixture_coeff=self.mixture_coeff,
+                    mixture_coeff=self.args.mixture_coeff,
                     device=self.accelerator.device,
                 )
 
@@ -175,14 +177,13 @@ class NashMDTrainer(OnlineDPOTrainer):
         return model_data, mixture_data
 
     def _compute_rewards(self, model_data, mixture_data, context_length):
-        all_input_ids = torch.cat([model_data["input_ids"], mixture_data["input_ids"]], dim=0)
-
         with torch.no_grad():
-            _, all_scores, _ = get_reward(
-                self.reward_model, all_input_ids, self.tokenizer.pad_token_id, context_length
+            _, model_scores, _ = get_reward(
+                self.reward_model, model_data["input_ids"], self.tokenizer.pad_token_id, context_length
             )
-
-        model_scores, mixture_scores = all_scores.chunk(2)
+            _, mixture_scores, _ = get_reward(
+                self.reward_model, mixture_data["input_ids"], self.tokenizer.pad_token_id, context_length
+            )
 
         # Apply EOS penalty if needed
         if self.args.missing_eos_penalty is not None:

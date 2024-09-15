@@ -38,6 +38,7 @@ from transformers.utils import (
 from ..import_utils import is_peft_available
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
+from .callbacks import DynamicParameterCallback
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
@@ -234,6 +235,9 @@ class OnlineDPOTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # Add dynamic parameter callback for beta
+        self.add_callback(DynamicParameterCallback("beta", args.beta))
 
         # Placed after the super().__init__ because we need self.is_deepspeed_enabled and self.accelerator
         if self.is_deepspeed_enabled:

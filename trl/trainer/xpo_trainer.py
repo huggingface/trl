@@ -25,12 +25,9 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import is_apex_available
 
 from ..models.utils import unwrap_model_for_generation
+from .callbacks import DynamicParameterCallback
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import (
-    empty_cache,
-    get_reward,
-    truncate_right,
-)
+from .utils import empty_cache, get_reward, truncate_right
 from .xpo_config import XPOConfig
 
 
@@ -110,6 +107,9 @@ class XPOTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Add the DynamicAlphaCallback to the callbacks
+        self.add_callback(DynamicParameterCallback("alpha", args.alpha))
+
         # Overwrite the stats dictionary to include XPO specific statistics
         self.stats = {
             # Remove "non_score_reward", "rlhf_reward", "scores"
@@ -176,14 +176,13 @@ class XPOTrainer(OnlineDPOTrainer):
         return model_data, ref_data
 
     def _compute_rewards(self, model_data, ref_data, context_length):
-        all_input_ids = torch.cat([model_data["input_ids"], ref_data["input_ids"]], dim=0)
-
         with torch.no_grad():
-            _, all_scores, _ = get_reward(
-                self.reward_model, all_input_ids, self.tokenizer.pad_token_id, context_length
+            _, model_scores, _ = get_reward(
+                self.reward_model, model_data["input_ids"], self.tokenizer.pad_token_id, context_length
             )
-
-        model_scores, ref_scores = all_scores.chunk(2)
+            _, ref_scores, _ = get_reward(
+                self.reward_model, ref_data["input_ids"], self.tokenizer.pad_token_id, context_length
+            )
 
         # Apply EOS penalty if needed
         if self.args.missing_eos_penalty is not None:
