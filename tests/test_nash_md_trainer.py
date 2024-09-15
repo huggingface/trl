@@ -27,7 +27,7 @@ class TestNashMDTrainer(unittest.TestCase):
         self.reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
-        
+
     def test_nash_md_trainer_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
