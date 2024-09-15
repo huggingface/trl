@@ -15,19 +15,19 @@
 import tempfile
 import unittest
 
-from datasets import Dataset, DatasetDict
+from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
 from trl import BasePairwiseJudge, WinRateCallback
 
 
-class ThreeQuatersPairwiseJudge(BasePairwiseJudge):
-    """Naive pairwise judge that always returns [1, 0, 1, 1, 0, 1, 1, 1]"""
+class HalfPairwiseJudge(BasePairwiseJudge):
+    """Naive pairwise judge that always returns [1, 0]"""
 
     def judge(self, prompts, completions, shuffle_order=True):
-        # just check that the batch size is 4
-        assert len(prompts) == 8
-        return [1, 0, 1, 1, 0, 1, 1, 1]
+        # just check that the batch size is 2
+        assert len(prompts) == 2
+        return [1, 0]
 
 
 class TrainerWithRefModel(Trainer):
@@ -46,38 +46,8 @@ class WinrateCallbackTester(unittest.TestCase):
         self.ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
         self.tokenizer.pad_token = self.tokenizer.eos_token
-        dataset = DatasetDict(
-            {
-                "train": Dataset.from_dict(
-                    {
-                        "prompt": [
-                            "Hello world!",
-                            "This is a test.",
-                            "We are creating a dataset.",
-                            "It has eight lines.",
-                            "Each line is a sentence.",
-                            "The sentences are simple.",
-                            "This is just for testing.",
-                            "Goodbye!",
-                        ]
-                    }
-                ),
-                "test": Dataset.from_dict(
-                    {
-                        "prompt": [
-                            "The sun sets in the west.",
-                            "Mountains are majestic.",
-                            "Rivers flow endlessly.",
-                            "Forests are full of life.",
-                            "Birds sing in the morning.",
-                            "Waves crash on the shore.",
-                            "The moon glows at night.",
-                            "Stars twinkle in the sky.",
-                        ]
-                    }
-                ),
-            }
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        dataset["train"] = dataset["train"].select(range(8))
 
         def tokenize_function(examples):
             out = self.tokenizer(examples["prompt"], padding="max_length", max_length=16, truncation=True)
@@ -87,7 +57,7 @@ class WinrateCallbackTester(unittest.TestCase):
         self.dataset = dataset.map(tokenize_function, batched=True)
 
         self.generation_config = GenerationConfig(max_length=32)
-        self.judge = ThreeQuatersPairwiseJudge()
+        self.judge = HalfPairwiseJudge()
 
     def test_basic(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -114,12 +84,12 @@ class WinrateCallbackTester(unittest.TestCase):
             trainer.train()
             winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
             assert winrate_history == [
-                {"eval_win_rate": 0.75, "epoch": 0.5, "step": 2},
-                {"eval_win_rate": 0.75, "epoch": 1.0, "step": 4},
-                {"eval_win_rate": 0.75, "epoch": 1.5, "step": 6},
-                {"eval_win_rate": 0.75, "epoch": 2.0, "step": 8},
-                {"eval_win_rate": 0.75, "epoch": 2.5, "step": 10},
-                {"eval_win_rate": 0.75, "epoch": 3.0, "step": 12},
+                {"eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
+                {"eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
+                {"eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
+                {"eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
+                {"eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
+                {"eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
             ]
 
     def test_without_ref_model(self):
@@ -147,10 +117,10 @@ class WinrateCallbackTester(unittest.TestCase):
             trainer.train()
             winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
             assert winrate_history == [
-                {"eval_win_rate": 0.75, "epoch": 0.5, "step": 2},
-                {"eval_win_rate": 0.75, "epoch": 1.0, "step": 4},
-                {"eval_win_rate": 0.75, "epoch": 1.5, "step": 6},
-                {"eval_win_rate": 0.75, "epoch": 2.0, "step": 8},
-                {"eval_win_rate": 0.75, "epoch": 2.5, "step": 10},
-                {"eval_win_rate": 0.75, "epoch": 3.0, "step": 12},
+                {"eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
+                {"eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
+                {"eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
+                {"eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
+                {"eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
+                {"eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
             ]

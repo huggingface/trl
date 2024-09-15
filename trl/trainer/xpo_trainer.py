@@ -63,8 +63,6 @@ class XPOTrainer(OnlineDPOTrainer):
             The dataset to use for evaluation.
         tokenizer (`transformers.PreTrainedTokenizerBase`):
             The tokenizer to use for training. This argument is required if you want to use the default data collator.
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
@@ -88,7 +86,6 @@ class XPOTrainer(OnlineDPOTrainer):
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
@@ -103,7 +100,6 @@ class XPOTrainer(OnlineDPOTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
