@@ -1,7 +1,22 @@
+# Copyright 2022 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 import unittest
+
 import torch
 from transformers import AutoModelForCausalLM, GenerationConfig
 from trl.models.modeling_base import GeometricMixtureWrapper, create_reference_model
+
 
 class TestGeometricMixtureWrapper(unittest.TestCase):
     def setUp(self):
@@ -10,10 +25,7 @@ class TestGeometricMixtureWrapper(unittest.TestCase):
         self.generation_config = GenerationConfig.from_pretrained("gpt2")
         self.mixture_coeff = 0.5
         self.wrapper = GeometricMixtureWrapper(
-            self.model,
-            self.ref_model,
-            self.generation_config,
-            mixture_coeff=self.mixture_coeff
+            self.model, self.ref_model, self.generation_config, mixture_coeff=self.mixture_coeff
         )
 
     def test_forward(self):
@@ -23,7 +35,7 @@ class TestGeometricMixtureWrapper(unittest.TestCase):
         output = self.wrapper(input_ids=input_ids, attention_mask=attention_mask)
 
         self.assertIsNotNone(output)
-        self.assertTrue(hasattr(output, 'logits'))
+        self.assertTrue(hasattr(output, "logits"))
         self.assertEqual(output.logits.shape, (1, 5, self.model.config.vocab_size))
 
     def test_mixture_coefficient(self):
@@ -36,8 +48,7 @@ class TestGeometricMixtureWrapper(unittest.TestCase):
             wrapper_output = self.wrapper(input_ids=input_ids, attention_mask=attention_mask)
 
         expected_logits = torch.nn.functional.log_softmax(
-            self.mixture_coeff * ref_model_output.logits + (1 - self.mixture_coeff) * model_output.logits,
-            dim=-1
+            self.mixture_coeff * ref_model_output.logits + (1 - self.mixture_coeff) * model_output.logits, dim=-1
         )
 
         self.assertTrue(torch.allclose(wrapper_output.logits, expected_logits, atol=1e-5))
@@ -46,12 +57,8 @@ class TestGeometricMixtureWrapper(unittest.TestCase):
         input_ids = torch.tensor([[1, 2, 3, 4, 5]])
         attention_mask = torch.ones_like(input_ids)
 
-        inputs = self.wrapper.prepare_inputs_for_generation(
-            input_ids,
-            attention_mask=attention_mask,
-            use_cache=True
-        )
+        inputs = self.wrapper.prepare_inputs_for_generation(input_ids, attention_mask=attention_mask, use_cache=True)
 
-        self.assertIn('input_ids', inputs)
-        self.assertIn('attention_mask', inputs)
-        self.assertFalse(inputs.get('use_cache', False))
+        self.assertIn("input_ids", inputs)
+        self.assertIn("attention_mask", inputs)
+        self.assertFalse(inputs.get("use_cache", False))
