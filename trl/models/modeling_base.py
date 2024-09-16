@@ -28,9 +28,8 @@ from huggingface_hub.utils import (
     RepositoryNotFoundError,
 )
 from safetensors.torch import load_file as safe_load_file
-from transformers import PreTrainedModel, is_torch_npu_available, is_torch_xpu_available
+from transformers import GenerationMixin, PreTrainedModel, is_torch_npu_available, is_torch_xpu_available
 from transformers.utils import is_peft_available
-from transformers import GenerationMixin, PreTrainedModel
 
 from ..import_utils import is_transformers_greater_than
 
