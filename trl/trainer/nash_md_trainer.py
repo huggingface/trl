@@ -26,7 +26,6 @@ from transformers.utils import is_apex_available
 
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
-from .callbacks import DynamicParameterCallback
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import empty_cache, get_reward, truncate_right
@@ -108,12 +107,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Add dynamic parameter callback for mixture_coeff
-        if isinstance(self.args.mixture_coeff, list):
-            self.mixture_coeff = self.args.mixture_coeff[0]
-            self.add_callback(DynamicParameterCallback(self, "mixture_coeff", args.mixture_coeff))
-        else:
-            self.mixture_coeff = self.args.mixture_coeff
+        self._mixture_coeff = self.args.mixture_coeff
 
         # Overwrite the stats dictionary to include NashMD specific statistics
         self.stats = {
@@ -129,6 +123,14 @@ class NashMDTrainer(OnlineDPOTrainer):
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
         }
+
+    @property
+    def mixture_coeff(self):
+        if isinstance(self._mixture_coeff, list):
+            epoch = self.state.epoch
+            return self._mixture_coeff[epoch] if epoch < len(self._mixture_coeff) else self._mixture_coeff[-1]
+        else:
+            return self._mixture_coeff
 
     def _generate_completions(self, model, prompts):
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:

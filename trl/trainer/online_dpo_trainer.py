@@ -38,7 +38,6 @@ from transformers.utils import (
 from ..import_utils import is_peft_available
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
-from .callbacks import DynamicParameterCallback
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
@@ -236,12 +235,7 @@ class OnlineDPOTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Add dynamic parameter callback for beta
-        if isinstance(self.args.beta, list):
-            self.beta = self.args.beta[0]
-            self.add_callback(DynamicParameterCallback(self, "beta", args.beta))
-        else:
-            self.beta = self.args.beta
+        self._beta = args.beta
 
         # Placed after the super().__init__ because we need self.is_deepspeed_enabled and self.accelerator
         if self.is_deepspeed_enabled:
@@ -255,6 +249,14 @@ class OnlineDPOTrainer(Trainer):
                 self.ref_model = self.ref_model.to(self.accelerator.device)
             if self.reward_model is not None:
                 self.reward_model = self.reward_model.to(self.accelerator.device)
+
+    @property
+    def beta(self):
+        if isinstance(self._beta, list):
+            epoch = self.state.epoch
+            return self._beta[epoch] if epoch < len(self._beta) else self._beta[-1]
+        else:
+            return self._beta
 
     @staticmethod
     def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> Dict[str, Any]:

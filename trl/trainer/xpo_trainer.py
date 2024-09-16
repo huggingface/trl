@@ -25,7 +25,6 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import is_apex_available
 
 from ..models.utils import unwrap_model_for_generation
-from .callbacks import DynamicParameterCallback
 from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import empty_cache, get_reward, truncate_right
 from .xpo_config import XPOConfig
@@ -107,12 +106,7 @@ class XPOTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Add dynamic parameter callback for mixture_coeff
-        if isinstance(self.args.alpha, list):
-            self.alpha = self.args.alpha[0]
-            self.add_callback(DynamicParameterCallback(self, "alpha", args.alpha))
-        else:
-            self.alpha = self.args.alpha
+        self._alpha = self.args.alpha
 
         # Overwrite the stats dictionary to include XPO specific statistics
         self.stats = {
@@ -136,6 +130,14 @@ class XPOTrainer(OnlineDPOTrainer):
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
         }
+
+    @property
+    def alpha(self):
+        if isinstance(self._alpha, list):
+            epoch = self.state.epoch
+            return self._alpha[epoch] if epoch < len(self._alpha) else self._alpha[-1]
+        else:
+            return self._alpha
 
     def _generate_completions(self, model, ref_model, prompts):
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:

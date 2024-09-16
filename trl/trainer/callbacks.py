@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, List, Optional, Union
+from typing import List, Optional, Union
 
 import torch
 from accelerate import Accelerator
@@ -374,28 +374,3 @@ class LogCompletionsCallback(WandbCallback):
 
         # Save the last logged step, so we don't log the same completions multiple times
         self._last_logged_step = state.global_step
-
-
-class DynamicParameterCallback(TrainerCallback):
-    r"""
-    A [`~transformers.TrainerCallback`] that allows for dynamic adjustment of training parameters during training.
-
-    Args:
-        trainer (`Trainer`):
-            Trainer to which the callback will be attached. The trainer must have an attribute with the name specified
-            in `param_name`.
-        param_name (`str`):
-            Name of the parameter to adjust. The trainer must have an attribute with this name.
-        param_values (`List[Any]`):
-            List of values where each value is used for the corresponding epoch.
-
-    """
-
-    def __init__(self, trainer: Trainer, param_name: str, param_values: List[Any]):
-        self.trainer = trainer
-        self.param_name = param_name
-        self.param_values = param_values
-
-    def on_epoch_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        value = self.param_values[state.epoch] if state.epoch < len(self.param_values) else self.param_values[-1]
-        setattr(self.trainer, self.param_name, value)
