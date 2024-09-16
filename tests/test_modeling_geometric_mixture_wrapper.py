@@ -24,9 +24,9 @@ class TestGeometricMixtureWrapper(unittest.TestCase):
         self.model = AutoModelForCausalLM.from_pretrained("gpt2")
         self.ref_model = create_reference_model(self.model)
         self.generation_config = GenerationConfig.from_pretrained("gpt2")
-        self.mixture_coeff = 0.5
+        self.mixture_coef = 0.5
         self.wrapper = GeometricMixtureWrapper(
-            self.model, self.ref_model, self.generation_config, mixture_coeff=self.mixture_coeff
+            self.model, self.ref_model, self.generation_config, mixture_coef=self.mixture_coef
         )
 
     def test_forward(self):
@@ -49,7 +49,7 @@ class TestGeometricMixtureWrapper(unittest.TestCase):
             wrapper_output = self.wrapper(input_ids=input_ids, attention_mask=attention_mask)
 
         expected_logits = torch.nn.functional.log_softmax(
-            self.mixture_coeff * ref_model_output.logits + (1 - self.mixture_coeff) * model_output.logits, dim=-1
+            self.mixture_coef * ref_model_output.logits + (1 - self.mixture_coef) * model_output.logits, dim=-1
         )
 
         self.assertTrue(torch.allclose(wrapper_output.logits, expected_logits, atol=1e-5))
