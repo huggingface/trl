@@ -15,7 +15,7 @@ import unittest
 
 from transformers import is_wandb_available
 
-from trl import is_diffusers_available
+from trl import is_diffusers_available, is_liger_kernel_available
 
 
 def require_diffusers(test_case):
@@ -30,3 +30,10 @@ def require_no_wandb(test_case):
     Decorator marking a test that requires no wandb. Skips the test if wandb is available.
     """
     return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
+
+
+def require_liger_kernel(test_case):
+    """
+    Decorator marking a test that requires liger_kernel. Skips the test if liger_kernel is not available.
+    """
+    return unittest.skipUnless(is_liger_kernel_available(), "test requires liger_kernel")(test_case)

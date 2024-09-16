@@ -29,6 +29,7 @@ else:
 _diffusers_available = _is_package_available("diffusers")
 _unsloth_available = _is_package_available("unsloth")
 _rich_available = _is_package_available("rich")
+_liger_kernel_available = _is_package_available("liger_kernel")
 _llmblender_available = _is_package_available("llm_blender")
 
 
@@ -42,6 +43,10 @@ def is_unsloth_available() -> bool:
 
 def is_rich_available() -> bool:
     return _rich_available
+
+
+def is_liger_kernel_available() -> bool:  # replace by transformers.import_utils.is_liger_kernel_available() from v4.45
+    return _liger_kernel_available
 
 
 def is_llmblender_available() -> bool:

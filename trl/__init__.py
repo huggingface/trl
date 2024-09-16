@@ -33,6 +33,7 @@ _import_structure = {
     ],
     "import_utils": [
         "is_diffusers_available",
+        "is_liger_kernel_available",
         "is_llmblender_available",
     ],
     "models": [
@@ -130,7 +131,7 @@ if TYPE_CHECKING:
     from .core import set_seed
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
-    from .import_utils import is_diffusers_available, is_llmblender_available
+    from .import_utils import is_diffusers_available, is_liger_kernel_available, is_llmblender_available
     from .models import (
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
