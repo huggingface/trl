@@ -75,6 +75,7 @@ class TestPeftDependancy(unittest.TestCase):
         self.seq_to_seq_model_id = "trl-internal-testing/tiny-random-T5ForConditionalGeneration"
 
     def test_no_peft(self):
+        _peft_available = import_utils._peft_available
         import_utils._peft_available = False  # required so that is_peft_available() returns False
         with patch.dict(sys.modules, {"peft": None}):
             from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
@@ -85,8 +86,10 @@ class TestPeftDependancy(unittest.TestCase):
 
             _trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)
             _trl_seq2seq_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(self.seq_to_seq_model_id)
+        import_utils._peft_available = _peft_available
 
     def test_imports_no_peft(self):
+        _peft_available = import_utils._peft_available
         import_utils._peft_available = False  # required so that is_peft_available() returns False
         with patch.dict(sys.modules, {"peft": None}):
             from trl import (  # noqa: F401
@@ -96,8 +99,10 @@ class TestPeftDependancy(unittest.TestCase):
                 PPOTrainer,
                 PreTrainedModelWrapper,
             )
+        import_utils._peft_available = _peft_available
 
     def test_ppo_trainer_no_peft(self):
+        _peft_available = import_utils._peft_available
         import_utils._peft_available = False  # required so that is_peft_available() returns False
         with patch.dict(sys.modules, {"peft": None}):
             from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
@@ -141,3 +146,4 @@ class TestPeftDependancy(unittest.TestCase):
             # check expected stats
             for stat in EXPECTED_STATS:
                 assert stat in train_stats
+        import_utils._peft_available = _peft_available
