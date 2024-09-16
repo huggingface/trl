@@ -109,7 +109,11 @@ class NashMDTrainer(OnlineDPOTrainer):
         )
 
         # Add dynamic parameter callback for mixture_coeff
-        self.add_callback(DynamicParameterCallback("mixture_coeff", args.mixture_coeff))
+        if isinstance(self.args.mixture_coeff, list):
+            self.mixture_coeff = self.args.mixture_coeff[0]
+            self.add_callback(DynamicParameterCallback(self, "mixture_coeff", args.mixture_coeff))
+        else:
+            self.mixture_coeff = self.args.mixture_coeff
 
         # Overwrite the stats dictionary to include NashMD specific statistics
         self.stats = {
@@ -139,7 +143,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                     model=unwrapped_model,
                     ref_model=unwrapped_ref_model,
                     generation_config=self.generation_config,
-                    mixture_coeff=self.args.mixture_coeff,
+                    mixture_coeff=self.mixture_coeff,
                     device=self.accelerator.device,
                 )
 

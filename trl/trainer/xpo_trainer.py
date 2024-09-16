@@ -107,8 +107,12 @@ class XPOTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Add the DynamicAlphaCallback to the callbacks for alpha
-        self.add_callback(DynamicParameterCallback("alpha", args.alpha))
+        # Add dynamic parameter callback for mixture_coeff
+        if isinstance(self.args.alpha, list):
+            self.alpha = self.args.alpha[0]
+            self.add_callback(DynamicParameterCallback(self, "alpha", args.alpha))
+        else:
+            self.alpha = self.args.alpha
 
         # Overwrite the stats dictionary to include XPO specific statistics
         self.stats = {
@@ -254,7 +258,7 @@ class XPOTrainer(OnlineDPOTrainer):
             raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
 
         # Compute XPO specific loss
-        xpo_losses = self.args.alpha * model_logprobs_ref_data_sum
+        xpo_losses = self.alpha * model_logprobs_ref_data_sum
 
         # Total loss
         loss = (dpo_losses + xpo_losses).mean()

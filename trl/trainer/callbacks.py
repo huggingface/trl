@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import torch
 from accelerate import Accelerator
@@ -381,20 +381,21 @@ class DynamicParameterCallback(TrainerCallback):
     A [`~transformers.TrainerCallback`] that allows for dynamic adjustment of training parameters during training.
 
     Args:
+        trainer (`Trainer`):
+            Trainer to which the callback will be attached. The trainer must have an attribute with the name specified
+            in `param_name`.
         param_name (`str`):
-            The name of the parameter to adjust.
-        param_values (`Union[float, List[float]]`):
-            The values to use for the parameter. If a list, the values will be selected based on the current epoch. If a float, the value will be used for all epochs.
+            Name of the parameter to adjust. The trainer must have an attribute with this name.
+        param_values (`List[Any]`):
+            List of values where each value is used for the corresponding epoch.
+
     """
 
-    def __init__(self, param_name: str, param_values: Union[float, List[float]]):
+    def __init__(self, trainer: Trainer, param_name: str, param_values: List[Any]):
+        self.trainer = trainer
         self.param_name = param_name
         self.param_values = param_values
-        self.default_value = param_values[-1] if isinstance(param_values, list) else param_values
 
     def on_epoch_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        # if param_name is a list, select the value for the current epoch or the last value if the list is shorter than the current epoch
-        if isinstance(self.param_values, list) and state.epoch < len(self.param_values):
-            setattr(args, self.param_name, self.param_values[state.epoch])
-        else:
-            setattr(args, self.param_name, self.default_value)
+        value = self.param_values[state.epoch] if state.epoch < len(self.param_values) else self.param_values[-1]
+        setattr(self.trainer, self.param_name, value)

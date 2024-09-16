@@ -237,7 +237,11 @@ class OnlineDPOTrainer(Trainer):
         )
 
         # Add dynamic parameter callback for beta
-        self.add_callback(DynamicParameterCallback("beta", args.beta))
+        if isinstance(self.args.beta, list):
+            self.beta = self.args.beta[0]
+            self.add_callback(DynamicParameterCallback(self, "beta", args.beta))
+        else:
+            self.beta = self.args.beta
 
         # Placed after the super().__init__ because we need self.is_deepspeed_enabled and self.accelerator
         if self.is_deepspeed_enabled:
@@ -427,9 +431,9 @@ class OnlineDPOTrainer(Trainer):
         logits = pi_logratios - ref_logratios
 
         if self.args.loss_type == "sigmoid":
-            losses = -F.logsigmoid(self.args.beta * logits)
+            losses = -F.logsigmoid(self.beta * logits)
         elif self.args.loss_type == "ipo":
-            losses = (logits - 1 / (2 * self.args.beta)) ** 2
+            losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
             raise NotImplementedError(f"invalid loss type {self.loss_type}")
 
@@ -443,7 +447,7 @@ class OnlineDPOTrainer(Trainer):
         kl = logprobs - ref_logprobs
         mean_kl = kl.sum(1).mean()
         self.stats["objective/kl"].append(self.accelerator.gather(mean_kl).mean().item())
-        non_score_reward = (-self.args.beta * kl).sum(1)
+        non_score_reward = (-self.beta * kl).sum(1)
         mean_non_score_reward = non_score_reward.mean()
         self.stats["objective/non_score_reward"].append(self.accelerator.gather(mean_non_score_reward).mean().item())
         rlhf_reward = scores + non_score_reward
@@ -452,10 +456,10 @@ class OnlineDPOTrainer(Trainer):
         self.stats["objective/entropy"].append(self.accelerator.gather(mean_entropy).mean().item())
         scores_margin = scores[chosen_indices] - scores[rejected_indices]
         self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
-        chosen_rewards = self.args.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
+        chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
         gathered_chosen_rewards = self.accelerator.gather(chosen_rewards)
         self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
-        rejected_rewards = self.args.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
+        rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
         gathered_rejected_rewards = self.accelerator.gather(rejected_rewards)
         self.stats["rewards/rejected"].append(gathered_rejected_rewards.mean().item())
         margin = gathered_chosen_rewards - gathered_rejected_rewards
