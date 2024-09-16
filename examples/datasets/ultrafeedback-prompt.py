@@ -44,7 +44,7 @@ def to_unpaired_preference(example):
 
 
 def drop_long_prompt(example):
-    if len(example["prompt"][0]["content"]) > 768:
+    if len(example["prompt"][0]["content"]) > 512:
         return False
     else:
         return True
