@@ -122,6 +122,8 @@ class NashMDTrainer(OnlineDPOTrainer):
             "rewards/accuracies": [],
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
+            "beta": [],
+            "mixture_coef": [],
         }
 
     @property
@@ -243,7 +245,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         kl_div = model_logprobs_model_data_sum - ref_logprobs_model_data_sum
 
         # final loss
-        loss = self.args.beta * kl_div - score
+        loss = self.beta * kl_div - score
 
         return loss.mean(), score, kl_div
 
@@ -296,6 +298,10 @@ class NashMDTrainer(OnlineDPOTrainer):
         mixture_eos = (mixture_data["input_ids"][:, context_length:] == self.tokenizer.eos_token_id).any(dim=1)
         self.stats["val/model_contain_eos_token"].append(gather_mean(model_eos.float()))
         self.stats["val/ref_contain_eos_token"].append(gather_mean(mixture_eos.float()))
+
+        # Log beta and mixture coef
+        self.stats["beta"].append(self.beta)
+        self.stats["mixture_coef"].append(self.mixture_coef)
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()

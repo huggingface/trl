@@ -211,6 +211,7 @@ class OnlineDPOTrainer(Trainer):
             "logps/chosen": [],
             "logps/rejected": [],
             "val/contain_eos_token": [],
+            "beta": [],
         }
 
         self.generation_config = GenerationConfig(
@@ -468,6 +469,7 @@ class OnlineDPOTrainer(Trainer):
         self.stats["rewards/margins"].append(margin.mean().item())
         accuracy = margin > 0
         self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
+        self.stats["beta"].append(self.beta)
 
         if (
             self.args.torch_empty_cache_steps is not None
