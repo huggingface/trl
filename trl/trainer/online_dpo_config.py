@@ -28,6 +28,9 @@ class OnlineDPOConfig(TrainingArguments):
     command line.
 
     Parameters:
+        learning_rate (`float`, *optional*, defaults to `5e-7`):
+            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
+            [`~transformers.TrainingArguments`].
         reward_model_path (`Optional[str]`, *optional*, defaults to `None`):
             Path to the reward model.
         max_new_tokens (`int`, *optional*, defaults to `64`):
@@ -54,6 +57,7 @@ class OnlineDPOConfig(TrainingArguments):
             Whether to disable dropout in the model.
     """
 
+    learning_rate: float = 5e-7
     reward_model_path: Optional[str] = None
     max_new_tokens: int = 64
     temperature: float = 0.9
