@@ -28,7 +28,7 @@ class KTOConfig(TrainingArguments):
 
     Parameters:
         learning_rate (`float`, *optional*, defaults to `5e-7`):
-            Learning rate to use for this trainer overriden by the default value in the TrainingArguments.
+            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of [`~transformers.TrainingArguments`].
         max_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
