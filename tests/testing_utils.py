@@ -22,7 +22,7 @@ def require_diffusers(test_case):
     """
     Decorator marking a test that requires diffusers. Skips the test if diffusers is not available.
     """
-    unittest.skipUnless(is_diffusers_available(), "test requires diffusers")(test_case)
+    return unittest.skipUnless(is_diffusers_available(), "test requires diffusers")(test_case)
 
 
 def require_no_wandb(test_case):
