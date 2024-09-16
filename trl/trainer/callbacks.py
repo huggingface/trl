@@ -374,27 +374,3 @@ class LogCompletionsCallback(WandbCallback):
 
         # Save the last logged step, so we don't log the same completions multiple times
         self._last_logged_step = state.global_step
-
-
-class DynamicParameterCallback(TrainerCallback):
-    r"""
-    A [`~transformers.TrainerCallback`] that allows for dynamic adjustment of training parameters during training.
-
-    Args:
-        param_name (`str`):
-            The name of the parameter to adjust.
-        param_values (`Union[float, List[float]]`):
-            The values to use for the parameter. If a list, the values will be selected based on the current epoch. If a float, the value will be used for all epochs.
-    """
-
-    def __init__(self, param_name: str, param_values: Union[float, List[float]]):
-        self.param_name = param_name
-        self.param_values = param_values
-        self.default_value = param_values[-1] if isinstance(param_values, list) else param_values
-
-    def on_epoch_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        # if param_name is a list, select the value for the current epoch or the last value if the list is shorter than the current epoch
-        if isinstance(self.param_values, list) and state.epoch < len(self.param_values):
-            setattr(args, self.param_name, self.param_values[state.epoch])
-        else:
-            setattr(args, self.param_name, self.default_value)
