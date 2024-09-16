@@ -19,14 +19,14 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import XPOConfig, XPOTrainer
+from trl import NashMDConfig, NashMDTrainer
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
-class TestXPOTrainer(unittest.TestCase):
+class TestNashMDTrainer(unittest.TestCase):
     def setUp(self):
         self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -35,9 +35,9 @@ class TestXPOTrainer(unittest.TestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def test_xpo_trainer_training(self):
+    def test_nash_md_trainer_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = XPOConfig(
+            training_args = NashMDConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -49,7 +49,7 @@ class TestXPOTrainer(unittest.TestCase):
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = XPOTrainer(
+            trainer = NashMDTrainer(
                 model=self.model,
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
@@ -68,7 +68,7 @@ class TestXPOTrainer(unittest.TestCase):
     def test_training_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = XPOConfig(
+            training_args = NashMDConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -78,7 +78,7 @@ class TestXPOTrainer(unittest.TestCase):
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = XPOTrainer(
+            trainer = NashMDTrainer(
                 model=self.model,
                 reward_model=self.reward_model,
                 args=training_args,
@@ -97,7 +97,7 @@ class TestXPOTrainer(unittest.TestCase):
     def test_training_with_peft_and_ref_model(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = XPOConfig(
+            training_args = NashMDConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -107,7 +107,7 @@ class TestXPOTrainer(unittest.TestCase):
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = XPOTrainer(
+            trainer = NashMDTrainer(
                 model=self.model,
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
@@ -129,7 +129,7 @@ class TestXPOTrainer(unittest.TestCase):
         # we want only the "train adapter" to be trained
         lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = XPOConfig(
+            training_args = NashMDConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -139,7 +139,7 @@ class TestXPOTrainer(unittest.TestCase):
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = XPOTrainer(
+            trainer = NashMDTrainer(
                 model=model,
                 reward_model=self.reward_model,
                 args=training_args,
