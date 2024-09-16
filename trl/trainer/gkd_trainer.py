@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available
 from transformers import AutoModelForCausalLM, GenerationConfig, PreTrainedModel
 
-from ..import_utils import is_liger_available
+from ..import_utils import is_liger_kernel_available
 from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
@@ -33,7 +33,7 @@ from .utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache
 if is_deepspeed_available():
     import deepspeed
 
-if is_liger_available():
+if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 

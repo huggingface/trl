@@ -18,10 +18,9 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers.testing_utils import require_peft
 
 from trl import ORPOConfig, ORPOTrainer
-
-from .testing_utils import require_peft
 
 
 class ORPOTrainerTester(unittest.TestCase):

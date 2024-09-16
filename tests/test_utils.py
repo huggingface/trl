@@ -16,16 +16,15 @@ import unittest
 
 import torch
 from transformers import AutoTokenizer
+from transformers.testing_utils import require_peft
+from transformers.utils import is_peft_available
 
-from trl import is_peft_available
 from trl.trainer.model_config import ModelConfig
 from trl.trainer.utils import decode_and_strip_padding, get_peft_config, pad
 
 
 if is_peft_available():
     from peft import LoraConfig
-
-from .testing_utils import require_peft
 
 
 class TestPad(unittest.TestCase):

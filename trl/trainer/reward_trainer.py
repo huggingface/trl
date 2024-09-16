@@ -27,8 +27,8 @@ from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase,
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_peft_available
 from .reward_config import RewardConfig
 from .utils import (
     RewardDataCollatorWithPadding,
