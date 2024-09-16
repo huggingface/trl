@@ -30,14 +30,14 @@
       title: DDPO
     - local: dpo_trainer
       title: DPO
+    - local: online_dpo_trainer
+      title: Online DPO
     - local: gkd_trainer
       title: GKD
     - local: kto_trainer
       title: KTO
     - local: nash_md_trainer
       title: Nash MD
-    - local: online_dpo_trainer
-      title: Online DPO
     - local: orpo_trainer
       title: ORPO
     - local: ppo_trainer
