@@ -37,9 +37,10 @@ from transformers import (
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
+from transformers.utils import is_peft_available
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
-from ..import_utils import is_liger_available, is_peft_available
+from ..import_utils import is_liger_kernel_available
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -53,7 +54,7 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
-if is_liger_available():
+if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 

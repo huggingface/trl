@@ -18,9 +18,7 @@ import torch.nn as nn
 import torchvision
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
-from transformers import CLIPModel
-
-from trl.import_utils import is_npu_available, is_xpu_available
+from transformers import CLIPModel, is_torch_npu_available, is_torch_xpu_available
 
 
 class MLP(nn.Module):
@@ -82,9 +80,9 @@ def aesthetic_scorer(hub_model_id, model_filename):
         model_filename=model_filename,
         dtype=torch.float32,
     )
-    if is_npu_available():
+    if is_torch_npu_available():
         scorer = scorer.npu()
-    elif is_xpu_available():
+    elif is_torch_xpu_available():
         scorer = scorer.xpu()
     else:
         scorer = scorer.cuda()

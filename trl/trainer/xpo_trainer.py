@@ -18,11 +18,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, IterableDataset
-from transformers import PreTrainedTokenizerBase, TrainerCallback
+from transformers import PreTrainedTokenizerBase, TrainerCallback, is_apex_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_apex_available
 
 from ..models.utils import unwrap_model_for_generation
 from .online_dpo_trainer import OnlineDPOTrainer

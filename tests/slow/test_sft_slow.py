@@ -21,17 +21,18 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.testing_utils import (
+    require_bitsandbytes,
+    require_peft,
+    require_torch_accelerator,
+    require_torch_multi_accelerator,
+)
+from transformers.utils import is_peft_available
 
-from trl import SFTConfig, SFTTrainer, is_peft_available
+from trl import SFTConfig, SFTTrainer
 from trl.models.utils import setup_chat_format
 
-from ..testing_utils import (
-    require_bitsandbytes,
-    require_liger_kernel,
-    require_multi_accelerator,
-    require_non_cpu,
-    require_peft,
-)
+from ..testing_utils import require_liger_kernel
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 
 
@@ -39,7 +40,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-@require_non_cpu
+@require_torch_accelerator
 class SFTTrainerSlowTester(unittest.TestCase):
     def setUp(self):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
@@ -270,7 +271,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
     @parameterized.expand(
         list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, DEVICE_MAP_OPTIONS))
     )
-    @require_multi_accelerator
+    @require_torch_multi_accelerator
     def test_sft_trainer_transformers_mp_gc_device_map(
         self, model_name, packing, gradient_checkpointing_kwargs, device_map
     ):

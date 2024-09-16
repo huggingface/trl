@@ -18,10 +18,9 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers.testing_utils import require_peft
 
 from trl import CPOConfig, CPOTrainer
-
-from .testing_utils import require_peft
 
 
 class CPOTrainerTester(unittest.TestCase):

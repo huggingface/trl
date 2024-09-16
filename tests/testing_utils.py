@@ -13,127 +13,27 @@
 # limitations under the License.
 import unittest
 
-import torch
-from accelerate.test_utils.testing import get_backend
+from transformers import is_wandb_available
 
-from trl import (
-    is_bitsandbytes_available,
-    is_diffusers_available,
-    is_liger_available,
-    is_peft_available,
-    is_pil_available,
-    is_wandb_available,
-    is_xpu_available,
-)
-
-
-torch_device, device_count, memory_allocated_func = get_backend()
-
-
-def require_peft(test_case):
-    """
-    Decorator marking a test that requires peft. Skips the test if peft is not available.
-    """
-    if not is_peft_available():
-        test_case = unittest.skip("test requires peft")(test_case)
-    return test_case
-
-
-def require_bitsandbytes(test_case):
-    """
-    Decorator marking a test that requires bnb. Skips the test if bnb is not available.
-    """
-    if not is_bitsandbytes_available():
-        test_case = unittest.skip("test requires bnb")(test_case)
-    return test_case
+from trl import is_diffusers_available, is_liger_kernel_available
 
 
 def require_diffusers(test_case):
     """
     Decorator marking a test that requires diffusers. Skips the test if diffusers is not available.
     """
-    if not is_diffusers_available():
-        test_case = unittest.skip("test requires diffusers")(test_case)
-    return test_case
-
-
-def requires_pil(test_case):
-    """
-    Decorator marking a test that requires PIL. Skips the test if pil is not available.
-    """
-    if not is_pil_available():
-        test_case = unittest.skip("test requires PIL")(test_case)
-    return test_case
-
-
-def require_wandb(test_case, required: bool = True):
-    """
-    Decorator marking a test that requires wandb. Skips the test if wandb is not available.
-    """
-    # XOR, i.e.:
-    # skip if available and required = False and
-    # skip if not available and required = True
-    if is_wandb_available() ^ required:
-        test_case = unittest.skip("test requires wandb")(test_case)
-    return test_case
+    return unittest.skipUnless(is_diffusers_available(), "test requires diffusers")(test_case)
 
 
 def require_no_wandb(test_case):
     """
     Decorator marking a test that requires no wandb. Skips the test if wandb is available.
     """
-    return require_wandb(test_case, required=False)
-
-
-def require_torch_multi_gpu(test_case):
-    """
-    Decorator marking a test that requires multiple GPUs. Skips the test if there aren't enough GPUs.
-    """
-    if torch.cuda.device_count() < 2:
-        test_case = unittest.skip("test requires multiple GPUs")(test_case)
-    return test_case
-
-
-def require_torch_gpu(test_case):
-    """
-    Decorator marking a test that requires GPUs. Skips the test if there is no GPU.
-    """
-    if not torch.cuda.is_available():
-        test_case = unittest.skip("test requires GPU")(test_case)
-    return test_case
-
-
-def require_torch_multi_xpu(test_case):
-    """
-    Decorator marking a test that requires multiple XPUs. Skips the test if there aren't enough XPUs.
-    """
-    if torch.xpu.device_count() < 2 and is_xpu_available():
-        test_case = unittest.skip("test requires multiple XPUs")(test_case)
-    return test_case
+    return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
 
 
 def require_liger_kernel(test_case):
     """
-    Decorator marking a test that requires liger-kernel. Also skip the test if there is no GPU.
+    Decorator marking a test that requires liger_kernel. Skips the test if liger_kernel is not available.
     """
-    if not (torch.cuda.is_available() and is_liger_available()):
-        test_case = unittest.skip("test requires GPU and liger-kernel")(test_case)
-    return test_case
-
-
-def require_non_cpu(test_case):
-    """
-    Decorator marking a test that requires a hardware accelerator backend. These tests are skipped when there are no
-    hardware accelerator available.
-    """
-    return unittest.skipUnless(torch_device != "cpu", "test requires a hardware accelerator")(test_case)
-
-
-def require_multi_accelerator(test_case):
-    """
-    Decorator marking a test that requires multiple hardware accelerators. These tests are skipped on a machine without
-    multiple accelerators.
-    """
-    return unittest.skipUnless(
-        torch_device != "cpu" and device_count > 1, "test requires multiple hardware accelerators"
-    )(test_case)
+    return unittest.skipUnless(is_liger_kernel_available(), "test requires liger_kernel")(test_case)

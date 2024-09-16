@@ -28,9 +28,10 @@ from huggingface_hub.utils import (
     RepositoryNotFoundError,
 )
 from safetensors.torch import load_file as safe_load_file
-from transformers import GenerationMixin, PreTrainedModel
+from transformers import GenerationMixin, PreTrainedModel, is_torch_npu_available, is_torch_xpu_available
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_npu_available, is_peft_available, is_transformers_greater_than, is_xpu_available
+from ..import_utils import is_transformers_greater_than
 
 
 if is_peft_available():
@@ -403,9 +404,9 @@ class PreTrainedModelWrapper(nn.Module):
                 The current device.
         """
         state = PartialState()
-        if is_xpu_available():
+        if is_torch_xpu_available():
             return f"xpu:{state.local_process_index}"
-        elif is_npu_available():
+        elif is_torch_npu_available():
             return f"npu:{state.local_process_index}"
         else:
             return state.local_process_index if torch.cuda.is_available() else "cpu"

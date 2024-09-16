@@ -28,11 +28,12 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
 )
+from transformers.testing_utils import require_bitsandbytes, require_peft
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 from trl.trainer.dpo_trainer import _build_tokenized_answer, _truncate_tokens
 
-from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
+from .testing_utils import require_no_wandb
 
 
 class TestBuildTokenizedAnswer(unittest.TestCase):

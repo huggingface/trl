@@ -27,11 +27,12 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     HfArgumentParser,
+    is_torch_npu_available,
+    is_torch_xpu_available,
     set_seed,
 )
 
 from trl import SFTConfig, SFTTrainer
-from trl.import_utils import is_npu_available, is_xpu_available
 from trl.trainer import ConstantLengthDataset
 
 
@@ -197,9 +198,9 @@ trainer.model.save_pretrained(output_dir)
 
 # Free memory for merging weights
 del base_model
-if is_xpu_available():
+if is_torch_xpu_available():
     torch.xpu.empty_cache()
-elif is_npu_available():
+elif is_torch_npu_available():
     torch.npu.empty_cache()
 else:
     torch.cuda.empty_cache()

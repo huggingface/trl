@@ -20,12 +20,12 @@ from typing import Literal, Optional
 
 import numpy as np
 import tyro
+from transformers import is_wandb_available
 from typing_extensions import Annotated
 
 from trl.trainer.utils import exact_div
 
 from ..core import flatten_dict
-from ..import_utils import is_wandb_available
 
 
 JSONDict = Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)]

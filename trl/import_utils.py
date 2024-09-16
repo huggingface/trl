@@ -14,10 +14,11 @@
 import importlib
 import os
 import sys
-from importlib.util import find_spec
 from itertools import chain
 from types import ModuleType
 from typing import Any
+
+from transformers.utils.import_utils import _is_package_available
 
 
 if sys.version_info < (3, 8):
@@ -25,17 +26,31 @@ if sys.version_info < (3, 8):
 else:
     _is_python_greater_3_8 = True
 
+_diffusers_available = _is_package_available("diffusers")
+_unsloth_available = _is_package_available("unsloth")
+_rich_available = _is_package_available("rich")
+_liger_kernel_available = _is_package_available("liger_kernel")
+_llmblender_available = _is_package_available("llm_blender")
 
-def is_peft_available() -> bool:
-    return find_spec("peft") is not None
 
-
-def is_liger_available() -> bool:
-    return find_spec("liger_kernel") is not None
+def is_diffusers_available() -> bool:
+    return _diffusers_available
 
 
 def is_unsloth_available() -> bool:
-    return find_spec("unsloth") is not None
+    return _unsloth_available
+
+
+def is_rich_available() -> bool:
+    return _rich_available
+
+
+def is_liger_kernel_available() -> bool:  # replace by transformers.import_utils.is_liger_kernel_available() from v4.45
+    return _liger_kernel_available
+
+
+def is_llmblender_available() -> bool:
+    return _llmblender_available
 
 
 def is_accelerate_greater_20_0() -> bool:
@@ -72,72 +87,6 @@ def is_torch_greater_2_0() -> bool:
 
         torch_version = pkg_resources.get_distribution("torch").version
     return torch_version >= "2.0"
-
-
-def is_diffusers_available() -> bool:
-    return find_spec("diffusers") is not None
-
-
-def is_pil_available() -> bool:
-    return find_spec("PIL") is not None
-
-
-def is_bitsandbytes_available() -> bool:
-    import torch
-
-    # bnb can be imported without GPU but is not usable.
-    return find_spec("bitsandbytes") is not None and torch.cuda.is_available()
-
-
-def is_torchvision_available() -> bool:
-    return find_spec("torchvision") is not None
-
-
-def is_rich_available() -> bool:
-    return find_spec("rich") is not None
-
-
-def is_wandb_available() -> bool:
-    return find_spec("wandb") is not None
-
-
-def is_sklearn_available() -> bool:
-    return find_spec("sklearn") is not None
-
-
-def is_llmblender_available() -> bool:
-    return find_spec("llm_blender") is not None
-
-
-def is_openai_available() -> bool:
-    return find_spec("openai") is not None
-
-
-def is_xpu_available() -> bool:
-    if is_accelerate_greater_20_0():
-        import accelerate
-
-        return accelerate.utils.is_xpu_available()
-    else:
-        if find_spec("intel_extension_for_pytorch") is None:
-            return False
-        try:
-            import torch
-
-            return hasattr(torch, "xpu") and torch.xpu.is_available()
-        except RuntimeError:
-            return False
-
-
-def is_npu_available() -> bool:
-    """Checks if `torch_npu` is installed and potentially if a NPU is in the environment"""
-    if find_spec("torch") is None or find_spec("torch_npu") is None:
-        return False
-
-    import torch
-    import torch_npu  # noqa: F401
-
-    return hasattr(torch, "npu") and torch.npu.is_available()
 
 
 class _LazyModule(ModuleType):
