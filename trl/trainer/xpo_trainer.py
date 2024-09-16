@@ -129,6 +129,8 @@ class XPOTrainer(OnlineDPOTrainer):
             # Replace "contain_eos_token" by "model_contain_eos_token" and "ref_contain_eos_token"
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
+            "alpha": [],
+            "beta": [],
         }
 
     @property
@@ -253,9 +255,9 @@ class XPOTrainer(OnlineDPOTrainer):
         logits = chosen_log_ratios - rejected_log_ratios
 
         if self.args.loss_type == "sigmoid":
-            dpo_losses = -F.logsigmoid(self.args.beta * logits)
+            dpo_losses = -F.logsigmoid(self.beta * logits)
         elif self.args.loss_type == "ipo":
-            dpo_losses = (logits - 1 / (2 * self.args.beta)) ** 2
+            dpo_losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
             raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
 
@@ -316,8 +318,8 @@ class XPOTrainer(OnlineDPOTrainer):
 
         # Log rewards
         # Compute various statistics
-        chosen_rewards = chosen_log_ratios * self.args.beta
-        rejected_rewards = rejected_log_ratios * self.args.beta
+        chosen_rewards = chosen_log_ratios * self.beta
+        rejected_rewards = rejected_log_ratios * self.beta
         self.stats["rewards/chosen"].append(gather_mean(chosen_rewards.mean()))
         self.stats["rewards/rejected"].append(gather_mean(rejected_rewards.mean()))
 
@@ -346,6 +348,10 @@ class XPOTrainer(OnlineDPOTrainer):
         ref_eos = (ref_data["input_ids"][:, context_length:] == self.tokenizer.eos_token_id).any(dim=1)
         self.stats["val/model_contain_eos_token"].append(gather_mean(model_eos.float()))
         self.stats["val/ref_contain_eos_token"].append(gather_mean(ref_eos.float()))
+
+        # Log alpha and beta
+        self.stats["alpha"].append(self.alpha)
+        self.stats["beta"].append(self.beta)
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
