@@ -141,7 +141,7 @@ class XPOTrainer(OnlineDPOTrainer):
         else:
             return self._alpha
 
-    def _generate_completions(self, prompts, model, ref_model=None):
+    def _generate_completions(self, prompts, model):
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
             model_output = unwrapped_model.generate(
                 input_ids=prompts["input_ids"],
@@ -149,8 +149,7 @@ class XPOTrainer(OnlineDPOTrainer):
                 generation_config=self.generation_config,
             )
 
-        if ref_model is None:
-            ref_model = self.model
+        ref_model = model if self.ref_model is None else self.ref_model
         with torch.no_grad(), unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_ref_model:
             ref_output = unwrapped_ref_model.generate(
                 input_ids=prompts["input_ids"],
@@ -373,7 +372,7 @@ class XPOTrainer(OnlineDPOTrainer):
         del inputs
 
         # Sample completions from both the model and the reference model
-        model_output, ref_output = self._generate_completions(prompts, model, self.ref_model)
+        model_output, ref_output = self._generate_completions(prompts, model)
 
         # Process model completions
         model_data, ref_data = self._process_completions(model_output, ref_output, prompts)
