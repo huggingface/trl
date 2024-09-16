@@ -21,9 +21,11 @@ from transformers import TrainingArguments
 class KTOConfig(TrainingArguments):
     r"""
     Configuration class for the [`KTOTrainer`].
+
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
+
     Parameters:
         max_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
@@ -38,8 +40,10 @@ class KTOConfig(TrainingArguments):
             reference model.
         loss_type (`str`, *optional*, defaults to `"kto"`):
             Type of loss to use. Possible values are:
+
                 - `"kto"`: KTO loss from the [KTO](https://huggingface.co/papers/2402.01306) paper.
                 - `"apo_zero_unpaired"`: Unpaired variant of APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+
         desirable_weight (`float`, *optional*, defaults to `1.0`):
             Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
         undesirable_weight (`float`, *optional*, defaults to `1.0`):
