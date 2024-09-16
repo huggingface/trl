@@ -19,9 +19,7 @@
     title: Understanding Logs
   title: Get started
 - sections:
-  - sections:
-    - local: trainer
-      title: Overview
+  - sections: # Sort alphabetically
     - local: alignprop_trainer
       title: AlignProp
     - local: bco_trainer
@@ -34,28 +32,28 @@
       title: DPO
     - local: online_dpo_trainer
       title: Online DPO
-    - local: xpo_trainer
-      title: XPO
+    - local: gkd_trainer
+      title: GKD
+    - local: kto_trainer
+      title: KTO
     - local: nash_md_trainer
       title: Nash MD
     - local: orpo_trainer
       title: ORPO
-    - local: kto_trainer
-      title: KTO
     - local: ppo_trainer
       title: PPO
     - local: ppov2_trainer
       title: PPOv2
+    - local: reward_trainer
+      title: Reward
     - local: rloo_trainer
       title: RLOO
     - local: sft_trainer
       title: SFT
     - local: iterative_sft_trainer
       title: Iterative SFT
-    - local: reward_trainer
-      title: Reward Model
-    - local: gkd_trainer
-      title: GKD Trainer
+    - local: xpo_trainer
+      title: XPO
     title: Trainers
   - local: models
     title: Model Classes
