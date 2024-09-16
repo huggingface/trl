@@ -26,6 +26,7 @@ if sys.version_info < (3, 8):
 else:
     _is_python_greater_3_8 = True
 
+# Use same as transformers.utils.import_utils
 _diffusers_available = _is_package_available("diffusers")
 _unsloth_available = _is_package_available("unsloth")
 _rich_available = _is_package_available("rich")
