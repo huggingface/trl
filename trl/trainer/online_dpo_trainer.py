@@ -96,6 +96,8 @@ class OnlineDPOTrainer(Trainer):
             The dataset to use for evaluation.
         tokenizer (`transformers.PreTrainedTokenizerBase`):
             The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        peft_config (`Dict`):
+            The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
@@ -211,11 +213,11 @@ class OnlineDPOTrainer(Trainer):
             "logps/chosen": [],
             "logps/rejected": [],
             "val/contain_eos_token": [],
+            "beta": [],
         }
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
-            min_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
             top_k=0,
             top_p=1.0,
@@ -236,6 +238,8 @@ class OnlineDPOTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        self._beta = args.beta
+
         # Placed after the super().__init__ because we need self.is_deepspeed_enabled and self.accelerator
         if self.is_deepspeed_enabled:
             if self.reward_model is not None:
@@ -248,6 +252,14 @@ class OnlineDPOTrainer(Trainer):
                 self.ref_model = self.ref_model.to(self.accelerator.device)
             if self.reward_model is not None:
                 self.reward_model = self.reward_model.to(self.accelerator.device)
+
+    @property
+    def beta(self):
+        if isinstance(self._beta, list):
+            epoch = self.state.epoch
+            return self._beta[epoch] if epoch < len(self._beta) else self._beta[-1]
+        else:
+            return self._beta
 
     @staticmethod
     def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> Dict[str, Any]:
@@ -394,11 +406,6 @@ class OnlineDPOTrainer(Trainer):
         if self.args.missing_eos_penalty is not None:
             scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
-        # Replace the logprobs of the padding tokens by 1.0
-        padding_mask = ~completion_mask.bool()
-        logprobs = logprobs.masked_fill(padding_mask, 1.0)
-        ref_logprobs = ref_logprobs.masked_fill(padding_mask, 1.0)
-
         # Split the scores in 2 (the prompts of the first half are the same as the second half)
         first_half, second_half = scores.split(num_examples)
 
@@ -412,6 +419,9 @@ class OnlineDPOTrainer(Trainer):
         cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)  # cr = chosen and rejected
         cr_logprobs = logprobs[cr_indices]
         cr_ref_logprobs = ref_logprobs[cr_indices]
+
+        # mask out the padding tokens
+        padding_mask = ~completion_mask.bool()
         cr_padding_mask = padding_mask[cr_indices]
 
         cr_logprobs_sum = (cr_logprobs * ~cr_padding_mask).sum(1)
@@ -426,9 +436,9 @@ class OnlineDPOTrainer(Trainer):
         logits = pi_logratios - ref_logratios
 
         if self.args.loss_type == "sigmoid":
-            losses = -F.logsigmoid(self.args.beta * logits)
+            losses = -F.logsigmoid(self.beta * logits)
         elif self.args.loss_type == "ipo":
-            losses = (logits - 1 / (2 * self.args.beta)) ** 2
+            losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
             raise NotImplementedError(f"invalid loss type {self.loss_type}")
 
@@ -442,7 +452,7 @@ class OnlineDPOTrainer(Trainer):
         kl = logprobs - ref_logprobs
         mean_kl = kl.sum(1).mean()
         self.stats["objective/kl"].append(self.accelerator.gather(mean_kl).mean().item())
-        non_score_reward = (-self.args.beta * kl).sum(1)
+        non_score_reward = (-self.beta * kl).sum(1)
         mean_non_score_reward = non_score_reward.mean()
         self.stats["objective/non_score_reward"].append(self.accelerator.gather(mean_non_score_reward).mean().item())
         rlhf_reward = scores + non_score_reward
@@ -451,16 +461,17 @@ class OnlineDPOTrainer(Trainer):
         self.stats["objective/entropy"].append(self.accelerator.gather(mean_entropy).mean().item())
         scores_margin = scores[chosen_indices] - scores[rejected_indices]
         self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
-        chosen_rewards = self.args.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
+        chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
         gathered_chosen_rewards = self.accelerator.gather(chosen_rewards)
         self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
-        rejected_rewards = self.args.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
+        rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
         gathered_rejected_rewards = self.accelerator.gather(rejected_rewards)
         self.stats["rewards/rejected"].append(gathered_rejected_rewards.mean().item())
         margin = gathered_chosen_rewards - gathered_rejected_rewards
         self.stats["rewards/margins"].append(margin.mean().item())
         accuracy = margin > 0
         self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
+        self.stats["beta"].append(self.beta)
 
         if (
             self.args.torch_empty_cache_steps is not None

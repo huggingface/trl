@@ -18,7 +18,7 @@ import unittest
 import numpy as np
 import pytest
 import torch
-from datasets import Dataset, features
+from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
@@ -209,46 +209,6 @@ class DPOTrainerTester(unittest.TestCase):
         self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    def _init_dummy_dataset(self):
-        # fmt: off
-        dummy_dataset_dict = {
-            "prompt": [
-                "hello",
-                "how are you",
-                "What is your name?",
-                "What is your name?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "[INST] How is the stock price? [/INST]",
-                "[INST] How is the stock price? [/INST] ",
-            ],
-            "chosen": [
-                "hi nice to meet you",
-                "I am fine",
-                "My name is Mary",
-                "My name is Mary",
-                "Python",
-                "Python",
-                "Python",
-                "$46 as of 10am EST",
-                "46 as of 10am EST",
-            ],
-            "rejected": [
-                "leave me alone",
-                "I am not fine",
-                "Whats it to you?",
-                "I dont have a name",
-                "Javascript",
-                "C++",
-                "Java",
-                " $46 as of 10am EST",
-                " 46 as of 10am EST",
-            ],
-        }
-        # fmt: on
-        return Dataset.from_dict(dummy_dataset_dict)
-
     @parameterized.expand(
         [
             ["gpt2", "sigmoid", True],
@@ -288,7 +248,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             if name == "gpt2":
                 model = self.model
@@ -304,8 +264,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=ref_model,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -343,15 +303,15 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             trainer = DPOTrainer(
                 model=self.model,
                 ref_model=None,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -393,15 +353,15 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             trainer = DPOTrainer(
                 model=self.model,
                 ref_model=None,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -433,7 +393,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             tokenizer = AutoTokenizer.from_pretrained(self.model_id)
             tokenizer.pad_token = None
@@ -449,8 +409,8 @@ class DPOTrainerTester(unittest.TestCase):
                     ref_model=None,
                     args=training_args,
                     tokenizer=tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=dummy_dataset,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
                 )
 
                 trainer.train()
@@ -470,7 +430,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             tokenizer = AutoTokenizer.from_pretrained(self.model_id)
             tokenizer.pad_token = None
@@ -486,8 +446,8 @@ class DPOTrainerTester(unittest.TestCase):
                     ref_model=None,
                     args=training_args,
                     tokenizer=tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=dummy_dataset,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
                 )
 
                 trainer.train()
@@ -509,7 +469,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             trainer = DPOTrainer(
                 model=self.model,
@@ -517,8 +477,8 @@ class DPOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             # params of the ref model as its the same as the model
@@ -551,7 +511,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             with self.assertRaisesRegex(
                 ValueError,
@@ -563,8 +523,8 @@ class DPOTrainerTester(unittest.TestCase):
                     ref_model=None,
                     args=training_args,
                     tokenizer=self.tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=dummy_dataset,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
                 )
 
     @require_peft
@@ -597,7 +557,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
@@ -605,8 +565,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -657,7 +617,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
@@ -665,8 +625,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -739,7 +699,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
@@ -747,8 +707,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -789,7 +749,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
@@ -797,8 +757,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -825,7 +785,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
@@ -833,8 +793,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             assert trainer.model.model_tags == trainer._tag_names
@@ -870,7 +830,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             with self.assertRaises(ValueError):
                 # passing a peft_model as model and ref_model should error out,
@@ -880,8 +840,8 @@ class DPOTrainerTester(unittest.TestCase):
                     ref_model=ref_model,
                     args=training_args,
                     tokenizer=self.tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=dummy_dataset,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
                     peft_config=lora_config,
                 )
 
@@ -903,8 +863,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=ref_model,
                 args=training_args,
                 tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -913,7 +873,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     def test_dpo_trainer_torch_dtype(self):
         # See https://github.com/huggingface/trl/issues/1751
-        dummy_dataset = self._init_dummy_dataset()
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         with tempfile.TemporaryDirectory() as tmp_dir:
             dpo_config = DPOConfig(
                 output_dir=tmp_dir,
@@ -929,7 +889,7 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=self.model_id,
                 tokenizer=self.tokenizer,
                 args=dpo_config,
-                train_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
             )
             assert trainer.model.config.torch_dtype == torch.float16
             assert trainer.ref_model.config.torch_dtype == torch.float16
@@ -952,7 +912,7 @@ class DPOTrainerTester(unittest.TestCase):
                     model=self.model_id,
                     tokenizer=self.tokenizer,
                     args=dpo_config,
-                    train_dataset=dummy_dataset,
+                    train_dataset=dummy_dataset["train"],
                 )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -973,7 +933,7 @@ class DPOTrainerTester(unittest.TestCase):
                     ref_model=self.model_id,
                     tokenizer=self.tokenizer,
                     args=dpo_config,
-                    train_dataset=dummy_dataset,
+                    train_dataset=dummy_dataset["train"],
                 )
 
     def test_dpo_loss_alpha_div_f(self):
@@ -997,7 +957,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
@@ -1005,8 +965,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             # Fake chosen and rejected log probs
@@ -1040,7 +1000,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
@@ -1048,8 +1008,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             # Fake chosen and rejected log probs

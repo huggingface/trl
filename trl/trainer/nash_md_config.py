@@ -19,15 +19,16 @@ from trl.trainer.online_dpo_config import OnlineDPOConfig
 
 
 @dataclass
-class XPOConfig(OnlineDPOConfig):
+class NashMDConfig(OnlineDPOConfig):
     r"""
-    Configuration class for the [`XPOTrainer`].
+    Configuration class for the [`NashMDTrainer`].
 
     Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 
     Parameters:
-        alpha (`float` or `List[float]`, *optional*, defaults to `1e-5`):
-            Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each new epoch and the last alpha is used for the rest of the epochs.
+        mixture_coef (`float` or `list[float]`, *optional*, defaults to `0.5`):
+            Logit mixture coefficient for the model and reference model.
+            If a list of floats is provided then the mixture coefficient is selected for each new epoch and the last coefficient is used for the rest of the epochs.
     """
 
-    alpha: Union[float, List[float]] = 1e-5
+    mixture_coef: Union[float, List[float]] = 0.5

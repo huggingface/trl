@@ -19,6 +19,7 @@ __version__ = "0.11.0.dev0"
 from typing import TYPE_CHECKING
 from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
+
 _import_structure = {
     "core": [
         "set_seed",
@@ -56,6 +57,8 @@ _import_structure = {
         "BCOConfig",
         "BCOTrainer",
         "ModelConfig",
+        "NashMDConfig",
+        "NashMDTrainer",
         "OnlineDPOConfig",
         "OnlineDPOTrainer",
         "XPOConfig",
@@ -150,6 +153,8 @@ if TYPE_CHECKING:
         BCOConfig,
         BCOTrainer,
         ModelConfig,
+        NashMDConfig,
+        NashMDTrainer,
         OnlineDPOConfig,
         OnlineDPOTrainer,
         XPOConfig,

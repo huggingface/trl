@@ -36,6 +36,8 @@
       title: Online DPO
     - local: xpo_trainer
       title: XPO
+    - local: nash_md_trainer
+      title: Nash MD
     - local: orpo_trainer
       title: ORPO
     - local: kto_trainer
