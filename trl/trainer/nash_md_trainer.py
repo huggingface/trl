@@ -142,11 +142,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                 generation_config=self.generation_config,
             )
 
-            if self.ref_model is None:
-                ref_model = model
-            else:
-                ref_model = self.ref_model
-
+            ref_model = model if self.ref_model is None else self.ref_model
             with torch.no_grad(), unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_ref_model:
                 mixture_model = GeometricMixtureWrapper(
                     model=unwrapped_model,
