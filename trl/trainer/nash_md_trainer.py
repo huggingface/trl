@@ -107,7 +107,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        self._mixture_coeff = self.args.mixture_coeff
+        self._mixture_coef = self.args.mixture_coef
 
         # Overwrite the stats dictionary to include NashMD specific statistics
         self.stats = {
@@ -125,12 +125,12 @@ class NashMDTrainer(OnlineDPOTrainer):
         }
 
     @property
-    def mixture_coeff(self):
-        if isinstance(self._mixture_coeff, list):
+    def mixture_coef(self):
+        if isinstance(self._mixture_coef, list):
             epoch = self.state.epoch
-            return self._mixture_coeff[epoch] if epoch < len(self._mixture_coeff) else self._mixture_coeff[-1]
+            return self._mixture_coef[epoch] if epoch < len(self._mixture_coef) else self._mixture_coef[-1]
         else:
-            return self._mixture_coeff
+            return self._mixture_coef
 
     def _generate_completions(self, model, prompts):
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
@@ -145,7 +145,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                     model=unwrapped_model,
                     ref_model=unwrapped_ref_model,
                     generation_config=self.generation_config,
-                    mixture_coeff=self.mixture_coeff,
+                    mixture_coef=self.mixture_coef,
                     device=self.accelerator.device,
                 )
 
