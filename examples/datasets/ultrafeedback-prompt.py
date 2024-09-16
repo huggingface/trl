@@ -42,6 +42,7 @@ def to_unpaired_preference(example):
     prompt = [{"role": "user", "content": example["instruction"]}]
     return {"prompt": prompt}
 
+
 def drop_long_prompt(example):
     if len(example["prompt"][0]["content"]) > 768:
         return False
