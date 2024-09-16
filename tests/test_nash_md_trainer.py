@@ -16,14 +16,21 @@ import unittest
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers.testing_utils import require_peft
+from transformers.utils import is_peft_available
 
 from trl import NashMDConfig, NashMDTrainer
+
+
+if is_peft_available():
+    from peft import LoraConfig, get_peft_model
 
 
 class TestNashMDTrainer(unittest.TestCase):
     def setUp(self):
         self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -44,12 +51,102 @@ class TestNashMDTrainer(unittest.TestCase):
 
             trainer = NashMDTrainer(
                 model=self.model,
-                ref_model=self.model,
+                ref_model=self.ref_model,
                 reward_model=self.reward_model,
                 args=training_args,
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
+            )
+
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    @require_peft
+    def test_training_with_peft(self):
+        lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = NashMDConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+            trainer = NashMDTrainer(
+                model=self.model,
+                reward_model=self.reward_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                peft_config=lora_config,
+            )
+
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    @require_peft
+    def test_training_with_peft_and_ref_model(self):
+        lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = NashMDConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+            trainer = NashMDTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                reward_model=self.reward_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                peft_config=lora_config,
+            )
+
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    def test_training_with_peft_model_and_peft_config(self):
+        model_lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
+        model = get_peft_model(self.model, model_lora_config)
+        # we want only the "train adapter" to be trained
+        lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = NashMDConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+            trainer = NashMDTrainer(
+                model=model,
+                reward_model=self.reward_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                peft_config=lora_train_config,
             )
 
             trainer.train()

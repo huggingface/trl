@@ -142,7 +142,12 @@ class NashMDTrainer(OnlineDPOTrainer):
                 generation_config=self.generation_config,
             )
 
-            with torch.no_grad(), unwrap_model_for_generation(self.ref_model, self.accelerator) as unwrapped_ref_model:
+            if self.ref_model is None:
+                ref_model = model
+            else:
+                ref_model = self.ref_model
+
+            with torch.no_grad(), unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_ref_model:
                 mixture_model = GeometricMixtureWrapper(
                     model=unwrapped_model,
                     ref_model=unwrapped_ref_model,
@@ -215,7 +220,11 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         # Compute logprobs of model completions under the reference model
         with torch.no_grad():
-            ref_logprobs_model_data = compute_logprobs_for_data(self.ref_model, model_data)
+            if self.ref_model is None:
+                with model.disable_adapter():
+                    ref_logprobs_model_data = compute_logprobs_for_data(model, model_data)
+            else:
+                ref_logprobs_model_data = compute_logprobs_for_data(self.ref_model, model_data)
 
         # Mask padding tokens
         model_padding_mask = model_data["attention_mask"][:, context_length:] == 0
@@ -305,7 +314,6 @@ class NashMDTrainer(OnlineDPOTrainer):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
-        self.ref_model.eval()
 
         # need the prompt_ only
         inputs = self._prepare_inputs(inputs)

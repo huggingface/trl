@@ -141,7 +141,7 @@ class XPOTrainer(OnlineDPOTrainer):
         else:
             return self._alpha
 
-    def _generate_completions(self, model, ref_model, prompts):
+    def _generate_completions(self, prompts, model, ref_model=None):
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
             model_output = unwrapped_model.generate(
                 input_ids=prompts["input_ids"],
@@ -149,6 +149,8 @@ class XPOTrainer(OnlineDPOTrainer):
                 generation_config=self.generation_config,
             )
 
+        if ref_model is None:
+            ref_model = self.model
         with torch.no_grad(), unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_ref_model:
             ref_output = unwrapped_ref_model.generate(
                 input_ids=prompts["input_ids"],
@@ -201,7 +203,7 @@ class XPOTrainer(OnlineDPOTrainer):
 
         return model_scores, ref_scores
 
-    def _compute_logprobs(self, model, ref_model, model_data, ref_data, context_length):
+    def _compute_logprobs(self, model, model_data, ref_data, context_length):
         def compute_logprobs_for_data(m, data):
             output = m(data["input_ids"], attention_mask=data["attention_mask"])
             logits = output.logits[:, context_length - 1 : -1]
@@ -216,8 +218,13 @@ class XPOTrainer(OnlineDPOTrainer):
 
         # Compute logprobs for reference model completions
         with torch.no_grad():
-            ref_logprobs_model_data = compute_logprobs_for_data(ref_model, model_data)
-            ref_logprobs_ref_data = compute_logprobs_for_data(ref_model, ref_data)
+            if self.ref_model is None:
+                with model.disable_adapter():
+                    ref_logprobs_model_data = compute_logprobs_for_data(model, model_data)
+                    ref_logprobs_ref_data = compute_logprobs_for_data(model, ref_data)
+            else:
+                ref_logprobs_model_data = compute_logprobs_for_data(self.ref_model, model_data)
+                ref_logprobs_ref_data = compute_logprobs_for_data(self.ref_model, ref_data)
 
         # Mask padding tokens
         model_padding_mask = model_data["attention_mask"][:, context_length:] == 0
@@ -355,8 +362,6 @@ class XPOTrainer(OnlineDPOTrainer):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
-        ref_model = self.ref_model
-        ref_model.eval()
 
         # need the prompt_ only
         inputs = self._prepare_inputs(inputs)
@@ -368,7 +373,7 @@ class XPOTrainer(OnlineDPOTrainer):
         del inputs
 
         # Sample completions from both the model and the reference model
-        model_output, ref_output = self._generate_completions(model, ref_model, prompts)
+        model_output, ref_output = self._generate_completions(prompts, model, self.ref_model)
 
         # Process model completions
         model_data, ref_data = self._process_completions(model_output, ref_output, prompts)
@@ -378,7 +383,7 @@ class XPOTrainer(OnlineDPOTrainer):
 
         # Compute logprobs
         model_logprobs_model_data, model_logprobs_ref_data, ref_logprobs_ref_data, ref_logprobs_model_data = (
-            self._compute_logprobs(model, ref_model, model_data, ref_data, context_length)
+            self._compute_logprobs(model, model_data, ref_data, context_length)
         )
 
         # Compute loss
