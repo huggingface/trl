@@ -42,7 +42,7 @@ class YamlConfigParser:
         return config
 
     def to_string(self, config):
-        final_string = """"""
+        final_string = ""
         for key, value in config.items():
             if isinstance(value, (dict, list)):
                 if len(value) != 0:
@@ -92,11 +92,25 @@ class SFTScriptArguments:
 
 
 @dataclass
+class RewardScriptArguments:
+    dataset_name: str = field(
+        default="trl-lib/ultrafeedback_binarized",
+        metadata={"help": "the dataset name"},
+    )
+    dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to train on"})
+    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to evaluate on"})
+    config: str = field(default=None, metadata={"help": "Path to the optional config file"})
+    gradient_checkpointing_use_reentrant: bool = field(
+        default=False,
+        metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"},
+    )
+
+
+@dataclass
 class DPOScriptArguments:
     dataset_name: str = field(default=None, metadata={"help": "the dataset name"})
     dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to use for training"})
     dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to use for evaluation"})
-    sanity_check: bool = field(default=False, metadata={"help": "only train on 1000 samples"})
     ignore_bias_buffers: bool = field(
         default=False,
         metadata={

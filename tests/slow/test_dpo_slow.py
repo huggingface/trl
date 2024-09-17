@@ -21,10 +21,11 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.testing_utils import require_bitsandbytes, require_peft, require_torch_accelerator, torch_device
+from transformers.utils import is_peft_available
 
-from trl import DPOConfig, DPOTrainer, is_peft_available
+from trl import DPOConfig, DPOTrainer
 
-from ..testing_utils import require_bitsandbytes, require_peft, require_torch_gpu
 from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST
 
 
@@ -32,7 +33,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-@require_torch_gpu
+@require_torch_accelerator
 class DPOTrainerSlowTester(unittest.TestCase):
     def setUp(self):
         self.dataset = load_dataset("trl-internal-testing/mlabonne-chatml-dpo-pairs-copy", split="train[:10%]")
@@ -47,7 +48,10 @@ class DPOTrainerSlowTester(unittest.TestCase):
 
     def tearDown(self):
         gc.collect()
-        torch.cuda.empty_cache()
+        if torch_device == "cpu":
+            torch.cuda.empty_cache()
+        elif torch_device == "xpu":
+            torch.xpu.empty_cache()
         gc.collect()
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS)))

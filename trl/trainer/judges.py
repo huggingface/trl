@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import concurrent.futures
 import logging
 import random
@@ -7,8 +21,9 @@ from typing import List, Optional, Union
 import numpy as np
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
+from transformers.utils import is_openai_available
 
-from ..import_utils import is_llmblender_available, is_openai_available
+from ..import_utils import is_llmblender_available
 
 
 if is_llmblender_available():
@@ -110,6 +125,11 @@ class BasePairwiseJudge(BaseJudge):
         Returns:
             List of idxs, where each idx is the rank of the best completion for the corresponding prompt.
             E.g., 1 means that the second completion (idx=1) is the best.
+
+        Note:
+            If the judge returns -1 for any prompt, it indicates that the inner process used to compute the preference has failed.
+            For instance, this could occur if the underlying language model returned an invalid answer.
+            In such cases, the caller should handle these invalid indices appropriately, possibly by implementing fallback logic or error handling.
         """
         raise NotImplementedError("Judge subclasses must implement the `judge` method.")
 
@@ -201,8 +221,8 @@ class HfPairwiseJudge(BasePairwiseJudge):
             if response in ["0", "1"]:
                 return int(response)
             else:
-                logging.warning(f"Invalid response from the model: {response}, using random choice instead.")
-                return random.choice([0, 1])
+                logging.debug(f"Invalid response from the judge model: '{response}'. Returning -1.")
+                return -1
 
         # Call the completions concurrently
         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -228,7 +248,6 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
             Note that the system prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`.
             Also, the inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token response.
         max_requests (`int`, *optional*): The maximum number of requests to make to the OpenAI API. Defaults to 1000. If set to `None`, there is no limit.
-
     """
 
     def __init__(
@@ -248,11 +267,11 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
         if self.max_requests is not None and self.num_requests >= self.max_requests:
             if not self._warned:  # Print the warning only once
                 logging.warning(
-                    f"Reached the maximum number of requests ({self.max_requests}). From now on, using random choice instead. "
+                    f"Reached the maximum number of requests ({self.max_requests}). From now on, returning -1 instead. "
                     " To increase the limit, set `max_requests` to a higher value, or to `None` for no limit."
                 )
                 self._warned = True
-            return [random.choice([0, 1]) for _ in prompts]
+            return [-1] * len(prompts)
 
         # Shuffle the order of the completions to avoid positional bias
         if shuffle_order:
@@ -268,8 +287,8 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
             if response in ["0", "1"]:
                 return int(response)
             else:
-                logging.warning(f"Invalid response from the model: {response}, using random choice instead.")
-                return random.choice([0, 1])
+                logging.debug(f"Invalid response from the judge model: '{response}'. Returning -1.")
+                return -1
 
         # Call the completions concurrently
         with concurrent.futures.ThreadPoolExecutor() as executor:

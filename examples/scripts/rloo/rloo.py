@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import shutil
 
 from accelerate import PartialState
@@ -11,7 +25,7 @@ from transformers import (
 
 from trl import ModelConfig
 from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
-from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 """
@@ -24,7 +38,8 @@ python -i examples/scripts/rloo/rloo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --non_eos_penalty \
+    --missing_eos_penalty 1.0
+
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/rloo/rloo.py \
     --output_dir models/minimal/rloo \
@@ -40,7 +55,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --reward_model_path EleutherAI/pythia-1b-deduped \
     --local_rollout_forward_batch_size 1 \
     --deepspeed3 \
-    --non_eos_penalty \
+    --missing_eos_penalty 1.0
 """
 
 
@@ -60,7 +75,7 @@ if __name__ == "__main__":
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         config.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
     )

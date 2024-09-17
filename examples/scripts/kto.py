@@ -20,7 +20,7 @@ python examples/scripts/kto.py \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
-    --learning_rate 1e-5 \
+    --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -36,7 +36,7 @@ python examples/scripts/kto.py \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --learning_rate 1e-4 \
+    --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -59,7 +59,7 @@ from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
+from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_unpair_preference_dataset, setup_chat_format
 
 
 # Define and parse arguments.
@@ -97,10 +97,17 @@ if __name__ == "__main__":
     # Load the dataset
     dataset = load_dataset(script_args.dataset_name)
 
+    # If needed, reformat a DPO-formatted dataset (prompt, chosen, rejected) to a KTO-format (prompt, completion, label)
+    dataset = maybe_unpair_preference_dataset(dataset, num_proc=kto_args.dataset_num_proc)
+
     # Apply chat template
     def format_dataset(example):
-        example["prompt"] = tokenizer.apply_chat_template(example["prompt"], tokenize=False)
-        example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
+        if isinstance(example["completion"], str):
+            example["prompt"] = tokenizer.apply_chat_template(example["prompt"], tokenize=False)
+            example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
+        else:
+            example["prompt"] = tokenizer.apply_chat_template(example["completion"][:-1], tokenize=False)
+            example["completion"] = tokenizer.apply_chat_template([example["completion"][-1]], tokenize=False)
         return example
 
     # Compute that only on the main process for faster data processing.

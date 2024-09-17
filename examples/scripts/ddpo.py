@@ -24,6 +24,7 @@ python examples/scripts/ddpo.py \
     --tracker_project_name="stable_diffusion_training" \
     --log_with="wandb"
 """
+
 import os
 from dataclasses import dataclass, field
 
@@ -32,10 +33,9 @@ import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
-from transformers import CLIPModel, CLIPProcessor, HfArgumentParser
+from transformers import CLIPModel, CLIPProcessor, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
-from trl.import_utils import is_npu_available, is_xpu_available
 
 
 @dataclass
@@ -93,7 +93,7 @@ class AestheticScorer(torch.nn.Module):
             cached_path = hf_hub_download(model_id, model_filename)
         except EntryNotFoundError:
             cached_path = os.path.join(model_id, model_filename)
-        state_dict = torch.load(cached_path, map_location=torch.device("cpu"))
+        state_dict = torch.load(cached_path, map_location=torch.device("cpu"), weights_only=True)
         self.mlp.load_state_dict(state_dict)
         self.dtype = dtype
         self.eval()
@@ -115,9 +115,9 @@ def aesthetic_scorer(hub_model_id, model_filename):
         model_filename=model_filename,
         dtype=torch.float32,
     )
-    if is_npu_available():
+    if is_torch_npu_available():
         scorer = scorer.npu()
-    elif is_xpu_available():
+    elif is_torch_xpu_available():
         scorer = scorer.xpu()
     else:
         scorer = scorer.cuda()

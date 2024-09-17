@@ -21,7 +21,7 @@ from subprocess import CalledProcessError
 from rich.console import Console
 
 
-SUPPORTED_COMMANDS = ["sft", "dpo", "chat"]
+SUPPORTED_COMMANDS = ["sft", "dpo", "chat", "kto"]
 
 
 def main():
@@ -40,10 +40,6 @@ def main():
             )
 
         trl_examples_dir = os.path.dirname(__file__)
-
-    # Force-use rich if the `TRL_USE_RICH` env var is not set
-    if "TRL_USE_RICH" not in os.environ:
-        os.environ["TRL_USE_RICH"] = "1"
 
     if command_name == "chat":
         command = f"""

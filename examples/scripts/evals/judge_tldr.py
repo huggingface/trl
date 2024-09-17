@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -48,13 +62,13 @@ parser = HfArgumentParser(ScriptArguments)
 args = parser.parse_args_into_dataclasses()[0]
 
 # Load the dataset
-raw_dataset = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style", split="test")
+raw_dataset = load_dataset("trl-lib/tldr", split="validation")
 if args.num_examples is not None:
     raw_dataset = raw_dataset.select(range(args.num_examples))
 
 # Extract the prompts and reference completions
 prompts = raw_dataset["prompt"]
-reference_completions = [message[-1]["content"] for message in raw_dataset["messages"]]
+reference_completions = raw_dataset["completion"]
 
 # Generate the model completions
 sampling_params = SamplingParams(temperature=0.0, top_p=0.95, max_tokens=200)  # very generous max token length

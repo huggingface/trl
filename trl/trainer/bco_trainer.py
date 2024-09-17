@@ -39,11 +39,13 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
+    is_sklearn_available,
+    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_peft_available, is_sklearn_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .bco_config import BCOConfig
 from .utils import (
@@ -58,7 +60,6 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-
 
 if is_wandb_available():
     import wandb
@@ -148,11 +149,11 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
 
     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
     in case the prompt + completion responses is/are too long. First
-        we truncate the prompt; if we're still too long, we truncate the completion.
+    we truncate the prompt; if we're still too long, we truncate the completion.
 
     We also create the labels for the completion responses, which are of length equal to
-        the sum of the length of the prompt and the completion response, with
-        label_pad_token_id  for the prompt tokens.
+    the sum of the length of the prompt and the completion response, with
+    label_pad_token_id  for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -327,8 +328,19 @@ class BCOTrainer(Trainer):
         embedding_func: Optional[Callable] = None,
         embedding_tokenizer: Optional[PreTrainedTokenizerBase] = None,
     ):
-        if type(args) == TrainingArguments:
-            raise ValueError("Please use `BCOConfig` instead TrainingArguments.")
+        if not is_sklearn_available():
+            raise ImportError(
+                "BCOTrainer requires the scikit-learn library. Please install it with `pip install scikit-learn`."
+            )
+
+        if type(args) is TrainingArguments:
+            raise ValueError("Please use `BCOConfig` instead `TrainingArguments`.")
+
+        if not isinstance(model, str) and ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+            )
 
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
