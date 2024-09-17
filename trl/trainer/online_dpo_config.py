@@ -44,7 +44,8 @@ class OnlineDPOConfig(TrainingArguments):
         beta (`float` or `list[float]`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
-            the [paper](https://huggingface.co/papers/2310.12036). If a list of floats is provided then the β is selected for each new epoch and the last β is used for the rest of the epochs.
+            the [paper](https://huggingface.co/papers/2310.12036). If a list of floats is provided then the β is
+            selected for each new epoch and the last β is used for the rest of the epochs.
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
