@@ -80,7 +80,7 @@ Online DPO only requires a [prompt-only dataset](dataset_format#preference) (unl
 
 Make sure that the SFT model and reward model use the _same_ chat template. Otherwise, you may find the model completions are scored incorrectly during training.
 
-### Encourage the model to generate finish the completion within a given length
+### Encourage EOS token generation
 
 We can want the model to generate completion within a given length. During the learning, the model will generate completion up to the maximum completion length specified in the `max_new_tokens` argument of [`OnlineDPOConfig`]. I you want to penalize for not generating an EOS token before the maximum completion length, you can use the `missing_eos_penalty` argument of [`OnlineDPOConfig`]:
 
