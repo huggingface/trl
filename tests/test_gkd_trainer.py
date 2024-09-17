@@ -17,14 +17,11 @@ import unittest
 
 import torch
 import torch.nn.functional as F
-from datasets import Dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    GenerationConfig,
-)
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl import GKDConfig, GKDTrainer
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 class TestGKDTrainer(unittest.TestCase):
@@ -34,7 +31,7 @@ class TestGKDTrainer(unittest.TestCase):
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
         cls.model = AutoModelForCausalLM.from_pretrained("gpt2")
         cls.generation_config = GenerationConfig(
-            max_length=20,
+            max_new_tokens=20,
             num_return_sequences=1,
             pad_token_id=cls.tokenizer.pad_token_id,
             eos_token_id=cls.tokenizer.eos_token_id,
@@ -51,7 +48,7 @@ class TestGKDTrainer(unittest.TestCase):
 
         # Set temperature to 0 for deterministic output
         deterministic_generation_config = GenerationConfig(
-            max_length=30,
+            max_new_tokens=30,
             num_return_sequences=1,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
@@ -62,7 +59,7 @@ class TestGKDTrainer(unittest.TestCase):
             self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
         )
 
-        new_input_ids, new_attention_mask = outputs
+        new_input_ids, new_attention_mask, new_labels = outputs
 
         # Decode the generated outputs
         generated_texts = self.tokenizer.batch_decode(new_input_ids, skip_special_tokens=True)
@@ -79,13 +76,17 @@ class TestGKDTrainer(unittest.TestCase):
             self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
         )
 
-        new_input_ids2, new_attention_mask2 = outputs2
+        new_input_ids2, new_attention_mask2, new_labels2 = outputs2
 
         # Check if the two generations are identical
         self.assertTrue(torch.all(new_input_ids.eq(new_input_ids2)), "Deterministic generations are not identical")
         self.assertTrue(
             torch.all(new_attention_mask.eq(new_attention_mask2)),
             "Attention masks for deterministic generations are not identical",
+        )
+        self.assertTrue(
+            torch.all(new_labels.eq(new_labels2)),
+            "Labels for deterministic generations are not identical",
         )
 
     def test_generate_on_policy_outputs(self):
@@ -103,21 +104,24 @@ class TestGKDTrainer(unittest.TestCase):
 
         # Check that outputs is a tuple of three tensors
         self.assertIsInstance(outputs, tuple)
-        self.assertEqual(len(outputs), 2)
+        self.assertEqual(len(outputs), 3)
 
-        new_input_ids, new_attention_mask = outputs
+        new_input_ids, new_attention_mask, new_labels = outputs
 
         # Check shapes
         batch_size = len(prompts)
         self.assertEqual(new_input_ids.shape[0], batch_size)
         self.assertEqual(new_attention_mask.shape[0], batch_size)
+        self.assertEqual(new_labels.shape[0], batch_size)
 
         # Check types
         self.assertIsInstance(new_input_ids, torch.Tensor)
         self.assertIsInstance(new_attention_mask, torch.Tensor)
+        self.assertIsInstance(new_labels, torch.Tensor)
 
         # Check that new_input_ids and new_attention_mask have the same shape
         self.assertEqual(new_input_ids.shape, new_attention_mask.shape)
+        self.assertEqual(new_labels.shape, new_attention_mask.shape)
 
 
 class TestGeneralizedJSDLoss(unittest.TestCase):
@@ -205,75 +209,7 @@ class GKDTrainerTester(unittest.TestCase):
 
         # Ensure the tokenizer has a chat template
         if not hasattr(self.tokenizer, "chat_template") or self.tokenizer.chat_template is None:
-            self.tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}"
-
-        self.dummy_dataset = Dataset.from_dict(
-            {
-                "question": [
-                    "Does llamas know how to code?",
-                    "Does llamas know how to fly?",
-                    "Does llamas know how to talk?",
-                    "Does llamas know how to code?",
-                    "Does llamas know how to fly?",
-                    "Does llamas know how to talk?",
-                    "Does llamas know how to swim?",
-                ],
-                "answer": [
-                    "Yes, llamas are very good at coding.",
-                    "No, llamas can't fly.",
-                    "Yes, llamas are very good at talking.",
-                    "Yes, llamas are very good at coding.",
-                    "No, llamas can't fly.",
-                    "Yes, llamas are very good at talking.",
-                    "No, llamas can't swim.",
-                ],
-                "text": [
-                    "### Question: Does llamas know how to code?\n ### Answer: Yes, llamas are very good at coding.",
-                    "### Question: Does llamas know how to fly?\n ### Answer: No, llamas can't fly.",
-                    "### Question: Does llamas know how to talk?\n ### Answer: Yes, llamas are very good at talking.",
-                    "### Question: Does llamas know how to code?\n ### Answer: Yes, llamas are very good at coding.",
-                    "### Question: Does llamas know how to fly?\n ### Answer: No, llamas can't fly.",
-                    "### Question: Does llamas know how to talk?\n ### Answer: Yes, llamas are very good at talking.",
-                    "### Question: Does llamas know how to swim?\n ### Answer: No, llamas can't swim.",
-                ],
-            }
-        )
-        self.dummy_chatml_dataset = Dataset.from_dict(
-            {
-                "messages": [
-                    [
-                        {"role": "system", "content": "You are helpful"},
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                        {"role": "user", "content": "What is 2+2?"},
-                        {"role": "assistant", "content": "4"},
-                        {"role": "user", "content": "What is 3+3?"},
-                        {"role": "assistant", "content": "6"},
-                    ],
-                    [
-                        {"role": "system", "content": "You are helpful"},
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                ]
-            }
-        )
-        self.dummy_instruction_dataset = Dataset.from_list(
-            [
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-            ]
-        )
+            self.tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     def test_gkd_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -287,13 +223,14 @@ class GKDTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
             )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
             trainer = GKDTrainer(
                 model=self.model_id,
                 teacher_model=self.model_id,
                 args=training_args,
-                train_dataset=self.dummy_chatml_dataset,
-                eval_dataset=self.dummy_chatml_dataset,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 tokenizer=self.tokenizer,
             )
 

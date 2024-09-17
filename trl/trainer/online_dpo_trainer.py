@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import warnings
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -11,16 +25,20 @@ from accelerate import PartialState
 from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
-from transformers import DataCollator, GenerationConfig, PreTrainedTokenizerBase, Trainer, TrainerCallback
+from transformers import (
+    DataCollator,
+    GenerationConfig,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainerCallback,
+    is_apex_available,
+)
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
-from transformers.utils import (
-    is_apex_available,
-    is_sagemaker_mp_enabled,
-    logging,
-)
+from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
+from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
@@ -34,6 +52,9 @@ from .utils import (
     truncate_right,
 )
 
+
+if is_peft_available():
+    from peft import PeftModel, get_peft_model
 
 if is_apex_available():
     from apex import amp
@@ -55,12 +76,12 @@ class OnlineDPOTrainer(Trainer):
     Initialize OnlineDPOTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model (`transformers.PreTrainedModel` or `torch.nn.Module`):
             The model to train, preferably an `AutoModelForCausalLM`.
-        ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
-        reward_model (`transformers.PreTrainedModel`):
+        ref_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
+            The reference model to use for training. If None is specified, the reference model will be created from
+            the model.
+        reward_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.
@@ -75,8 +96,8 @@ class OnlineDPOTrainer(Trainer):
             The dataset to use for evaluation.
         tokenizer (`transformers.PreTrainedTokenizerBase`):
             The tokenizer to use for training. This argument is required if you want to use the default data collator.
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
+        peft_config (`Dict`):
+            The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
@@ -92,16 +113,16 @@ class OnlineDPOTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module] = None,
-        ref_model: Union[PreTrainedModel, nn.Module] = None,
-        reward_model: Optional[nn.Module] = None,
+        model: Union[PreTrainedModel, nn.Module],
+        ref_model: Union[PreTrainedModel, nn.Module, None] = None,
+        reward_model: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
         args: Optional[OnlineDPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset], "datasets.Dataset"]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
+        peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
@@ -109,7 +130,10 @@ class OnlineDPOTrainer(Trainer):
     ) -> None:
 
         if ref_model is model:
-            raise ValueError("`policy` and `ref_policy` are the same Python object but should not be. You probably want two copies of the same model.")
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, either omit the `ref_model` argument or pass `None`."
+            )
 
         self.ref_model = ref_model
 
@@ -133,14 +157,43 @@ class OnlineDPOTrainer(Trainer):
         if tokenizer is None:
             raise ValueError("`tokenizer` must be provided.")
 
-        # We don't optimize the reward model model nor the ref model, so we can set them to eval mode
-        self.ref_model.eval()
-        if self.reward_model is not None:
-            self.reward_model.eval()
+        # Convert to PEFT model if peft_config is provided
+        if peft_config is not None:
+            # Check if PEFT is available
+            if not is_peft_available():
+                raise ImportError(
+                    "PEFT is not available and passed `peft_config`. Please install PEFT with "
+                    "`pip install peft` to use it."
+                )
+
+            # If the model is already a PeftModel, we need to merge and unload it.
+            # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
+            if isinstance(model, PeftModel):
+                model = model.merge_and_unload()
+
+            # Get peft model with the given config
+            model = get_peft_model(model, peft_config)
 
         # Disable dropout in the model if specified
         if args.disable_dropout:
             disable_dropout_in_model(model)
+
+        # Handle the ref_model
+        # Usually, the user wants the ref model to be the initial version of the model. When using PEFT, it's easy to
+        # get the ref model, as it's just the model with a disabled adapter. When not using PEFT, we need to create
+        # the ref model from the model by copying it and disable the gradients and set it in evaluation mode.
+        if ref_model is None:  # No ref model provided, the most common case
+            if peft_config is None:
+                self.ref_model = create_reference_model(model)  # copy, disable gradients, set eval mode
+            else:
+                self.ref_model = None  # we don't need a ref model here, we can just disable the adapter.
+        else:  # rare case, the user provided a ref model
+            self.ref_model = ref_model
+            self.ref_model.eval()
+
+        # Disable the gradient and set the reward model in eval mode
+        if self.reward_model is not None:
+            self.reward_model.eval()
 
         # Define the collator is not provided
         if data_collator is None:
@@ -169,11 +222,11 @@ class OnlineDPOTrainer(Trainer):
             "logps/chosen": [],
             "logps/rejected": [],
             "val/contain_eos_token": [],
+            "beta": [],
         }
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
-            min_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
             top_k=0,
             top_p=1.0,
@@ -188,12 +241,13 @@ class OnlineDPOTrainer(Trainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        self._beta = args.beta
 
         # Placed after the super().__init__ because we need self.is_deepspeed_enabled and self.accelerator
         if self.is_deepspeed_enabled:
@@ -203,9 +257,18 @@ class OnlineDPOTrainer(Trainer):
                 )
             self.ref_model = prepare_deepspeed(self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16)
         else:
-            self.ref_model = self.ref_model.to(self.accelerator.device)
+            if self.ref_model is not None:
+                self.ref_model = self.ref_model.to(self.accelerator.device)
             if self.reward_model is not None:
                 self.reward_model = self.reward_model.to(self.accelerator.device)
+
+    @property
+    def beta(self):
+        if isinstance(self._beta, list):
+            epoch = self.state.epoch
+            return self._beta[epoch] if epoch < len(self._beta) else self._beta[-1]
+        else:
+            return self._beta
 
     @staticmethod
     def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> Dict[str, Any]:
@@ -266,9 +329,7 @@ class OnlineDPOTrainer(Trainer):
         eval_dataset = (
             self.eval_dataset[eval_dataset]
             if isinstance(eval_dataset, str)
-            else eval_dataset
-            if eval_dataset is not None
-            else self.eval_dataset
+            else eval_dataset if eval_dataset is not None else self.eval_dataset
         )
         data_collator = self.data_collator
 
@@ -331,14 +392,17 @@ class OnlineDPOTrainer(Trainer):
 
         # Same for the reference model
         with torch.no_grad():
-            ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-        ref_logits = ref_output.logits[:, context_length - 1 : -1]
-        ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
-        ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
-        del ref_output, ref_logits, ref_all_logprobs  # free memory
+            if self.ref_model is not None:
+                ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+            else:  # peft case: we just need to disable the adapter
+                with self.model.disable_adapter():
+                    ref_output = self.model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+            ref_logits = ref_output.logits[:, context_length - 1 : -1]
+            ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
+            ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
+            del ref_output, ref_logits, ref_all_logprobs  # free memory
 
-        # Get the reward from the reward model
-        with torch.no_grad():
+            # Get the reward from the reward model
             _, scores, _ = get_reward(
                 self.reward_model, prompt_completion_ids, self.tokenizer.pad_token_id, context_length
             )
@@ -348,11 +412,6 @@ class OnlineDPOTrainer(Trainer):
         contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
         if self.args.missing_eos_penalty is not None:
             scores[~contain_eos_token] -= self.args.missing_eos_penalty
-
-        # Replace the logprobs of the padding tokens by 1.0
-        padding_mask = ~completion_mask.bool()
-        logprobs = logprobs.masked_fill(padding_mask, 1.0)
-        ref_logprobs = ref_logprobs.masked_fill(padding_mask, 1.0)
 
         # Split the scores in 2 (the prompts of the first half are the same as the second half)
         first_half, second_half = scores.split(num_examples)
@@ -367,6 +426,9 @@ class OnlineDPOTrainer(Trainer):
         cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)  # cr = chosen and rejected
         cr_logprobs = logprobs[cr_indices]
         cr_ref_logprobs = ref_logprobs[cr_indices]
+
+        # mask out the padding tokens
+        padding_mask = ~completion_mask.bool()
         cr_padding_mask = padding_mask[cr_indices]
 
         cr_logprobs_sum = (cr_logprobs * ~cr_padding_mask).sum(1)
@@ -381,9 +443,9 @@ class OnlineDPOTrainer(Trainer):
         logits = pi_logratios - ref_logratios
 
         if self.args.loss_type == "sigmoid":
-            losses = -F.logsigmoid(self.args.beta * logits)
+            losses = -F.logsigmoid(self.beta * logits)
         elif self.args.loss_type == "ipo":
-            losses = (logits - 1 / (2 * self.args.beta)) ** 2
+            losses = (logits - 1 / (2 * self.beta)) ** 2
         else:
             raise NotImplementedError(f"invalid loss type {self.loss_type}")
 
@@ -397,7 +459,7 @@ class OnlineDPOTrainer(Trainer):
         kl = logprobs - ref_logprobs
         mean_kl = kl.sum(1).mean()
         self.stats["objective/kl"].append(self.accelerator.gather(mean_kl).mean().item())
-        non_score_reward = (-self.args.beta * kl).sum(1)
+        non_score_reward = (-self.beta * kl).sum(1)
         mean_non_score_reward = non_score_reward.mean()
         self.stats["objective/non_score_reward"].append(self.accelerator.gather(mean_non_score_reward).mean().item())
         rlhf_reward = scores + non_score_reward
@@ -406,16 +468,17 @@ class OnlineDPOTrainer(Trainer):
         self.stats["objective/entropy"].append(self.accelerator.gather(mean_entropy).mean().item())
         scores_margin = scores[chosen_indices] - scores[rejected_indices]
         self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
-        chosen_rewards = self.args.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
+        chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
         gathered_chosen_rewards = self.accelerator.gather(chosen_rewards)
         self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
-        rejected_rewards = self.args.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
+        rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum)
         gathered_rejected_rewards = self.accelerator.gather(rejected_rewards)
         self.stats["rewards/rejected"].append(gathered_rejected_rewards.mean().item())
         margin = gathered_chosen_rewards - gathered_rejected_rewards
         self.stats["rewards/margins"].append(margin.mean().item())
         accuracy = margin > 0
         self.stats["rewards/accuracies"].append(accuracy.float().mean().item())
+        self.stats["beta"].append(self.beta)
 
         if (
             self.args.torch_empty_cache_steps is not None

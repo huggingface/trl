@@ -28,9 +28,10 @@ from huggingface_hub.utils import (
     RepositoryNotFoundError,
 )
 from safetensors.torch import load_file as safe_load_file
-from transformers import PreTrainedModel
+from transformers import GenerationMixin, PreTrainedModel, is_torch_npu_available, is_torch_xpu_available
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_npu_available, is_peft_available, is_transformers_greater_than, is_xpu_available
+from ..import_utils import is_transformers_greater_than
 
 
 if is_peft_available():
@@ -403,9 +404,9 @@ class PreTrainedModelWrapper(nn.Module):
                 The current device.
         """
         state = PartialState()
-        if is_xpu_available():
+        if is_torch_xpu_available():
             return f"xpu:{state.local_process_index}"
-        elif is_npu_available():
+        elif is_torch_npu_available():
             return f"npu:{state.local_process_index}"
         else:
             return state.local_process_index if torch.cuda.is_available() else "cpu"
@@ -676,3 +677,58 @@ def create_reference_model(
         logging.warning("Pattern passed or found, but no layers matched in the model. Check for a typo.")
 
     return ref_model.eval()
+
+
+class GeometricMixtureWrapper(GenerationMixin):
+    r"""
+    Geometric Mixture generation wrapper that samples from the logits of two model's geometric mixture.
+
+    Args:
+        model (`PreTrainedModel`): The model to be wrapped.
+        ref_model (`PreTrainedModel`): The reference model.
+        generation_config (`GenerationConfig`): The generation config.
+        mixture_coef (`float`, *optional* - default: 0.5): The mixture coefficient.
+    """
+
+    main_input_name = "input_ids"
+    _supports_cache_class = False
+    _supports_static_cache = False
+
+    def __init__(self, model, ref_model, generation_config, mixture_coef=0.5, device=None):
+        super().__init__()
+
+        self.model = model.eval()
+        self.config = model.config
+        self.ref_model = ref_model.eval()
+        self.generation_config = generation_config
+        self.mixture_coef = mixture_coef
+        self.device = device
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    @torch.no_grad()
+    def forward(self, *args, **kwargs):
+        model_outputs = self.model(*args, **kwargs)
+        model_logits = model_outputs.logits
+        ref_model_logits = self.ref_model(*args, **kwargs).logits
+
+        model_outputs.logits = torch.nn.functional.log_softmax(
+            self.mixture_coef * ref_model_logits + (1 - self.mixture_coef) * model_logits, dim=-1
+        )
+
+        return model_outputs
+
+    def prepare_inputs_for_generation(self, *args, **kwargs):
+        # turn off cache in the generation config
+        kwargs["use_cache"] = False
+        model_inputs = self.model.prepare_inputs_for_generation(*args, **kwargs)
+        _ = self.ref_model.prepare_inputs_for_generation(*args, **kwargs)
+
+        return model_inputs
+
+    def _validate_model_class(self):
+        self.model._validate_model_class()
+
+    def _validate_model_kwargs(self, model_kwargs):
+        return self.model._validate_model_kwargs(model_kwargs)

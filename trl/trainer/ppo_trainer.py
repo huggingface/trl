@@ -35,6 +35,8 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
+    is_torch_npu_available,
+    is_torch_xpu_available,
 )
 
 from ..core import (
@@ -52,7 +54,7 @@ from ..core import (
     stack_dicts,
     stats_to_np,
 )
-from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
+from ..import_utils import is_torch_greater_2_0
 from ..models import (
     SUPPORTED_ARCHITECTURES,
     PreTrainedModelWrapper,
@@ -379,9 +381,9 @@ class PPOTrainer(BaseTrainer):
         if not getattr(self.model, "is_sequential_parallel", False):
             self.current_device = self.accelerator.device
         else:
-            if is_xpu_available():
+            if is_torch_xpu_available():
                 self.current_device = torch.device("xpu:0")
-            elif is_npu_available():
+            elif is_torch_npu_available():
                 self.current_device = torch.device("npu:0")
             else:
                 self.current_device = torch.device("cuda:0")

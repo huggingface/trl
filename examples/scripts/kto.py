@@ -20,7 +20,7 @@ python examples/scripts/kto.py \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
-    --learning_rate 1e-5 \
+    --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -36,7 +36,7 @@ python examples/scripts/kto.py \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --learning_rate 1e-4 \
+    --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \

@@ -28,9 +28,9 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_utils import EvalLoopOutput
+from transformers.utils import is_peft_available
 
 from ..core import PPODecorators
-from ..import_utils import is_peft_available
 from .utils import trl_sanitze_kwargs_for_tagging
 
 

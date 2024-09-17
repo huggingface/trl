@@ -24,11 +24,10 @@ from accelerate import Accelerator, PartialState
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoTokenizer, HfArgumentParser, pipeline
+from transformers import AutoTokenizer, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
-from trl.import_utils import is_npu_available, is_xpu_available
 
 
 tqdm.pandas()
@@ -142,9 +141,9 @@ ppo_trainer = PPOTrainer(ppo_config, model, ref_model, tokenizer, dataset=datase
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
-    if is_xpu_available():
+    if is_torch_xpu_available():
         device = "xpu:0"
-    elif is_npu_available():
+    elif is_torch_npu_available():
         device = "npu:0"
     else:
         device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug

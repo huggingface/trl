@@ -42,6 +42,8 @@ _import_structure = {
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
     "model_config": ["ModelConfig"],
+    "nash_md_config": ["NashMDConfig"],
+    "nash_md_trainer": ["NashMDTrainer"],
     "online_dpo_config": ["OnlineDPOConfig"],
     "online_dpo_trainer": ["OnlineDPOTrainer"],
     "xpo_config": ["XPOConfig"],
@@ -62,7 +64,7 @@ _import_structure = {
     "ddpo_config": ["DDPOConfig"],
     "gkd_trainer": ["GKDTrainer"],
     "gkd_config": ["GKDConfig"],
-    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
+    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback", "LogCompletionsCallback"],
     "judges": [
         "BaseJudge",
         "BaseRankJudge",
@@ -114,6 +116,8 @@ if TYPE_CHECKING:
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
     from .model_config import ModelConfig
+    from .nash_md_config import NashMDConfig
+    from .nash_md_trainer import NashMDTrainer
     from .online_dpo_config import OnlineDPOConfig
     from .online_dpo_trainer import OnlineDPOTrainer
     from .xpo_config import XPOConfig
@@ -132,7 +136,7 @@ if TYPE_CHECKING:
     from .sft_trainer import SFTTrainer
     from .gkd_trainer import GKDTrainer
     from .gkd_config import GKDConfig
-    from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
+    from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback, LogCompletionsCallback
     from .judges import (
         BaseJudge,
         BaseRankJudge,

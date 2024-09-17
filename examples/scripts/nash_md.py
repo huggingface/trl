@@ -1,4 +1,5 @@
 # flake8: noqa
+
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,29 +16,35 @@
 """
 Usage:
 
-python examples/scripts/dpo_online.py \
+python examples/scripts/nash_md.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
     --learning_rate 5.0e-7 \
-    --output_dir pythia-1b-tldr-online-dpo \
-    --per_device_train_batch_size 8 \
-    --gradient_accumulation_steps 16 \
+    --output_dir pythia-1b-tldr-nash-md \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 32 \
+    --num_train_epochs 3 \
+    --max_new_tokens 64 \
     --warmup_ratio 0.1 \
-    --missing_eos_penalty 1.0
+    --missing_eos_penalty 1.0 \
+    --push_to_hub
 
-With LoRA:
-python examples/scripts/dpo_online.py \
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/nash_md.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
-    --learning_rate 5.0e-6 \
-    --output_dir pythia-1b-tldr-online-dpo \
-    --per_device_train_batch_size 16 \
-    --gradient_accumulation_steps 8 \
+    --learning_rate 5.0e-7 \
+    --output_dir pythia-1b-tldr-nash-md \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 32 \
+    --num_train_epochs 3 \
+    --max_new_tokens 64 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
-    --use_peft
+    --push_to_hub
 """
 
 import torch
@@ -47,20 +54,19 @@ from accelerate import PartialState
 from trl import (
     DPOScriptArguments,
     ModelConfig,
-    OnlineDPOConfig,
-    OnlineDPOTrainer,
+    NashMDConfig,
+    NashMDTrainer,
     get_kbit_device_map,
-    get_peft_config,
     get_quantization_config,
     maybe_apply_chat_template,
     LogCompletionsCallback,
 )
-
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
+
 
 if __name__ == "__main__":
-    parser = TrlParser((DPOScriptArguments, OnlineDPOConfig, ModelConfig))
+    parser = TrlParser((DPOScriptArguments, NashMDConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
     args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
@@ -82,24 +88,21 @@ if __name__ == "__main__":
     model = AutoModelForCausalLM.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
-
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path,
-        num_labels=1,
-        trust_remote_code=model_config.trust_remote_code,
-        **model_kwargs,
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
-
+    reward_model = AutoModelForSequenceClassification.from_pretrained(
+        training_args.reward_model_path, num_labels=1, trust_remote_code=model_config.trust_remote_code
+    )
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         padding_side="left",
         trust_remote_code=model_config.trust_remote_code,
-        **model_kwargs,
     )
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
-    if tokenizer.pad_token_id is None:
+    if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
 
     dataset = load_dataset(args.dataset_name)
 
@@ -108,18 +111,22 @@ if __name__ == "__main__":
             maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
         )
 
-    trainer = OnlineDPOTrainer(
+    trainer = NashMDTrainer(
         model=model,
+        ref_model=ref_model,
         reward_model=reward_model,
         args=training_args,
         train_dataset=dataset[args.dataset_train_split],
         eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
-        peft_config=get_peft_config(model_config),
     )
     generation_config = GenerationConfig(
         max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
     )
     completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
     trainer.add_callback(completions_callback)
+    # train the model
     trainer.train()
+
+    # save the model
+    trainer.save_model(training_args.output_dir)
