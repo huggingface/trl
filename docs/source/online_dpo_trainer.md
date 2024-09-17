@@ -135,13 +135,14 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 * `objective/rlhf_reward`: The mean RLHF reward, which is `scores - non_score_reward`. The `rlhf_reward` is the ultimate objective of online DPO training. If training works as intended, this metric should keep going up.
 * `objective/scores`: The mean scores returned by the reward mode.
 * `objective/scores_margin`: The mean score margin (according to the external reward model) between the chosen and rejected completions.
-* `rewards/accuracies`: The accuracies of the online DPO's implicit reward model.
 * `rewards/chosen`: The mean reward (according to online DPO's implicit reward model)of the chosen completions.
 * `rewards/rejected`: The mean reward (according to online DPO's implicit reward model) of the rejected completions.
+* `rewards/accuracies`: The accuracies of the online DPO's implicit reward model.
 * `rewards/margins`: The mean reward margin (according to online DPO's implicit reward model) between the chosen and rejected completions.
 * `logps/chosen`: The mean log probabilities of the chosen completions.
 * `logps/rejected`: The mean log probabilities of the rejected completions.
 * `val/contain_eos_token`: The fraction of completions which contain an EOS token.
+* `beta`:
 
 ## Benchmark experiments
 
@@ -265,7 +266,6 @@ The online DPO checkpoint gets increasingly more win rate as we scale up the mod
 ## OnlineDPOTrainer
 
 [[autodoc]] OnlineDPOTrainer
-
 
 ## OnlineDPOConfig
 
