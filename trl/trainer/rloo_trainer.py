@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import gc
 import math
 import os
@@ -64,6 +78,12 @@ class RLOOTrainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[List[TrainerCallback]] = None,
     ) -> None:
+        if ref_policy is policy:
+            raise ValueError(
+                "`policy` and `ref_policy` cannot be the same object. If you want `ref_policy` to be the "
+                "same as `policy`, you must mass a copy of it, or `None` if you use peft."
+            )
+
         self.args = config
         args = config
         self.tokenizer = tokenizer
@@ -213,7 +233,6 @@ class RLOOTrainer(Trainer):
         iter_dataloader = iter(repeat_generator())
         generation_config = GenerationConfig(
             max_new_tokens=args.response_length,
-            min_new_tokens=args.response_length,
             temperature=(args.temperature + 1e-7),
             top_k=0.0,
             top_p=1.0,
@@ -330,8 +349,8 @@ class RLOOTrainer(Trainer):
                 # responses not passing that filter will receive a low (fixed) score
                 # only query humans on responses that pass that filter
                 contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
-                if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, args.penalty_reward_value)
+                if args.missing_eos_penalty is not None:
+                    scores[~contain_eos_token] -= self.args.missing_eos_penalty
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw

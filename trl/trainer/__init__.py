@@ -18,6 +18,7 @@
 from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
 
+
 _import_structure = {
     "callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
     "utils": [
@@ -41,19 +42,29 @@ _import_structure = {
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
     "model_config": ["ModelConfig"],
+    "nash_md_config": ["NashMDConfig"],
+    "nash_md_trainer": ["NashMDTrainer"],
     "online_dpo_config": ["OnlineDPOConfig"],
     "online_dpo_trainer": ["OnlineDPOTrainer"],
+    "xpo_config": ["XPOConfig"],
+    "xpo_trainer": ["XPOTrainer"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
+    "ppov2_config": ["PPOv2Config"],
+    "ppov2_trainer": ["PPOv2Trainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer", "compute_accuracy"],
+    "rloo_config": ["RLOOConfig"],
+    "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "base": ["BaseTrainer"],
     "ddpo_config": ["DDPOConfig"],
-    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
+    "gkd_trainer": ["GKDTrainer"],
+    "gkd_config": ["GKDConfig"],
+    "callbacks": ["RichProgressCallback", "SyncRefModelCallback", "WinRateCallback", "LogCompletionsCallback"],
     "judges": [
         "BaseJudge",
         "BaseRankJudge",
@@ -73,7 +84,6 @@ except OptionalDependencyNotAvailable:
     pass
 else:
     _import_structure["ddpo_trainer"] = ["DDPOTrainer"]
-
 
 if TYPE_CHECKING:
     # isort: off
@@ -106,17 +116,27 @@ if TYPE_CHECKING:
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
     from .model_config import ModelConfig
+    from .nash_md_config import NashMDConfig
+    from .nash_md_trainer import NashMDTrainer
     from .online_dpo_config import OnlineDPOConfig
     from .online_dpo_trainer import OnlineDPOTrainer
+    from .xpo_config import XPOConfig
+    from .xpo_trainer import XPOTrainer
     from .orpo_config import ORPOConfig
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
+    from .ppov2_config import PPOv2Config
+    from .ppov2_trainer import PPOv2Trainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
+    from .rloo_config import RLOOConfig
+    from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
-    from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback
+    from .gkd_trainer import GKDTrainer
+    from .gkd_config import GKDConfig
+    from .callbacks import RichProgressCallback, SyncRefModelCallback, WinRateCallback, LogCompletionsCallback
     from .judges import (
         BaseJudge,
         BaseRankJudge,

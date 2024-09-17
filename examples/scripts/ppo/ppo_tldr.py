@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import shutil
 
 from accelerate import PartialState
@@ -9,9 +23,8 @@ from transformers import (
     HfArgumentParser,
 )
 
-from trl import ModelConfig
-from trl.trainer.ppov2_trainer import PPOv2Config, PPOv2Trainer
-from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
+from trl import ModelConfig, PPOv2Config, PPOv2Trainer
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 """
@@ -24,10 +37,9 @@ python examples/scripts/ppo/ppo_tldr.py \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
-    --non_eos_penalty \
+    --missing_eos_penalty 1.0 \
     --stop_token eos \
-    --response_length 53 \
-    --sanity_check
+    --response_length 53
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
@@ -40,8 +52,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
-    --non_eos_penalty \
-    --stop_token eos \
+    --missing_eos_penalty 1.0 \
+    --stop_token eos
 """
 
 
@@ -61,7 +73,7 @@ if __name__ == "__main__":
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     value_model = AutoModelForSequenceClassification.from_pretrained(
         config.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
     )
@@ -78,9 +90,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
-    if config.sanity_check:
-        for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].select(range(1000))
     train_dataset = raw_datasets["train"]
     eval_dataset = raw_datasets["validation"]
 
@@ -98,7 +107,6 @@ if __name__ == "__main__":
         return dataset.map(
             tokenize,
             remove_columns=dataset.column_names,
-            load_from_cache_file=not config.sanity_check,
             num_proc=config.dataset_num_proc,
         )
 

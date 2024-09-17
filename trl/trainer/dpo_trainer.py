@@ -35,12 +35,13 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
+    is_wandb_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
@@ -404,6 +405,12 @@ class DPOTrainer(Trainer):
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
     ):
+        if not isinstance(model, str) and ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+            )
+
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
@@ -882,21 +889,13 @@ class DPOTrainer(Trainer):
         with torch.no_grad(), compte_ref_context_manager:
             if self.ref_model is None:
                 with self.null_ref_context():
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.model, padded_batch)
+                    reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                        self.model, padded_batch
+                    )[:2]
             else:
-                (
-                    reference_chosen_logps,
-                    reference_rejected_logps,
-                    _,
-                    _,
-                    _,
-                ) = self.concatenated_forward(self.ref_model, padded_batch)
+                reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                    self.ref_model, padded_batch
+                )[:2]
 
         return reference_chosen_logps, reference_rejected_logps
 
@@ -1305,21 +1304,13 @@ class DPOTrainer(Trainer):
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            _,
-                            _,
-                            _,
-                        ) = self.concatenated_forward(self.model, batch)
+                        reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                            self.model, batch
+                        )[:2]
                 else:
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.ref_model, batch)
+                    reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                        self.ref_model, batch
+                    )[:2]
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,

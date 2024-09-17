@@ -20,12 +20,12 @@ from typing import Literal, Optional
 
 import numpy as np
 import tyro
+from transformers import is_wandb_available
 from typing_extensions import Annotated
 
 from trl.trainer.utils import exact_div
 
 from ..core import flatten_dict
-from ..import_utils import is_wandb_available
 
 
 JSONDict = Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)]
@@ -52,7 +52,7 @@ class PPOConfig:
             Name of task to use - used only for tracking purposes.
         model_name (`Optional[str]`, *optional*, defaults to `"gpt2"`):
             Name of model to use - used only for tracking purposes.
-        query_dataset (`Optional[str]`, *optional*, defaults to `"imdb"`):
+        query_dataset (`Optional[str]`, *optional*, defaults to `"stanfordnlp/imdb"`):
             Name of dataset to query - used only for tracking purposes.
         reward_model (`Optional[str]`, *optional*, defaults to `"sentiment-analysis:lvwerra/distilbert-imdb"`):
             Reward model to use - used only for tracking purposes.
@@ -148,7 +148,7 @@ class PPOConfig:
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     task_name: Optional[str] = None
     model_name: str = "gpt2"
-    query_dataset: str = "imdb"
+    query_dataset: str = "stanfordnlp/imdb"
     reward_model: str = "sentiment-analysis:lvwerra/distilbert-imdb"
     remove_unused_columns: bool = True
     tracker_kwargs: JSONDict = field(default_factory=dict)
@@ -204,6 +204,10 @@ class PPOConfig:
         optimize_device_cache = optimize_cuda_cache
 
     def __post_init__(self):
+        warnings.warn(
+            "`PPOConfig` is deprecated and will be removed in the future. Please use `PPOv2Config` with `PPOv2Trainer` instead.",
+            FutureWarning,
+        )
         if self.forward_batch_size is not None:
             warnings.warn(
                 "Note that using `forward_batch_size` is deprecated, use `mini_batch_size` instead. By setting it you overwrite `mini_batch_size` which affects both the batch size during forward passes and also the mini batch size for PPO optimization."

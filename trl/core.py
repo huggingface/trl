@@ -22,9 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-from transformers.generation import TopKLogitsWarper, TopPLogitsWarper
-
-from .import_utils import is_npu_available, is_xpu_available
+from transformers import TopKLogitsWarper, TopPLogitsWarper, is_torch_npu_available, is_torch_xpu_available
 
 
 try:
@@ -230,9 +228,9 @@ def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if is_xpu_available():
+    if is_torch_xpu_available():
         torch.xpu.manual_seed_all(seed)
-    elif is_npu_available():
+    elif is_torch_npu_available():
         torch.npu.manual_seed_all(seed)
     else:
         torch.cuda.manual_seed_all(seed)
@@ -258,11 +256,11 @@ class PPODecorators:
     def empty_device_cache(cls):
         yield
         if cls.optimize_device_cache:
-            if is_xpu_available():
+            if is_torch_xpu_available():
                 gc.collect()
                 torch.xpu.empty_cache()
                 gc.collect()
-            elif is_npu_available():
+            elif is_torch_npu_available():
                 gc.collect()
                 torch.npu.empty_cache()
                 gc.collect()

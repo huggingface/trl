@@ -1,12 +1,14 @@
 - sections:
   - local: index
     title: TRL
-  - local: quickstart
-    title: Quickstart
   - local: installation
     title: Installation
+  - local: quickstart
+    title: Quickstart
   - local: clis
     title: Get started with Command Line Interfaces (CLIs)
+  - local: dataset_formats
+    title: Dataset Formats
   - local: how_to_train
     title: PPO Training FAQ
   - local: use_model
@@ -17,9 +19,7 @@
     title: Understanding Logs
   title: Get started
 - sections:
-  - sections:
-    - local: trainer
-      title: Overview
+  - sections: # Sort alphabetically
     - local: alignprop_trainer
       title: AlignProp
     - local: bco_trainer
@@ -32,22 +32,28 @@
       title: DPO
     - local: online_dpo_trainer
       title: Online DPO
-    - local: orpo_trainer
-      title: ORPO
+    - local: gkd_trainer
+      title: GKD
     - local: kto_trainer
       title: KTO
+    - local: nash_md_trainer
+      title: Nash MD
+    - local: orpo_trainer
+      title: ORPO
     - local: ppo_trainer
       title: PPO
     - local: ppov2_trainer
       title: PPOv2
+    - local: reward_trainer
+      title: Reward
     - local: rloo_trainer
       title: RLOO
     - local: sft_trainer
       title: SFT
     - local: iterative_sft_trainer
       title: Iterative SFT
-    - local: reward_trainer
-      title: Reward Model
+    - local: xpo_trainer
+      title: XPO
     title: Trainers
   - local: models
     title: Model Classes
@@ -57,6 +63,8 @@
     title: Judges
   - local: callbacks
     title: Callbacks
+  - local: data_utils
+    title: Data Utilities
   - local: text_environments
     title: Text Environments
   title: API

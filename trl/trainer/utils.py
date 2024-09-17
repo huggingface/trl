@@ -37,12 +37,13 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.utils import (
+    is_peft_available,
     is_torch_mlu_available,
     is_torch_npu_available,
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
+from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
 
@@ -231,9 +232,100 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
 
 @dataclass
+class DataCollatorForChatML:
+    """
+    Data collator for ChatML format datasets.
+    """
+
+    tokenizer: PreTrainedTokenizerBase
+    ignore_index: int = -100
+    max_length: int = None
+    messages_key: str = "messages"
+
+    def __post_init__(self):
+        if self.tokenizer.pad_token_id is None:
+            raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
+        if self.max_length is None:
+            # set a sensible default
+            self.max_length = min(self.tokenizer.model_max_length, 1024)
+
+    def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        prompts = []
+        completions = []
+
+        for example in examples:
+            messages = example[self.messages_key]
+            formatted_chat = self.tokenizer.apply_chat_template(messages, tokenize=False)
+
+            # Split the formatted chat into prompt and completion
+            assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
+            last_assistant_message = assistant_messages[-1]["content"]
+            prompt = formatted_chat.rsplit(last_assistant_message, 1)[0]
+            completion = last_assistant_message
+
+            prompts.append(prompt)
+            completions.append(completion)
+
+        # Tokenize prompts and completions
+        tokenized_prompts = self.tokenizer(
+            prompts, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
+        )
+        tokenized_completions = self.tokenizer(
+            completions, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
+        )
+
+        # Combine prompts and completions
+        input_ids = []
+        attention_mask = []
+        labels = []
+
+        for prompt, completion in zip(tokenized_prompts["input_ids"], tokenized_completions["input_ids"]):
+            combined_input_ids = prompt + completion
+            combined_attention_mask = [1] * len(combined_input_ids)
+
+            # Create labels for one-token ahead task, masking the prompt
+            combined_labels = [self.ignore_index] * len(prompt) + completion[:-1]
+            combined_labels.append(self.tokenizer.eos_token_id)  # Add EOS token as final target
+
+            input_ids.append(combined_input_ids)
+            attention_mask.append(combined_attention_mask)
+            labels.append(combined_labels)
+
+        # first convert to list of tensors
+        input_ids = [torch.tensor(ids) for ids in input_ids]
+        attention_mask = [torch.tensor(mask) for mask in attention_mask]
+        labels = [torch.tensor(label) for label in labels]
+
+        # pad the input_ids, attention_mask and labels to the same length across the batch
+        input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
+        attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
+        labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
+
+        # pad the tokenized_prompts on the left to the same length convert to tensor first
+        prompts_input_ids = [torch.tensor(ids) for ids in tokenized_prompts["input_ids"]]
+        prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
+
+        # prompt attention mask
+        prompt_attention_mask = pad(
+            [torch.tensor([1] * len(ids)) for ids in tokenized_prompts["input_ids"]],
+            padding_side="left",
+            padding_value=0,
+        )
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+            "prompts": prompts_input_ids,
+            "prompt_attention_mask": prompt_attention_mask,
+        }
+
+
+@dataclass
 class RewardDataCollatorWithPadding:
     r"""
     Reward DataCollator class that pads the inputs to the maximum length of the batch.
+
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
@@ -365,6 +457,7 @@ def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str =
 class DPODataCollatorWithPadding:
     r"""
     DPO DataCollator class that pads the tokenized inputs to the maximum length of the batch.
+
     Args:
         pad_token_id (`int` defaults to 0):
             The tokenizer's pad_token_id.
@@ -450,32 +543,32 @@ class ConstantLengthDataset(IterableDataset):
     The dataset also formats the text before tokenization with a specific format that is provided
     by the user.
 
-        Args:
-            tokenizer (`transformers.PreTrainedTokenizer`):
-                The processor used for processing the data.
-            dataset (`dataset.Dataset`):
-                Dataset with text files.
-            dataset_text_field (`str`, **optional**):
-                Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
-            formatting_func (`Callable`, **optional**):
-                Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-                pattern such as `"### Question: {question} ### Answer: {answer}"`
-            infinite (`bool`, *optional*, defaults to `False`):
-                If True the iterator is reset after dataset reaches end else stops.
-            seq_length (`int`, *optional*, defaults to `1024`):
-                Length of token sequences to return.
-            num_of_sequences (`int`, *optional*, defaults to `1024`):
-                Number of token sequences to keep in buffer.
-            chars_per_token (`int`, *optional*, defaults to `3.6`):
-                Number of characters per token used to estimate number of tokens in text buffer.
-            eos_token_id (`int`, *optional*, defaults to `0`):
-                Id of the end of sequence token if the passed tokenizer does not have an EOS token.
-            shuffle (`bool`, *optional*, defaults to True)
-                Shuffle the examples before they are returned
-            append_concat_token (`bool`, *optional*, defaults to True)
-                If true, appends `eos_token_id` at the end of each sample being packed.
-            add_special_tokens (`bool`, *optional*, defaults to True)
-                If true, tokenizers adds special tokens to each sample being packed.
+    Args:
+        tokenizer (`transformers.PreTrainedTokenizer`):
+            The processor used for processing the data.
+        dataset (`dataset.Dataset`):
+            Dataset with text files.
+        dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
+            Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
+        formatting_func (`Callable`, *optional*):
+            Function that formats the text before tokenization. Usually it is recommended to have follows a certain
+            pattern such as `"### Question: {question} ### Answer: {answer}"`
+        infinite (`bool`, *optional*, defaults to `False`):
+            If True the iterator is reset after dataset reaches end else stops.
+        seq_length (`int`, *optional*, defaults to `1024`):
+            Length of token sequences to return.
+        num_of_sequences (`int`, *optional*, defaults to `1024`):
+            Number of token sequences to keep in buffer.
+        chars_per_token (`int`, *optional*, defaults to `3.6`):
+            Number of characters per token used to estimate number of tokens in text buffer.
+        eos_token_id (`int`, *optional*, defaults to `0`):
+            Id of the end of sequence token if the passed tokenizer does not have an EOS token.
+        shuffle (`bool`, *optional*, defaults to `True`)
+            Shuffle the examples before they are returned
+        append_concat_token (`bool`, *optional*, defaults to `True`)
+            If true, appends `eos_token_id` at the end of each sample being packed.
+        add_special_tokens (`bool`, *optional*, defaults to `True`)
+            If true, tokenizers adds special tokens to each sample being packed.
     """
 
     def __init__(
@@ -543,6 +636,8 @@ class ConstantLengthDataset(IterableDataset):
                     else:
                         more_examples = False
                         break
+            if self.shuffle:
+                random.shuffle(buffer)
             tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
                 "input_ids"
             ]
@@ -557,6 +652,7 @@ class ConstantLengthDataset(IterableDataset):
                 if len(input_ids) == self.seq_length:
                     examples.append(input_ids)
             if self.shuffle:
+                # Shuffle again, otherwise split examples occur in consecutive tensors.
                 random.shuffle(examples)
             for example in examples:
                 self.current_size += 1
@@ -807,7 +903,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
 
 
 def get_kbit_device_map() -> Optional[Dict[str, int]]:
-    if is_xpu_available():
+    if is_torch_xpu_available():
         return {"": f"xpu:{PartialState().local_process_index}"}
     elif torch.cuda.is_available():
         return {"": PartialState().local_process_index}
@@ -846,6 +942,7 @@ def get_exp_cap(value, decimal=4):
     E.g.
       For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
     ```
+
     Args:
         value (`torch.Tensor`):
             The input tensor to obtain the data type
@@ -878,9 +975,7 @@ def print_rich_table(df: pd.DataFrame) -> Table:
 SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
 # SIMPLE_SFT_CHAT_TEMPLATE simply ends things with an EOS token, this helps the SFT model learn to end the completions with EOS tokens
 
-SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}"
-# SIMPLE_QUERY_CHAT_TEMPLATE is a variant of SIMPLE_SFT_CHAT_TEMPLATE, which does not end the content with EOS token. The idea
-# is to have the generated response to end with an EOS token, but the query itself should not end with EOS tokens.
+SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
 
 
 @dataclass
@@ -900,8 +995,6 @@ class OnPolicyConfig(TrainingArguments):
     Parameters:
         run_name (`Optional[str]`, *optional*, defaults to `None`):
             Name of the run.
-        sanity_check (`bool`, *optional*, defaults to `False`):
-            Whether to run in debug mode.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
@@ -920,10 +1013,10 @@ class OnPolicyConfig(TrainingArguments):
             Truncation token id.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
-        penalty_reward_value (`int`, *optional*, defaults to `-1`):
-            Reward value for responses that do not contain `stop_token_id`.
-        non_eos_penalty (`bool`, *optional*, defaults to `False`):
-            Whether to penalize responses that do not contain `stop_token_id`.
+        missing_eos_penalty (`Optional[float]`, *optional*, defaults to `None`):
+            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
+            to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
+            value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
         world_size (`Optional[int]`, *optional*, defaults to `None`):
@@ -943,7 +1036,6 @@ class OnPolicyConfig(TrainingArguments):
     """
 
     run_name: Optional[str] = None
-    sanity_check: bool = False
     dataset_num_proc: Optional[int] = None
     num_mini_batches: int = 1
     total_episodes: Optional[int] = None
@@ -953,8 +1045,7 @@ class OnPolicyConfig(TrainingArguments):
     stop_token: Optional[Literal["eos"]] = None
     stop_token_id: Optional[int] = None
     temperature: float = 0.7
-    penalty_reward_value: int = -1
-    non_eos_penalty: bool = False
+    missing_eos_penalty: Optional[float] = None
     sft_model_path: str = "EleutherAI/pythia-160m"
     world_size: Optional[int] = None
     num_total_batches: Optional[int] = None

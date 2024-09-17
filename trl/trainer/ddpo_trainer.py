@@ -32,7 +32,6 @@ from .utils import PerPromptStatTracker
 
 logger = get_logger(__name__)
 
-
 MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
 library_name: transformers

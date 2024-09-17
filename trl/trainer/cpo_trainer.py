@@ -29,12 +29,18 @@ import torch.nn.functional as F
 from accelerate import PartialState
 from datasets import Dataset
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer
+from transformers import (
+    AutoModelForCausalLM,
+    DataCollator,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    Trainer,
+    is_wandb_available,
+)
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
-from transformers.utils import is_torch_fx_proxy
+from transformers.utils import is_peft_available, is_torch_fx_proxy
 
-from ..import_utils import is_peft_available, is_wandb_available
 from .cpo_config import CPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
@@ -378,11 +384,11 @@ class CPOTrainer(Trainer):
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
         in case the prompt + chosen or prompt + rejected responses is/are too long. First
-            we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
+        we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
 
         We also create the labels for the chosen/rejected responses, which are of length equal to
-            the sum of the length of the prompt and the chosen/rejected response, with
-            label_pad_token_id  for the prompt tokens.
+        the sum of the length of the prompt and the chosen/rejected response, with
+        label_pad_token_id  for the prompt tokens.
         """
         batch = {}
         prompt = feature["prompt"]
