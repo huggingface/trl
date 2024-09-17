@@ -111,15 +111,17 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         # Overwrite the stats dictionary to include NashMD specific statistics
         self.stats = {
-            "logps/chosen": [],
-            "logps/rejected": [],
+            # Remove "non_score_reward", "rlhf_reward", "scores_margin"
+            # Add "mixture_coef"
+            "loss/kl": [],
+            "objective/entropy": [],
+            "loss/score": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
-            "loss/score": [],
-            "loss/kl_div": [],
-            "objective/entropy": [],
-            "rewards/margins": [],
             "rewards/accuracies": [],
+            "rewards/margins": [],
+            "logps/chosen": [],
+            "logps/rejected": [],
             "val/model_contain_eos_token": [],
             "val/ref_contain_eos_token": [],
             "beta": [],
@@ -273,7 +275,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         # Log score
         self.stats["loss/score"].append(gather_mean(score))
         # Log KL divergence
-        self.stats["loss/kl_div"].append(gather_mean(kl_div))
+        self.stats["loss/kl"].append(gather_mean(kl_div))
 
         # Log logprobs
         model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
