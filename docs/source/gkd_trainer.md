@@ -22,9 +22,9 @@ The GKD Trainer is a wrapper around the [`SFTTrainer`] class that takes in a tea
 * `beta`: controls the interpolation in the generalized Jensen-Shannon Divergence.  When `beta=0.0` the loss approximates forward KL divergence, while for `beta=1.0` the loss approximates reverse KL divergence. For values in between [0, 1] it interpolates between the two.
 
 The authors find that on-policy data (high `lmbda`) performs better and the optimal `beta` varied depending on the task and evaluation method.
-> [!WARNING]
-> Make sure that `attn_implementation="flash_attention_2" when training [Gemma models](https://huggingface.co/models?other=gemma2). Otherwise you will encounter NaNs in the logits due to the [soft capping technique](https://huggingface.co/blog/gemma2#soft-capping-and-attention-implementations) adopted by this architecture.
 
+> [!WARNING]
+> Make sure that `attn_implementation="flash_attention_2"` when training [Gemma models](https://huggingface.co/models?other=gemma2). Otherwise you will encounter NaNs in the logits due to the [soft capping technique](https://huggingface.co/blog/gemma2#soft-capping-and-attention-implementations) adopted by this architecture.
 
 The basic API is as follows:
 
