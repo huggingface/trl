@@ -103,7 +103,6 @@ class BCOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
-
     def test_bco_trainer_with_ref_model_is_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
