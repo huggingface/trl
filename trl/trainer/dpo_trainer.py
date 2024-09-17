@@ -123,7 +123,7 @@ def _process_prompt(
         )
         prompt_tokens = []
         for prompt, image in zip(prompts, images):
-            tokens = processor(prompt, images=image, **processor_kwargs)
+            tokens = processor(images=image, text=prompt, **processor_kwargs)
             tokens = {k: v[0] for k, v in tokens.items()}
             if not isinstance(tokens["input_ids"], list):
                 tokens["input_ids"] = tokens["input_ids"].tolist()
@@ -302,7 +302,7 @@ def _build_tokenized_answer(
                 if "add_special_tokens" in inspect.signature(processor).parameters
                 else {}
             )
-            tokenized = processor(text, images=images, **processor_kwargs)
+            tokenized = processor(images=images, text=text, **processor_kwargs)
             tokenized = {k: v[0] for k, v in tokenized.items()}
             if not isinstance(tokenized["input_ids"], list):
                 tokenized["input_ids"] = tokenized["input_ids"].tolist()
