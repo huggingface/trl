@@ -86,6 +86,26 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
+    def test_ref_model_is_model(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+            with self.assertRaises(ValueError):
+                OnlineDPOTrainer(
+                    model=self.model,
+                    ref_model=self.model,  # ref_model can't be the same as model
+                    args=training_args,
+                    tokenizer=self.tokenizer,
+                    train_dataset=dummy_dataset["train"],
+                )
+
     @require_peft
     def test_training_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
