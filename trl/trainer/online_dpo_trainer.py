@@ -128,7 +128,6 @@ class OnlineDPOTrainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ) -> None:
-
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
@@ -329,7 +328,9 @@ class OnlineDPOTrainer(Trainer):
         eval_dataset = (
             self.eval_dataset[eval_dataset]
             if isinstance(eval_dataset, str)
-            else eval_dataset if eval_dataset is not None else self.eval_dataset
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
         )
         data_collator = self.data_collator
 

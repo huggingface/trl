@@ -97,9 +97,10 @@ class PPOv2Trainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[List[TrainerCallback]] = None,
     ) -> None:
-
         if ref_policy is policy:
-            raise ValueError("`policy` and `ref_policy` are the same Python object but should not be. You probably want two copies of the same model.")
+            raise ValueError(
+                "`policy` and `ref_policy` are the same Python object but should not be. You probably want two copies of the same model."
+            )
 
         self.args = config
         args = config
