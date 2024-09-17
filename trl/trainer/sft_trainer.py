@@ -307,12 +307,15 @@ class SFTTrainer(Trainer):
             args.dataset_batch_size = dataset_batch_size
         self.dataset_batch_size = args.dataset_batch_size
 
-        if neftune_noise_alpha is not None:
+        self._trainer_supports_neftune = hasattr(args, "neftune_noise_alpha")
+        if neftune_noise_alpha is not None and self._trainer_supports_neftune:
             args.neftune_noise_alpha = neftune_noise_alpha
             warnings.warn(
                 "You passed a `neftune_noise_alpha` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
             )
-        self.neftune_noise_alpha = args.neftune_noise_alpha
+            # self.neftune_noise_alpha is done at Trainer level
+        elif not self._trainer_supports_neftune:
+            self.neftune_noise_alpha = neftune_noise_alpha
 
         if dataset_text_field is not None:
             warnings.warn(
@@ -424,16 +427,27 @@ class SFTTrainer(Trainer):
 
     @wraps(Trainer.train)
     def train(self, *args, **kwargs):
-        # Activate neftune right before training.
+        # Activate neftune right before training if it's not already activated
         if self.neftune_noise_alpha is not None:
-            self.model = self._trl_activate_neftune(self.model)
+            if not self._trainer_supports_neftune or not hasattr(
+                self.model.get_input_embeddings(), "neftune_noise_alpha"
+            ):
+                self.model = self._trl_activate_neftune(self.model)
 
         output = super().train(*args, **kwargs)
 
         # After training we make sure to retrieve back the original forward pass method
         # for the embedding layer by removing the forward post hook.
         if self.neftune_noise_alpha is not None:
-            self.neftune_hook_handle.remove()
+            if not self._trainer_supports_neftune or hasattr(self.model.get_input_embeddings(), "neftune_noise_alpha"):
+                unwrapped_model = unwrap_model(self.model)
+                if is_peft_available() and isinstance(unwrapped_model, PeftModel):
+                    embeddings = unwrapped_model.base_model.model.get_input_embeddings()
+                else:
+                    embeddings = unwrapped_model.get_input_embeddings()
+
+                self.neftune_hook_handle.remove()
+                del embeddings.neftune_noise_alpha
 
         return output
 
@@ -641,6 +655,10 @@ class SFTTrainer(Trainer):
         else:
             embeddings = unwrapped_model.get_input_embeddings()
 
-        embeddings.neftune_noise_alpha = self.neftune_noise_alpha
-        self.neftune_hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
+        if not hasattr(embeddings, "neftune_noise_alpha"):
+            embeddings.neftune_noise_alpha = self.neftune_noise_alpha
+            hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
+            self.neftune_hook_handle = hook_handle
+        else:
+            warnings.warn("NEFTune appears to be already activated. Skipping activation.")
         return model
