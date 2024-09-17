@@ -128,6 +128,14 @@ class OnlineDPOTrainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ) -> None:
+        if ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, either omit the `ref_model` argument or pass `None`."
+            )
+
+        self.ref_model = ref_model
+
         if reward_model is not None and judge is not None:
             warnings.warn(
                 "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
