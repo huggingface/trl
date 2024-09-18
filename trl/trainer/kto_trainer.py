@@ -1202,7 +1202,7 @@ class KTOTrainer(Trainer):
             metrics["rewards/chosen_sum"] = self.accelerator.gather(chosen_rewards.nansum()).nansum().item()
             metrics["logps/chosen_sum"] = self.accelerator.gather(policy_chosen_logps.nansum()).nansum().item()
             metrics["logits/chosen"] = (
-                self.accelerator.gather(policy_chosen_logits.nansum()).nansum().item() / all_num_chosen#
+                self.accelerator.gather(policy_chosen_logits.nansum()).nansum().item() / all_num_chosen
             )
             metrics["count/chosen"] = all_num_chosen
 
