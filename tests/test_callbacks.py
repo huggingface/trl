@@ -16,6 +16,7 @@ import tempfile
 import unittest
 
 from datasets import load_dataset
+from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
 from trl import BasePairwiseJudge, WinRateCallback
@@ -40,7 +41,7 @@ class TrainerWithRefModel(Trainer):
         self.ref_model = ref_model
 
 
-class WinrateCallbackTester(unittest.TestCase):
+class WinRateCallbackTester(unittest.TestCase):
     def setUp(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
         self.ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
@@ -48,6 +49,14 @@ class WinrateCallbackTester(unittest.TestCase):
         self.tokenizer.pad_token = self.tokenizer.eos_token
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         dataset["train"] = dataset["train"].select(range(8))
+        self.expected_winrates = [
+            {"eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
+            {"eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
+            {"eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
+            {"eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
+            {"eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
+            {"eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
+        ]
 
         def tokenize_function(examples):
             out = self.tokenizer(examples["prompt"], padding="max_length", max_length=16, truncation=True)
@@ -83,14 +92,7 @@ class WinrateCallbackTester(unittest.TestCase):
             trainer.add_callback(win_rate_callback)
             trainer.train()
             winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-            assert winrate_history == [
-                {"eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
-                {"eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
-                {"eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
-                {"eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
-                {"eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
-                {"eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
-            ]
+            self.assertListEqual(winrate_history, self.expected_winrates)
 
     def test_without_ref_model(self):
         # Same as before, but without the ref_model attribute. It should use the model attribute instead
@@ -116,11 +118,37 @@ class WinrateCallbackTester(unittest.TestCase):
             trainer.add_callback(win_rate_callback)
             trainer.train()
             winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-            assert winrate_history == [
-                {"eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
-                {"eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
-                {"eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
-                {"eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
-                {"eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
-                {"eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
-            ]
+            self.assertListEqual(winrate_history, self.expected_winrates)
+
+    def test_lora(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            peft_config = LoraConfig(
+                r=16,
+                lora_alpha=32,
+                lora_dropout=0.05,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            self.model.add_adapter(peft_config)
+            args = TrainingArguments(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                eval_steps=2,  # evaluate every 2 steps
+                per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
+                per_device_eval_batch_size=2,
+                report_to="none",
+            )
+            trainer = Trainer(
+                model=self.model,
+                args=args,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                tokenizer=self.tokenizer,
+            )
+            win_rate_callback = WinRateCallback(
+                judge=self.judge, trainer=trainer, generation_config=self.generation_config
+            )
+            trainer.add_callback(win_rate_callback)
+            trainer.train()
+            winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
+            self.assertListEqual(winrate_history, self.expected_winrates)
