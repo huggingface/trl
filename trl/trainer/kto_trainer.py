@@ -1201,13 +1201,17 @@ class KTOTrainer(Trainer):
         if all_num_chosen > 0:
             metrics["rewards/chosen_sum"] = self.accelerator.gather(chosen_rewards.nansum()).nansum().item()
             metrics["logps/chosen_sum"] = self.accelerator.gather(policy_chosen_logps.nansum()).nansum().item()
-            metrics["logits/chosen"] = self.accelerator.gather(policy_chosen_logits.nansum()).nanmean().item()
+            metrics["logits/chosen"] = (
+                self.accelerator.gather(policy_chosen_logits.nansum()).nansum().item() / all_num_chosen
+            )
             metrics["count/chosen"] = all_num_chosen
 
         if all_num_rejected > 0:
             metrics["rewards/rejected_sum"] = self.accelerator.gather(rejected_rewards.nansum()).nansum().item()
             metrics["logps/rejected_sum"] = self.accelerator.gather(policy_rejected_logps.nansum()).nansum().item()
-            metrics["logits/rejected"] = self.accelerator.gather(policy_rejected_logits.nansum()).nanmean().item()
+            metrics["logits/rejected"] = (
+                self.accelerator.gather(policy_rejected_logits.nansum()).nansum().item() / all_num_rejected
+            )
             metrics["count/rejected"] = all_num_rejected
 
         loss = losses.nanmean()
