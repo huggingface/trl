@@ -18,8 +18,9 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
+from transformers import is_bitsandbytes_available, is_torchvision_available
+
 from ..core import flatten_dict
-from ..import_utils import is_bitsandbytes_available, is_torchvision_available
 
 
 @dataclass

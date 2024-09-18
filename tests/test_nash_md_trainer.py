@@ -19,14 +19,14 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer
+from trl import NashMDConfig, NashMDTrainer
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
-class TestOnlineDPOTrainer(unittest.TestCase):
+class TestNashMDTrainer(unittest.TestCase):
     def setUp(self):
         self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -35,44 +35,21 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def test_training(self):
+    def test_nash_md_trainer_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
+            training_args = NashMDConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
-                learning_rate=5.0e-7,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
                 eval_strategy="steps",
                 report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = OnlineDPOTrainer(
-                model=self.model,
-                reward_model=self.reward_model,
-                args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
-            trainer.train()
-
-            # Check if training loss is available
-            self.assertIn("train_loss", trainer.state.log_history[-1])
-
-    def test_training_with_ref_model(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                learning_rate=5.0e-7,
-                eval_strategy="steps",
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-
-            trainer = OnlineDPOTrainer(
+            trainer = NashMDTrainer(
                 model=self.model,
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
@@ -81,36 +58,17 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
+
             trainer.train()
 
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    def test_ref_model_is_model(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                report_to="none",
-            )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-
-            with self.assertRaises(ValueError):
-                OnlineDPOTrainer(
-                    model=self.model,
-                    ref_model=self.model,  # ref_model can't be the same as model
-                    args=training_args,
-                    tokenizer=self.tokenizer,
-                    train_dataset=dummy_dataset["train"],
-                )
-
     @require_peft
     def test_training_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
+            training_args = NashMDConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -120,7 +78,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = OnlineDPOTrainer(
+            trainer = NashMDTrainer(
                 model=self.model,
                 reward_model=self.reward_model,
                 args=training_args,
@@ -139,7 +97,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
     def test_training_with_peft_and_ref_model(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
+            training_args = NashMDConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -149,7 +107,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = OnlineDPOTrainer(
+            trainer = NashMDTrainer(
                 model=self.model,
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
@@ -171,7 +129,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         # we want only the "train adapter" to be trained
         lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
+            training_args = NashMDConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
@@ -181,7 +139,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = OnlineDPOTrainer(
+            trainer = NashMDTrainer(
                 model=model,
                 reward_model=self.reward_model,
                 args=training_args,

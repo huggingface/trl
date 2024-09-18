@@ -36,12 +36,13 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
+    is_wandb_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_peft_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
@@ -122,7 +123,7 @@ def _process_prompt(
         )
         prompt_tokens = []
         for prompt, image in zip(prompts, images):
-            tokens = processor(prompt, images=image, **processor_kwargs)
+            tokens = processor(images=image, text=prompt, **processor_kwargs)
             tokens = {k: v[0] for k, v in tokens.items()}
             if not isinstance(tokens["input_ids"], list):
                 tokens["input_ids"] = tokens["input_ids"].tolist()
@@ -301,7 +302,7 @@ def _build_tokenized_answer(
                 if "add_special_tokens" in inspect.signature(processor).parameters
                 else {}
             )
-            tokenized = processor(text, images=images, **processor_kwargs)
+            tokenized = processor(images=images, text=text, **processor_kwargs)
             tokenized = {k: v[0] for k, v in tokenized.items()}
             if not isinstance(tokenized["input_ids"], list):
                 tokenized["input_ids"] = tokenized["input_ids"].tolist()
@@ -451,6 +452,12 @@ class DPOTrainer(Trainer):
         reference_free: bool = False,
         force_use_ref_model: bool = False,
     ):
+        if not isinstance(model, str) and ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+            )
+
         if model_init_kwargs is not None:
             warnings.warn(
                 "You passed `model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."

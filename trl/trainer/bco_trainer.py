@@ -39,11 +39,13 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
+    is_sklearn_available,
+    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_peft_available, is_sklearn_available, is_wandb_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .bco_config import BCOConfig
 from .utils import (
@@ -333,6 +335,12 @@ class BCOTrainer(Trainer):
 
         if type(args) is TrainingArguments:
             raise ValueError("Please use `BCOConfig` instead `TrainingArguments`.")
+
+        if not isinstance(model, str) and ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+            )
 
         if args.model_init_kwargs is None:
             model_init_kwargs = {}

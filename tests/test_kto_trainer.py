@@ -18,11 +18,12 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers.testing_utils import require_peft
 
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 
-from .testing_utils import require_no_wandb, require_peft
+from .testing_utils import require_no_wandb
 
 
 class KTOTrainerTester(unittest.TestCase):
@@ -99,6 +100,26 @@ class KTOTrainerTester(unittest.TestCase):
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
+
+    def test_kto_trainer_with_ref_model_is_model(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+
+            with self.assertRaises(ValueError):
+                KTOTrainer(
+                    model=self.model,
+                    ref_model=self.model,  # ref_model can't be the same as model
+                    args=training_args,
+                    tokenizer=self.tokenizer,
+                    train_dataset=dummy_dataset["train"],
+                )
 
     def test_tokenize_and_process_tokens(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

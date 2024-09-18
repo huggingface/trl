@@ -26,13 +26,13 @@ from transformers import (
     AutoTokenizer,
     LlavaForConditionalGeneration,
     TrainingArguments,
+    is_vision_available,
 )
+from transformers.testing_utils import require_peft, require_vision
+from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.import_utils import is_peft_available, is_pil_available
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
-
-from .testing_utils import require_peft, requires_pil
 
 
 def formatting_prompts_func(example):
@@ -51,7 +51,7 @@ def formatting_prompts_func_batched(example):
 if is_peft_available():
     from peft import LoraConfig, PeftModel
 
-if is_pil_available():
+if is_vision_available():
     from PIL import Image as PILImage
 
 
@@ -99,7 +99,7 @@ class SFTTrainerTester(unittest.TestCase):
             "trl-internal-testing/zen", "standard_prompt_completion"
         )
 
-        if is_pil_available():
+        if is_vision_available():
             self.dummy_vsft_instruction_dataset = Dataset.from_dict(
                 {
                     "messages": [
@@ -1159,7 +1159,7 @@ class SFTTrainerTester(unittest.TestCase):
             assert len(trainer.train_dataset["input_ids"]) == len(self.conversational_lm_dataset["train"])
             assert len(trainer.eval_dataset["input_ids"]) == len(self.conversational_lm_dataset["test"])
 
-    @requires_pil
+    @require_vision
     def test_sft_trainer_skip_prepare_dataset(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -1210,7 +1210,7 @@ class SFTTrainerTester(unittest.TestCase):
             )
             assert trainer.train_dataset.features == self.dummy_dataset.features
 
-    @requires_pil
+    @require_vision
     def test_sft_trainer_llava(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
