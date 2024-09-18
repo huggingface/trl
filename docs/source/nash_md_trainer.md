@@ -120,8 +120,8 @@ The logged metrics are as follows:
 * `logps/rejected`: The mean log probabilities of the reference completions.
 * `val/model_contain_eos_token`: The amount of times the model's output contains the eos token.
 * `val/ref_contain_eos_token`: The amount of times the mixture's output contains the eos token.
-* `beta`:
-* `mixture_coef`:
+* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`NashMDConfig`].
+* `mixture_coef`: Logit mixture coefficient for the model and reference model. Typically fixed, but can be made dynamic by passing a list to [`NashMDConfig`].
 
 ## NashMDTrainer
 

@@ -124,8 +124,9 @@ The logged metrics are as follows:
 * `logps/rejected`: The mean log probabilities of the rejected completions.
 * `val/model_contain_eos_token`: The amount of times the model's output contains the eos token.
 * `val/ref_contain_eos_token`: The amount of times the reference's output contains the eos token.
-* `beta`:
-* `mixture_coef`:
+* `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
+* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
+
 
 ## XPOTrainer
 
