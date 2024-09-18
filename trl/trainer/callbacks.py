@@ -47,7 +47,7 @@ def _generate_completions(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
     accelerator: Accelerator,
-    generation_config: GenerationConfig,
+    generation_config: Optional[GenerationConfig],
     batch_size: int = 1,
 ) -> List[str]:
     """

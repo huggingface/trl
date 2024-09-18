@@ -15,6 +15,7 @@ import tempfile
 import unittest
 
 from datasets import load_dataset
+from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
@@ -35,7 +36,8 @@ class TestNashMDTrainer(unittest.TestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def test_nash_md_trainer_training(self):
+    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    def test_nash_md_trainer_training(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
                 output_dir=tmp_dir,
@@ -47,7 +49,7 @@ class TestNashMDTrainer(unittest.TestCase):
                 eval_strategy="steps",
                 report_to="none",
             )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             trainer = NashMDTrainer(
                 model=self.model,

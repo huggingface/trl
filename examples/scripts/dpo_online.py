@@ -43,7 +43,6 @@ python examples/scripts/dpo_online.py \
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
-from accelerate import PartialState
 from trl import (
     DPOScriptArguments,
     ModelConfig,
@@ -52,7 +51,6 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    maybe_apply_chat_template,
     LogCompletionsCallback,
 )
 
@@ -102,11 +100,6 @@ if __name__ == "__main__":
         tokenizer.pad_token = tokenizer.eos_token
 
     dataset = load_dataset(args.dataset_name)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(
-            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
-        )
 
     trainer = OnlineDPOTrainer(
         model=model,

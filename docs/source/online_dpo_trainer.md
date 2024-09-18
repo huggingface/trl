@@ -12,50 +12,102 @@ The current implementation uses reward models for scoring completions -- see [Re
 
 This post-training method was contributed by [Michael Noukhovitch](https://huggingface.co/mnoukhov), [Shengyi Costa Huang](https://huggingface.co/vwxyzjn), [Quentin Gallouédec](https://huggingface.co/qgallouedec), and [Edward Beeching](https://huggingface.co/edbeeching).
 
-## Usage tips
+## Quick start
 
-> [!WARNING]
-> Make sure that the SFT model and reward model use the _same_ chat template. Otherwise, you may find the model completions are scored incorrectly during training.
+This example demonstrates how to train a model using the online DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and the [Qwen 0.5B reward model](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) as the reward model. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 
-The basic API is as follows:
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
+Below is the script to train the model:
 
 ```python
-from datasets import Dataset
+# train_online_dpo.py
+from datasets import load_dataset
 from trl import OnlineDPOConfig, OnlineDPOTrainer
-from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-)
-NUM_DUMMY_SAMPLES = 100
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-# The model to optimise
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-# The reference model to calculate the KL divergence against
-ref_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-# The model to score completions with.
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
+train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-train_dataset = Dataset.from_dict(
-    {"prompt": ["Q: Hi how are you? A:"] * NUM_DUMMY_SAMPLES})
-eval_dataset = Dataset.from_dict(
-    {"prompt": ["Q: What do you like to eat A:"] * NUM_DUMMY_SAMPLES})
-
-args = OnlineDPOConfig(output_dir="online-dpo-model")
+args = OnlineDPOConfig(output_dir="online-dpo-qwen2", logging_steps=10)
 trainer = OnlineDPOTrainer(
     model=model,
-    ref_model=ref_model,
     reward_model=reward_model,
     args=args,
     tokenizer=tokenizer,
     train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
 )
 trainer.train()
 ```
 
-To test the online DPO script with 1B parameter models, run:
+Execute the script using the following command:
+
+```bash
+accelerate launch train_online_dpo.py
+```
+
+Distributed across 8 GPUs, the training takes approximately 1 hour. You can verify the training progress by checking the reward graph. An increasing trend in both the reward for rejected and chosen completions indicates that the model is improving and generating better responses over time.
+
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/online-dpo-qwen2-reward.png)
+
+To see how the trained model performs, use the following code to generate completions:
+
+```python
+>>> from transformers import pipeline
+>>> generator = pipeline("text-generation", model="online-dpo-qwen2/checkpoint-1773", device="cuda")
+>>> question = "Why is the problem always DNS?"
+>>> output = generator([{"role": "user", "content": question}], max_new_tokens=200, return_full_text=False)[0]
+>>> print(output["generated_text"])
+The reason why the problem of DNS (Domain Name System) can always be encountered is that it is designed to provide reliable and accurate information about the availability, ownership, or expiration of domain names. However, there may be some circumstances where the system fails to resolve an IP address correctly, leading to the problem of DNS.
+For example, if the server hosting the domain name does not have the correct IP address associated with it, or if the IP address is incorrectly formatted, then the DNS system will fail to resolve the domain name correctly. Additionally, if the server hosting the domain name has been compromised, then the DNS system may also fail to resolve the domain name correctly.
+It's worth noting that the exact cause of DNS failure can vary depending on the specific situation, so it's important to carefully check all relevant factors before attempting to resolve the issue. If you suspect that your DNS problem may be caused by a bug in the system, you should report it to the DNS provider directly for further investigation.
+```
+
+## Expected dataset format
+
+Online DPO only requires a [prompt-only dataset](dataset_format#preference) (unlike offline DPO, that expects [preference dataset](dataset_format#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_format#conversational-dataset-format) and [standard](dataset_format#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+
+## Usage tips
+
+### ⚠️ Use the same chat template
+
+Make sure that the SFT model and reward model use the _same_ chat template. Otherwise, you may find the model completions are scored incorrectly during training.
+
+### Encourage EOS token generation
+
+We can want the model to generate completion within a given length. During the learning, the model will generate completion up to the maximum completion length specified in the `max_new_tokens` argument of [`OnlineDPOConfig`]. I you want to penalize for not generating an EOS token before the maximum completion length, you can use the `missing_eos_penalty` argument of [`OnlineDPOConfig`]:
+
+```python
+args = OnlineDPOConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
+```
+
+### Logging Completions
+
+To better understand your model’s behavior during training, you can log sample completions periodically using the [`LogCompletionsCallback`].
+
+```python
+trainer = OnlineDPOTrainer(..., eval_dataset=eval_dataset)
+completions_callback = LogCompletionsCallback(trainer, num_prompts=8)
+trainer.add_callback(completions_callback)
+```
+
+This callback logs the model's generated completions directly to Weights & Biases.
+
+![Logged Completions](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/wandb_completions.png)
+
+
+## Example script
+
+We provide an example script to train a model using the online DPO method. The script is available in [`examples/scripts/dpo_online.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/dpo_online.py)
+
+To test the online DPO script with the [Pythia 1B model](https://huggingface.co/trl-lib/pythia-1b-deduped-tldr-sft) on the TL;DR summarization task, run the following command:
 
 ```bash
 python examples/scripts/dpo_online.py \
@@ -73,52 +125,24 @@ python examples/scripts/dpo_online.py \
     --push_to_hub
 ```
 
-Tips:
-
-* `objective/rlhf_reward` is the ultimate objective of online DPO training. If training works as intended, this metric should keep going up.
-* We recommend using the "EOS trick" via the `--missing_eos_penalty` argument, which subtracts from the rewards a fixed scalar penalty for completions that do not end with an EOS token. This can help the model learn to generate more coherent completions.
-
-### Expected dataset format
-
-Unlike offline DPO, where one provides a dataset with chosen and rejected columns, online DPO only requires a dataset of prompts to generate the completions from. The [`OnlineDPOTrainer`] assumes that the dataset is preprocessed for model inference, so typically you will need to wrap your prompts in the messages format and then apply the chat template as follows:
-
-```python
-def prepare_dataset(row):
-    """Apply chat template to messages"""
-    row["prompt"] = tokenizer.apply_chat_template(row["prompt"], tokenize=False, add_generation_prompt=True)
-    return row
-
-dataset = prepare_dataset(dataset)
-```
-
-### Explanation of the logged metrics
+## Logged metrics
 
 The logged metrics are as follows. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/dd2o3g35)
 
 * `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current model and reference model.
 * `objective/entropy`: The mean entropy of the model, indicating the randomness of the actions chosen by the model.
 * `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
-* `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
-* `objective/scores`: The mean scores returned by the reward model / environment.
+* `objective/rlhf_reward`: The mean RLHF reward, which is `scores - non_score_reward`. The `rlhf_reward` is the ultimate objective of online DPO training. If training works as intended, this metric should keep going up.
+* `objective/scores`: The mean scores returned by the reward mode.
 * `objective/scores_margin`: The mean score margin (according to the external reward model) between the chosen and rejected completions.
-* `rewards/accuracies`: The accuracies of the online DPO's implicit reward model.
 * `rewards/chosen`: The mean reward (according to online DPO's implicit reward model)of the chosen completions.
 * `rewards/rejected`: The mean reward (according to online DPO's implicit reward model) of the rejected completions.
+* `rewards/accuracies`: The accuracies of the online DPO's implicit reward model.
 * `rewards/margins`: The mean reward margin (according to online DPO's implicit reward model) between the chosen and rejected completions.
 * `logps/chosen`: The mean log probabilities of the chosen completions.
 * `logps/rejected`: The mean log probabilities of the rejected completions.
 * `val/contain_eos_token`: The fraction of completions which contain an EOS token.
-
-
-## What is my model doing exactly?
-
-To help you understand what your model is doing, we periodically log some sample completions from the model via [`LogCompletionsCallback`]. You can find an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/hlzevfro?nw=nwuserlewtun), which allows you to see the model's response at different stages of training. By default we generate during training, but you can customize the number of prompts to generate completions for in [`LogCompletionsCallback`]. 
-
-
-## Implementation details
-
-Many online implementation details are borrowed from the [`PPOv2Trainer`], which is itself based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
-
+* `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`OnlineDPOConfig`].
 
 ## Benchmark experiments
 
@@ -163,7 +187,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --bf16 \
     --logging_steps 20 \
     --save_steps 0.1 \
-    --push_to_hub \
+    --push_to_hub
 
 # 6.9B Online DPO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
@@ -242,7 +266,6 @@ The online DPO checkpoint gets increasingly more win rate as we scale up the mod
 ## OnlineDPOTrainer
 
 [[autodoc]] OnlineDPOTrainer
-
 
 ## OnlineDPOConfig
 

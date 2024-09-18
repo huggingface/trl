@@ -50,7 +50,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
-from accelerate import PartialState
 from trl import (
     DPOScriptArguments,
     ModelConfig,
@@ -58,7 +57,6 @@ from trl import (
     NashMDTrainer,
     get_kbit_device_map,
     get_quantization_config,
-    maybe_apply_chat_template,
     LogCompletionsCallback,
 )
 from trl.commands.cli_utils import TrlParser
@@ -105,11 +103,6 @@ if __name__ == "__main__":
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
 
     dataset = load_dataset(args.dataset_name)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(
-            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
-        )
 
     trainer = NashMDTrainer(
         model=model,
