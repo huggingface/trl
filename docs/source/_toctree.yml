@@ -37,7 +37,7 @@
     - local: kto_trainer
       title: KTO
     - local: nash_md_trainer
-      title: Nash MD
+      title: Nash-MD
     - local: orpo_trainer
       title: ORPO
     - local: ppo_trainer
