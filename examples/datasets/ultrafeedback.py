@@ -70,7 +70,6 @@ class ScriptArguments:
 
 
 def to_unpaired_preference(example, model_name, aspect):
-    model_index = example["models"].index(model_name)
     prompt = [{"role": "user", "content": example["instruction"]}]
     model_index = example["models"].index(model_name)
     response_content = example["completions"][model_index]["response"]
