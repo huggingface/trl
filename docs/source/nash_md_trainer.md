@@ -1,4 +1,4 @@
-# Nash MD Trainer
+# Nash-MD Trainer
 
 ## Overview
 
@@ -12,7 +12,7 @@ This post-training method was contributed by [Kashif Rasul](https://huggingface.
 
 ## Quick start
 
-This example demonstrates how to train a model using the Nash MD method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and the [Qwen 0.5B reward model](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) as the reward model. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+This example demonstrates how to train a model using the Nash-MD method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and the [Qwen 0.5B reward model](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) as the reward model. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
@@ -53,7 +53,7 @@ accelerate launch train_nash_md.py
 
 ## Expected dataset format
 
-Nash MD requires a [prompt-only dataset](dataset_format#preference). The [`NashMDTrainer`] supports both [conversational](dataset_format#conversational-dataset-format) and [standard](dataset_format#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Nash-MD requires a [prompt-only dataset](dataset_format#preference). The [`NashMDTrainer`] supports both [conversational](dataset_format#conversational-dataset-format) and [standard](dataset_format#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
@@ -85,9 +85,9 @@ This callback logs the model's generated completions directly to Weights & Biase
 
 ## Example script
 
-We provide an example script to train a model using the Nash MD method. The script is available in [`examples/scripts/nash_md.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/nash_md.py)
+We provide an example script to train a model using the Nash-MD method. The script is available in [`examples/scripts/nash_md.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/nash_md.py)
 
-To test the Nash MD script with the [Pythia 14M model](https://huggingface.co/EleutherAI/pythia-14m) on the TL;DR summarization task, run the following command:
+To test the Nash-MD script with the [Pythia 14M model](https://huggingface.co/EleutherAI/pythia-14m) on the TL;DR summarization task, run the following command:
 
 ```bash
 python examples/scripts/nash_md.py \
@@ -114,7 +114,7 @@ The logged metrics are as follows:
 * `loss/score`: The mean reinforce score loss.
 * `rewards/chosen`: The mean scores (according to the reward model) of the model completions.
 * `rewards/rejected`: The mean scores (according to the reward model) of the mixture completions.
-* `rewards/accuracies`: The accuracies of the Nash MD's implicit reward model.
+* `rewards/accuracies`: The accuracies of the Nash-MD's implicit reward model.
 * `rewards/margins`: The mean reward margin (according to reward model) between the chosen and mixture completions.
 * `logps/chosen`: The mean log probabilities of the chosen completions.
 * `logps/rejected`: The mean log probabilities of the reference completions.
