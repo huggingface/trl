@@ -253,7 +253,17 @@ class WinRateCallback(TrainerCallback):
         tokenizer = kwargs["tokenizer"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
-        model = getattr(self.trainer, "ref_model", kwargs["model"])  # get the ref model if any, else use the model
+        # Use the reference model if available, otherwise use the initial model
+        model = getattr(self.trainer, "ref_model", None)
+        # At this point, there are two cases where `ref_model` is None:
+        # 1. The method doesn't require a reference model.
+        # 2. The method uses a reference model, but `ref_model` is set to None.
+        #    This occurs when using PEFT, where the reference model can be obtained by simply disabling the model's adapter.
+        #    In theory, we should disable the adapter here, but since it's zero-initialized at the start of training,
+        #    the model behaves identically with or without the adapter.
+        #    Therefore, there's no need to explicitly disable it at this point.
+        if model is None:
+            model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
             self.ref_completions = _generate_completions(
                 prompts,
@@ -312,7 +322,7 @@ class LogCompletionsCallback(WandbCallback):
         num_prompts (`int`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in the evaluation dataset.
         freq (`int`, *optional*):
-            The frequency at which to log completions. If not provided, defaults to the trainer's `logging_steps`.
+            The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
 
     def __init__(
@@ -342,8 +352,8 @@ class LogCompletionsCallback(WandbCallback):
         if state.global_step == self._last_logged_step:
             return
 
-        # Only log every `freq` steps (if no `freq` is provided, log every `logging_steps` steps)
-        freq = self.freq or state.logging_steps
+        # Only log every `freq` steps (if no `freq` is provided, log every `eval_steps` steps)
+        freq = self.freq or state.eval_steps
         if state.global_step % freq != 0:
             return
 
