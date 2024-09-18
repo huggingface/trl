@@ -255,12 +255,12 @@ class WinRateCallback(TrainerCallback):
         accelerator = self.trainer.accelerator
         # Use the reference model if available, otherwise use the initial model
         model = getattr(self.trainer, "ref_model", None)
-        # At this point, there are two cases where `ref_model` is None: 
-        # 1. The method doesn't require a reference model. 
-        # 2. The method uses a reference model, but `ref_model` is set to None. 
-        #    This occurs when using PEFT, where the reference model can be obtained by simply disabling the model's adapter. 
-        #    In theory, we should disable the adapter here, but since it's zero-initialized at the start of training, 
-        #    the model behaves identically with or without the adapter. 
+        # At this point, there are two cases where `ref_model` is None:
+        # 1. The method doesn't require a reference model.
+        # 2. The method uses a reference model, but `ref_model` is set to None.
+        #    This occurs when using PEFT, where the reference model can be obtained by simply disabling the model's adapter.
+        #    In theory, we should disable the adapter here, but since it's zero-initialized at the start of training,
+        #    the model behaves identically with or without the adapter.
         #    Therefore, there's no need to explicitly disable it at this point.
         if model is None:
             model = self.trainer.model_wrapped
