@@ -101,14 +101,12 @@ EXTRAS = {
     "liger": ["liger-kernel>=0.2.1"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.14.4"],
-    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
     "quantization": ["bitsandbytes<=0.41.1"],
     "llm_judge": ["openai>=1.23.2", "huggingface_hub>=0.22.2", "llm-blender>=0.0.2"],
 }
 EXTRAS["dev"] = []
-for k, v in EXTRAS.values():
-    if k != "benchmark":
-        EXTRAS["dev"].extend(v)
+for reqs in EXTRAS.values():
+    EXTRAS["dev"].extend(reqs)
 
 try:
     file_path = os.path.dirname(os.path.abspath(__file__))
