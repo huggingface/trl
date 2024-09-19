@@ -64,7 +64,7 @@ def filter_fn(sample):
     toxicity = sample["prompt"]["toxicity"]
     return toxicity is not None and toxicity > 0.3
 
-train_dataset = dataset.filter(filter_fn, batched=False)
+train_dataset = train_dataset.filter(filter_fn, batched=False)
 ```
 
 ### Reward function
