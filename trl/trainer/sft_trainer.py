@@ -34,7 +34,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
 )
-from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
@@ -45,7 +44,6 @@ from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
-    neftune_post_forward_hook,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
 )
@@ -153,6 +151,12 @@ class SFTTrainer(Trainer):
             # Manually copy token values as TrainingArguments.to_dict() redacts them
             args_as_dict.update({k: getattr(args, k) for k in args_as_dict.keys() if k.endswith("_token")})
             args = SFTConfig(**args_as_dict)
+
+        if neftune_noise_alpha is not None:
+            warnings.warn(
+                "You passed a `neftune_noise_alpha` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.neftune_noise_alpha = neftune_noise_alpha
 
         if model_init_kwargs is not None:
             warnings.warn(
@@ -307,16 +311,6 @@ class SFTTrainer(Trainer):
             args.dataset_batch_size = dataset_batch_size
         self.dataset_batch_size = args.dataset_batch_size
 
-        self._trainer_supports_neftune = hasattr(args, "neftune_noise_alpha")
-        if neftune_noise_alpha is not None and self._trainer_supports_neftune:
-            args.neftune_noise_alpha = neftune_noise_alpha
-            warnings.warn(
-                "You passed a `neftune_noise_alpha` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            # self.neftune_noise_alpha is done at Trainer level
-        elif not self._trainer_supports_neftune:
-            self.neftune_noise_alpha = neftune_noise_alpha
-
         if dataset_text_field is not None:
             warnings.warn(
                 "You passed a `dataset_text_field` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
@@ -424,28 +418,6 @@ class SFTTrainer(Trainer):
                 self.train_dataset.infinite = True
             elif self.args.max_steps == -1 and args.packing:
                 self.train_dataset.infinite = False
-
-    @wraps(Trainer.train)
-    def train(self, *args, **kwargs):
-        # Activate neftune right before training.
-        if self.neftune_noise_alpha is not None and not self._trainer_supports_neftune:
-            self.model = self._trl_activate_neftune(self.model)
-
-        output = super().train(*args, **kwargs)
-
-        # After training we make sure to retrieve back the original forward pass method
-        # for the embedding layer by removing the forward post hook.
-        if self.neftune_noise_alpha is not None and not self._trainer_supports_neftune:
-            unwrapped_model = unwrap_model(self.model)
-            if is_peft_available() and isinstance(unwrapped_model, PeftModel):
-                embeddings = unwrapped_model.base_model.model.get_input_embeddings()
-            else:
-                embeddings = unwrapped_model.get_input_embeddings()
-
-            self.neftune_hook_handle.remove()
-            del embeddings.neftune_noise_alpha
-
-        return output
 
     @wraps(Trainer.push_to_hub)
     def push_to_hub(
@@ -639,19 +611,3 @@ class SFTTrainer(Trainer):
             raise ValueError(
                 "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
             )
-
-    def _trl_activate_neftune(self, model):
-        r"""
-        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://huggingface.co/papers/2310.05914
-        Since in transformers Trainer we do have an `_activate_neftune` method, we need to rename this method to avoid conflicts.
-        """
-        unwrapped_model = unwrap_model(model)
-        if is_peft_available() and isinstance(unwrapped_model, PeftModel):
-            embeddings = unwrapped_model.base_model.model.get_input_embeddings()
-        else:
-            embeddings = unwrapped_model.get_input_embeddings()
-
-        embeddings.neftune_noise_alpha = self.neftune_noise_alpha
-        hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
-        self.neftune_hook_handle = hook_handle
-        return model
