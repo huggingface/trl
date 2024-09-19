@@ -29,7 +29,7 @@ python -i examples/datasets/tokenize_ds.py --model gpt2
 
 @dataclass
 class ScriptArguments:
-    dataset: str = field(
+    dataset_name: str = field(
         default="trl-internal-testing/hh-rlhf-helpful-base-trl-style", metadata={"help": "The dataset to load"}
     )
     model: str = field(default="gpt2", metadata={"help": "The model to use for tokenization"})
@@ -40,7 +40,7 @@ class ScriptArguments:
 
 if __name__ == "__main__":
     args = HfArgumentParser(ScriptArguments).parse_args_into_dataclasses()[0]
-    ds = load_dataset(args.dataset)
+    dataset = load_dataset(args.dataset_name)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
@@ -50,5 +50,5 @@ if __name__ == "__main__":
         row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
         return row
 
-    ds = ds.map(process, num_proc=args.dataset_num_proc)
-    print(ds["train"][0]["chosen"])
+    dataset = dataset.map(process, num_proc=args.dataset_num_proc)
+    print(dataset["train"][0]["chosen"])

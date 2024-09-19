@@ -62,13 +62,13 @@ parser = HfArgumentParser(ScriptArguments)
 args = parser.parse_args_into_dataclasses()[0]
 
 # Load the dataset
-raw_dataset = load_dataset("trl-lib/tldr", split="validation")
+dataset = load_dataset("trl-lib/tldr", split="validation")
 if args.num_examples is not None:
-    raw_dataset = raw_dataset.select(range(args.num_examples))
+    dataset = dataset.select(range(args.num_examples))
 
 # Extract the prompts and reference completions
-prompts = raw_dataset["prompt"]
-reference_completions = raw_dataset["completion"]
+prompts = dataset["prompt"]
+reference_completions = dataset["completion"]
 
 # Generate the model completions
 sampling_params = SamplingParams(temperature=0.0, top_p=0.95, max_tokens=200)  # very generous max token length

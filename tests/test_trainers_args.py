@@ -80,7 +80,7 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_cpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = CPOConfig(
                 tmp_dir,
@@ -121,7 +121,7 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_dpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = DPOConfig(
                 tmp_dir,
@@ -182,7 +182,7 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_kto(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             args = KTOConfig(
                 tmp_dir,

@@ -112,16 +112,13 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    ds = load_dataset(args.dataset_name)
+    dataset = load_dataset(args.dataset_name)
 
     with PartialState().local_main_process_first():
-        ds = ds.map(maybe_extract_prompt, num_proc=training_args.dataset_num_proc)
-        ds = ds.map(
+        dataset = dataset.map(maybe_extract_prompt, num_proc=training_args.dataset_num_proc)
+        dataset = dataset.map(
             maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
         )
-
-    train_dataset = ds[args.dataset_train_split]
-    eval_dataset = ds[args.dataset_test_split]
 
     ##########
     # Training
@@ -130,8 +127,8 @@ if __name__ == "__main__":
         model,
         ref_model,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=dataset[args.dataset_train_split],
+        eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
         peft_config=peft_config,
     )
