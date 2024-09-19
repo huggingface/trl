@@ -59,7 +59,7 @@ from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_unpair_preference_dataset, setup_chat_format
+from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_unpair_preference_dataset, setup_chat_format, maybe_apply_chat_template
 
 
 # Define and parse arguments.
@@ -113,7 +113,7 @@ if __name__ == "__main__":
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        formatted_dataset = dataset.map(format_dataset, num_proc=kto_args.dataset_num_proc)
+        formatted_dataset = dataset.map(maybe_apply_chat_template, num_proc=kto_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer})
 
     # Initialize the KTO trainer
     kto_trainer = KTOTrainer(
