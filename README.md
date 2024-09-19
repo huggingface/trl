@@ -269,7 +269,7 @@ make dev
 
 ```bibtex
 @misc{vonwerra2022trl,
-  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif },
+  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallouedec},
   title = {TRL: Transformer Reinforcement Learning},
   year = {2020},
   publisher = {GitHub},
