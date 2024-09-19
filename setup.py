@@ -106,8 +106,9 @@ EXTRAS = {
     "llm_judge": ["openai>=1.23.2", "huggingface_hub>=0.22.2", "llm-blender>=0.0.2"],
 }
 EXTRAS["dev"] = []
-for reqs in EXTRAS.values():
-    EXTRAS["dev"].extend(reqs)
+for k, v in EXTRAS.values():
+    if k != "benchmark":
+        EXTRAS["dev"].extend(v)
 
 try:
     file_path = os.path.dirname(os.path.abspath(__file__))
