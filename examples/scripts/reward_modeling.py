@@ -113,7 +113,7 @@ if __name__ == "__main__":
     #############################
     # Load and preprocess dataset
     #############################
-    raw_datasets = load_dataset(args.dataset_name)
+    dataset = load_dataset(args.dataset_name)
 
     def preprocess_function(examples):
         new_examples = {
@@ -137,24 +137,21 @@ if __name__ == "__main__":
         # This assumes the chosen/rejected columns are in the OpenAI messages format.
         chosen_fn = conversations_formatting_function(tokenizer, "chosen")
         rejected_fn = conversations_formatting_function(tokenizer, "rejected")
-        raw_datasets = raw_datasets.map(
+        dataset = dataset.map(
             lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)}, num_proc=config.dataset_num_proc
         )
         # Tokenize inputs
-        raw_datasets = raw_datasets.map(
+        dataset = dataset.map(
             preprocess_function,
             batched=True,
             num_proc=config.dataset_num_proc,
         )
         # Filter out examples that are too long
-        raw_datasets = raw_datasets.filter(
+        dataset = dataset.filter(
             lambda x: len(x["input_ids_chosen"]) <= config.max_length
             and len(x["input_ids_rejected"]) <= config.max_length,
             num_proc=config.dataset_num_proc,
         )
-
-    train_dataset = raw_datasets[args.dataset_train_split]
-    eval_dataset = raw_datasets[args.dataset_test_split]
 
     ##########
     # Training
@@ -163,8 +160,8 @@ if __name__ == "__main__":
         model=model,
         tokenizer=tokenizer,
         args=config,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=dataset[args.dataset_train_split],
+        eval_dataset=dataset[args.dataset_test_split],
         peft_config=get_peft_config(model_config),
     )
     trainer.train()

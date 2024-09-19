@@ -64,7 +64,7 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 @dataclass
 class ScriptArguments:
-    dataset: str = field(
+    dataset_name: str = field(
         default="trl-internal-testing/hh-rlhf-helpful-base-trl-style",
         metadata={"help": "The name of the dataset to use."},
     )
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    ds = load_dataset(args.dataset)
+    dataset = load_dataset(args.dataset_name)
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
@@ -101,10 +101,7 @@ if __name__ == "__main__":
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        ds = ds.map(process, num_proc=cpo_args.dataset_num_proc)
-
-    train_dataset = ds["train"]
-    eval_dataset = ds["test"]
+        dataset = dataset.map(process, num_proc=cpo_args.dataset_num_proc)
 
     ################
     # Training
@@ -112,8 +109,8 @@ if __name__ == "__main__":
     trainer = CPOTrainer(
         model,
         args=cpo_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["test"],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )

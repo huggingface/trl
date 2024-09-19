@@ -103,9 +103,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset(sft_script_args.dataset_name)
-    train_dataset = raw_datasets[sft_script_args.dataset_train_split]
-    eval_dataset = raw_datasets[sft_script_args.dataset_test_split]
+    dataset = load_dataset(sft_script_args.dataset_name)
 
     ################
     # Training
@@ -114,8 +112,8 @@ if __name__ == "__main__":
         model=model,
         args=training_args,
         data_collator=collate_fn,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=dataset[sft_script_args.dataset_train_split],
+        eval_dataset=dataset[sft_script_args.dataset_test_split],
         tokenizer=processor.tokenizer,
         peft_config=get_peft_config(model_config),
     )

@@ -103,18 +103,15 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset(args.dataset_name)
+    dataset = load_dataset(args.dataset_name)
 
     with PartialState().local_main_process_first():
-        raw_datasets = raw_datasets.map(
+        dataset = dataset.map(
             lambda x: {
                 "prompt": tokenizer.apply_chat_template(x["prompt"], tokenize=False, add_generation_prompt=True)
             },
             num_proc=training_args.dataset_num_proc,
         )
-
-    train_dataset = raw_datasets[args.dataset_train_split]
-    eval_dataset = raw_datasets[args.dataset_test_split]
 
     ################
     # Training
@@ -123,8 +120,8 @@ if __name__ == "__main__":
         model=model_config.model_name_or_path,
         teacher_model=training_args.teacher_model_name_or_path,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=dataset[args.dataset_train_split],
+        eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )
