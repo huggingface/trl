@@ -16,7 +16,7 @@ from trl import SFTConfig, SFTTrainer
 
 dataset = load_dataset("stanfordnlp/imdb", split="train")
 
-sft_config = SFTConfig(
+training_args = SFTConfig(
     dataset_text_field="text",
     max_seq_length=512,
     output_dir="/tmp",
@@ -24,7 +24,7 @@ sft_config = SFTConfig(
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
 )
 trainer.train()
 ```
@@ -41,12 +41,12 @@ dataset = load_dataset("stanfordnlp/imdb", split="train")
 
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
 
-sft_config = SFTConfig(output_dir="/tmp")
+training_args = SFTConfig(output_dir="/tmp")
 
 trainer = SFTTrainer(
     model,
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
 )
 
 trainer.train()
@@ -220,10 +220,10 @@ dataset = load_dataset("philschmid/dolly-15k-oai-style", split="train")
 
 ...
 
-sft_config = SFTConfig(packing=True)
+training_args = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
-    args=sft_config,
+    args=training_args,
     train_dataset=dataset,
 )
 ```
@@ -256,7 +256,7 @@ def formatting_prompts_func(example):
 
 trainer = SFTTrainer(
     model,
-    args=sft_config,
+    args=training_args,
     train_dataset=dataset,
     formatting_func=formatting_prompts_func,
 )
@@ -271,12 +271,12 @@ To properly format your input make sure to process all the examples by looping o
 
 ```python
 ...
-sft_config = SFTConfig(packing=True, dataset_text_field="text",)
+training_args = SFTConfig(packing=True, dataset_text_field="text",)
 
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config
+    args=training_args
 )
 
 trainer.train()
@@ -294,11 +294,11 @@ def formatting_func(example):
     text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
     return text
 
-sft_config = SFTConfig(packing=True)
+training_args = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
     formatting_func=formatting_func
 )
 
@@ -315,7 +315,7 @@ model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=to
 
 ...
 
-sft_config = SFTConfig(
+training_args = SFTConfig(
     model_init_kwargs={
         "torch_dtype": "bfloat16",
     },
@@ -324,7 +324,7 @@ sft_config = SFTConfig(
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
 )
 
 trainer.train()
@@ -510,13 +510,13 @@ from trl import SFTConfig, SFTTrainer
 
 dataset = load_dataset("stanfordnlp/imdb", split="train")
 
-sft_config = SFTConfig(
+training_args = SFTConfig(
     neftune_noise_alpha=5,
 )
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
 )
 trainer.train()
 ```
@@ -578,7 +578,7 @@ model = FastLanguageModel.get_peft_model(
     random_state=3407,
 )
 
-args = SFTConfig(
+training_args = SFTConfig(
     output_dir="./output",
     max_seq_length=max_seq_length,
     dataset_text_field="text",
@@ -586,7 +586,7 @@ args = SFTConfig(
 
 trainer = SFTTrainer(
     model=model,
-    args=args,
+    args=training_args,
     train_dataset=dataset,
 )
 trainer.train()
@@ -611,10 +611,10 @@ With great memory reduction, you can potentially turn off cpu_offloading or grad
 pip install liger-kernel
 ```
 
-2. Once installed, set `use_liger` in [SFTConfig](https://github.com/huggingface/trl/blob/850ddcf598984013007d384c6b3e311def2a616e/trl/trainer/sft_config.py#L69). No other changes are needed!
+2. Once installed, set `use_liger` in [`SFTConfig`]. No other changes are needed!
 
 ```python
-config = SFTConfig(
+training_args = SFTConfig(
   use_liger=True
 )
 ```
@@ -742,13 +742,13 @@ print(collated_data.keys())  # dict_keys(['input_ids', 'attention_mask', 'pixel_
 Now that we have prepared the data and defined the collator, we can proceed with training the model. To ensure that the data is not processed as text-only, we need to set a couple of arguments in the `SFTConfig`, specifically `dataset_text_field` and `remove_unused_columns`. We also need to set `skip_prepare_dataset` to `True` to avoid the default processing of the dataset. Below is an example of how to set up the `SFTTrainer`.
 
 ```python
-args.dataset_text_field = ""  # needs a dummy field
-args.remove_unused_columns = False
-args.dataset_kwargs = {"skip_prepare_dataset": True}
+training_args.dataset_text_field = ""  # needs a dummy field
+training_args.remove_unused_columns = False
+training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
 trainer = SFTTrainer(
     model=model,
-    args=args,
+    args=training_args,
     data_collator=collate_fn,
     train_dataset=train_dataset,
     tokenizer=processor.tokenizer,
