@@ -102,11 +102,11 @@ from datasets import load_dataset
 dataset = load_dataset("trl-lib/Capybara", split="train")
 
 # configure trainer
-args = SFTConfig(output_dir="Qwen/Qwen2.5-0.5B-SFT")
+training_args = SFTConfig(output_dir="Qwen/Qwen2.5-0.5B-SFT")
 trainer = SFTTrainer(
+    args=training_args,
     model="Qwen/Qwen2.5-0.5B",
     train_dataset=dataset,
-    args=args,
 )
 
 # train
@@ -162,16 +162,16 @@ dataset = dataset.map(
 )
 
 # configure trainer
-args = RewardConfig(
+training_args = RewardConfig(
     per_device_train_batch_size=2,
     remove_unused_columns=False,
     output_dir="Qwen2.5-0.5B-Reward",
 )
 trainer = RewardTrainer(
+    args=training_args,
     model=model,
     tokenizer=tokenizer,
     train_dataset=dataset,
-    args=args,
 )
 
 # train
@@ -206,12 +206,9 @@ dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokeniz
 dataset = dataset.map(lambda x: tokenizer(x["prompt"]), remove_columns="prompt")
 
 # configure trainer
-args = RLOOConfig(
-    # per_device_train_batch_size=2,
-    output_dir="Qwen2.5-0.5B-RL",
-)
+training_args = RLOOConfig(output_dir="Qwen2.5-0.5B-RL")
 trainer = RLOOTrainer(
-    config=args,
+    config=training_args,
     tokenizer=tokenizer,
     policy=policy,
     ref_policy=ref_policy,
@@ -243,12 +240,12 @@ dataset = dataset.map(maybe_extract_prompt)
 dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 
 # load trainer
-args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
+training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 trainer = DPOTrainer(
+    args=training_args,
     model=model,
     tokenizer=tokenizer,
     train_dataset=dataset,
-    args=args,
 )
 
 # train
