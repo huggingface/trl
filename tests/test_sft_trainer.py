@@ -828,7 +828,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.eval_dataset,
             )
 
-            trainer.model = trainer._trl_activate_neftune(trainer.model)
+            trainer.model = trainer._activate_neftune(trainer.model)
 
             device = trainer.model.get_input_embeddings().weight.device
             trainer.model.train()
@@ -992,7 +992,7 @@ class SFTTrainerTester(unittest.TestCase):
                 peft_config=peft_config,
             )
 
-            trainer.model = trainer._trl_activate_neftune(trainer.model)
+            trainer.model = trainer._activate_neftune(trainer.model)
 
             assert isinstance(trainer.model, PeftModel)
 
