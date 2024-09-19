@@ -89,9 +89,9 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
-    train_dataset = raw_datasets["train"]
-    eval_dataset = raw_datasets["validation"]
+    dataset = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
+    train_dataset = dataset["train"]
+    eval_dataset = dataset["validation"]
 
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
