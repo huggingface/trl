@@ -70,7 +70,7 @@ class WinRateCallbackTester(unittest.TestCase):
 
     def test_basic(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = TrainingArguments(
+            training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 eval_strategy="steps",
                 eval_steps=2,  # evaluate every 2 steps
@@ -81,7 +81,7 @@ class WinRateCallbackTester(unittest.TestCase):
             trainer = TrainerWithRefModel(
                 model=self.model,
                 ref_model=self.ref_model,
-                args=args,
+                args=training_args,
                 train_dataset=self.dataset["train"],
                 eval_dataset=self.dataset["test"],
                 tokenizer=self.tokenizer,
@@ -97,7 +97,7 @@ class WinRateCallbackTester(unittest.TestCase):
     def test_without_ref_model(self):
         # Same as before, but without the ref_model attribute. It should use the model attribute instead
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = TrainingArguments(
+            training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 eval_strategy="steps",
                 eval_steps=2,  # evaluate every 2 steps
@@ -107,7 +107,7 @@ class WinRateCallbackTester(unittest.TestCase):
             )
             trainer = Trainer(
                 model=self.model,
-                args=args,
+                args=training_args,
                 train_dataset=self.dataset["train"],
                 eval_dataset=self.dataset["test"],
                 tokenizer=self.tokenizer,
@@ -130,7 +130,7 @@ class WinRateCallbackTester(unittest.TestCase):
                 task_type="CAUSAL_LM",
             )
             self.model.add_adapter(peft_config)
-            args = TrainingArguments(
+            training_args = TrainingArguments(
                 output_dir=tmp_dir,
                 eval_strategy="steps",
                 eval_steps=2,  # evaluate every 2 steps
@@ -140,7 +140,7 @@ class WinRateCallbackTester(unittest.TestCase):
             )
             trainer = Trainer(
                 model=self.model,
-                args=args,
+                args=training_args,
                 train_dataset=self.dataset["train"],
                 eval_dataset=self.dataset["test"],
                 tokenizer=self.tokenizer,
