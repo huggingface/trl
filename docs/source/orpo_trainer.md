@@ -56,13 +56,13 @@ The ORPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that
 For a detailed example have a look at the `examples/scripts/orpo.py` script. At a high level we need to initialize the `ORPOTrainer` with a `model` we wish to train. **Note that ORPOTrainer eliminates the need to use the reference model, simplifying the optimization process.** The `beta` refers to the hyperparameter `lambda` in eq. (6) of the paper and refers to the weighting of the relative odd ratio loss in the standard cross-entropy loss used for SFT.
 
 ```py
-orpo_config = ORPOConfig(
+training_args = ORPOConfig(
     beta=0.1, # the lambda/alpha hyperparameter in the paper/code
 )
 
 orpo_trainer = ORPOTrainer(
     model,
-    args=orpo_config,
+    args=training_args,
     train_dataset=train_dataset,
     tokenizer=tokenizer,
 )

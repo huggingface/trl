@@ -185,8 +185,8 @@ def image_outputs_logger(image_data, global_step, accelerate_logger):
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, DDPOConfig))
-    args, ddpo_config = parser.parse_args_into_dataclasses()
-    ddpo_config.project_kwargs = {
+    args, training_args = parser.parse_args_into_dataclasses()
+    training_args.project_kwargs = {
         "logging_dir": "./logs",
         "automatic_checkpoint_naming": True,
         "total_limit": 5,
@@ -198,7 +198,7 @@ if __name__ == "__main__":
     )
 
     trainer = DDPOTrainer(
-        ddpo_config,
+        training_args,
         aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
         prompt_fn,
         pipeline,
