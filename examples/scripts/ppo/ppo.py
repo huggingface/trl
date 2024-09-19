@@ -87,10 +87,10 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("trl-internal-testing/descriptiveness-sentiment-trl-style", split="descriptiveness")
+    dataset = load_dataset("trl-internal-testing/descriptiveness-sentiment-trl-style", split="descriptiveness")
     eval_samples = 20
-    train_dataset = raw_datasets.select(range(len(raw_datasets) - eval_samples))
-    eval_dataset = raw_datasets.select(range(len(raw_datasets) - eval_samples, len(raw_datasets)))
+    train_dataset = dataset.select(range(len(dataset) - eval_samples))
+    eval_dataset = dataset.select(range(len(dataset) - eval_samples, len(dataset)))
     dataset_text_field = "prompt"
 
     def prepare_dataset(dataset, tokenizer):

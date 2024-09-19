@@ -113,15 +113,15 @@ if __name__ == "__main__":
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        formatted_dataset = dataset.map(format_dataset, num_proc=kto_args.dataset_num_proc)
+        dataset = dataset.map(format_dataset, num_proc=kto_args.dataset_num_proc)
 
     # Initialize the KTO trainer
     kto_trainer = KTOTrainer(
         model,
         ref_model,
         args=kto_args,
-        train_dataset=formatted_dataset["train"],
-        eval_dataset=formatted_dataset["test"],
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["test"],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_args),
     )
