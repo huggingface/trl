@@ -67,7 +67,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         as expected.
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -80,7 +80,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model_name,
-                args=args,
+                args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -94,7 +94,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         as expected.
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -110,7 +110,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model,
-                args=args,
+                args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -128,7 +128,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         as expected.
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -145,7 +145,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model,
-                args=args,
+                args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -165,7 +165,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         as expected in mixed precision.
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -182,7 +182,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model,
-                args=args,
+                args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -199,7 +199,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         as expected in mixed precision + different scenarios of gradient_checkpointing.
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -218,7 +218,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model,
-                args=args,
+                args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -236,7 +236,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         as expected in mixed precision + different scenarios of gradient_checkpointing.
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -255,7 +255,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model,
-                args=args,
+                args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -280,7 +280,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         as expected in mixed precision + different scenarios of gradient_checkpointing (single, multi-gpu, etc).
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -299,7 +299,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model,
-                args=args,
+                args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -318,7 +318,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         as expected in mixed precision + different scenarios of gradient_checkpointing.
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -339,7 +339,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model,
-                args=args,
+                args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
@@ -363,7 +363,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             train_dataset = load_dataset("trl-internal-testing/dolly-chatml-sft", split="train")
 
-            args = SFTConfig(
+            training_args = SFTConfig(
                 packing=packing,
                 max_seq_length=self.max_seq_length,
                 output_dir=tmp_dir,
@@ -383,7 +383,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model,
-                args=args,
+                args=training_args,
                 tokenizer=tokenizer,
                 train_dataset=train_dataset,
                 peft_config=self.peft_config,
@@ -403,7 +403,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         with AutoLigerKernelForCausalLM as expected.
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -417,7 +417,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             trainer = SFTTrainer(
                 model_name,
-                args=args,
+                args=training_args,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )

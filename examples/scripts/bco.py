@@ -175,9 +175,9 @@ def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, 
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, BCOConfig, ModelConfig))
-    script_args, bco_args, model_args = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
 
-    bco_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
@@ -208,8 +208,8 @@ if __name__ == "__main__":
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
         # Load the dataset
-        dataset = build_helpfulness_dataset(script_args.llm_name, num_proc=bco_args.dataset_num_proc)
-        dataset = dataset.map(format_dataset, batched=False, num_proc=bco_args.dataset_num_proc)
+        dataset = build_helpfulness_dataset(script_args.llm_name, num_proc=training_args.dataset_num_proc)
+        dataset = dataset.map(format_dataset, batched=False, num_proc=training_args.dataset_num_proc)
 
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
@@ -232,7 +232,7 @@ if __name__ == "__main__":
     bco_trainer = BCOTrainer(
         model,
         ref_model,
-        args=bco_args,
+        args=training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["test"],
         tokenizer=tokenizer,
@@ -243,4 +243,4 @@ if __name__ == "__main__":
 
     # Train and push the model to the Hub
     bco_trainer.train()
-    bco_trainer.save_model(bco_args.output_dir)
+    bco_trainer.save_model(training_args.output_dir)

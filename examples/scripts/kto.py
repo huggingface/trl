@@ -74,7 +74,7 @@ class ScriptArguments:
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, KTOConfig, ModelConfig))
-    script_args, kto_args, model_args = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     dataset = load_dataset(script_args.dataset_name)
 
     # If needed, reformat a DPO-formatted dataset (prompt, chosen, rejected) to a KTO-format (prompt, completion, label)
-    dataset = maybe_unpair_preference_dataset(dataset, num_proc=kto_args.dataset_num_proc)
+    dataset = maybe_unpair_preference_dataset(dataset, num_proc=training_args.dataset_num_proc)
 
     # Apply chat template
     def format_dataset(example):
@@ -113,13 +113,13 @@ if __name__ == "__main__":
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        dataset = dataset.map(format_dataset, num_proc=kto_args.dataset_num_proc)
+        dataset = dataset.map(format_dataset, num_proc=training_args.dataset_num_proc)
 
     # Initialize the KTO trainer
     kto_trainer = KTOTrainer(
         model,
         ref_model,
-        args=kto_args,
+        args=training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["test"],
         tokenizer=tokenizer,
@@ -128,5 +128,5 @@ if __name__ == "__main__":
 
     # Train and push the model to the Hub
     kto_trainer.train()
-    kto_trainer.save_model(kto_args.output_dir)
+    kto_trainer.save_model(training_args.output_dir)
     kto_trainer.push_to_hub()

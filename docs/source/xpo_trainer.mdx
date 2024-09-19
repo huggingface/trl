@@ -34,11 +34,11 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-args = XPOConfig(output_dir="nash-md-qwen2", logging_steps=10)
+training_args = XPOConfig(output_dir="nash-md-qwen2", logging_steps=10)
 trainer = XPOTrainer(
     model=model,
     reward_model=reward_model,
-    args=args,
+    args=training_args,
     tokenizer=tokenizer,
     train_dataset=train_dataset,
 )
@@ -66,7 +66,7 @@ Make sure that the SFT model and reward model use the _same_ chat template. Othe
 We can want the model to generate completion within a given length. During the learning, the model will generate completion up to the maximum completion length specified in the `max_new_tokens` argument of [`XPOConfig`]. I you want to penalize for not generating an EOS token before the maximum completion length, you can use the `missing_eos_penalty` argument of [`XPOConfig`]:
 
 ```python
-args = XPOConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
+training_args = XPOConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
 ```
 
 ### Logging Completions
