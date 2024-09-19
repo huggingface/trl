@@ -183,7 +183,6 @@ trainer.train()
 `RLOOTrainer` implements a [REINFORCE-style optimization](https://huggingface.co/papers/2402.14740) for RLHF that is more performant and memory-efficient than PPO. Here is a basic example of how to use the `RLOOTrainer`:
 
 ```python
-# imports
 from trl import RLOOConfig, RLOOTrainer, maybe_apply_chat_template
 from datasets import load_dataset
 from transformers import (
@@ -201,8 +200,8 @@ ref_policy = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 policy = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 
 # load dataset and preprocess
-dataset = load_dataset("trl-lib/ultrafeedback-prompt")
-dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
+dataset = dataset.map(apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 dataset = dataset.map(lambda x: tokenizer(x["prompt"]), remove_columns="prompt")
 
 # configure trainer
@@ -266,7 +265,7 @@ make dev
 
 ```bibtex
 @misc{vonwerra2022trl,
-  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallouedec},
+  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallouédec},
   title = {TRL: Transformer Reinforcement Learning},
   year = {2020},
   publisher = {GitHub},
