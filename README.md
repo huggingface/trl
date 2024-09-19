@@ -58,7 +58,9 @@ pip install git+https://github.com/huggingface/trl.git
 ```
 
 ### Repository
+
 If you want to use the examples you can clone the repository with the following command:
+
 ```bash
 git clone https://github.com/huggingface/trl.git
 ```
@@ -96,7 +98,6 @@ For more flexibility and control over training, TRL provides dedicated trainer c
 Here is a basic example on how to use the `SFTTrainer`:
 
 ```python
-# imports
 from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 
@@ -120,7 +121,6 @@ trainer.train()
 Here is a basic example on how to use the `RewardTrainer`:
 
 ```python
-# imports
 from trl import RewardConfig, RewardTrainer
 from trl.extras.dataset_formatting import conversations_formatting_function
 from datasets import load_dataset
@@ -202,7 +202,7 @@ ref_policy = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 policy = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 
 # load dataset and preprocess
-train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
+dataset = load_dataset("trl-lib/ultrafeedback-prompt")
 dataset = dataset.map(apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 dataset = dataset.map(lambda x: tokenizer(x["prompt"]), remove_columns="prompt")
 
