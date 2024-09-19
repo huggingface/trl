@@ -660,5 +660,5 @@ class SFTTrainer(Trainer):
             hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
             self.neftune_hook_handle = hook_handle
         else:
-            warnings.warn("NEFTune appears to be already activated. Skipping activation.")
+            warnings.warn("NEFTune is already activated. Skipping activation.")
         return model
