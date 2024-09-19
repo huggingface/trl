@@ -4,7 +4,9 @@
 
 # TRL - Transformer Reinforcement Learning
 
-> Full stack library to post-train large language models.
+<h3 align="center">
+    <p>Full stack library to post-train large language models.</p>
+</h3>
 
 <p align="center">
     <a href="https://github.com/huggingface/trl/blob/main/LICENSE">
@@ -33,7 +35,7 @@ The library is built on top of [🤗 Transformers](https://github.com/huggingfac
     - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to train even the largest models on modest hardware with quantisation and methods such as LoRA or QLoRA.
     - [Unsloth](https://github.com/unslothai/unsloth) is also integrated and allows to significantly speed up training with dedicated kernels.
 - **`CLI`**: With the [CLI](https://huggingface.co/docs/trl/clis) you can fine-tune and chat with LLMs without writing any code using a single command and a flexible config system.
-- **`Trainers`**: The trainer classes are an abstraction to apply many fine-tuning methods with ease such as the [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/trainer#trl.DPOTrainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer), [`PPOTrainer`](https://huggingface.co/docs/trl/main/en/ppov2_trainer), and [`ORPOTrainer`](https://huggingface.co/docs/trl/main/en/orpo_trainer).
+- **`Trainers`**: The trainer classes are an abstraction to apply many fine-tuning methods with ease such as the [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer), [`PPOTrainer`](https://huggingface.co/docs/trl/ppov2_trainer), and [`ORPOTrainer`](https://huggingface.co/docs/trl/orpo_trainer).
 - **`AutoModels`**: The [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) & [`AutoModelForSeq2SeqLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForSeq2SeqLMWithValueHead) classes add an additional value head to the model which allows to train them with RL algorithms such as PPO.
 - **`Examples`**: Fine-tune Llama for chat applications or apply full RLHF using adapters etc, following the [examples](https://github.com/huggingface/trl/tree/main/examples).
 
