@@ -114,38 +114,38 @@ def build_helpfulness_dataset(llm_name: str, num_proc: Optional[int] = None) -> 
 
     dataset = load_dataset("openbmb/UltraFeedback")["train"]
 
-    ds = dataset.filter(lambda example: llm_name in example["models"], batched=False, num_proc=num_proc)
-    ds = ds.filter(
+    dataset = dataset.filter(lambda example: llm_name in example["models"], batched=False, num_proc=num_proc)
+    dataset = dataset.filter(
         lambda example: len(example["models"]) == len(example["completions"]), batched=False, num_proc=num_proc
     )
 
     METRIC = "helpfulness"
 
-    ds = ds.map(
+    dataset = dataset.map(
         get_model_rating,
         batched=False,
         fn_kwargs={"metric": METRIC, "llm_name": llm_name},
         num_proc=num_proc,
     )
 
-    ds = ds.map(
+    dataset = dataset.map(
         get_model_response,
         batched=False,
         fn_kwargs={"llm_name": llm_name},
         num_proc=num_proc,
     )
 
-    ds = ds.select_columns(["source", "instruction", "response", "helpfulness"])
+    dataset = dataset.select_columns(["source", "instruction", "response", "helpfulness"])
 
-    ds = ds.rename_columns({"instruction": "prompt", "response": "completion"})
-    ds = ds.map(lambda example: {"label": example["helpfulness"] >= 5}, batched=False, num_proc=num_proc)
+    dataset = dataset.rename_columns({"instruction": "prompt", "response": "completion"})
+    dataset = dataset.map(lambda example: {"label": example["helpfulness"] >= 5}, batched=False, num_proc=num_proc)
 
-    ds = ds.map(
+    dataset = dataset.map(
         lambda example: {"prompt": [{"role": "user", "content": example["prompt"]}]},
         batched=False,
         num_proc=num_proc,
     )
-    dataset = ds.train_test_split(test_size=0.05, seed=42)
+    dataset = dataset.train_test_split(test_size=0.05, seed=42)
 
     return dataset
 
@@ -175,9 +175,9 @@ def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, 
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, BCOConfig, ModelConfig))
-    script_args, bco_args, model_args = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
 
-    bco_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
@@ -208,8 +208,8 @@ if __name__ == "__main__":
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
         # Load the dataset
-        dataset = build_helpfulness_dataset(script_args.llm_name, num_proc=bco_args.dataset_num_proc)
-        formatted_dataset = dataset.map(format_dataset, batched=False, num_proc=bco_args.dataset_num_proc)
+        dataset = build_helpfulness_dataset(script_args.llm_name, num_proc=training_args.dataset_num_proc)
+        dataset = dataset.map(format_dataset, batched=False, num_proc=training_args.dataset_num_proc)
 
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
@@ -232,9 +232,9 @@ if __name__ == "__main__":
     bco_trainer = BCOTrainer(
         model,
         ref_model,
-        args=bco_args,
-        train_dataset=formatted_dataset["train"],
-        eval_dataset=formatted_dataset["test"],
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["test"],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_args),
         embedding_func=embedding_func,
@@ -243,4 +243,4 @@ if __name__ == "__main__":
 
     # Train and push the model to the Hub
     bco_trainer.train()
-    bco_trainer.save_model(bco_args.output_dir)
+    bco_trainer.save_model(training_args.output_dir)

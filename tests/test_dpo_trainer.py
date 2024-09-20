@@ -112,7 +112,7 @@ class TestBuildTokenizedAnswer(unittest.TestCase):
 class TestTruncateTokens(unittest.TestCase):
     def setUp(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            self.args = DPOConfig(
+            self.training_args = DPOConfig(
                 max_length=20, max_prompt_length=10, truncation_mode="keep_start", output_dir=tmp_dir
             )
 
@@ -135,7 +135,7 @@ class TestTruncateTokens(unittest.TestCase):
         ]
         prompt_tokens = [{"prompt_input_ids": list(range(15)), "prompt_attention_mask": [1] * 15}]
 
-        _truncate_tokens(chosen_tokens, rejected_tokens, prompt_tokens, self.args)
+        _truncate_tokens(chosen_tokens, rejected_tokens, prompt_tokens, self.training_args)
 
         # Check if prompt is truncated correctly
         self.assertEqual(len(chosen_tokens[0]["prompt_input_ids"]), 10)
@@ -152,7 +152,7 @@ class TestTruncateTokens(unittest.TestCase):
         self.assertEqual(len(rejected_tokens[0]["attention_mask"]), 10)
 
     def test_truncation_mode_keep_end(self):
-        self.args.truncation_mode = "keep_end"
+        self.training_args.truncation_mode = "keep_end"
         chosen_tokens = [
             {
                 "prompt_input_ids": list(range(15)),
@@ -171,7 +171,7 @@ class TestTruncateTokens(unittest.TestCase):
         ]
         prompt_tokens = [{"prompt_input_ids": list(range(15)), "prompt_attention_mask": [1] * 15}]
 
-        _truncate_tokens(chosen_tokens, rejected_tokens, prompt_tokens, self.args)
+        _truncate_tokens(chosen_tokens, rejected_tokens, prompt_tokens, self.training_args)
 
         # Check if prompt is truncated correctly from the end
         self.assertEqual(prompt_tokens[0]["prompt_input_ids"], list(range(5, 15)))
@@ -190,9 +190,9 @@ class TestTruncateTokens(unittest.TestCase):
         self.assertEqual(rejected_tokens[0]["attention_mask"], [1] * 10)
 
     def test_invalid_truncation_mode(self):
-        self.args.truncation_mode = "invalid_mode"
+        self.training_args.truncation_mode = "invalid_mode"
         with self.assertRaises(ValueError):
-            _truncate_tokens([], [], [], self.args)
+            _truncate_tokens([], [], [], self.training_args)
 
 
 class DPOTrainerTester(unittest.TestCase):
@@ -895,7 +895,7 @@ class DPOTrainerTester(unittest.TestCase):
         # See https://github.com/huggingface/trl/issues/1751
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dpo_config = DPOConfig(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
@@ -908,7 +908,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=self.model_id,
                 ref_model=self.model_id,
                 tokenizer=self.tokenizer,
-                args=dpo_config,
+                args=training_args,
                 train_dataset=dummy_dataset["train"],
             )
             assert trainer.model.config.torch_dtype == torch.float16
@@ -916,7 +916,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         # Now test when `torch_dtype` is provided but is wrong to either the model or the ref_model
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dpo_config = DPOConfig(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
@@ -931,12 +931,12 @@ class DPOTrainerTester(unittest.TestCase):
                 _ = DPOTrainer(
                     model=self.model_id,
                     tokenizer=self.tokenizer,
-                    args=dpo_config,
+                    args=training_args,
                     train_dataset=dummy_dataset["train"],
                 )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dpo_config = DPOConfig(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
@@ -952,7 +952,7 @@ class DPOTrainerTester(unittest.TestCase):
                     model=self.model_id,
                     ref_model=self.model_id,
                     tokenizer=self.tokenizer,
-                    args=dpo_config,
+                    args=training_args,
                     train_dataset=dummy_dataset["train"],
                 )
 
