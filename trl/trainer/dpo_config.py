@@ -129,9 +129,9 @@ class DPOConfig(TrainingArguments):
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
             DPO loss. The paper recommends `rpo_alpha=1.0`.
         use_num_logits_to_keep (`bool`, *optional*, defaults to `False`): 
-            If `True`, only a specified number of logits are used to compute the loss. This can be useful for saving memory 
-            and speeding up training by not computing the loss for all logits, especially in scenarios where only the 
-            top logits are relevant or when working with very long sequences.
+            If `True`, only a specified number of logits are computed in the forward pass. This can be useful for 
+            saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios 
+            when working with very long prompts where labels are -100 (ignored).
             [Read more](https://huggingface.co/docs/transformers/main/model_doc/llama#transformers.LlamaForCausalLM)
     """
 

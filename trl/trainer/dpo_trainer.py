@@ -450,8 +450,7 @@ class DPOTrainer(Trainer):
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
         reference_free: bool = False,
-        force_use_ref_model: bool = False,
-        use_num_logits_to_keep:  bool = False,
+        force_use_ref_model: bool = False
     ):
         if not isinstance(model, str) and ref_model is model:
             raise ValueError(
@@ -532,12 +531,6 @@ class DPOTrainer(Trainer):
                 "You passed `force_use_ref_model` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.force_use_ref_model = force_use_ref_model
-
-        if use_num_logits_to_keep:
-            warnings.warn(
-                "You passed `use_num_logits_to_keep` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.use_num_logits_to_keep = use_num_logits_to_keep
 
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -1080,6 +1073,7 @@ class DPOTrainer(Trainer):
             label_pad_token_id: The label pad token id.
             padding_value: The padding value to use for the concatenated inputs_ids.
             device: The device for the concatenated inputs.
+            use_num_logits_to_keep: Whether to computes necessary logits in the forward pass.
 
         Returns:
             A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
@@ -1092,9 +1086,10 @@ class DPOTrainer(Trainer):
             max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
 
         # Support num_logits_to_keep, which computes necessary logits in the forward pass.
-        # This saves memory for long prompts where labels are -100 (unused).
-        num_logits_to_keep = batch["chosen_labels"].shape[1] - (batch["chosen_labels"] != -100).nonzero(as_tuple=True)[1].min()
-        concatenated_batch["num_logits_to_keep"] = num_logits_to_keep.cpu()
+        # This saves memory for long prompts where labels are -100 (ignored).
+        if use_num_logits_to_keep:
+            num_logits_to_keep = batch["chosen_labels"].shape[1] - (batch["chosen_labels"] != -100).nonzero(as_tuple=True)[1].min()
+            concatenated_batch["num_logits_to_keep"] = num_logits_to_keep.cpu()
 
         for k in batch:
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
