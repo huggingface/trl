@@ -74,8 +74,8 @@ tqdm.pandas()
 
 if __name__ == "__main__":
     parser = HfArgumentParser((RewardScriptArguments, RewardConfig, ModelConfig))
-    args, config, model_config = parser.parse_args_into_dataclasses()
-    config.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+    args, training_args, model_config = parser.parse_args_into_dataclasses()
+    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     ################
     # Model & Tokenizer
@@ -113,7 +113,7 @@ if __name__ == "__main__":
     #############################
     # Load and preprocess dataset
     #############################
-    raw_datasets = load_dataset(args.dataset_name)
+    dataset = load_dataset(args.dataset_name)
 
     def preprocess_function(examples):
         new_examples = {
@@ -137,24 +137,21 @@ if __name__ == "__main__":
         # This assumes the chosen/rejected columns are in the OpenAI messages format.
         chosen_fn = conversations_formatting_function(tokenizer, "chosen")
         rejected_fn = conversations_formatting_function(tokenizer, "rejected")
-        raw_datasets = raw_datasets.map(
-            lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)}, num_proc=config.dataset_num_proc
+        dataset = dataset.map(
+            lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)}, num_proc=training_args.dataset_num_proc
         )
         # Tokenize inputs
-        raw_datasets = raw_datasets.map(
+        dataset = dataset.map(
             preprocess_function,
             batched=True,
-            num_proc=config.dataset_num_proc,
+            num_proc=training_args.dataset_num_proc,
         )
         # Filter out examples that are too long
-        raw_datasets = raw_datasets.filter(
-            lambda x: len(x["input_ids_chosen"]) <= config.max_length
-            and len(x["input_ids_rejected"]) <= config.max_length,
-            num_proc=config.dataset_num_proc,
+        dataset = dataset.filter(
+            lambda x: len(x["input_ids_chosen"]) <= training_args.max_length
+            and len(x["input_ids_rejected"]) <= training_args.max_length,
+            num_proc=training_args.dataset_num_proc,
         )
-
-    train_dataset = raw_datasets[args.dataset_train_split]
-    eval_dataset = raw_datasets[args.dataset_test_split]
 
     ##########
     # Training
@@ -162,9 +159,9 @@ if __name__ == "__main__":
     trainer = RewardTrainer(
         model=model,
         tokenizer=tokenizer,
-        args=config,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        args=training_args,
+        train_dataset=dataset[args.dataset_train_split],
+        eval_dataset=dataset[args.dataset_test_split],
         peft_config=get_peft_config(model_config),
     )
     trainer.train()
@@ -172,9 +169,9 @@ if __name__ == "__main__":
     ############################
     # Save model and push to Hub
     ############################
-    trainer.save_model(config.output_dir)
+    trainer.save_model(training_args.output_dir)
     metrics = trainer.evaluate()
     trainer.log_metrics("eval", metrics)
     trainer.save_metrics("eval", metrics)
-    trainer.save_model(config.output_dir)
+    trainer.save_model(training_args.output_dir)
     trainer.push_to_hub()

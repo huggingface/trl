@@ -74,9 +74,9 @@ def build_dataset(query_dataset, dataset_num_proc, input_min_text_length=2, inpu
             The dataloader for the dataset.
     """
     # load imdb with datasets
-    ds = load_dataset(query_dataset, split="train")
-    ds = ds.rename_columns({"text": "review"})
-    ds = ds.filter(lambda x: len(x["review"]) > 200, num_proc=dataset_num_proc)
+    dataset = load_dataset(query_dataset, split="train")
+    dataset = dataset.rename_columns({"text": "review"})
+    dataset = dataset.filter(lambda x: len(x["review"]) > 200, num_proc=dataset_num_proc)
 
     input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
@@ -85,9 +85,9 @@ def build_dataset(query_dataset, dataset_num_proc, input_min_text_length=2, inpu
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
-    ds = ds.map(tokenize, num_proc=dataset_num_proc)
-    ds.set_format(type="torch")
-    return ds
+    dataset = dataset.map(tokenize, num_proc=dataset_num_proc)
+    dataset.set_format(type="torch")
+    return dataset
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
