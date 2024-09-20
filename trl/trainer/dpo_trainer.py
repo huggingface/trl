@@ -451,6 +451,7 @@ class DPOTrainer(Trainer):
         ref_adapter_name: Optional[str] = None,
         reference_free: bool = False,
         force_use_ref_model: bool = False,
+        use_num_logits_to_keep:  bool = False,
     ):
         if not isinstance(model, str) and ref_model is model:
             raise ValueError(
@@ -531,6 +532,12 @@ class DPOTrainer(Trainer):
                 "You passed `force_use_ref_model` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.force_use_ref_model = force_use_ref_model
+
+        if use_num_logits_to_keep:
+            warnings.warn(
+                "You passed `use_num_logits_to_keep` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.use_num_logits_to_keep = use_num_logits_to_keep
 
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -763,6 +770,7 @@ class DPOTrainer(Trainer):
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = args.max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
+        self.use_num_logits_to_keep = args.use_num_logits_to_keep
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
@@ -1062,6 +1070,7 @@ class DPOTrainer(Trainer):
         label_pad_token_id: int = -100,
         padding_value: int = 0,
         device: Optional[torch.device] = None,
+        use_num_logits_to_keep: bool = False,
     ) -> Dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
 
@@ -1081,6 +1090,11 @@ class DPOTrainer(Trainer):
             max_length = max(batch["chosen_labels"].shape[1], batch["rejected_labels"].shape[1])
         else:
             max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
+
+        # Support num_logits_to_keep, which computes necessary logits in the forward pass.
+        # This saves memory for long prompts where labels are -100 (unused).
+        num_logits_to_keep = batch["chosen_labels"].shape[1] - (batch["chosen_labels"] != -100).nonzero(as_tuple=True)[1].min()
+        concatenated_batch["num_logits_to_keep"] = num_logits_to_keep.cpu()
 
         for k in batch:
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
@@ -1126,6 +1140,8 @@ class DPOTrainer(Trainer):
                 concatenated_batch["pixel_attention_mask"] = torch.cat(
                     [batch["prompt_pixel_attention_mask"], batch["prompt_pixel_attention_mask"]], dim=0
                 )
+        if use_num_logits_to_keep:
+            concatenated_batch["concatenated_labels"] = concatenated_batch["concatenated_labels"][:, -concatenated_batch["num_logits_to_keep"]:]
         return concatenated_batch
 
     def dpo_loss(
@@ -1358,6 +1374,7 @@ class DPOTrainer(Trainer):
             label_pad_token_id=self.label_pad_token_id,
             padding_value=self.padding_value,
             device=self.accelerator.device,
+            use_num_logits_to_keep=self.use_num_logits_to_keep
         )
         len_chosen = batch["chosen_labels"].shape[0]
 
@@ -1379,6 +1396,7 @@ class DPOTrainer(Trainer):
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
             use_cache=False,
+            num_logits_to_keep=concatenated_batch["num_logits_to_keep"], # save memory
             **model_kwargs,
         )
         all_logits = outputs.logits
