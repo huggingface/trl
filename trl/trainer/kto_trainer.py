@@ -178,9 +178,9 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
         max_length = kwargs["max_length"]
         bos_token_id = kwargs["tokenizer"].bos_token_id
         eos_token_id = kwargs["tokenizer"].eos_token_id
-        if bos_token_id != all_tokens["prompt_input_ids"][0]:
+        if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
             max_length -= 1
-        if eos_token_id != all_tokens["answer_input_ids"][-1]:
+        if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
             max_length -= 1
 
         # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
