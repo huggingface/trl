@@ -101,7 +101,6 @@ Here is a basic example on how to use the `SFTTrainer`:
 from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 
-# load dataset
 dataset = load_dataset("trl-lib/Capybara", split="train")
 
 # configure trainer
@@ -126,14 +125,12 @@ from trl.extras.dataset_formatting import conversations_formatting_function
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-# load model and tokenizer
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 model = AutoModelForSequenceClassification.from_pretrained(
     "Qwen/Qwen2.5-0.5B-Instruct", num_labels=1
 )
 model.config.pad_token_id = tokenizer.pad_token_id
 
-# load dataset and preprocess
 dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
 
 def preprocess_function(examples):
@@ -163,7 +160,6 @@ dataset = dataset.map(
     batched=True,
 )
 
-# configure trainer
 training_args = RewardConfig(
     per_device_train_batch_size=2,
     remove_unused_columns=False,
@@ -185,7 +181,7 @@ trainer.train()
 `RLOOTrainer` implements a [REINFORCE-style optimization](https://huggingface.co/papers/2402.14740) for RLHF that is more performant and memory-efficient than PPO. Here is a basic example of how to use the `RLOOTrainer`:
 
 ```python
-from trl import RLOOConfig, RLOOTrainer, maybe_apply_chat_template
+from trl import RLOOConfig, RLOOTrainer, apply_chat_template
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -193,7 +189,6 @@ from transformers import (
     AutoTokenizer,
 )
 
-# load model and tokenizer
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     "Qwen/Qwen2.5-0.5B-Instruct", num_labels=1
@@ -201,12 +196,10 @@ reward_model = AutoModelForSequenceClassification.from_pretrained(
 ref_policy = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 policy = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 
-# load dataset and preprocess
 dataset = load_dataset("trl-lib/ultrafeedback-prompt")
 dataset = dataset.map(apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 dataset = dataset.map(lambda x: tokenizer(x["prompt"]), remove_columns="prompt")
 
-# configure trainer
 training_args = RLOOConfig(output_dir="Qwen2.5-0.5B-RL")
 trainer = RLOOTrainer(
     config=training_args,
