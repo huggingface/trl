@@ -235,6 +235,9 @@ class RewardTrainer(Trainer):
                     fn_kwargs=fn_kwargs,
                     num_proc=args.dataset_num_proc,
                 )
+                # This filter is important because otherwise you get samples that exceed the model's context length and
+                # get truncated => noisy signal because the model can miss the proper label. The downside is that the
+                # user might get surprised if N samples are missing from training.
                 train_dataset = train_dataset.filter(
                     lambda x: len(x["input_ids_chosen"]) <= max_length and len(x["input_ids_rejected"]) <= max_length,
                     num_proc=args.dataset_num_proc,
