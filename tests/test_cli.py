@@ -38,3 +38,8 @@ def test_dpo_cli():
         )
     except BaseException as exc:
         raise AssertionError("An error occured while running the CLI, please double check") from exc
+
+
+def test_env_cli():
+    output = subprocess.run("trl env", capture_output=True, text=True, shell=True, check=True)
+    assert "- Python version: " in output.stdout
