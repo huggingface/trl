@@ -24,8 +24,26 @@ import torch
 import transformers
 from accelerate.commands.config import default_config_file, load_config_from_file
 from rich.console import Console
+from transformers import is_bitsandbytes_available
+from transformers.utils import is_peft_available
 
-from .. import __version__
+from .. import __version__, is_deepspeed_available, is_diffusers_available, is_liger_kernel_available
+
+
+if is_bitsandbytes_available():
+    import bitsandbytes
+
+if is_deepspeed_available():
+    import deepspeed
+
+if is_diffusers_available():
+    import diffusers
+
+if is_liger_kernel_available():
+    import liger_kernel
+
+if is_peft_available():
+    import peft
 
 
 SUPPORTED_COMMANDS = ["sft", "dpo", "chat", "kto", "env"]
@@ -47,7 +65,7 @@ def print_env():
     info = {
         "Platform": platform.platform(),
         "Python version": platform.python_version(),
-        "PyTorch version": f"{torch.__version__}",
+        "PyTorch version": torch.__version__,
         "CUDA device": torch.cuda.get_device_name() if torch.cuda.is_available() else "not available",
         "Transformers version": transformers.__version__,
         "Accelerate version": accelerate.__version__,
@@ -55,6 +73,11 @@ def print_env():
         "Datasets version": datasets.__version__,
         "TRL version": __version__,
         "HF Hub version": huggingface_hub.__version__,
+        "bitsandbytes version": bitsandbytes.__version__ if is_bitsandbytes_available() else "not installed",
+        "DeepSpeed": deepspeed.__version__ if is_deepspeed_available() else "not installed",
+        "Diffusers version": diffusers.__version__ if is_diffusers_available() else "not installed",
+        "PEFT version": peft.__version__ if is_peft_available() else "not installed",
+        "Liger-Kernel version": liger_kernel.__version__ if is_liger_kernel_available() else "not installed",
     }
 
     info_str = "\n".join([f"- {prop}: {val}" for prop, val in info.items()])
