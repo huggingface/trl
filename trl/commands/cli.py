@@ -25,9 +25,15 @@ import transformers
 from accelerate.commands.config import default_config_file, load_config_from_file
 from rich.console import Console
 from transformers import is_bitsandbytes_available
-from transformers.utils import is_peft_available
+from transformers.utils import is_openai_available, is_peft_available
 
-from .. import __version__, is_deepspeed_available, is_diffusers_available, is_liger_kernel_available
+from .. import (
+    __version__,
+    is_deepspeed_available,
+    is_diffusers_available,
+    is_liger_kernel_available,
+    is_llmblender_available,
+)
 
 
 if is_bitsandbytes_available():
@@ -41,6 +47,12 @@ if is_diffusers_available():
 
 if is_liger_kernel_available():
     import liger_kernel
+
+if is_llmblender_available():
+    import llm_blender
+
+if is_openai_available():
+    import openai
 
 if is_peft_available():
     import peft
@@ -71,13 +83,15 @@ def print_env():
         "Accelerate version": accelerate.__version__,
         "Accelerate config": accelerate_config_str,
         "Datasets version": datasets.__version__,
-        "TRL version": __version__,
         "HF Hub version": huggingface_hub.__version__,
+        "TRL version": __version__,
         "bitsandbytes version": bitsandbytes.__version__ if is_bitsandbytes_available() else "not installed",
-        "DeepSpeed": deepspeed.__version__ if is_deepspeed_available() else "not installed",
+        "DeepSpeed version": deepspeed.__version__ if is_deepspeed_available() else "not installed",
         "Diffusers version": diffusers.__version__ if is_diffusers_available() else "not installed",
-        "PEFT version": peft.__version__ if is_peft_available() else "not installed",
         "Liger-Kernel version": liger_kernel.__version__ if is_liger_kernel_available() else "not installed",
+        "LLM-Blender version": llm_blender.__version__ if is_llmblender_available() else "not installed",
+        "OpenAI version": openai.__version__ if is_openai_available() else "not installed",
+        "PEFT version": peft.__version__ if is_peft_available() else "not installed",
     }
 
     info_str = "\n".join([f"- {prop}: {val}" for prop, val in info.items()])
