@@ -67,11 +67,11 @@ eval_dataset = Dataset.from_dict(
     }
 )
 
-args = GKDConfig(output_dir="gkd-model", per_device_train_batch_size=1)
+training_args = GKDConfig(output_dir="gkd-model", per_device_train_batch_size=1)
 trainer = GKDTrainer(
     model=model,
     teacher_model=teacher_model,
-    args=args,
+    args=training_args,
     tokenizer=tokenizer,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,

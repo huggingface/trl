@@ -105,7 +105,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    ds = load_dataset(args.dataset_name)
+    dataset = load_dataset(args.dataset_name)
 
     def process(row):
         row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
@@ -116,10 +116,7 @@ if __name__ == "__main__":
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        ds = ds.map(process, num_proc=training_args.dataset_num_proc)
-
-    train_dataset = ds[args.dataset_train_split]
-    eval_dataset = ds[args.dataset_test_split]
+        dataset = dataset.map(process, num_proc=training_args.dataset_num_proc)
 
     ################
     # Training
@@ -128,8 +125,8 @@ if __name__ == "__main__":
         model,
         ref_model,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=dataset[args.dataset_train_split],
+        eval_dataset=dataset[args.dataset_test_split],
         tokenizer=processor,
         peft_config=peft_config,
     )
