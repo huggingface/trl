@@ -21,8 +21,9 @@ from typing import List, Optional, Union
 import numpy as np
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
+from transformers.utils import is_openai_available
 
-from ..import_utils import is_llmblender_available, is_openai_available
+from ..import_utils import is_llmblender_available
 
 
 if is_llmblender_available():

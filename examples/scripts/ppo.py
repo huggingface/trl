@@ -24,11 +24,10 @@ from accelerate import Accelerator, PartialState
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoTokenizer, HfArgumentParser, pipeline
+from transformers import AutoTokenizer, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
-from trl.import_utils import is_npu_available, is_xpu_available
 
 
 tqdm.pandas()
@@ -75,9 +74,9 @@ def build_dataset(query_dataset, dataset_num_proc, input_min_text_length=2, inpu
             The dataloader for the dataset.
     """
     # load imdb with datasets
-    ds = load_dataset(query_dataset, split="train")
-    ds = ds.rename_columns({"text": "review"})
-    ds = ds.filter(lambda x: len(x["review"]) > 200, num_proc=dataset_num_proc)
+    dataset = load_dataset(query_dataset, split="train")
+    dataset = dataset.rename_columns({"text": "review"})
+    dataset = dataset.filter(lambda x: len(x["review"]) > 200, num_proc=dataset_num_proc)
 
     input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
@@ -86,9 +85,9 @@ def build_dataset(query_dataset, dataset_num_proc, input_min_text_length=2, inpu
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
-    ds = ds.map(tokenize, num_proc=dataset_num_proc)
-    ds.set_format(type="torch")
-    return ds
+    dataset = dataset.map(tokenize, num_proc=dataset_num_proc)
+    dataset.set_format(type="torch")
+    return dataset
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
@@ -142,9 +141,9 @@ ppo_trainer = PPOTrainer(ppo_config, model, ref_model, tokenizer, dataset=datase
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
-    if is_xpu_available():
+    if is_torch_xpu_available():
         device = "xpu:0"
-    elif is_npu_available():
+    elif is_torch_npu_available():
         device = "npu:0"
     else:
         device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug

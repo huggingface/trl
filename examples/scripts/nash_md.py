@@ -1,4 +1,5 @@
 # flake8: noqa
+
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,12 +16,28 @@
 """
 Usage:
 
-python examples/scripts/xpo.py \
+python examples/scripts/nash_md.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
     --learning_rate 5.0e-7 \
-    --output_dir pythia-1b-tldr-xpo \
+    --output_dir pythia-1b-tldr-nash-md \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 32 \
+    --num_train_epochs 3 \
+    --max_new_tokens 64 \
+    --warmup_ratio 0.1 \
+    --missing_eos_penalty 1.0 \
+    --push_to_hub
+
+
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
+    examples/scripts/nash_md.py \
+    --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
+    --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
+    --dataset_name trl-lib/tldr \
+    --learning_rate 5.0e-7 \
+    --output_dir pythia-1b-tldr-nash-md \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 32 \
     --num_train_epochs 3 \
@@ -36,18 +53,18 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from trl import (
     DPOScriptArguments,
     ModelConfig,
-    XPOConfig,
-    XPOTrainer,
+    NashMDConfig,
+    NashMDTrainer,
     get_kbit_device_map,
     get_quantization_config,
     LogCompletionsCallback,
 )
 from trl.commands.cli_utils import TrlParser
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":
-    parser = TrlParser((DPOScriptArguments, XPOConfig, ModelConfig))
+    parser = TrlParser((DPOScriptArguments, NashMDConfig, ModelConfig))
     args, training_args, model_config = parser.parse_args_and_config()
     args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
@@ -83,11 +100,11 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
+        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
 
     dataset = load_dataset(args.dataset_name)
 
-    trainer = XPOTrainer(
+    trainer = NashMDTrainer(
         model=model,
         ref_model=ref_model,
         reward_model=reward_model,

@@ -33,10 +33,9 @@ import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
-from transformers import CLIPModel, CLIPProcessor, HfArgumentParser
+from transformers import CLIPModel, CLIPProcessor, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
-from trl.import_utils import is_npu_available, is_xpu_available
 
 
 @dataclass
@@ -116,9 +115,9 @@ def aesthetic_scorer(hub_model_id, model_filename):
         model_filename=model_filename,
         dtype=torch.float32,
     )
-    if is_npu_available():
+    if is_torch_npu_available():
         scorer = scorer.npu()
-    elif is_xpu_available():
+    elif is_torch_xpu_available():
         scorer = scorer.xpu()
     else:
         scorer = scorer.cuda()
@@ -186,8 +185,8 @@ def image_outputs_logger(image_data, global_step, accelerate_logger):
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, DDPOConfig))
-    args, ddpo_config = parser.parse_args_into_dataclasses()
-    ddpo_config.project_kwargs = {
+    args, training_args = parser.parse_args_into_dataclasses()
+    training_args.project_kwargs = {
         "logging_dir": "./logs",
         "automatic_checkpoint_naming": True,
         "total_limit": 5,
@@ -199,7 +198,7 @@ if __name__ == "__main__":
     )
 
     trainer = DDPOTrainer(
-        ddpo_config,
+        training_args,
         aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
         prompt_fn,
         pipeline,

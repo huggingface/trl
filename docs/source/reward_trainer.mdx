@@ -79,7 +79,7 @@ $$\Big( R(p, r_1) + R(p, r_2) \Big)^2 $$
 This auxiliary loss is combined with the main loss function, weighted by the parameter `center_rewards_coefficient` in the `[RewardConfig]`. By default, this feature is deactivated (`center_rewards_coefficient = None`).
 
 ```python
-reward_config = RewardConfig(
+training_args = RewardConfig(
     center_rewards_coefficient=0.01,
     ...
 )

@@ -14,10 +14,11 @@
 
 # flake8: noqa
 
-__version__ = "0.11.0.dev0"
+__version__ = "0.12.0.dev0"
 
 from typing import TYPE_CHECKING
 from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
+
 
 _import_structure = {
     "core": [
@@ -31,16 +32,9 @@ _import_structure = {
         "BestOfNSampler",
     ],
     "import_utils": [
-        "is_bitsandbytes_available",
         "is_diffusers_available",
-        "is_npu_available",
-        "is_peft_available",
-        "is_pil_available",
-        "is_wandb_available",
-        "is_xpu_available",
+        "is_liger_kernel_available",
         "is_llmblender_available",
-        "is_openai_available",
-        "is_liger_available",
     ],
     "models": [
         "AutoModelForCausalLMWithValueHead",
@@ -64,6 +58,8 @@ _import_structure = {
         "BCOConfig",
         "BCOTrainer",
         "ModelConfig",
+        "NashMDConfig",
+        "NashMDTrainer",
         "OnlineDPOConfig",
         "OnlineDPOTrainer",
         "XPOConfig",
@@ -93,6 +89,7 @@ _import_structure = {
         "PairRMJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
+        "LogCompletionsCallback",
     ],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
@@ -134,18 +131,7 @@ if TYPE_CHECKING:
     from .core import set_seed
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
-    from .import_utils import (
-        is_bitsandbytes_available,
-        is_diffusers_available,
-        is_npu_available,
-        is_peft_available,
-        is_pil_available,
-        is_wandb_available,
-        is_xpu_available,
-        is_llmblender_available,
-        is_openai_available,
-        is_liger_available,
-    )
+    from .import_utils import is_diffusers_available, is_liger_kernel_available, is_llmblender_available
     from .models import (
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
@@ -168,6 +154,8 @@ if TYPE_CHECKING:
         BCOConfig,
         BCOTrainer,
         ModelConfig,
+        NashMDConfig,
+        NashMDTrainer,
         OnlineDPOConfig,
         OnlineDPOTrainer,
         XPOConfig,
@@ -197,6 +185,7 @@ if TYPE_CHECKING:
         PairRMJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
+        LogCompletionsCallback,
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config

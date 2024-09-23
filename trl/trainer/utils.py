@@ -37,12 +37,13 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.utils import (
+    is_peft_available,
     is_torch_mlu_available,
     is_torch_npu_available,
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
+from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
 
@@ -825,35 +826,6 @@ class PerPromptStatTracker:
         return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
 
 
-def neftune_post_forward_hook(module, input, output):
-    """
-    Implements the NEFTune forward pass for the model using forward hooks. Note this works only for
-    torch.nn.Embedding layers. This method is slightly adapted from the original source code
-    that can be found here: https://github.com/neelsjain/NEFTune
-
-    Simply add it to your model as follows:
-    ```python
-    model = ...
-    model.embed_tokens.neftune_noise_alpha = 0.1
-    model.embed_tokens.register_forward_hook(neftune_post_forward_hook)
-    ```
-
-    Args:
-        module (`torch.nn.Module`):
-            The embedding module where the hook is attached. Note that you need to set
-            `module.neftune_noise_alpha` to the desired noise alpha value.
-        input (`torch.Tensor`):
-            The input tensor to the model.
-        output (`torch.Tensor`):
-            The output tensor of the model (i.e. the embeddings).
-    """
-    if module.training:
-        dims = torch.tensor(output.size(1) * output.size(2))
-        mag_norm = module.neftune_noise_alpha / torch.sqrt(dims)
-        output = output + torch.zeros_like(output).uniform_(-mag_norm, mag_norm)
-    return output
-
-
 def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
@@ -902,7 +874,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
 
 
 def get_kbit_device_map() -> Optional[Dict[str, int]]:
-    if is_xpu_available():
+    if is_torch_xpu_available():
         return {"": f"xpu:{PartialState().local_process_index}"}
     elif torch.cuda.is_available():
         return {"": PartialState().local_process_index}
@@ -974,10 +946,7 @@ def print_rich_table(df: pd.DataFrame) -> Table:
 SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
 # SIMPLE_SFT_CHAT_TEMPLATE simply ends things with an EOS token, this helps the SFT model learn to end the completions with EOS tokens
 
-SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
-
-# SIMPLE_QUERY_CHAT_TEMPLATE is a variant of SIMPLE_SFT_CHAT_TEMPLATE, which does not end the content with EOS token. The idea
-# is to have the generated response to end with an EOS token, but the query itself should not end with EOS tokens.
+SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
 
 
 @dataclass

@@ -15,7 +15,7 @@
 import tempfile
 import unittest
 
-import datasets
+from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl import (
@@ -39,11 +39,9 @@ from trl import (
 class TrainerArgTester(unittest.TestCase):
     def test_bco(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "completion": ["This is a test completion."], "label": [True]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = BCOConfig(
+            training_args = BCOConfig(
                 tmp_dir,
                 max_length=256,
                 max_prompt_length=64,
@@ -62,7 +60,9 @@ class TrainerArgTester(unittest.TestCase):
                 min_density_ratio=0.2,
                 max_density_ratio=20.0,
             )
-            trainer = BCOTrainer(model="gpt2", ref_model="gpt2", args=args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = BCOTrainer(
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+            )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
@@ -82,11 +82,9 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_cpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "chosen": ["Nice to meet you."], "rejected": ["I don't like you."]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = CPOConfig(
+            training_args = CPOConfig(
                 tmp_dir,
                 max_length=256,
                 max_prompt_length=64,
@@ -105,7 +103,7 @@ class TrainerArgTester(unittest.TestCase):
                 model_init_kwargs={"trust_remote_code": True},
                 dataset_num_proc=4,
             )
-            trainer = CPOTrainer(model="gpt2", args=args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = CPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer)
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
@@ -125,11 +123,9 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_dpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "chosen": ["Nice to meet you."], "rejected": ["I don't like you."]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = DPOConfig(
+            training_args = DPOConfig(
                 tmp_dir,
                 beta=0.5,
                 label_smoothing=0.5,
@@ -158,7 +154,9 @@ class TrainerArgTester(unittest.TestCase):
                 ref_model_sync_steps=32,
                 rpo_alpha=0.5,
             )
-            trainer = DPOTrainer(model="gpt2", ref_model="gpt2", args=args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = DPOTrainer(
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+            )
             self.assertEqual(trainer.args.beta, 0.5)
             self.assertEqual(trainer.args.label_smoothing, 0.5)
             self.assertEqual(trainer.args.loss_type, "hinge")
@@ -188,11 +186,9 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_kto(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "completion": ["This is a test completion."], "label": [True]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = KTOConfig(
+            training_args = KTOConfig(
                 tmp_dir,
                 max_length=256,
                 max_prompt_length=64,
@@ -210,7 +206,9 @@ class TrainerArgTester(unittest.TestCase):
                 ref_model_init_kwargs={"trust_remote_code": True},
                 dataset_num_proc=4,
             )
-            trainer = KTOTrainer(model="gpt2", ref_model="gpt2", args=args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = KTOTrainer(
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+            )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
@@ -229,11 +227,9 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_online_dpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "completion": ["This is a test completion."], "label": [True]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = OnlineDPOConfig(
+            training_args = OnlineDPOConfig(
                 tmp_dir,
                 max_new_tokens=42,
                 temperature=0.5,
@@ -246,7 +242,7 @@ class TrainerArgTester(unittest.TestCase):
             ref_model = AutoModelForCausalLM.from_pretrained("EleutherAI/pythia-14m")
             reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
             trainer = OnlineDPOTrainer(
-                args=args,
+                args=training_args,
                 tokenizer=tokenizer,
                 model=model,
                 ref_model=ref_model,
@@ -262,11 +258,9 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_orpo(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "chosen": ["Nice to meet you."], "rejected": ["I don't like you."]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = ORPOConfig(
+            training_args = ORPOConfig(
                 tmp_dir,
                 max_length=256,
                 max_prompt_length=64,
@@ -282,7 +276,7 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
             )
 
-            trainer = ORPOTrainer(model="gpt2", args=args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = ORPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer)
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
@@ -291,11 +285,9 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.label_pad_token_id, -99)
 
     def test_sft(self):
-        dataset = datasets.Dataset.from_dict(
-            {"prompt": ["Hello, world!"], "chosen": ["Nice to meet you."], "rejected": ["I don't like you."]}
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            args = SFTConfig(
+            training_args = SFTConfig(
                 tmp_dir,
                 dataset_text_field="dummy_text_field",
                 packing=True,
@@ -309,7 +301,7 @@ class TrainerArgTester(unittest.TestCase):
                 num_of_sequences=32,
                 chars_per_token=4.2,
             )
-            trainer = SFTTrainer("gpt2", args=args, train_dataset=dataset)
+            trainer = SFTTrainer("gpt2", args=training_args, train_dataset=dataset)
             self.assertEqual(trainer.args.dataset_text_field, "dummy_text_field")
             self.assertEqual(trainer.args.packing, True)
             self.assertEqual(trainer.args.max_seq_length, 256)

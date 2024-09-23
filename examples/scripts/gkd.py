@@ -17,7 +17,7 @@
 python examples/scripts/gkd.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
-    --dataset_name andito/chatbot_arena_completions \
+    --dataset_name trl-lib/chatbot_arena_completions \
     --learning_rate 2e-5 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
@@ -31,7 +31,7 @@ python examples/scripts/gkd.py \
 python examples/scripts/gkd.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2-1.5B-Instruct \
-    --dataset_name andito/chatbot_arena_completions \
+    --dataset_name trl-lib/chatbot_arena_completions \
     --learning_rate 2e-4 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
@@ -46,7 +46,7 @@ python examples/scripts/gkd.py \
 """
 
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, GenerationConfig
 
 from trl import (
     GKDConfig,
@@ -55,9 +55,11 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
+    maybe_apply_chat_template,
+    LogCompletionsCallback,
 )
 from trl.commands.cli_utils import SFTScriptArguments, TrlParser
-from trl.trainer.callbacks import LogCompletionsCallback
+from accelerate import PartialState
 
 
 if __name__ == "__main__":
@@ -101,18 +103,15 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset(args.dataset_name)
-    train_dataset = raw_datasets[args.dataset_train_split]
-    try:
-        eval_dataset = raw_datasets[args.dataset_test_split]
-        prompts = eval_dataset["messages"][:8]
-    except KeyError:
-        eval_dataset = None
-        prompts = train_dataset["messages"][:8]
+    dataset = load_dataset(args.dataset_name)
 
-    # remove the last assistant message from the prompts messages and then apply chat template to the prompts
-    prompts = [prompts[i][:-1] for i in range(len(prompts))]
-    prompts = [tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True) for prompt in prompts]
+    with PartialState().local_main_process_first():
+        dataset = dataset.map(
+            lambda x: {
+                "prompt": tokenizer.apply_chat_template(x["prompt"], tokenize=False, add_generation_prompt=True)
+            },
+            num_proc=training_args.dataset_num_proc,
+        )
 
     ################
     # Training
@@ -121,13 +120,16 @@ if __name__ == "__main__":
         model=model_config.model_name_or_path,
         teacher_model=training_args.teacher_model_name_or_path,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=dataset[args.dataset_train_split],
+        eval_dataset=dataset[args.dataset_test_split],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )
-    log_completions_callback = LogCompletionsCallback(prompts)
-    trainer.add_callback(log_completions_callback)
+    generation_config = GenerationConfig(
+        max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+    )
+    completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
+    trainer.add_callback(completions_callback)
     trainer.train()
 
     trainer.save_model(training_args.output_dir)

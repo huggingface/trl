@@ -39,7 +39,7 @@ from transformers import (
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
-from transformers.trainer_callback import CallbackHandler, PrinterCallback
+from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 
 from ..core import masked_mean, masked_whiten
 from ..models.utils import unwrap_model_for_generation
@@ -97,6 +97,12 @@ class PPOv2Trainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[List[TrainerCallback]] = None,
     ) -> None:
+        if ref_policy is policy:
+            raise ValueError(
+                "`policy` and `ref_policy` cannot be the same object. If you want `ref_policy` to be the "
+                "same as `policy`, you must mass a copy of it, or `None` if you use peft."
+            )
+
         self.args = config
         args = config
         self.tokenizer = tokenizer
@@ -168,10 +174,6 @@ class PPOv2Trainer(Trainer):
         #########
         ### trainer specifics
         #########
-        self.state = OnlineTrainerState(
-            is_local_process_zero=self.is_local_process_zero(),
-            is_world_process_zero=self.is_world_process_zero(),
-        )
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
@@ -179,6 +181,13 @@ class PPOv2Trainer(Trainer):
         )
         self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
         self.control = TrainerControl()
+        self.state = OnlineTrainerState(
+            is_local_process_zero=self.is_local_process_zero(),
+            is_world_process_zero=self.is_world_process_zero(),
+            stateful_callbacks=[
+                cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)
+            ],
+        )
         self.current_flos = 0
         self.hp_search_backend = None
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
@@ -264,7 +273,6 @@ class PPOv2Trainer(Trainer):
         iter_dataloader = iter(repeat_generator())
         generation_config = GenerationConfig(
             max_new_tokens=args.response_length,
-            min_new_tokens=args.response_length,
             temperature=(args.temperature + 1e-7),
             top_k=0.0,
             top_p=1.0,
@@ -305,6 +313,11 @@ class PPOv2Trainer(Trainer):
             else:
                 self.state.save_steps = args.save_steps
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+
+        # backward compatibility
+        if self.is_deepspeed_enabled:
+            self.deepspeed = self.model
+            self.model_wrapped = self.model
 
         for update in range(1, args.num_total_batches + 1):
             self.state.episode += 1 * args.batch_size

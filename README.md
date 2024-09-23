@@ -3,7 +3,10 @@
 </div>
 
 # TRL - Transformer Reinforcement Learning
-> Full stack library to fine-tune and align large language models.
+
+<h3 align="center">
+    <p>Full stack library to post-train large language models.</p>
+</h3>
 
 <p align="center">
     <a href="https://github.com/huggingface/trl/blob/main/LICENSE">
@@ -20,88 +23,92 @@
 
 ## What is it?
 
-The `trl` library is a full stack tool to fine-tune and align transformer language and diffusion models using methods such as Supervised Fine-tuning step (SFT), Reward Modeling (RM) and the Proximal Policy Optimization (PPO) as well as Direct Preference Optimization (DPO). 
+TRL is a library to post-train LLMs and diffusion models with methods such as Supervised Fine-tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). 
 
-The library is built on top of the [`transformers`](https://github.com/huggingface/transformers) library and thus allows to use any model architecture available there.
+The library is built on top of [🤗 Transformers](https://github.com/huggingface/transformers) and is compatible with any model architecture available there.
 
 
 ## Highlights
 
 - **`Efficient and scalable`**: 
-    - [`accelerate`](https://github.com/huggingface/accelerate) is the backbone of `trl` which allows to scale model training from a single GPU to a large scale multi-node cluster with methods such as DDP and DeepSpeed.
+    - [🤗 Accelerate](https://github.com/huggingface/accelerate) is the backbone of TRL that model training to scale from a single GPU to a large scale multi-node cluster with methods such as DDP and DeepSpeed.
     - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to train even the largest models on modest hardware with quantisation and methods such as LoRA or QLoRA.
-    - [`unsloth`](https://github.com/unslothai/unsloth) is also integrated and allows to significantly speed up training with dedicated kernels.
+    - [Unsloth](https://github.com/unslothai/unsloth) is also integrated and allows to significantly speed up training with dedicated kernels.
 - **`CLI`**: With the [CLI](https://huggingface.co/docs/trl/clis) you can fine-tune and chat with LLMs without writing any code using a single command and a flexible config system.
-- **`Trainers`**: The Trainer classes are an abstraction to apply many fine-tuning methods with ease such as the [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/trainer#trl.DPOTrainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer), [`PPOTrainer`](https://huggingface.co/docs/trl/trainer#trl.PPOTrainer), [`CPOTrainer`](https://huggingface.co/docs/trl/trainer#trl.CPOTrainer), and [`ORPOTrainer`](https://huggingface.co/docs/trl/trainer#trl.ORPOTrainer).
+- **`Trainers`**: The trainer classes are an abstraction to apply many fine-tuning methods with ease such as the [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer), [`PPOTrainer`](https://huggingface.co/docs/trl/ppov2_trainer), and [`ORPOTrainer`](https://huggingface.co/docs/trl/orpo_trainer).
 - **`AutoModels`**: The [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) & [`AutoModelForSeq2SeqLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForSeq2SeqLMWithValueHead) classes add an additional value head to the model which allows to train them with RL algorithms such as PPO.
-- **`Examples`**: Train GPT2 to generate positive movie reviews with a BERT sentiment classifier, full RLHF using adapters only, train GPT-j to be less toxic, [StackLlama example](https://huggingface.co/blog/stackllama), etc. following the [examples](https://github.com/huggingface/trl/tree/main/examples).
+- **`Examples`**: Fine-tune Llama for chat applications or apply full RLHF using adapters etc, following the [examples](https://github.com/huggingface/trl/tree/main/examples).
 
 ## Installation
 
 ### Python package
+
 Install the library with `pip`:
+
 ```bash
 pip install trl
 ```
 
 ### From source
+
 If you want to use the latest features before an official release you can install from source:
+
 ```bash
 pip install git+https://github.com/huggingface/trl.git
 ```
 
 ### Repository
+
 If you want to use the examples you can clone the repository with the following command:
+
 ```bash
 git clone https://github.com/huggingface/trl.git
 ```
 
 ## Command Line Interface (CLI)
 
-You can use TRL Command Line Interface (CLI) to quickly get started with Supervised Fine-tuning (SFT), Direct Preference Optimization (DPO) and test your aligned model with the chat CLI: 
+You can use TRL Command Line Interface (CLI) to quickly get started with Supervised Fine-tuning (SFT) and Direct Preference Optimization (DPO), or vibe check your model with the chat CLI: 
 
 **SFT:**
 
 ```bash
-trl sft --model_name_or_path facebook/opt-125m --dataset_name stanfordnlp/imdb --output_dir opt-sft-imdb
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name trl-lib/Capybara --output_dir Qwen2.5-0.5B-SFT
 ```
 
 **DPO:**
 
 ```bash
-trl dpo --model_name_or_path facebook/opt-125m --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style --output_dir opt-sft-hh-rlhf 
+trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct --dataset_name argilla/Capybara-Preferences --output_dir Qwen2.5-0.5B-DPO 
 ```
 
 **Chat:**
 
 ```bash
-trl chat --model_name_or_path Qwen/Qwen1.5-0.5B-Chat
+trl chat --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct
 ```
 
 Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
 
 ## How to use
 
-For more flexibility and control over the training, you can use the dedicated trainer classes to fine-tune the model in Python.
+For more flexibility and control over training, TRL provides dedicated trainer classes to post-train language models or PEFT adapters on a custom dataset. Each trainer in TRL is a light wrapper around the 🤗 Transformers trainer and natively supports distributed training methods like DDP, DeepSpeed ZeRO, and FSDP.
 
 ### `SFTTrainer`
 
-This is a basic example of how to use the `SFTTrainer` from the library. The `SFTTrainer` is a light wrapper around the `transformers` Trainer to easily fine-tune language models or adapters on a custom dataset.
+Here is a basic example on how to use the `SFTTrainer`:
 
 ```python
-# imports
+from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
-from trl import SFTTrainer
 
-# get dataset
-dataset = load_dataset("stanfordnlp/imdb", split="train")
+dataset = load_dataset("trl-lib/Capybara", split="train")
 
-# get trainer
+# configure trainer
+training_args = SFTConfig(output_dir="Qwen/Qwen2.5-0.5B-SFT")
 trainer = SFTTrainer(
-    "facebook/opt-350m",
+    args=training_args,
+    model="Qwen/Qwen2.5-0.5B",
     train_dataset=dataset,
-    dataset_text_field="text",
-    max_seq_length=512,
 )
 
 # train
@@ -110,21 +117,56 @@ trainer.train()
 
 ### `RewardTrainer`
 
-This is a basic example of how to use the `RewardTrainer` from the library. The `RewardTrainer` is a wrapper around the `transformers` Trainer to easily fine-tune reward models or adapters on a custom preference dataset.
+Here is a basic example on how to use the `RewardTrainer`:
 
 ```python
-# imports
+from trl import RewardConfig, RewardTrainer
+from trl.extras.dataset_formatting import conversations_formatting_function
+from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from trl import RewardTrainer
 
-# load model and dataset - dataset needs to be in a specific format
-model = AutoModelForSequenceClassification.from_pretrained("gpt2", num_labels=1)
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+model = AutoModelForSequenceClassification.from_pretrained(
+    "Qwen/Qwen2.5-0.5B-Instruct", num_labels=1
+)
+model.config.pad_token_id = tokenizer.pad_token_id
 
-...
+dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
 
-# load trainer
+def preprocess_function(examples):
+    new_examples = {
+        "input_ids_chosen": [],
+        "attention_mask_chosen": [],
+        "input_ids_rejected": [],
+        "attention_mask_rejected": [],
+    }
+    for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
+        tokenized_chosen = tokenizer(chosen)
+        tokenized_rejected = tokenizer(rejected)
+        new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
+        new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
+        new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
+        new_examples["attention_mask_rejected"].append(
+            tokenized_rejected["attention_mask"]
+        )
+
+    return new_examples
+
+chosen_fn = conversations_formatting_function(tokenizer, "chosen")
+rejected_fn = conversations_formatting_function(tokenizer, "rejected")
+dataset = dataset.map(lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)})
+dataset = dataset.map(
+    preprocess_function,
+    batched=True,
+)
+
+training_args = RewardConfig(
+    per_device_train_batch_size=2,
+    remove_unused_columns=False,
+    output_dir="Qwen2.5-0.5B-Reward",
+)
 trainer = RewardTrainer(
+    args=training_args,
     model=model,
     tokenizer=tokenizer,
     train_dataset=dataset,
@@ -134,62 +176,67 @@ trainer = RewardTrainer(
 trainer.train()
 ```
 
-### `PPOTrainer`
+### `RLOOTrainer`
 
-This is a basic example of how to use the `PPOTrainer` from the library. Based on a query the language model creates a response which is then evaluated. The evaluation could be a human in the loop or another model's output.
+`RLOOTrainer` implements a [REINFORCE-style optimization](https://huggingface.co/papers/2402.14740) for RLHF that is more performant and memory-efficient than PPO. Here is a basic example of how to use the `RLOOTrainer`:
 
 ```python
-# imports
-import torch
-from transformers import AutoTokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, create_reference_model
-from trl.core import respond_to_batch
+from trl import RLOOConfig, RLOOTrainer, apply_chat_template
+from datasets import load_dataset
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+)
 
-# get models
-model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-ref_model = create_reference_model(model)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+reward_model = AutoModelForSequenceClassification.from_pretrained(
+    "Qwen/Qwen2.5-0.5B-Instruct", num_labels=1
+)
+ref_policy = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+policy = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 
-tokenizer = AutoTokenizer.from_pretrained('gpt2')
-tokenizer.pad_token = tokenizer.eos_token
+dataset = load_dataset("trl-lib/ultrafeedback-prompt")
+dataset = dataset.map(apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+dataset = dataset.map(lambda x: tokenizer(x["prompt"]), remove_columns="prompt")
 
-# initialize trainer
-ppo_config = PPOConfig(batch_size=1, mini_batch_size=1)
-
-# encode a query
-query_txt = "This morning I went to the "
-query_tensor = tokenizer.encode(query_txt, return_tensors="pt")
-
-# get model response
-response_tensor  = respond_to_batch(model, query_tensor)
-
-# create a ppo trainer
-ppo_trainer = PPOTrainer(ppo_config, model, ref_model, tokenizer)
-
-# define a reward for response
-# (this could be any reward such as human feedback or output from another model)
-reward = [torch.tensor(1.0)]
-
-# train model for one step with ppo
-train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
+training_args = RLOOConfig(output_dir="Qwen2.5-0.5B-RL")
+trainer = RLOOTrainer(
+    config=training_args,
+    tokenizer=tokenizer,
+    policy=policy,
+    ref_policy=ref_policy,
+    reward_model=reward_model,
+    train_dataset=dataset["train"],
+    eval_dataset=dataset["test"],
+)
+# train
+trainer.train()
 ```
 
 ### `DPOTrainer`
 
-`DPOTrainer` is a trainer that uses [Direct Preference Optimization algorithm](https://huggingface.co/papers/2305.18290). This is a basic example of how to use the `DPOTrainer` from the library. The `DPOTrainer` is a wrapper around the `transformers` Trainer to easily fine-tune reward models or adapters on a custom preference dataset.
+`DPOTrainer` implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train Llama 3 and many other models. Here is a basic example on how to use the `DPOTrainer`:
 
 ```python
 # imports
+from trl import DPOConfig, DPOTrainer, maybe_extract_prompt, maybe_apply_chat_template
+from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import DPOTrainer
 
-# load model and dataset - dataset needs to be in a specific format
-model = AutoModelForCausalLM.from_pretrained("gpt2")
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
+# load model and tokenizer
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 
-...
+# load preference dataset - needs to be in a specific format
+dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
+dataset = dataset.map(maybe_extract_prompt)
+dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 
 # load trainer
+training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 trainer = DPOTrainer(
+    args=training_args,
     model=model,
     tokenizer=tokenizer,
     train_dataset=dataset,
@@ -209,20 +256,11 @@ cd trl/
 make dev
 ```
 
-## References
-
-### Proximal Policy Optimisation
-The PPO implementation largely follows the structure introduced in the paper **"Fine-Tuning Language Models from Human Preferences"** by D. Ziegler et al. \[[paper](https://huggingface.co/papers/1909.08593), [code](https://github.com/openai/lm-human-preferences)].
-
-### Direct Preference Optimization
-DPO is based on the original implementation of **"Direct Preference Optimization: Your Language Model is Secretly a Reward Model"** by E. Mitchell et al. \[[paper](https://huggingface.co/papers/2305.18290), [code](https://github.com/eric-mitchell/direct-preference-optimization)]
-
-
 ## Citation
 
 ```bibtex
 @misc{vonwerra2022trl,
-  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang},
+  author = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallouédec},
   title = {TRL: Transformer Reinforcement Learning},
   year = {2020},
   publisher = {GitHub},
