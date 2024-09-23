@@ -15,13 +15,10 @@ import os
 import platform
 import subprocess
 import sys
+from importlib.metadata import version
 from subprocess import CalledProcessError
 
-import accelerate
-import datasets
-import huggingface_hub
 import torch
-import transformers
 from accelerate.commands.config import default_config_file, load_config_from_file
 from rich.console import Console
 from transformers import is_bitsandbytes_available
@@ -34,28 +31,7 @@ from .. import (
     is_liger_kernel_available,
     is_llmblender_available,
 )
-
-
-if is_bitsandbytes_available():
-    import bitsandbytes
-
-if is_deepspeed_available():
-    import deepspeed
-
-if is_diffusers_available():
-    import diffusers
-
-if is_liger_kernel_available():
-    import liger_kernel
-
-if is_llmblender_available():
-    import llm_blender
-
-if is_openai_available():
-    import openai
-
-if is_peft_available():
-    import peft
+from .cli_utils import get_git_commit_hash
 
 
 SUPPORTED_COMMANDS = ["sft", "dpo", "chat", "kto", "env"]
@@ -74,24 +50,26 @@ def print_env():
         else f"\t{accelerate_config}"
     )
 
+    commit_hash = get_git_commit_hash("trl")
+
     info = {
         "Platform": platform.platform(),
         "Python version": platform.python_version(),
-        "PyTorch version": torch.__version__,
+        "PyTorch version": version("torch"),
         "CUDA device": torch.cuda.get_device_name() if torch.cuda.is_available() else "not available",
-        "Transformers version": transformers.__version__,
-        "Accelerate version": accelerate.__version__,
+        "Transformers version": version("transformers"),
+        "Accelerate version": version("accelerate"),
         "Accelerate config": accelerate_config_str,
-        "Datasets version": datasets.__version__,
-        "HF Hub version": huggingface_hub.__version__,
-        "TRL version": __version__,
-        "bitsandbytes version": bitsandbytes.__version__ if is_bitsandbytes_available() else "not installed",
-        "DeepSpeed version": deepspeed.__version__ if is_deepspeed_available() else "not installed",
-        "Diffusers version": diffusers.__version__ if is_diffusers_available() else "not installed",
-        "Liger-Kernel version": liger_kernel.__version__ if is_liger_kernel_available() else "not installed",
-        "LLM-Blender version": llm_blender.__version__ if is_llmblender_available() else "not installed",
-        "OpenAI version": openai.__version__ if is_openai_available() else "not installed",
-        "PEFT version": peft.__version__ if is_peft_available() else "not installed",
+        "Datasets version": version("datasets"),
+        "HF Hub version": version("huggingface_hub"),
+        "TRL version": f"{__version__}+{commit_hash[:7]}" if commit_hash else __version__,
+        "bitsandbytes version": version("bitsandbytes") if is_bitsandbytes_available() else "not installed",
+        "DeepSpeed version": version("deepspeed") if is_deepspeed_available() else "not installed",
+        "Diffusers version": version("diffusers") if is_diffusers_available() else "not installed",
+        "Liger-Kernel version": version("liger_kernel") if is_liger_kernel_available() else "not installed",
+        "LLM-Blender version": version("llm_blender") if is_llmblender_available() else "not installed",
+        "OpenAI version": version("openai") if is_openai_available() else "not installed",
+        "PEFT version": version("peft") if is_peft_available() else "not installed",
     }
 
     info_str = "\n".join([f"- {prop}: {val}" for prop, val in info.items()])
