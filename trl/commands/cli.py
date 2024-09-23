@@ -42,12 +42,12 @@ def print_env():
 
     # Get the default from the config file.
     if os.path.isfile(default_config_file):
-        accelerate_config = load_config_from_file().to_dict()
+        accelerate_config = load_config_from_file(default_config_file).to_dict()
 
     accelerate_config_str = (
-        "\n".join([f"\t- {prop}: {val}" for prop, val in accelerate_config.items()])
+        "\n" + "\n".join([f"  - {prop}: {val}" for prop, val in accelerate_config.items()])
         if isinstance(accelerate_config, dict)
-        else f"\t{accelerate_config}"
+        else accelerate_config
     )
 
     commit_hash = get_git_commit_hash("trl")
