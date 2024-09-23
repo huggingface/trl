@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import pandas as pd
 import torch
 import torch.nn as nn
+from accelerate import PartialState
 from accelerate.utils import gather_object
 from datasets import Dataset
 from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
@@ -41,6 +42,25 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+
+
+def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase") -> Dict[str, List[Any]]:
+    """Tokenize a batch from a reward modelling dataset."""
+    new_examples = {
+        "input_ids_chosen": [],
+        "attention_mask_chosen": [],
+        "input_ids_rejected": [],
+        "attention_mask_rejected": [],
+    }
+    for chosen, rejected in zip(batch["chosen"], batch["rejected"]):
+        tokenized_chosen = tokenizer(chosen)
+        tokenized_rejected = tokenizer(rejected)
+        new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
+        new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
+        new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
+        new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
+
+    return new_examples
 
 
 class RewardTrainer(Trainer):
@@ -205,6 +225,34 @@ class RewardTrainer(Trainer):
             self.use_reward_data_collator = True
         else:
             self.use_reward_data_collator = False
+
+        if "input_ids" not in train_dataset.column_names:
+            with PartialState().local_main_process_first():
+                fn_kwargs = {"tokenizer": tokenizer}
+                train_dataset = train_dataset.map(
+                    _tokenize,
+                    batched=True,
+                    fn_kwargs=fn_kwargs,
+                    num_proc=args.dataset_num_proc,
+                )
+                eval_dataset = eval_dataset.map(
+                    _tokenize,
+                    fn_kwargs=fn_kwargs,
+                    batched=True,
+                    num_proc=args.dataset_num_proc,
+                )
+                # Filter out examples that are too long
+                train_dataset = train_dataset.filter(
+                    lambda x: len(x["input_ids_chosen"]) <= args.max_length
+                    and len(x["input_ids_rejected"]) <= args.max_length,
+                    num_proc=args.dataset_num_proc,
+                )
+                eval_dataset = eval_dataset.filter(
+                    lambda x: len(x["input_ids_chosen"]) <= args.max_length
+                    and len(x["input_ids_rejected"]) <= args.max_length,
+                    num_proc=args.dataset_num_proc,
+                )
+
         super().__init__(
             model=model,
             args=args,
