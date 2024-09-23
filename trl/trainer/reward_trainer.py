@@ -235,23 +235,22 @@ class RewardTrainer(Trainer):
                     fn_kwargs=fn_kwargs,
                     num_proc=args.dataset_num_proc,
                 )
-                eval_dataset = eval_dataset.map(
-                    _tokenize,
-                    fn_kwargs=fn_kwargs,
-                    batched=True,
-                    num_proc=args.dataset_num_proc,
-                )
-                # Filter out examples that are too long
                 train_dataset = train_dataset.filter(
-                    lambda x: len(x["input_ids_chosen"]) <= args.max_length
-                    and len(x["input_ids_rejected"]) <= args.max_length,
+                    lambda x: len(x["input_ids_chosen"]) <= max_length and len(x["input_ids_rejected"]) <= max_length,
                     num_proc=args.dataset_num_proc,
                 )
-                eval_dataset = eval_dataset.filter(
-                    lambda x: len(x["input_ids_chosen"]) <= args.max_length
-                    and len(x["input_ids_rejected"]) <= args.max_length,
-                    num_proc=args.dataset_num_proc,
-                )
+                if eval_dataset is not None:
+                    eval_dataset = eval_dataset.map(
+                        _tokenize,
+                        fn_kwargs=fn_kwargs,
+                        batched=True,
+                        num_proc=args.dataset_num_proc,
+                    )
+                    eval_dataset = eval_dataset.filter(
+                        lambda x: len(x["input_ids_chosen"]) <= max_length
+                        and len(x["input_ids_rejected"]) <= max_length,
+                        num_proc=args.dataset_num_proc,
+                    )
 
         super().__init__(
             model=model,
