@@ -30,6 +30,7 @@ from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
+from ..data_utils import maybe_apply_chat_template
 from .reward_config import RewardConfig
 from .utils import (
     RewardDataCollatorWithPadding,
@@ -229,6 +230,7 @@ class RewardTrainer(Trainer):
         if "input_ids" not in train_dataset.column_names:
             with PartialState().local_main_process_first():
                 fn_kwargs = {"tokenizer": tokenizer}
+                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
                 train_dataset = train_dataset.map(
                     _tokenize,
                     batched=True,
@@ -243,6 +245,7 @@ class RewardTrainer(Trainer):
                     num_proc=args.dataset_num_proc,
                 )
                 if eval_dataset is not None:
+                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
                     eval_dataset = eval_dataset.map(
                         _tokenize,
                         fn_kwargs=fn_kwargs,

@@ -51,7 +51,6 @@ python examples/scripts/reward_modeling.py \
 import warnings
 
 import torch
-from accelerate import PartialState
 from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
@@ -63,7 +62,6 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    maybe_apply_chat_template,
     setup_chat_format,
 )
 from trl.commands.cli_utils import RewardScriptArguments
@@ -110,15 +108,10 @@ if __name__ == "__main__":
             " Make sure to pass --lora_task_type SEQ_CLS when using this script with PEFT."
         )
 
-    #############################
-    # Load and preprocess dataset
-    #############################
+    ##############
+    # Load dataset
+    ##############
     dataset = load_dataset(args.dataset_name)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(
-            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
-        )
 
     ##########
     # Training
