@@ -195,7 +195,7 @@ class RichProgressCallback(TrainerCallback):
             self.current_step = None
 
 
-class WinRateCallback(TrainerCallback):
+class WinRateCallback(WandbCallback):
     """
     A [`~transformers.TrainerCallback`] that computes the win rate of a model based on a reference.
 
@@ -234,11 +234,15 @@ class WinRateCallback(TrainerCallback):
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
         num_prompts: int = None,
+        shuffle_order: Optional[bool] = True,
     ):
+        super().__init__()
         self.judge = judge
         self.trainer = trainer
+        self.shuffle_order = shuffle_order
         self.generation_config = generation_config
         self.ref_completions = []
+        self.table = []
 
         if self.trainer.eval_dataset is None:
             raise ValueError("Trainer must have an evaluation dataset to use the WinRateCallback.")
@@ -293,11 +297,22 @@ class WinRateCallback(TrainerCallback):
             )
 
             completions = list(zip(self.ref_completions, completions))
-            winner_indices = self.judge.judge(prompts, completions)
+            winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
+            prompts = gather_object(prompts)
+            completions = gather_object(completions)
             winner_indices = gather_object(winner_indices)
 
         # Logging
         if self.trainer.accelerator.is_main_process:
+            global_step = [str(state.global_step)] * len(prompts)
+            data = list(zip(global_step, prompts, completions, winner_indices))
+            # Split referenece and completion
+            split_data = [(item[0], item[1], item[2][0], item[2][1], item[3]) for item in data]
+            self.table.extend(split_data)
+            table = self._wandb.Table(
+                columns=["step", "prompt", "reference", "completion", "winner_index"], data=self.table
+            )
+            self._wandb.log({"win_rate_completions": table})
             win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
             self.trainer.log({"eval_win_rate": win_rate})
 
@@ -375,7 +390,6 @@ class LogCompletionsCallback(WandbCallback):
 
         # Build the data to log
         if self.trainer.accelerator.is_main_process:
-            # prompts = self.eval_dataset["prompt"][:]
             global_step = [str(state.global_step)] * len(prompts)
             data = list(zip(global_step, prompts, completions))
             self.table.extend(data)
