@@ -7,6 +7,7 @@ Currently supported CLIs are:
 - `trl sft`: fine-tune a LLM on a text/instruction dataset
 - `trl dpo`: fine-tune a LLM with DPO on a preference dataset 
 - `trl chat`: quickly spin up a LLM fine-tuned for chatting
+- `trl env`: get the system information
 
 ## Fine-tuning with the CLI
 
@@ -117,3 +118,54 @@ Besides talking to the model there are a few commands you can use:
 - **exit**: closes the interface
 
 The default examples are defined in `examples/scripts/config/default_chat_config.yaml` but you can pass your own with `--config CONFIG_FILE` where you can also specify the default generation parameters.
+
+## Getting the system information
+
+You can get the system information by running the following command:
+
+```bash
+trl env
+```
+
+This will print out the system information including the GPU information, the CUDA version, the PyTorch version, the transformers version, and the TRL version, and any optional dependencies that are installed.
+
+```txt
+Copy-paste the following information when reporting an issue:
+
+- Platform: Linux-5.15.0-1048-aws-x86_64-with-glibc2.31
+- Python version: 3.11.9
+- PyTorch version: 2.4.1
+- CUDA device: NVIDIA H100 80GB HBM3
+- Transformers version: 4.45.0.dev0
+- Accelerate version: 0.34.2
+- Accelerate config: 
+  - compute_environment: LOCAL_MACHINE
+  - distributed_type: DEEPSPEED
+  - mixed_precision: no
+  - use_cpu: False
+  - debug: False
+  - num_processes: 4
+  - machine_rank: 0
+  - num_machines: 1
+  - rdzv_backend: static
+  - same_network: True
+  - main_training_function: main
+  - enable_cpu_affinity: False
+  - deepspeed_config: {'gradient_accumulation_steps': 4, 'offload_optimizer_device': 'none', 'offload_param_device': 'none', 'zero3_init_flag': False, 'zero_stage': 2}
+  - downcast_bf16: no
+  - tpu_use_cluster: False
+  - tpu_use_sudo: False
+  - tpu_env: []
+- Datasets version: 3.0.0
+- HF Hub version: 0.24.7
+- TRL version: 0.12.0.dev0+acb4d70
+- bitsandbytes version: 0.41.1
+- DeepSpeed version: 0.15.1
+- Diffusers version: 0.30.3
+- Liger-Kernel version: 0.3.0
+- LLM-Blender version: 0.0.2
+- OpenAI version: 1.46.0
+- PEFT version: 0.12.0
+```
+
+This information are required when reporting an issue.

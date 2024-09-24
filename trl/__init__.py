@@ -32,6 +32,7 @@ _import_structure = {
         "BestOfNSampler",
     ],
     "import_utils": [
+        "is_deepspeed_available",
         "is_diffusers_available",
         "is_liger_kernel_available",
         "is_llmblender_available",
@@ -131,7 +132,12 @@ if TYPE_CHECKING:
     from .core import set_seed
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
-    from .import_utils import is_diffusers_available, is_liger_kernel_available, is_llmblender_available
+    from .import_utils import (
+        is_deepspeed_available,
+        is_diffusers_available,
+        is_liger_kernel_available,
+        is_llmblender_available,
+    )
     from .models import (
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
