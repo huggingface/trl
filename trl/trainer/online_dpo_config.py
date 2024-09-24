@@ -70,5 +70,5 @@ class OnlineDPOConfig(TrainingArguments):
 
     def __post_init__(self):
         super().__post_init__()
-        if len(self.beta) == 1:
+        if hasattr(self.beta, "__len__") and len(self.beta) == 1:
             self.beta = self.beta[0]

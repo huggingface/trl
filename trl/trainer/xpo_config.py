@@ -34,5 +34,5 @@ class XPOConfig(OnlineDPOConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        if len(self.alpha) == 1:
+        if hasattr(self.alpha, "__len__") and len(self.alpha) == 1:
             self.alpha = self.alpha[0]

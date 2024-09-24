@@ -35,5 +35,5 @@ class NashMDConfig(OnlineDPOConfig):
 
     def __post_init__(self):
         super().__post_init__()
-        if len(self.mixture_coef) == 1:
+        if hasattr(self.mixture_coef, "__len__") and len(self.mixture_coef) == 1:
             self.mixture_coef = self.mixture_coef[0]
