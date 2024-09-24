@@ -26,7 +26,7 @@ class XPOConfig(OnlineDPOConfig):
     Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 
     Parameters:
-        alpha (`List[float]`, defaults to `[1e-5]`):
+        alpha (`float` or `List[float]`, *optional*, defaults to `1e-5`):
             Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each new epoch and the last alpha is used for the rest of the epochs.
     """
 
