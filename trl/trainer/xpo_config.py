@@ -27,7 +27,7 @@ class XPOConfig(OnlineDPOConfig):
 
     Parameters:
         alpha (`float`, *optional*, defaults to `1e-5`):
-            Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each new epoch and the last alpha is used for the rest of the epochs.
+            Weight of the XPO loss term.
         alpha_list (`List[float]`, *optional*, defaults to `None`):
             List of α values to use for each epoch. If a list of floats is provided then the α is selected for each new epoch and the last α is used for the rest of the epochs.
     """

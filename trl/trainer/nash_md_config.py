@@ -27,9 +27,7 @@ class NashMDConfig(OnlineDPOConfig):
 
     Parameters:
         mixture_coef (`float`, *optional*, defaults to `0.5`):
-            Logit mixture coefficient for the model and reference model. If a list of floats is provided then the
-            mixture coefficient is selected for each new epoch and the last coefficient is used for the rest of the
-            epochs.
+            Logit mixture coefficient for the model and reference model.
         mixture_coef_list (`List[float]`, *optional*, defaults to `None`):
             List of mixture coefficients to use for each epoch. If a list of floats is provided then the mixture
             coefficient is selected for each new epoch and the last coefficient is used for the rest of the epochs.
