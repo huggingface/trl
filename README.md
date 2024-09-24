@@ -128,8 +128,7 @@ model = AutoModelForSequenceClassification.from_pretrained(
 )
 model.config.pad_token_id = tokenizer.pad_token_id
 
-dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
-dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 training_args = RewardConfig(
     per_device_train_batch_size=2,
