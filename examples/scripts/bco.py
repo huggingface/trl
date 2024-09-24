@@ -17,7 +17,7 @@ Run the BCO training script with the commands below. In general, the optimal con
 
 # Full training:
 python examples/scripts/bco.py \
-    --model_name_or_path=nnheui/stablelm-2-1_6b-sft-full \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --trust_remote_code \
     --dataset_name trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness \
     --per_device_train_batch_size 16 \
