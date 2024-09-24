@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -41,10 +41,13 @@ class OnlineDPOConfig(TrainingArguments):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
             to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.
-        beta (`float` or `list[float]`, *optional*, defaults to `0.1`):
+        beta (`float`, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
             the [paper](https://huggingface.co/papers/2310.12036). If a list of floats is provided then the β is
+            selected for each new epoch and the last β is used for the rest of the epochs.
+        beta_list (`List[float]`, *optional*, defaults to `None`):
+            List of β values to use for each epoch. If a list of floats is provided then the β is
             selected for each new epoch and the last β is used for the rest of the epochs.
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
@@ -63,7 +66,13 @@ class OnlineDPOConfig(TrainingArguments):
     max_new_tokens: int = 64
     temperature: float = 0.9
     missing_eos_penalty: Optional[float] = None
-    beta: Union[float, List[float]] = 0.1
+    beta: float = 0.1
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
     dataset_num_proc: Optional[int] = None
     disable_dropout: bool = True
+    beta_list: Optional[List[float]] = None
+
+    def __post_init__(self):
+        if self.beta_list is not None:
+            self.beta = self.beta_list
+        super().__post_init__()
