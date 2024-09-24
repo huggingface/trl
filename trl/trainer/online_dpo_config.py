@@ -45,6 +45,7 @@ class OnlineDPOConfig(TrainingArguments):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
             the [paper](https://huggingface.co/papers/2310.12036).
+        beta_list (`List[float]`, *optional*, defaults to `None`):
             List of β values to use for each epoch. If a list of floats is provided then the β is
             selected for each new epoch and the last β is used for the rest of the epochs.
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
@@ -65,10 +66,10 @@ class OnlineDPOConfig(TrainingArguments):
     temperature: float = 0.9
     missing_eos_penalty: Optional[float] = None
     beta: float = 0.1
+    beta_list: Optional[List[float]] = None
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
     dataset_num_proc: Optional[int] = None
     disable_dropout: bool = True
-    beta_list: Optional[List[float]] = None
 
     def __post_init__(self):
         super().__post_init__()

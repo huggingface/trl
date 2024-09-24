@@ -26,7 +26,7 @@ class NashMDConfig(OnlineDPOConfig):
     Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 
     Parameters:
-        mixture_coef (`float`, *optional*, defaults to `0.5`):
+        mixture_coef (`float`, defaults to `0.5`):
             Logit mixture coefficient for the model and reference model.
         mixture_coef_list (`List[float]`, *optional*, defaults to `None`):
             List of mixture coefficients to use for each epoch. If a list of floats is provided then the mixture
