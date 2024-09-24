@@ -44,7 +44,7 @@ class RewardTrainerTester(unittest.TestCase):
     def test_preprocessing_conversational(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir)
+            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
             )
@@ -57,7 +57,7 @@ class RewardTrainerTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir)
+            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, tokenizer=tokenizer, train_dataset=dummy_dataset
             )
@@ -67,7 +67,7 @@ class RewardTrainerTester(unittest.TestCase):
     def test_train_full(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3)
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
             )
@@ -87,7 +87,7 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
             dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
             dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer})
-            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3)
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
             )
@@ -113,7 +113,55 @@ class RewardTrainerTester(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3)
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            trainer = RewardTrainer(
+                model=self.model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset,
+                peft_config=peft_config,
+            )
+            previous_trainable_params = {}
+            previous_non_trainable_params = {}
+
+            # due to a change in the way the modules to save are dealt in PEFT.
+            trainable_params_name = ["lora", "modules_to_save"]
+
+            # check gradients are not None
+            for n, param in trainer.model.named_parameters():
+                if any(t in n for t in trainable_params_name):
+                    previous_trainable_params[n] = param.clone()
+                else:
+                    previous_non_trainable_params[n] = param.clone()
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
+
+            # check the non trainable params have not changed
+            for n, param in previous_non_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
+
+    @require_peft
+    def test_train_lora_pretokenized(self):
+        peft_config = LoraConfig(
+            task_type=TaskType.SEQ_CLS,
+            inference_mode=False,
+            r=8,
+            lora_alpha=32,
+            lora_dropout=0.1,
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+            dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
+            dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer})
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
                 model=self.model,
                 args=training_args,
@@ -168,7 +216,7 @@ class RewardTrainerTester(unittest.TestCase):
                 ],
             }
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
-            training_args = RewardConfig(output_dir=tmp_dir)
+            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
             )
@@ -187,7 +235,7 @@ class RewardTrainerTester(unittest.TestCase):
     def test_tags(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir)
+            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
             )
