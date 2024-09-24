@@ -39,6 +39,6 @@ class NashMDConfig(OnlineDPOConfig):
     mixture_coef_list: Optional[List[float]] = None
 
     def __post_init__(self):
+        super().__post_init__()
         if self.mixture_coef_list is not None:
             self.mixture_coef = self.mixture_coef_list
-        super().__post_init__()

@@ -73,6 +73,6 @@ class OnlineDPOConfig(TrainingArguments):
     beta_list: Optional[List[float]] = None
 
     def __post_init__(self):
+        super().__post_init__()
         if self.beta_list is not None:
             self.beta = self.beta_list
-        super().__post_init__()

@@ -36,6 +36,6 @@ class XPOConfig(OnlineDPOConfig):
     alpha_list: Optional[List[float]] = None
 
     def __post_init__(self):
+        super().__post_init__()
         if self.alpha_list is not None:
             self.alpha = self.alpha_list
-        super().__post_init__()
