@@ -123,7 +123,7 @@ def chat():
             env=os.environ.copy(),
         )
     except (CalledProcessError, ChildProcessError) as exc:
-        console.log("TRL - CHAT failed on ! See the logs above for further details.")
+        console.log("TRL - CHAT failed! See the logs above for further details.")
         raise ValueError("TRL CLI failed! Check the traceback above..") from exc
 
 
