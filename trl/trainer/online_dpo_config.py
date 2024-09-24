@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Literal, Optional
 
 from transformers import TrainingArguments
@@ -41,12 +41,10 @@ class OnlineDPOConfig(TrainingArguments):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
             to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.
-        beta (`float`, defaults to `0.1`):
+        beta (`List[float]`, *optional*, defaults to `[0.1]`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
-            the [paper](https://huggingface.co/papers/2310.12036).
-        beta_list (`List[float]`, *optional*, defaults to `None`):
-            List of β values to use for each epoch. If a list of floats is provided then the β is
+            the [paper](https://huggingface.co/papers/2310.12036). If a list of floats is provided then the β is
             selected for each new epoch and the last β is used for the rest of the epochs.
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
@@ -65,13 +63,12 @@ class OnlineDPOConfig(TrainingArguments):
     max_new_tokens: int = 64
     temperature: float = 0.9
     missing_eos_penalty: Optional[float] = None
-    beta: float = 0.1
-    beta_list: Optional[List[float]] = None
+    beta: List[float] = field(default_factory=lambda: [0.1])
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
     dataset_num_proc: Optional[int] = None
     disable_dropout: bool = True
 
     def __post_init__(self):
         super().__post_init__()
-        if self.beta_list is not None:
-            self.beta = self.beta_list
+        if len(self.beta) == 1:
+            self.beta = self.beta[0]

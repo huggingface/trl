@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import List
 
 from trl.trainer.online_dpo_config import OnlineDPOConfig
 
@@ -26,17 +26,14 @@ class NashMDConfig(OnlineDPOConfig):
     Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 
     Parameters:
-        mixture_coef (`float`, defaults to `0.5`):
-            Logit mixture coefficient for the model and reference model.
-        mixture_coef_list (`List[float]`, *optional*, defaults to `None`):
-            List of mixture coefficients to use for each epoch. If a list of floats is provided then the mixture
+        mixture_coef (`List[float]`, defaults to `[0.5]`):
+            Logit mixture coefficient for the model and reference model. If a list of floats is provided then the mixture
             coefficient is selected for each new epoch and the last coefficient is used for the rest of the epochs.
     """
 
-    mixture_coef: float = 0.5
-    mixture_coef_list: Optional[List[float]] = None
+    mixture_coef: List[float] = field(default_factory=lambda: [0.5])
 
     def __post_init__(self):
         super().__post_init__()
-        if self.mixture_coef_list is not None:
-            self.mixture_coef = self.mixture_coef_list
+        if len(self.mixture_coef) == 1:
+            self.mixture_coef = self.mixture_coef[0]

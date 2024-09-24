@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import List
 
 from trl.trainer.online_dpo_config import OnlineDPOConfig
 
@@ -26,16 +26,13 @@ class XPOConfig(OnlineDPOConfig):
     Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 
     Parameters:
-        alpha (`float`, defaults to `1e-5`):
-            Weight of the XPO loss term.
-        alpha_list (`List[float]`, *optional*, defaults to `None`):
-            List of α values to use for each epoch. If a list of floats is provided then the α is selected for each new epoch and the last α is used for the rest of the epochs.
+        alpha (`List[float]`, defaults to `[1e-5]`):
+            Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each new epoch and the last alpha is used for the rest of the epochs.
     """
 
-    alpha: float = 1e-5
-    alpha_list: Optional[List[float]] = None
+    alpha: List[float] = field(default_factory=lambda: [1e-5])
 
     def __post_init__(self):
         super().__post_init__()
-        if self.alpha_list is not None:
-            self.alpha = self.alpha_list
+        if len(self.alpha) == 1:
+            self.alpha = self.alpha[0]
