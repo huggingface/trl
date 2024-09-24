@@ -65,25 +65,6 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase")
 
 
 class RewardTrainer(Trainer):
-    r"""
-    The RewardTrainer can be used to train your custom Reward Model. It is a subclass of the
-    `transformers.Trainer` class and inherits all of its attributes and methods. It is recommended to use
-    an `AutoModelForSequenceClassification` as the reward model. The reward model should be trained on a dataset
-    of paired examples, where each example is a tuple of two sequences. The reward model should be trained to
-    predict which example in the pair is more relevant to the task at hand.
-
-    The reward trainer expects a very specific format for the dataset. The dataset should contain two 4 entries at least
-    if you don't use the default `RewardDataCollatorWithPadding` data collator. The entries should be named
-    - `input_ids_chosen`
-    - `attention_mask_chosen`
-    - `input_ids_rejected`
-    - `attention_mask_rejected`
-
-    Optionally, you can also pass a `margin` entry to the dataset. This entry should contain the margin used to modulate the
-    loss of the reward model as outlined in https://ai.meta.com/research/publications/llama-2-open-foundation-and-fine-tuned-chat-models/.
-    If you don't pass a margin, no margin will be used.
-    """
-
     _tag_names = ["trl", "reward-trainer"]
 
     def __init__(
@@ -132,8 +113,6 @@ class RewardTrainer(Trainer):
                 The optimizer and scheduler to use for training.
             preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
                 The function to use to preprocess the logits before computing the metrics.
-            max_length (`int`, defaults to `None`):
-                The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
@@ -227,7 +206,7 @@ class RewardTrainer(Trainer):
         else:
             self.use_reward_data_collator = False
 
-        if "input_ids" not in train_dataset.column_names:
+        if "input_ids_chosen" not in train_dataset.column_names:
             with PartialState().local_main_process_first():
                 fn_kwargs = {"tokenizer": tokenizer}
                 train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
@@ -238,7 +217,7 @@ class RewardTrainer(Trainer):
                     num_proc=args.dataset_num_proc,
                 )
                 # This filter is important because otherwise you get samples that exceed the model's context length and
-                # get truncated => noisy signal because the model can miss the proper label. The downside is that the
+                # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
                 # user might get surprised if N samples are missing from training.
                 train_dataset = train_dataset.filter(
                     lambda x: len(x["input_ids_chosen"]) <= max_length and len(x["input_ids_rejected"]) <= max_length,
@@ -252,6 +231,9 @@ class RewardTrainer(Trainer):
                         batched=True,
                         num_proc=args.dataset_num_proc,
                     )
+                    # This filter is important because otherwise you get samples that exceed the model's context length and
+                    # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
+                    # user might get surprised if N samples are missing from training.
                     eval_dataset = eval_dataset.filter(
                         lambda x: len(x["input_ids_chosen"]) <= max_length
                         and len(x["input_ids_rejected"]) <= max_length,

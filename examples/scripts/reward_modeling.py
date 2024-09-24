@@ -14,13 +14,11 @@
 """
 Full training:
 python examples/scripts/reward_modeling.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --output_dir Qwen2-0.5B-Reward \
+    --output_dir Qwen2.5-0.5B-Reward \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --gradient_accumulation_steps 1 \
-    --remove_unused_columns False \
     --gradient_checkpointing True \
     --learning_rate 1.0e-5 \
     --logging_steps 25 \
@@ -30,19 +28,17 @@ python examples/scripts/reward_modeling.py \
 
 LoRA:
 python examples/scripts/reward_modeling.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --output_dir Qwen2-0.5B-Reward \
+    --output_dir Qwen2.5-0.5B-Reward-LoRA \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --gradient_accumulation_steps 1 \
-    --remove_unused_columns False \
     --gradient_checkpointing True \
-    --learning_rate 1.0e-5 \
+    --learning_rate 1.0e-4 \
     --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 50 \
-    --max_length 2048 /
+    --max_length 2048 \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16
@@ -52,7 +48,6 @@ import warnings
 
 import torch
 from datasets import load_dataset
-from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
 from trl import (
@@ -65,9 +60,6 @@ from trl import (
     setup_chat_format,
 )
 from trl.commands.cli_utils import RewardScriptArguments
-
-
-tqdm.pandas()
 
 
 if __name__ == "__main__":
@@ -88,6 +80,7 @@ if __name__ == "__main__":
         revision=model_config.model_revision,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
+        use_cache=False if training_args.gradient_checkpointing else True,
     )
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
