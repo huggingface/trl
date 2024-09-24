@@ -117,8 +117,7 @@ trainer.train()
 Here is a basic example on how to use the `RewardTrainer`:
 
 ```python
-from trl import RewardConfig, RewardTrainer, maybe_apply_chat_template
-from trl.extras.dataset_formatting import conversations_formatting_function
+from trl import RewardConfig, RewardTrainer
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
@@ -130,11 +129,7 @@ model.config.pad_token_id = tokenizer.pad_token_id
 
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-training_args = RewardConfig(
-    per_device_train_batch_size=2,
-    remove_unused_columns=False,
-    output_dir="Qwen2.5-0.5B-Reward",
-)
+training_args = RewardConfig(output_dir="Qwen2.5-0.5B-Reward", per_device_train_batch_size=2)
 trainer = RewardTrainer(
     args=training_args,
     model=model,
