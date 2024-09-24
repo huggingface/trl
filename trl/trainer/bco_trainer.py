@@ -46,6 +46,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
+from ..data_utils import maybe_apply_chat_template
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .bco_config import BCOConfig
 from .utils import (
@@ -562,6 +563,14 @@ class BCOTrainer(Trainer):
         self.embedding_tokenizer = embedding_tokenizer
 
         with PartialState().local_main_process_first():
+            # Apply the chat template if needed
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(
+                    maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+                )
             # Shuffle the datasets
             train_dataset = train_dataset.shuffle(seed=args.data_seed)
             if eval_dataset is not None:

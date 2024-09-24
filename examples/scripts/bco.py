@@ -17,7 +17,9 @@ Run the BCO training script with the commands below. In general, the optimal con
 
 # Full training:
 python examples/scripts/bco.py \
-    --model_name_or_path=nnheui/stablelm-2-1_6b-sft-full \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --trust_remote_code \
+    --dataset_name trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 32 \
     --num_train_epochs 1 \
@@ -66,88 +68,15 @@ python examples/scripts/bco.py \
     --lora_alpha=16
 """
 
-import logging
-from dataclasses import dataclass
 from functools import partial
-from typing import Literal, Optional
 
 import torch
 import torch.nn.functional as F
-from accelerate import Accelerator, PartialState
-from datasets import Dataset, load_dataset
+from accelerate import Accelerator
+from datasets import load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
-from trl import BCOConfig, BCOTrainer, ModelConfig, get_peft_config, setup_chat_format
-
-
-# Define and parse arguments.
-@dataclass
-class ScriptArguments:
-    """
-    The arguments for the BCO training script.
-    """
-
-    llm_name: Literal["gpt-3.5-turbo", "llama-2-7b-chat", "llama-2-70b-chat"] = "gpt-3.5-turbo"
-
-
-def build_helpfulness_dataset(llm_name: str, num_proc: Optional[int] = None) -> Dataset:
-    """
-    Filter `llm_name` completions and binarize given their helpfulness score.
-    If helpfulness score is 5, it is desirable. Otherwise, it is undesirable.
-    """
-
-    def get_model_rating(example, metric: str, llm_name: str):
-        try:
-            model_index = example["models"].index(llm_name)
-            return {metric: int(example["completions"][model_index]["annotations"][metric]["Rating"])}
-        except ValueError as e:
-            logging.warning(e)
-            return -1
-
-    def get_model_response(example, llm_name: str):
-        try:
-            model_index = example["models"].index(llm_name)
-            return {"response": example["completions"][model_index]["response"]}
-        except ValueError as e:
-            logging.warning(e)
-            return -1
-
-    dataset = load_dataset("openbmb/UltraFeedback")["train"]
-
-    dataset = dataset.filter(lambda example: llm_name in example["models"], batched=False, num_proc=num_proc)
-    dataset = dataset.filter(
-        lambda example: len(example["models"]) == len(example["completions"]), batched=False, num_proc=num_proc
-    )
-
-    METRIC = "helpfulness"
-
-    dataset = dataset.map(
-        get_model_rating,
-        batched=False,
-        fn_kwargs={"metric": METRIC, "llm_name": llm_name},
-        num_proc=num_proc,
-    )
-
-    dataset = dataset.map(
-        get_model_response,
-        batched=False,
-        fn_kwargs={"llm_name": llm_name},
-        num_proc=num_proc,
-    )
-
-    dataset = dataset.select_columns(["source", "instruction", "response", "helpfulness"])
-
-    dataset = dataset.rename_columns({"instruction": "prompt", "response": "completion"})
-    dataset = dataset.map(lambda example: {"label": example["helpfulness"] >= 5}, batched=False, num_proc=num_proc)
-
-    dataset = dataset.map(
-        lambda example: {"prompt": [{"role": "user", "content": example["prompt"]}]},
-        batched=False,
-        num_proc=num_proc,
-    )
-    dataset = dataset.train_test_split(test_size=0.05, seed=42)
-
-    return dataset
+from trl import BCOConfig, BCOTrainer, DPOScriptArguments, ModelConfig, get_peft_config, setup_chat_format
 
 
 def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, model: PreTrainedModel):
@@ -174,8 +103,8 @@ def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, 
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, BCOConfig, ModelConfig))
-    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((DPOScriptArguments, BCOConfig, ModelConfig))
+    args, training_args, model_args = parser.parse_args_into_dataclasses()
 
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
@@ -197,19 +126,7 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         model, tokenizer = setup_chat_format(model, tokenizer)
 
-    # Apply chat template
-    def format_dataset(example):
-        example["prompt"] = tokenizer.apply_chat_template(
-            example["prompt"], tokenize=False, add_generation_prompt=True
-        )
-        return example
-
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
-    with PartialState().local_main_process_first():
-        # Load the dataset
-        dataset = build_helpfulness_dataset(script_args.llm_name, num_proc=training_args.dataset_num_proc)
-        dataset = dataset.map(format_dataset, batched=False, num_proc=training_args.dataset_num_proc)
+    dataset = load_dataset(args.dataset_name)
 
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
