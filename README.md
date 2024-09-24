@@ -103,15 +103,12 @@ from datasets import load_dataset
 
 dataset = load_dataset("trl-lib/Capybara", split="train")
 
-# configure trainer
 training_args = SFTConfig(output_dir="Qwen/Qwen2.5-0.5B-SFT")
 trainer = SFTTrainer(
     args=training_args,
     model="Qwen/Qwen2.5-0.5B",
     train_dataset=dataset,
 )
-
-# train
 trainer.train()
 ```
 
@@ -121,7 +118,6 @@ Here is a basic example on how to use the `RewardTrainer`:
 
 ```python
 from trl import RewardConfig, RewardTrainer
-from trl.extras.dataset_formatting import conversations_formatting_function
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
@@ -131,48 +127,15 @@ model = AutoModelForSequenceClassification.from_pretrained(
 )
 model.config.pad_token_id = tokenizer.pad_token_id
 
-dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-def preprocess_function(examples):
-    new_examples = {
-        "input_ids_chosen": [],
-        "attention_mask_chosen": [],
-        "input_ids_rejected": [],
-        "attention_mask_rejected": [],
-    }
-    for chosen, rejected in zip(examples["chosen"], examples["rejected"]):
-        tokenized_chosen = tokenizer(chosen)
-        tokenized_rejected = tokenizer(rejected)
-        new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
-        new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
-        new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
-        new_examples["attention_mask_rejected"].append(
-            tokenized_rejected["attention_mask"]
-        )
-
-    return new_examples
-
-chosen_fn = conversations_formatting_function(tokenizer, "chosen")
-rejected_fn = conversations_formatting_function(tokenizer, "rejected")
-dataset = dataset.map(lambda x: {"chosen": chosen_fn(x), "rejected": rejected_fn(x)})
-dataset = dataset.map(
-    preprocess_function,
-    batched=True,
-)
-
-training_args = RewardConfig(
-    per_device_train_batch_size=2,
-    remove_unused_columns=False,
-    output_dir="Qwen2.5-0.5B-Reward",
-)
+training_args = RewardConfig(output_dir="Qwen2.5-0.5B-Reward", per_device_train_batch_size=2)
 trainer = RewardTrainer(
     args=training_args,
     model=model,
     tokenizer=tokenizer,
     train_dataset=dataset,
 )
-
-# train
 trainer.train()
 ```
 
@@ -210,7 +173,6 @@ trainer = RLOOTrainer(
     train_dataset=dataset["train"],
     eval_dataset=dataset["test"],
 )
-# train
 trainer.train()
 ```
 
@@ -219,21 +181,17 @@ trainer.train()
 `DPOTrainer` implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train Llama 3 and many other models. Here is a basic example on how to use the `DPOTrainer`:
 
 ```python
-# imports
 from trl import DPOConfig, DPOTrainer, maybe_extract_prompt, maybe_apply_chat_template
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# load model and tokenizer
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 
-# load preference dataset - needs to be in a specific format
 dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
 dataset = dataset.map(maybe_extract_prompt)
 dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 
-# load trainer
 training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 trainer = DPOTrainer(
     args=training_args,
@@ -241,8 +199,6 @@ trainer = DPOTrainer(
     tokenizer=tokenizer,
     train_dataset=dataset,
 )
-
-# train
 trainer.train()
 ```
 
