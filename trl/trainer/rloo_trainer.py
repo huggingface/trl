@@ -39,7 +39,7 @@ from transformers import (
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
-from transformers.trainer_callback import CallbackHandler, PrinterCallback, ExportableState
+from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
@@ -163,7 +163,7 @@ class RLOOTrainer(Trainer):
                 cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)
             ],
         )
-        
+
         self.current_flos = 0
         self.hp_search_backend = None
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
