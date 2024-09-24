@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import List
 
 from trl.trainer.online_dpo_config import OnlineDPOConfig
 
@@ -26,42 +25,34 @@ class SCoREConfig(OnlineDPOConfig):
     Subclass of [`OnlineDPOConfig`] we can use all its arguments and add the following:
 
     """
+
     # Stage I specific parameters
-    kl_coef: float = field(
-        default=0.1,
-        metadata={"help": "Coefficient for KL divergence loss in Stage I"}
-    )
+    kl_coef: float = field(default=0.1, metadata={"help": "Coefficient for KL divergence loss in Stage I"})
 
     # Prompts
     correction_instruction: str = field(
         default="The previous response may contain errors. Please review and correct any mistakes: ",
-        metadata={"help": "Instruction for self-correction in the second attempt"}
+        metadata={"help": "Instruction for self-correction in the second attempt"},
     )
 
     first_attempt_prefix: str = field(
-        default="First attempt: ",
-        metadata={"help": "Prefix for the first attempt in the second attempt prompt"}
+        default="First attempt: ", metadata={"help": "Prefix for the first attempt in the second attempt prompt"}
     )
 
     second_attempt_prefix: str = field(
-        default="Improved response: ",
-        metadata={"help": "Prefix for the second attempt in the model output"}
+        default="Improved response: ", metadata={"help": "Prefix for the second attempt in the model output"}
     )
 
     # Training stages
-    num_stage1_epochs: int = field(
-        default=1,
-        metadata={"help": "Number of epochs to train in Stage I"}
-    )
-
+    num_stage1_epochs: int = field(default=1, metadata={"help": "Number of epochs to train in Stage I"})
 
     def __post_init__(self):
         super().__post_init__()
-        
+
         # Ensure that the correction instruction ends with a space
         if not self.correction_instruction.endswith(" "):
             self.correction_instruction += " "
-        
+
         # Ensure that the prefixes end with a space
         if not self.first_attempt_prefix.endswith(" "):
             self.first_attempt_prefix += " "

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Dict, Union, Any
+from typing import Any, Dict, Union
 
 import torch
 import torch.nn as nn
@@ -20,19 +20,22 @@ import torch.nn.functional as F
 
 from .online_dpo_trainer import OnlineDPOTrainer
 from .score_config import SCoREConfig
+from .utils import get_reward
 
 
 class SCoRETrainer(OnlineDPOTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.score_config = SCoREConfig() 
-        
+        self.score_config = SCoREConfig()
+
         # Add SCoRE-specific statistics
-        self.stats.update({
-            "loss/stage1": [],
-            "kl_div/first_attempt": [],
-            "reward/second_attempt": [],
-        })
+        self.stats.update(
+            {
+                "loss/stage1": [],
+                "kl_div/first_attempt": [],
+                "reward/second_attempt": [],
+            }
+        )
 
     def _generate_completions(self, model, prompts):
         with self.accelerator.unwrap_model(model) as unwrapped_model:
@@ -45,7 +48,7 @@ class SCoRETrainer(OnlineDPOTrainer):
 
             # Prepare input for second attempt
             second_attempt_prompt = self._prepare_second_attempt_prompt(prompts, first_attempt)
-            
+
             # Generate second attempt
             second_attempt = unwrapped_model.generate(
                 input_ids=second_attempt_prompt["input_ids"],
@@ -58,41 +61,37 @@ class SCoRETrainer(OnlineDPOTrainer):
     def _prepare_second_attempt_prompt(self, prompts, first_attempt):
         context_length = prompts["input_ids"].shape[1]
         first_completion = first_attempt[:, context_length:]
-        correction_instruction = self.tokenizer.encode(
-            self.score_config.correction_instruction,
-            return_tensors="pt",
-            add_special_tokens=False
-        ).repeat(prompts["input_ids"].shape[0], 1).to(first_attempt.device)
+        correction_instruction = (
+            self.tokenizer.encode(
+                self.score_config.correction_instruction, return_tensors="pt", add_special_tokens=False
+            )
+            .repeat(prompts["input_ids"].shape[0], 1)
+            .to(first_attempt.device)
+        )
 
-        second_attempt_input_ids = torch.cat([
-            prompts["input_ids"],
-            first_completion,
-            correction_instruction
-        ], dim=1)
+        second_attempt_input_ids = torch.cat([prompts["input_ids"], first_completion, correction_instruction], dim=1)
 
         second_attempt_attention_mask = torch.ones_like(second_attempt_input_ids)
 
-        return {
-            "input_ids": second_attempt_input_ids,
-            "attention_mask": second_attempt_attention_mask
-        }
+        return {"input_ids": second_attempt_input_ids, "attention_mask": second_attempt_attention_mask}
 
     def _compute_stage1_loss(self, model, ref_model, first_attempt, second_attempt, prompts):
         context_length = prompts["input_ids"].shape[1]
 
         # Compute logprobs for first attempt
         first_attempt_logits = model(first_attempt["input_ids"], attention_mask=first_attempt["attention_mask"]).logits
-        first_attempt_logprobs = F.log_softmax(first_attempt_logits[:, context_length-1:-1], dim=-1)
-        first_attempt_token_logprobs = torch.gather(
-            first_attempt_logprobs, 2, first_attempt["input_ids"][:, context_length:].unsqueeze(-1)
-        ).squeeze(-1)
+        first_attempt_logprobs = F.log_softmax(first_attempt_logits[:, context_length - 1 : -1], dim=-1)
 
         # Compute KL divergence for first attempt
         with torch.no_grad():
-            ref_first_attempt_logits = ref_model(first_attempt["input_ids"], attention_mask=first_attempt["attention_mask"]).logits
-            ref_first_attempt_logprobs = F.log_softmax(ref_first_attempt_logits[:, context_length-1:-1], dim=-1)
+            ref_first_attempt_logits = ref_model(
+                first_attempt["input_ids"], attention_mask=first_attempt["attention_mask"]
+            ).logits
+            ref_first_attempt_logprobs = F.log_softmax(ref_first_attempt_logits[:, context_length - 1 : -1], dim=-1)
 
-        kl_div = F.kl_div(first_attempt_logprobs, ref_first_attempt_logprobs.exp(), reduction='none').sum(-1)
+        kl_div = F.kl_div(ref_first_attempt_logprobs, first_attempt_logprobs, reduction="none", log_target=True).sum(
+            -1
+        )
 
         # Compute reward for second attempt
         second_attempt_reward = self._compute_rewards(second_attempt, context_length)
@@ -100,7 +99,7 @@ class SCoRETrainer(OnlineDPOTrainer):
         # Compute loss
         kl_loss = self.score_config.kl_coef * kl_div.mean()
         reward_loss = -second_attempt_reward.mean()
-        
+
         loss = kl_loss + reward_loss
 
         # Log statistics
@@ -140,6 +139,18 @@ class SCoRETrainer(OnlineDPOTrainer):
         self.accelerator.backward(loss)
 
         return loss.detach()
+
+    def _compute_rewards(self, completions, context_length):
+        with torch.no_grad():
+            _, scores, _ = get_reward(
+                self.reward_model, completions["input_ids"], self.tokenizer.pad_token_id, context_length
+            )
+
+        if self.args.missing_eos_penalty is not None:
+            contain_eos = torch.any(completions["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
+            scores[~contain_eos] -= self.args.missing_eos_penalty
+
+        return scores
 
     def _process_completion(self, completion, prompts):
         context_length = prompts["input_ids"].shape[1]
