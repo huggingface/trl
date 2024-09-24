@@ -13,8 +13,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import importlib
+import inspect
 import logging
 import os
+import subprocess
 import sys
 from argparse import Namespace
 from dataclasses import dataclass, field
@@ -279,3 +282,26 @@ class TrlParser(HfArgumentParser):
             if action.dest in kwargs:
                 action.default = kwargs[action.dest]
                 action.required = False
+
+
+def get_git_commit_hash(package_name):
+    try:
+        # Import the package to locate its path
+        package = importlib.import_module(package_name)
+        # Get the path to the package using inspect
+        package_path = os.path.dirname(inspect.getfile(package))
+
+        # Navigate up to the Git repository root if the package is inside a subdirectory
+        git_repo_path = os.path.abspath(os.path.join(package_path, ".."))
+        git_dir = os.path.join(git_repo_path, ".git")
+
+        if os.path.isdir(git_dir):
+            # Run the git command to get the current commit hash
+            commit_hash = (
+                subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=git_repo_path).strip().decode("utf-8")
+            )
+            return commit_hash
+        else:
+            return None
+    except Exception as e:
+        return f"Error: {str(e)}"
