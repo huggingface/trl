@@ -44,4 +44,4 @@ class RewardConfig(TrainingArguments):
     max_length: Optional[int] = None
     dataset_num_proc: Optional[int] = None
     center_rewards_coefficient: Optional[float] = None
-    remove_unused_columns: Optional[bool] = False
+    remove_unused_columns: bool = False
