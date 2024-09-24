@@ -36,8 +36,12 @@ class RewardConfig(TrainingArguments):
         center_rewards_coefficient (`float`, *optional*, defaults to `None`):
             Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
             https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
+        remove_unused_columns (`bool`, *optional*, defaults to `False`):
+            Whether or not to remove the columns that are not used by the model's forward pass. Can be `True` only if
+            the dataset is pretokenized.
     """
 
     max_length: Optional[int] = None
     dataset_num_proc: Optional[int] = None
     center_rewards_coefficient: Optional[float] = None
+    remove_unused_columns: bool = False
