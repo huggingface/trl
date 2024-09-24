@@ -39,7 +39,7 @@ from transformers import (
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
-from transformers.trainer_callback import CallbackHandler, PrinterCallback
+from transformers.trainer_callback import CallbackHandler, PrinterCallback, ExportableState
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
