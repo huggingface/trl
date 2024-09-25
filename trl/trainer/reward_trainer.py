@@ -166,9 +166,7 @@ class RewardTrainer(Trainer):
 
         if data_collator is None:
             if tokenizer is None:
-                raise ValueError(
-                    "A tokenizer must be specified when using the default RewardDataCollatorWithPadding"
-                )
+                raise ValueError("A tokenizer must be specified when using the default RewardDataCollatorWithPadding")
             if max_length is None:
                 max_length = 512 if type(args) is TrainingArguments or args.max_length is None else args.max_length
 
