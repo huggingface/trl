@@ -36,8 +36,6 @@ For REDACTED, use: (requires transformers>=4.45.1)
     
 """
 
-
-
 from trl.commands.cli_utils import SFTScriptArguments, TrlParser
 import torch
 from accelerate import Accelerator
@@ -99,11 +97,11 @@ if __name__ == "__main__":
             images = [image[0] for image in images]
 
         # Tokenize the texts and process the images
-        batch = processor(images=images,text=texts, return_tensors="pt", padding=True)
+        batch = processor(text=texts, images=images, return_tensors="pt", padding=True)
 
         # The labels are the input_ids, and we mask the padding tokens in the loss computation
         labels = batch["input_ids"].clone()
-        labels[labels == processor.tokenizer.pad_token_id] = -100 # 
+        labels[labels == processor.tokenizer.pad_token_id] = -100  #
         # Ignore the image token index in the loss computation (model specific)
         image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
         labels[labels == image_token_id] = -100
