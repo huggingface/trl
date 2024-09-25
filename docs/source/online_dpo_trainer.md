@@ -72,7 +72,7 @@ It's worth noting that the exact cause of DNS failure can vary depending on the 
 
 ## Expected dataset format
 
-Online DPO only requires a [prompt-only dataset](dataset_format#preference) (unlike offline DPO, that expects [preference dataset](dataset_format#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_format#conversational-dataset-format) and [standard](dataset_format#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (unlike offline DPO, that expects [preference dataset](dataset_formats#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
