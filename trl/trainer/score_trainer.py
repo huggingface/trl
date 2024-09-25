@@ -90,17 +90,22 @@ class SCoRETrainer(OnlineDPOTrainer):
             ).logits
             ref_first_attempt_logprobs = F.log_softmax(ref_first_attempt_logits[:, context_length - 1 : -1], dim=-1)
 
+        # Create a mask for non-padding tokens
+        non_padding_mask = (first_attempt["input_ids"][:, context_length:] != self.tokenizer.pad_token_id).float()
+
         kl_div = F.kl_div(ref_first_attempt_logprobs, first_attempt_logprobs, reduction="none", log_target=True).sum(
             -1
         )
+        kl_div = (kl_div * non_padding_mask).sum() / non_padding_mask.sum()
 
-        # Compute reward for second attempt
+        # Compute reward for second attempt against ground truth
         second_attempt_reward = self._compute_rewards(second_attempt, prompts, ground_truth_completions)
 
         # Compute loss
-        kl_loss = self.score_config.kl_coef * kl_div.mean()
+        kl_loss = self.score_config.beta * kl_div
         reward_loss = -second_attempt_reward.mean()
 
+        # reinforce loss
         loss = kl_loss + reward_loss
 
         # Log statistics

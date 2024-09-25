@@ -26,9 +26,6 @@ class SCoREConfig(OnlineDPOConfig):
 
     """
 
-    # Stage I specific parameters
-    kl_coef: float = field(default=0.1, metadata={"help": "Coefficient for KL divergence loss in Stage I"})
-
     # Prompts
     correction_instruction: str = field(
         default="The previous response may contain errors. Please review and correct any mistakes: ",
@@ -42,9 +39,6 @@ class SCoREConfig(OnlineDPOConfig):
     second_attempt_prefix: str = field(
         default="Improved response: ", metadata={"help": "Prefix for the second attempt in the model output"}
     )
-
-    # Training stages
-    num_stage1_epochs: int = field(default=1, metadata={"help": "Number of epochs to train in Stage I"})
 
     def __post_init__(self):
         super().__post_init__()
