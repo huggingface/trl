@@ -116,3 +116,8 @@ if __name__ == "__main__":
     completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
     trainer.add_callback(completions_callback)
     trainer.train()
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub()
