@@ -15,7 +15,8 @@
 """
 pip install pillow
 
-python examples/scripts/vsft_llava.py \
+
+python examples/scripts/vsft.py \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
     --model_name_or_path llava-hf/llava-1.5-7b-hf \
     --per_device_train_batch_size 8 \
@@ -25,20 +26,24 @@ python examples/scripts/vsft_llava.py \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
-    --dataloader_num_workers 32 \
     --lora_target_modules=all-linear
 
 For LLaVA-NeXT, use: (requires transformers>=4.45)
     --model_name_or_path llava-hf/llava-v1.6-mistral-7b-hf
+
+For REDACTED, use: (requires transformers>=4.45.1)
+    --model_name_or_path REDACTED
+    
 """
 
-from trl.commands.cli_utils import SFTScriptArguments, TrlParser
 
+
+from trl.commands.cli_utils import SFTScriptArguments, TrlParser
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset
 
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForVision2Seq, AutoProcessor, LlavaForConditionalGeneration
 
 from trl import (
     ModelConfig,
@@ -88,14 +93,20 @@ if __name__ == "__main__":
     def collate_fn(examples):
         # Get the texts and images, and apply the chat template
         texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
-        images = [example["images"][0] for example in examples]
+        images = [example["images"] for example in examples]
+        if isinstance(model, LlavaForConditionalGeneration):
+            # LLava1.5 does not support multiple images
+            images = [image[0] for image in images]
 
         # Tokenize the texts and process the images
-        batch = processor(texts, images, return_tensors="pt", padding=True)
+        batch = processor(images=images,text=texts, return_tensors="pt", padding=True)
 
         # The labels are the input_ids, and we mask the padding tokens in the loss computation
         labels = batch["input_ids"].clone()
-        labels[labels == processor.tokenizer.pad_token_id] = -100
+        labels[labels == processor.tokenizer.pad_token_id] = -100 # 
+        # Ignore the image token index in the loss computation (model specific)
+        image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
+        labels[labels == image_token_id] = -100
         batch["labels"] = labels
 
         return batch
