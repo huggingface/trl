@@ -34,6 +34,7 @@ from transformers import (
     TrainerCallback,
     is_apex_available,
 )
+from transformers.integrations import is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
@@ -69,6 +70,9 @@ if is_sagemaker_mp_enabled():
 
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
+
+if is_wandb_available():
+    import wandb
 
 logger = logging.get_logger(__name__)
 
@@ -574,7 +578,9 @@ class OnlineDPOTrainer(Trainer):
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
+            hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="Online DPO",
             trainer_tag="online-dpo",
             paper_title="Direct Language Model Alignment from Online AI Feedback",

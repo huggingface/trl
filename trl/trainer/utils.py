@@ -1380,7 +1380,9 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
 def generate_model_card(
     base_model: Optional[str],
     model_name: str,
+    hub_model_id: str,
     dataset_name: Optional[str],
+    wandb_url: Optional[str],
     trainer_name: str,
     trainer_tag: str,
     paper_title: Optional[str],
@@ -1394,8 +1396,12 @@ def generate_model_card(
             Base model.
         model_name (`str`):
             Model name.
+        hub_model_id (`str`):
+            Hub model ID.
         dataset_name (`str` or `None`):
             Dataset name.
+        wandb_url (`str` or `None`):
+            Weights & Biases run URL.
         trainer_name (`str`):
             Trainer name.
         trainer_tag (`str`):
@@ -1422,7 +1428,9 @@ def generate_model_card(
         template_path=str(pkg_resources.files("trl").joinpath("templates/model_card.md")),
         base_model=base_model,
         model_name=model_name,
+        hub_model_id=hub_model_id,
         dataset_name=dataset_name,
+        wandb_url=wandb_url,
         trainer_name=trainer_name,
         paper_title=paper_title,
         paper_id=paper_id,
