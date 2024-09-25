@@ -15,8 +15,10 @@
 """
 pip install pillow
 
-
-python examples/scripts/vsft.py \
+# Tested on 8x H100 GPUs
+accelerate launch 
+    --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/vsft.py \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
     --model_name_or_path llava-hf/llava-1.5-7b-hf \
     --per_device_train_batch_size 8 \
@@ -24,9 +26,7 @@ python examples/scripts/vsft.py \
     --output_dir sft-llava-1.5-7b-hf \
     --bf16 \
     --torch_dtype bfloat16 \
-    --gradient_checkpointing \
-    --use_peft \
-    --lora_target_modules=all-linear
+    --gradient_checkpointing
 
 For LLaVA-NeXT, use: (requires transformers>=4.45)
     --model_name_or_path llava-hf/llava-v1.6-mistral-7b-hf
