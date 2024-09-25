@@ -17,6 +17,7 @@ from typing import Any, Dict, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from transformers import PreTrainedTokenizerBase
 
 from .online_dpo_trainer import OnlineDPOTrainer
 from .score_config import SCoREConfig
@@ -75,7 +76,7 @@ class SCoRETrainer(OnlineDPOTrainer):
 
         return {"input_ids": second_attempt_input_ids, "attention_mask": second_attempt_attention_mask}
 
-    def _compute_stage1_loss(self, model, ref_model, first_attempt, second_attempt, prompts):
+    def _compute_stage1_loss(self, model, ref_model, first_attempt, second_attempt, prompts, ground_truth_completions):
         context_length = prompts["input_ids"].shape[1]
 
         # Compute logprobs for first attempt
@@ -94,7 +95,7 @@ class SCoRETrainer(OnlineDPOTrainer):
         )
 
         # Compute reward for second attempt
-        second_attempt_reward = self._compute_rewards(second_attempt, context_length)
+        second_attempt_reward = self._compute_rewards(second_attempt, prompts, ground_truth_completions)
 
         # Compute loss
         kl_loss = self.score_config.kl_coef * kl_div.mean()
@@ -119,6 +120,10 @@ class SCoRETrainer(OnlineDPOTrainer):
             "input_ids": inputs["prompt_input_ids"],
             "attention_mask": inputs["prompt_attention_mask"],
         }
+        ground_truth_completions = {
+            "input_ids": inputs["completion_input_ids"],
+            "attention_mask": inputs["completion_attention_mask"],
+        }
 
         # Generate completions (both first and second attempts)
         first_attempt, second_attempt = self._generate_completions(model, prompts)
@@ -128,7 +133,9 @@ class SCoRETrainer(OnlineDPOTrainer):
         second_attempt_data = self._process_completion(second_attempt, prompts)
 
         # Compute Stage I loss
-        loss = self._compute_stage1_loss(model, ref_model, first_attempt_data, second_attempt_data, prompts)
+        loss = self._compute_stage1_loss(
+            model, ref_model, first_attempt_data, second_attempt_data, prompts, ground_truth_completions
+        )
 
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -140,17 +147,24 @@ class SCoRETrainer(OnlineDPOTrainer):
 
         return loss.detach()
 
-    def _compute_rewards(self, completions, context_length):
+    def _compute_rewards(self, completions, prompts, ground_truth_completions):
+        context_length = prompts["input_ids"].shape[1]
         with torch.no_grad():
-            _, scores, _ = get_reward(
+            _, generated_scores, _ = get_reward(
                 self.reward_model, completions["input_ids"], self.tokenizer.pad_token_id, context_length
             )
 
+        # Compute scores for ground-truth completions
+        ground_truth_input_ids = torch.cat([prompts["input_ids"], ground_truth_completions["input_ids"]], dim=1)
+        _, ground_truth_scores, _ = get_reward(
+            self.reward_model, ground_truth_input_ids, self.tokenizer.pad_token_id, context_length
+        )
+
         if self.args.missing_eos_penalty is not None:
             contain_eos = torch.any(completions["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
-            scores[~contain_eos] -= self.args.missing_eos_penalty
+            generated_scores[~contain_eos] -= self.args.missing_eos_penalty
 
-        return scores
+        return generated_scores - ground_truth_scores
 
     def _process_completion(self, completion, prompts):
         context_length = prompts["input_ids"].shape[1]
@@ -170,3 +184,38 @@ class SCoRETrainer(OnlineDPOTrainer):
         mask = torch.arange(tokens.shape[1], device=tokens.device)[None, :] < eos_index[:, None]
         tokens = tokens.masked_fill(~mask, pad_token_id)
         return tokens, mask
+
+    @staticmethod
+    def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> Dict[str, Any]:
+        """Tokenize a single row from a DPO specific dataset."""
+        if not is_encoder_decoder:
+            prompt_tokens = tokenizer(feature["prompt"], add_special_tokens=False)
+            # Add BOS token to head of prompt. Avoid adding if it's already there
+            if tokenizer.bos_token_id is not None:
+                prompt_len_input_ids = len(prompt_tokens["input_ids"])
+                if prompt_len_input_ids == 0 or tokenizer.bos_token_id != prompt_tokens["input_ids"][0]:
+                    prompt_tokens["input_ids"] = [tokenizer.bos_token_id] + prompt_tokens["input_ids"]
+                    prompt_tokens["attention_mask"] = [1] + prompt_tokens["attention_mask"]
+
+            # Tokenize the ground-truth completion
+            completion_tokens = tokenizer(feature["completion"], add_special_tokens=False)
+
+            # Combine prompt and completion
+            batch = {
+                "prompt_input_ids": prompt_tokens["input_ids"],
+                "prompt_attention_mask": prompt_tokens["attention_mask"],
+                "completion_input_ids": completion_tokens["input_ids"],
+                "completion_attention_mask": completion_tokens["attention_mask"],
+            }
+        else:
+            prompt_tokens = tokenizer(feature["prompt"], add_special_tokens=True)
+            completion_tokens = tokenizer(feature["completion"], add_special_tokens=False)
+
+            batch = {
+                "prompt_input_ids": prompt_tokens["input_ids"],
+                "prompt_attention_mask": prompt_tokens["attention_mask"],
+                "completion_input_ids": completion_tokens["input_ids"],
+                "completion_attention_mask": completion_tokens["attention_mask"],
+            }
+
+        return batch
