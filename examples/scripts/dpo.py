@@ -67,7 +67,7 @@ from trl import (
 
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, DPOConfig, ModelConfig))
-    args, training_args, model_config = parser.parse_args_and_config()
+    script_args, training_args, model_config = parser.parse_args_and_config()
 
     ################
     # Model & Tokenizer
@@ -103,7 +103,7 @@ if __name__ == "__main__":
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
-    if args.ignore_bias_buffers:
+    if script_args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
@@ -112,7 +112,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset(args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name)
 
     with PartialState().local_main_process_first():
         dataset = dataset.map(maybe_extract_prompt, num_proc=training_args.dataset_num_proc)
@@ -127,8 +127,8 @@ if __name__ == "__main__":
         model,
         ref_model,
         args=training_args,
-        train_dataset=dataset[args.dataset_train_split],
-        eval_dataset=dataset[args.dataset_test_split],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
         tokenizer=tokenizer,
         peft_config=peft_config,
     )
