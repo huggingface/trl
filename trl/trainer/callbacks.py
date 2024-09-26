@@ -239,7 +239,6 @@ class WinRateCallback(TrainerCallback):
         num_prompts: Optional[int] = None,
         shuffle_order: bool = True,
     ):
-        super().__init__()
         self.judge = judge
         self.trainer = trainer
         self.shuffle_order = shuffle_order
