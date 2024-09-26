@@ -13,7 +13,6 @@
 # limitations under the License.
 import inspect
 import os
-import textwrap
 import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
@@ -246,10 +245,6 @@ class RewardTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
 
     def compute_loss(
         self,
