@@ -244,7 +244,6 @@ class WinRateCallback(TrainerCallback):
         self.shuffle_order = shuffle_order
         self.generation_config = generation_config
         self.ref_completions = []
-        self.table = []
 
         if self.trainer.eval_dataset is None:
             raise ValueError("Trainer must have an evaluation dataset to use the WinRateCallback.")
@@ -381,6 +380,7 @@ class LogCompletionsCallback(WandbCallback):
         self.trainer = trainer
         self.generation_config = generation_config
         self.freq = freq
+        self.table = []
         self._last_logged_step = -1
 
         if self.trainer.eval_dataset is None:
