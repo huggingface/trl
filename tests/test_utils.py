@@ -135,9 +135,9 @@ class TestGenerateModelCard(unittest.TestCase):
             model_name="my_model",
             hub_model_id="username/my_hub_model",
             dataset_name="username/my_dataset",
+            tags=["trl", "trainer-tag"],
             wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
             trainer_name="My Trainer",
-            trainer_tag="my_trainer",
             trainer_citation="@article{my_trainer, ...}",
             paper_title="My Paper",
             paper_id="1234.56789",
@@ -149,7 +149,6 @@ class TestGenerateModelCard(unittest.TestCase):
         assert "datasets: username/my_dataset" in card_text
         assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
         assert "My Trainer" in card_text
-        assert "my_trainer" in card_text
         assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
         assert "[My Paper](https://huggingface.co/papers/1234.56789)" in card_text
 
@@ -159,9 +158,9 @@ class TestGenerateModelCard(unittest.TestCase):
             model_name="my_model",
             hub_model_id="username/my_hub_model",
             dataset_name=None,
+            tags=None,
             wandb_url=None,
             trainer_name="My Trainer",
-            trainer_tag="my_trainer",
             trainer_citation=None,
             paper_title=None,
             paper_id=None,
@@ -170,4 +169,3 @@ class TestGenerateModelCard(unittest.TestCase):
         assert "my_model" in card_text
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "My Trainer" in card_text
-        assert "my_trainer" in card_text

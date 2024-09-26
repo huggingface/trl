@@ -854,6 +854,10 @@ class DPOTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Add tags for models that have been loaded with the correct transformers version
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
+
         if not hasattr(self, "accelerator"):
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
@@ -1674,7 +1678,12 @@ class DPOTrainer(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
-    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
@@ -1707,9 +1716,9 @@ class DPOTrainer(Trainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
+            tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="DPO",
-            trainer_tag="dpo",
             trainer_citation=citation,
             paper_title="Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
             paper_id="2305.18290",

@@ -388,7 +388,12 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         return loss.detach() / self.args.gradient_accumulation_steps
 
-    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
@@ -421,9 +426,9 @@ class NashMDTrainer(OnlineDPOTrainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
+            tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="Nash-MD",
-            trainer_tag="nash-md",
             trainer_citation=citation,
             paper_title="Nash Learning from Human Feedback",
             paper_id="2312.00886",

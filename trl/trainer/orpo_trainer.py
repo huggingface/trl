@@ -311,6 +311,10 @@ class ORPOTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Add tags for models that have been loaded with the correct transformers version
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
+
         if not hasattr(self, "accelerator"):
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
@@ -990,7 +994,12 @@ class ORPOTrainer(Trainer):
 
         return shifted_input_ids
 
-    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
@@ -1021,9 +1030,9 @@ class ORPOTrainer(Trainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
+            tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="ORPO",
-            trainer_tag="orpo",
             trainer_citation=citation,
             paper_title="ORPO: Monolithic Preference Optimization without Reference Model",
             paper_id="2403.07691",

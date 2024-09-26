@@ -16,7 +16,7 @@ import os
 import textwrap
 from collections import defaultdict
 from concurrent import futures
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple, Union
 from warnings import warn
 
 import torch
@@ -35,25 +35,6 @@ if is_wandb_available():
 
 
 logger = get_logger(__name__)
-
-MODEL_CARD_TEMPLATE = """---
-license: apache-2.0
-library_name: transformers
-tags:
-- trl
-- ddpo
-- diffusers
-- reinforcement-learning
-- text-to-image
-- stable-diffusion
----
-
-# {model_name}
-
-This is a diffusion model that has been fine-tuned with reinforcement learning to
- guide the model outputs according to a value, function, or human feedback. The model can be used for image generation conditioned with text.
-
-"""
 
 
 class DDPOTrainer(BaseTrainer):
@@ -611,7 +592,12 @@ class DDPOTrainer(BaseTrainer):
         self.sd_pipeline.save_pretrained(save_directory)
         self.create_model_card()
 
-    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
@@ -644,9 +630,9 @@ class DDPOTrainer(BaseTrainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
+            tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="DDPO",
-            trainer_tag="ddpo",
             trainer_citation=citation,
             paper_title="Training Diffusion Models with Reinforcement Learning",
             paper_id="2305.13301",

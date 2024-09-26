@@ -16,7 +16,7 @@ import random
 import textwrap
 import warnings
 from copy import deepcopy
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -264,7 +264,12 @@ class GKDTrainer(SFTTrainer):
         model.eval()
         return model
 
-    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
@@ -297,9 +302,9 @@ class GKDTrainer(SFTTrainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
+            tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="GKD",
-            trainer_tag="gkd",
             trainer_citation=citation,
             paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
             paper_id="2306.13649",

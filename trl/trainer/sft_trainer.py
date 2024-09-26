@@ -412,6 +412,10 @@ class SFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Add tags for models that have been loaded with the correct transformers version
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
+
         if self.train_dataset is not None:
             if self.args.max_steps > 0 and args.packing:
                 warnings.warn(
@@ -614,7 +618,12 @@ class SFTTrainer(Trainer):
                 "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
             )
 
-    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
@@ -637,9 +646,9 @@ class SFTTrainer(Trainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
+            tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="SFT",
-            trainer_tag="sft",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))

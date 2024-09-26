@@ -14,7 +14,7 @@
 import os
 import textwrap
 from collections import defaultdict
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple, Union
 from warnings import warn
 
 import torch
@@ -32,24 +32,6 @@ if is_wandb_available():
     import wandb
 
 logger = get_logger(__name__)
-
-MODEL_CARD_TEMPLATE = """---
-license: apache-2.0
-library_name: transformers
-tags:
-- trl
-- alignprop
-- diffusers
-- reinforcement-learning
-- text-to-image
-- stable-diffusion
----
-
-# {model_name}
-
-This is a pipeline that finetunes a diffusion model with reward backpropagation while using randomized truncation (https://huggingface.co/papers/2310.03739). The model can be used for image generation conditioned with text.
-
-"""
 
 
 class AlignPropTrainer(BaseTrainer):
@@ -408,7 +390,12 @@ class AlignPropTrainer(BaseTrainer):
         self.sd_pipeline.save_pretrained(save_directory)
         self.create_model_card()
 
-    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
@@ -439,9 +426,9 @@ class AlignPropTrainer(BaseTrainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
+            tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="AlignProp",
-            trainer_tag="alignprop",
             trainer_citation=citation,
             paper_title="Aligning Text-to-Image Diffusion Models with Reward Backpropagation",
             paper_id="2310.03739",

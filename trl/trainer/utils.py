@@ -1377,9 +1377,9 @@ def generate_model_card(
     model_name: str,
     hub_model_id: str,
     dataset_name: Optional[str],
+    tags: Union[str, List[str], None],
     wandb_url: Optional[str],
     trainer_name: str,
-    trainer_tag: str,
     trainer_citation: Optional[str],
     paper_title: Optional[str],
     paper_id: Optional[str],
@@ -1396,12 +1396,12 @@ def generate_model_card(
             Hub model ID as `username/model_id`.
         dataset_name (`str` or `None`):
             Dataset name.
+        tags (`str`, `List[str]`, or `None`):
+            Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
         trainer_name (`str`):
             Trainer name.
-        trainer_tag (`str`):
-            Trainer tag.
         trainer_citation (`str` or `None`):
             Trainer citation as a BibTeX entry.
         paper_title (`str` or `None`):
@@ -1413,13 +1413,17 @@ def generate_model_card(
         `ModelCard`:
             A ModelCard object.
     """
+    if tags is None:
+        tags = []
+    elif isinstance(tags, str):
+        tags = [tags]
     card_data = ModelCardData(
         base_model=base_model,
         datasets=dataset_name,
         library_name="transformers",
         licence="license",
         model_name=model_name,
-        tags=["trl", "generated_from_trainer", trainer_tag],
+        tags=["generated_from_trainer", *tags],
     )
     card = ModelCard.from_template(
         card_data,

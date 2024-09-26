@@ -243,6 +243,10 @@ class OnlineDPOTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Add tags for models that have been loaded with the correct transformers version
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
+
         self._beta = args.beta
 
         # Placed after the super().__init__ because we need self.is_deepspeed_enabled and self.accelerator
@@ -544,7 +548,12 @@ class OnlineDPOTrainer(Trainer):
             self._save_checkpoint(model, trial, metrics=metrics)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
-    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
@@ -575,9 +584,9 @@ class OnlineDPOTrainer(Trainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
+            tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="Online DPO",
-            trainer_tag="online-dpo",
             trainer_citation=citation,
             paper_title="Direct Language Model Alignment from Online AI Feedback",
             paper_id="2402.04792",
