@@ -412,10 +412,6 @@ class SFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
-
         if self.train_dataset is not None:
             if self.args.max_steps > 0 and args.packing:
                 warnings.warn(
