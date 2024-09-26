@@ -33,8 +33,8 @@ from transformers import (
     Trainer,
     TrainerCallback,
     is_apex_available,
+    is_wandb_available,
 )
-from transformers.integrations import is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
@@ -567,9 +567,6 @@ class OnlineDPOTrainer(Trainer):
         if not self.is_world_process_zero():
             return
 
-        model_card_filepath = os.path.join(self.args.output_dir, "README.md")
-        is_peft_library = False
-
         if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
             base_model = self.model.config._name_or_path
         else:
@@ -586,7 +583,4 @@ class OnlineDPOTrainer(Trainer):
             paper_title="Direct Language Model Alignment from Online AI Feedback",
             paper_id="2402.04792",
         )
-        model_card.save(model_card_filepath)
-
-        if is_peft_library:
-            self.accelerator.unwrap_model(self.model).create_or_update_model_card(self.args.output_dir)
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

@@ -19,8 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, IterableDataset
-from transformers import PreTrainedTokenizerBase, TrainerCallback, is_apex_available
-from transformers.integrations import is_wandb_available
+from transformers import PreTrainedTokenizerBase, TrainerCallback, is_apex_available, is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
@@ -449,9 +448,6 @@ class XPOTrainer(OnlineDPOTrainer):
         if not self.is_world_process_zero():
             return
 
-        model_card_filepath = os.path.join(self.args.output_dir, "README.md")
-        is_peft_library = False
-
         if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
             base_model = self.model.config._name_or_path
         else:
@@ -469,7 +465,4 @@ class XPOTrainer(OnlineDPOTrainer):
             paper_id="2405.21046",
         )
 
-        model_card.save(model_card_filepath)
-
-        if is_peft_library:
-            self.accelerator.unwrap_model(self.model).create_or_update_model_card(self.args.output_dir)
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
