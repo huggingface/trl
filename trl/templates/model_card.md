@@ -34,11 +34,11 @@ This model was trained with {{ trainer_name }}{% if paper_id %}, a method introd
 
 ## Citations
 
-Cite {{ trainer_name }} as:
-    
+{% if trainer_citation %}Cite {{ trainer_name }} as:
+
 ```bibtex
 {{ trainer_citation }}
-```
+```{% endif %}
 
 Cite TRL as:
     
