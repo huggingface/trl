@@ -440,10 +440,10 @@ class AlignPropTrainer(BaseTrainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
-            trainer_name="XPO",
-            trainer_tag="xpo",
+            trainer_name="AlignProp",
+            trainer_tag="alignprop",
             trainer_citation=citation,
-            paper_title="Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
+            paper_title="Aligning Text-to-Image Diffusion Models with Reward Backpropagation",
             paper_id="2310.03739",
         )
 
