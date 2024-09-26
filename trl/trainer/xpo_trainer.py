@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -19,18 +20,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, IterableDataset
 from transformers import PreTrainedTokenizerBase, TrainerCallback, is_apex_available
+from transformers.integrations import is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 
 from ..models.utils import unwrap_model_for_generation
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import empty_cache, get_reward, truncate_right
+from .utils import empty_cache, generate_model_card, get_reward, truncate_right
 from .xpo_config import XPOConfig
 
 
 if is_apex_available():
     from apex import amp
+
+
+if is_wandb_available():
+    import wandb
 
 
 class XPOTrainer(OnlineDPOTrainer):
@@ -429,3 +435,41 @@ class XPOTrainer(OnlineDPOTrainer):
             self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*):
+                The name of the model.
+            dataset_name (`str`, *optional*):
+                The name of the dataset used for training.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        model_card_filepath = os.path.join(self.args.output_dir, "README.md")
+        is_peft_library = False
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="XPO",
+            trainer_tag="xpo",
+            paper_title="Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
+            paper_id="2405.21046",
+        )
+
+        model_card.save(model_card_filepath)
+
+        if is_peft_library:
+            self.accelerator.unwrap_model(self.model).create_or_update_model_card(self.args.output_dir)
