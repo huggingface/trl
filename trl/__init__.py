@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# flake8: noqa
-
 __version__ = "0.12.0.dev0"
 
 from typing import TYPE_CHECKING

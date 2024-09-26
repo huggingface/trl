@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# flake8: noqa
-
 # There is a circular import in the PPOTrainer if we let isort sort these
 from typing import TYPE_CHECKING
 
