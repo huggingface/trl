@@ -207,4 +207,7 @@ if __name__ == "__main__":
 
     trainer.train()
 
-    trainer.push_to_hub(args.hf_hub_model_id)
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub()

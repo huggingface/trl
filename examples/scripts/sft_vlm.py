@@ -130,6 +130,10 @@ if __name__ == "__main__":
     trainer.train()
 
     trainer.save_model(training_args.output_dir)
-    trainer.push_to_hub()
-    if Accelerator().is_main_process:
-        processor.push_to_hub(training_args.hub_model_id)
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub()
+        if trainer.accelerator.is_main_process:
+            processor.push_to_hub(training_args.hub_model_id)
