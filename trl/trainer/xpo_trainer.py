@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import textwrap
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -461,6 +462,14 @@ class XPOTrainer(OnlineDPOTrainer):
         else:
             base_model = None
 
+        citation = textwrap.dedent("""\
+        @article{jung2024binary,
+            title        = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF}},
+            author       = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed Awadallah and Alexander Rakhlin},
+            year         = 2024,
+            eprint       = {arXiv:2405.21046}
+        }""")
+
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
@@ -469,6 +478,7 @@ class XPOTrainer(OnlineDPOTrainer):
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="XPO",
             trainer_tag="xpo",
+            trainer_citation=citation,
             paper_title="Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
             paper_id="2405.21046",
         )
