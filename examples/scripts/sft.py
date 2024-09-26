@@ -66,7 +66,7 @@ from trl import (
 
 if __name__ == "__main__":
     parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
-    args, training_args, model_config = parser.parse_args_and_config()
+    script_args, training_args, model_config = parser.parse_args_and_config()
 
     ################
     # Model init kwargs & Tokenizer
@@ -90,7 +90,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset(args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name)
 
     ################
     # Training
@@ -98,8 +98,8 @@ if __name__ == "__main__":
     trainer = SFTTrainer(
         model=model_config.model_name_or_path,
         args=training_args,
-        train_dataset=dataset[args.dataset_train_split],
-        eval_dataset=dataset[args.dataset_test_split],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )
