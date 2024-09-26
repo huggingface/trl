@@ -30,7 +30,7 @@ _import_structure = {
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
     "ddpo_config": ["DDPOConfig"],
-    "dpo_config": ["DPOConfig, FDivergenceConstants, FDivergenceType"],
+    "dpo_config": ["DPOConfig", "FDivergenceConstants", "FDivergenceType"],
     "dpo_trainer": ["DPOTrainer"],
     "gkd_config": ["GKDConfig"],
     "gkd_trainer": ["GKDTrainer"],
