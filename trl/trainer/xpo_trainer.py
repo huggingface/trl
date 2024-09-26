@@ -23,6 +23,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 
+from ..data_utils import maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import empty_cache, get_reward, truncate_right
@@ -360,6 +361,13 @@ class XPOTrainer(OnlineDPOTrainer):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
+
+        # Apply chat template and tokenize the input
+        batch_size = len(next(iter(inputs.values())))
+        inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
+        inputs = [maybe_apply_chat_template(x, self.tokenizer) for x in inputs]
+        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.tokenizer) for x in inputs]
+        inputs = self.data_collator(inputs)
 
         # need the prompt_ only
         inputs = self._prepare_inputs(inputs)
