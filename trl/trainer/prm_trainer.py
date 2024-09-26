@@ -31,13 +31,10 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import maybe_apply_chat_template
-from .reward_config import RewardConfig
+from .prm_config import PRMConfig
 from .utils import (
-    RewardDataCollatorWithPadding,
     compute_accuracy,
-    decode_and_strip_padding,
     print_rich_table,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
@@ -56,9 +53,13 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase")
     post_step_tokens = tokenizer.encode("\n", add_special_tokens=False)
     
     for steps, labels in zip(batch["steps"], batch["labels"]):
+        assert len(steps)==len(labels), "Steps and Labels should have the same number of elements."
         input_ids = []
         labels = []
-        assert len(steps)==len(labels), "Steps and Labels should have the same number of elements."
+        
+        if getattr(tokenizer, 'add_bos_token', False) and tokenizer.bos_token_id is not None:
+            input_ids.append(tokenizer.bos_token_id)
+            labels.append(-100)
         
         for step, label in zip(steps, labels):
             tokenized_step = tokenizer.encode(step, add_special_tokens=False) + post_step_tokens
@@ -70,10 +71,14 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase")
             input_ids.extend(tokenized_step)
             labels.extend(step_labels)
             
-            new_examples["input_ids"].append(input_ids)
-            new_examples["attention_mask"].append([1]*len(input_ids))
-            new_examples["labels"].append(labels)
-
+        if getattr(tokenizer, 'add_eos_token', False) and tokenizer.eos_token_id is not None:
+            input_ids.append(tokenizer.eos_token_id)
+            labels.append(-100)
+            
+        new_examples["input_ids"].append(input_ids)
+        new_examples["attention_mask"].append([1]*len(input_ids))
+        new_examples["labels"].append(labels)
+        
     return new_examples
 
 
@@ -83,7 +88,7 @@ class PRMTrainer(Trainer):
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module]] = None,
-        args: Optional[RewardConfig] = None,
+        args: Optional[PRMConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
@@ -100,12 +105,12 @@ class PRMTrainer(Trainer):
         peft_config: Optional[Dict] = None,
     ):
         """
-        Initialize RewardTrainer.
+        Initialize PRMTrainer.
 
         Args:
             model (`transformers.PreTrainedModel`):
                 The model to train, preferably an `AutoModelForSequenceClassification`.
-            args (`RewardConfig`):
+            args (`PRMConfig`):
                 The arguments to use for training.
             data_collator (`transformers.DataCollator`):
                 The data collator to use for training. If None is specified, the default data collator (`RewardDataCollatorWithPadding`) will be used
@@ -131,22 +136,22 @@ class PRMTrainer(Trainer):
         """
         if type(args) is TrainingArguments:
             warnings.warn(
-                "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `RewardConfig` instead.",
+                "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `PRMConfig` instead.",
                 FutureWarning,
             )
             if max_length is not None:
                 warnings.warn(
-                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
+                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `PRMConfig` to set `max_length` instead.",
                     FutureWarning,
                 )
         else:
             if max_length is not None and args.max_length is not None:
                 raise ValueError(
-                    "You cannot specify both `max_length` and `args.max_length`. Please use the `RewardConfig` to set `max_length` once."
+                    "You cannot specify both `max_length` and `args.max_length`. Please use the `PRMConfig` to set `max_length` once."
                 )
             if max_length is not None and args.max_length is None:
                 warnings.warn(
-                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
+                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `PRMConfig` to set `max_length` instead.",
                     FutureWarning,
                 )
         if not is_peft_available() and peft_config is not None:
@@ -185,7 +190,7 @@ class PRMTrainer(Trainer):
             if type(args) is TrainingArguments:
                 if max_length is None:
                     warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
+                        "When using RewardDataCollatorWithPadding, you should set `max_length` in PRMConfig."
                         " It will be set to `512` by default, but you should do it yourself in the future.",
                         UserWarning,
                     )
@@ -193,7 +198,7 @@ class PRMTrainer(Trainer):
             else:
                 if max_length is None and args.max_length is None:
                     warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
+                        "When using RewardDataCollatorWithPadding, you should set `max_length` in PRMConfig."
                         " It will be set to `512` by default, but you should do it yourself in the future.",
                         UserWarning,
                     )
