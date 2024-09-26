@@ -57,6 +57,7 @@ from .utils import (
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
 )
+from packaging.version import Version
 
 
 if is_peft_available():
@@ -892,6 +893,16 @@ class DPOTrainer(Trainer):
                 )
 
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+        
+        # num_logits_to_keep is supported since transformers v4.45.0
+        if self.use_num_logits_to_keep:
+            import transformers
+            transformers_version = transformers.__version__
+            if Version(transformers_version) < Version("4.45.0"):
+                raise ValueError(
+                    f"num_logits_to_keep is only supported since transformers v4.45.0. Your current version is {transformers_version}."
+                )
+            
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
 
@@ -1073,7 +1084,7 @@ class DPOTrainer(Trainer):
             label_pad_token_id: The label pad token id.
             padding_value: The padding value to use for the concatenated inputs_ids.
             device: The device for the concatenated inputs.
-            use_num_logits_to_keep: Whether to computes necessary logits in the forward pass.
+            use_num_logits_to_keep: Whether to computes necessary logits in the forward pass of CausalLM.
 
         Returns:
             A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
@@ -1084,12 +1095,6 @@ class DPOTrainer(Trainer):
             max_length = max(batch["chosen_labels"].shape[1], batch["rejected_labels"].shape[1])
         else:
             max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
-
-        # Support num_logits_to_keep, which computes necessary logits in the forward pass.
-        # This saves memory for long prompts where labels are -100 (ignored).
-        if use_num_logits_to_keep:
-            num_logits_to_keep = batch["chosen_labels"].shape[1] - (batch["chosen_labels"] != -100).nonzero(as_tuple=True)[1].min()
-            concatenated_batch["num_logits_to_keep"] = num_logits_to_keep.cpu()
 
         for k in batch:
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
@@ -1135,8 +1140,16 @@ class DPOTrainer(Trainer):
                 concatenated_batch["pixel_attention_mask"] = torch.cat(
                     [batch["prompt_pixel_attention_mask"], batch["prompt_pixel_attention_mask"]], dim=0
                 )
-        if use_num_logits_to_keep:
+
+        # Support num_logits_to_keep, which computes necessary logits in the forward pass.
+        # This saves memory for long prompts where labels are -100 (label_pad_token_id).
+        if use_num_logits_to_keep and not is_encoder_decoder:
+            concatenated_batch["num_logits_to_keep"] = 0
+            min_compute_index = (concatenated_batch["concatenated_labels"] != label_pad_token_id).nonzero(as_tuple=True)[1].min()
+            num_logits_to_keep = concatenated_batch["concatenated_labels"].shape[1] - min_compute_index
+            concatenated_batch["num_logits_to_keep"] = num_logits_to_keep.cpu()
             concatenated_batch["concatenated_labels"] = concatenated_batch["concatenated_labels"][:, -concatenated_batch["num_logits_to_keep"]:]
+
         return concatenated_batch
 
     def dpo_loss(
@@ -1387,13 +1400,21 @@ class DPOTrainer(Trainer):
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        outputs = model(
-            concatenated_batch["concatenated_input_ids"],
-            attention_mask=concatenated_batch["concatenated_attention_mask"],
-            use_cache=False,
-            num_logits_to_keep=concatenated_batch["num_logits_to_keep"], # save memory
-            **model_kwargs,
-        )
+        if self.use_num_logits_to_keep and not self.is_encoder_decoder:
+            outputs = model(
+                concatenated_batch["concatenated_input_ids"],
+                attention_mask=concatenated_batch["concatenated_attention_mask"],
+                use_cache=False,
+                num_logits_to_keep=concatenated_batch["num_logits_to_keep"], # save memory
+                **model_kwargs,
+            )
+        else:
+            outputs = model(
+                concatenated_batch["concatenated_input_ids"],
+                attention_mask=concatenated_batch["concatenated_attention_mask"],
+                use_cache=False,
+                **model_kwargs,
+            )
         all_logits = outputs.logits
 
         if all_logits.shape[:2] != concatenated_batch["concatenated_labels"].shape[:2]:
