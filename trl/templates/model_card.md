@@ -31,3 +31,24 @@ This model was trained with {{ trainer_name }}{% if paper_id %}, a method introd
 - Pytorch: {{ pytorch_version }}
 - Datasets: {{ datasets_version }}
 - Tokenizers: {{ tokenizers_version }}
+
+## Citations
+
+Cite {{ trainer_name }} as:
+    
+```bibtex
+{{ trainer_citation }}
+```
+
+Cite TRL as:
+    
+```bibtex
+{% raw %}@misc{vonwerra2022trl,
+	title        = {{TRL: Transformer Reinforcement Learning}},
+	author       = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallouédec},
+	year         = 2020,
+	journal      = {GitHub repository},
+	publisher    = {GitHub},
+	howpublished = {\url{https://github.com/huggingface/trl}}
+}{% endraw %}
+```
