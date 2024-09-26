@@ -352,7 +352,8 @@ class OnlineDPOTrainer(Trainer):
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
 
-        # Apply chat template and tokenize the input
+        # Apply chat template and tokenize the input.
+        # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
         batch_size = len(next(iter(inputs.values())))
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
         inputs = [maybe_apply_chat_template(x, self.tokenizer) for x in inputs]
