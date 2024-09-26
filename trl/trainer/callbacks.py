@@ -381,7 +381,6 @@ class LogCompletionsCallback(WandbCallback):
         self.trainer = trainer
         self.generation_config = generation_config
         self.freq = freq
-        self.table = []
         self._last_logged_step = -1
 
         if self.trainer.eval_dataset is None:
