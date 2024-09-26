@@ -34,7 +34,7 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-training_args = XPOConfig(output_dir="nash-md-qwen2", logging_steps=10)
+training_args = XPOConfig(output_dir="xpo-qwen2", logging_steps=10)
 trainer = XPOTrainer(
     model=model,
     reward_model=reward_model,
@@ -85,7 +85,7 @@ This callback logs the model's generated completions directly to Weights & Biase
 
 ## Example script
 
-We provide an example script to train a model using the XPO method. The script is available in [`examples/scripts/nash_md.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/nash_md.py)
+We provide an example script to train a model using the XPO method. The script is available in [`examples/scripts/xpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/xpo.py)
 
 To test the XPO script with the [Pythia 14M model](https://huggingface.co/EleutherAI/pythia-14m) on the TL;DR summarization task, run the following command:
 
