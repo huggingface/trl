@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,7 +15,7 @@
 pip install pillow
 
 # Tested on 8x H100 GPUs
-accelerate launch 
+accelerate launch
     --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/sft_vlm.py \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
@@ -33,23 +32,21 @@ For LLaVA-NeXT, use: (requires transformers>=4.45)
 
 For meta-llama/Llama-3.2-11B-Vision-Instruct, use: (requires transformers>=4.45.1)
     --model_name_or_path meta-llama/Llama-3.2-11B-Vision-Instruct
-    
 """
 
-from trl.commands.cli_utils import SFTScriptArguments, TrlParser
 import torch
-from accelerate import Accelerator
 from datasets import load_dataset
-
 from transformers import AutoModelForVision2Seq, AutoProcessor, LlavaForConditionalGeneration
 
 from trl import (
     ModelConfig,
     SFTConfig,
+    SFTScriptArguments,
     SFTTrainer,
+    TrlParser,
+    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    get_kbit_device_map,
 )
 
 

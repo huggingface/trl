@@ -47,11 +47,22 @@ python examples/scripts/dpo.py \
 """
 
 import torch
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl import DPOConfig, DPOTrainer, ModelConfig, get_kbit_device_map, get_peft_config, get_quantization_config
-from trl.commands.cli_utils import DPOScriptArguments, TrlParser
+from trl import (
+    DPOConfig,
+    DPOScriptArguments,
+    DPOTrainer,
+    ModelConfig,
+    TrlParser,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
+    maybe_apply_chat_template,
+    maybe_extract_prompt,
+)
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 

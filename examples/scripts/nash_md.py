@@ -1,5 +1,3 @@
-# flake8: noqa
-
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,17 +48,18 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
+
 from trl import (
     DPOScriptArguments,
+    LogCompletionsCallback,
     ModelConfig,
     NashMDConfig,
     NashMDTrainer,
+    TrlParser,
     get_kbit_device_map,
     get_quantization_config,
-    LogCompletionsCallback,
 )
-from trl.commands.cli_utils import TrlParser
-from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":
@@ -100,7 +99,7 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     dataset = load_dataset(script_args.dataset_name)
 

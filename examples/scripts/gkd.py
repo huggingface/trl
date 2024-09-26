@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,21 +44,21 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
 from trl import (
     GKDConfig,
     GKDTrainer,
+    LogCompletionsCallback,
     ModelConfig,
+    SFTScriptArguments,
+    TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    maybe_apply_chat_template,
-    LogCompletionsCallback,
 )
-from trl.commands.cli_utils import SFTScriptArguments, TrlParser
-from accelerate import PartialState
 
 
 if __name__ == "__main__":
