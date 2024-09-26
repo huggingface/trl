@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-import warnings
+import textwrap
 from collections import defaultdict
 from typing import Any, Callable, Optional, Tuple
 from warnings import warn
@@ -21,11 +21,15 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from huggingface_hub import whoami
+from transformers import is_wandb_available
 
 from ..models import DDPOStableDiffusionPipeline
 from . import AlignPropConfig, BaseTrainer
+from .utils import generate_model_card
 
+
+if is_wandb_available():
+    import wandb
 
 logger = get_logger(__name__)
 
@@ -400,27 +404,47 @@ class AlignPropTrainer(BaseTrainer):
         for epoch in range(self.first_epoch, epochs):
             global_step = self.step(epoch, global_step)
 
-    def create_model_card(self, path: str, model_name: Optional[str] = "TRL AlignProp Model") -> None:
-        """Creates and saves a model card for a TRL model.
-
-        Args:
-            path (`str`): The path to save the model card to.
-            model_name (`str`, *optional*): The name of the model, defaults to `TRL AlignProp Model`.
-        """
-        try:
-            user = whoami()["name"]
-        # handle the offline case
-        except Exception:
-            warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
-            return
-
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
-        with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
-            f.write(model_card_content)
-
     def _save_pretrained(self, save_directory):
         self.sd_pipeline.save_pretrained(save_directory)
-        self.create_model_card(save_directory)
+        self.create_model_card()
+
+    def create_model_card(self, model_name: Optional[str] = None, dataset_name: Optional[str] = None):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*):
+                The name of the model.
+            dataset_name (`str`, *optional*):
+                The name of the dataset used for training.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        citation = textwrap.dedent("""\
+        @article{prabhudesai2024aligning,
+            title        = {{Aligning Text-to-Image Diffusion Models with Reward Backpropagation}},
+            author       = {Mihir Prabhudesai and Anirudh Goyal and Deepak Pathak and Katerina Fragkiadaki},
+            year         = 2024,
+            eprint       = {arXiv:2310.03739}
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="XPO",
+            trainer_tag="xpo",
+            trainer_citation=citation,
+            paper_title="Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
+            paper_id="2310.03739",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
