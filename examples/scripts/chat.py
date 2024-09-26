@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,16 +13,12 @@
 # limitations under the License.
 
 
-from trl.commands.cli_utils import init_zero_verbose
-
-init_zero_verbose()
-
 import copy
 import json
 import os
-import sys
 import pwd
 import re
+import sys
 import time
 from threading import Thread
 
@@ -33,9 +28,12 @@ from rich.live import Live
 from rich.markdown import Markdown
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
-from trl.commands.cli_utils import ChatArguments, TrlParser, init_zero_verbose
+from trl import TrlParser, init_zero_verbose
+from trl.commands.cli_utils import ChatArguments
 from trl.trainer.utils import get_quantization_config
 
+
+init_zero_verbose()
 
 HELP_STRING = """\
 
