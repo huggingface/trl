@@ -381,6 +381,9 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
     #  "rejected": [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}]}
     # That's why we check if the prompt is also conversational before deciding not to extract it.
     if "prompt" in example:
-        if is_conversational({"chosen": example["chosen"]}) and not is_conversational({"prompt": example["prompt"]}):
+        # Both conversational or both non-conversational
+        chosen_conv = is_conversational({"chosen": example["chosen"]})
+        prompt_conv = is_conversational({"prompt": example["prompt"]})
+        if (chosen_conv and prompt_conv) or (not chosen_conv and not prompt_conv):
             return example
     return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
