@@ -17,6 +17,7 @@
 import inspect
 import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
@@ -1011,6 +1012,14 @@ class ORPOTrainer(Trainer):
         else:
             base_model = None
 
+        citation = textwrap.dedent("""\
+        @article{hong2024orpo,
+            title        = {{ORPO: Monolithic Preference Optimization without Reference Model}},
+            author       = {Jiwoo Hong and Noah Lee and James Thorne},
+            year         = 2024,
+            eprint       = {arXiv:2403.07691}
+        }""")
+
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
@@ -1019,6 +1028,7 @@ class ORPOTrainer(Trainer):
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="ORPO",
             trainer_tag="orpo",
+            trainer_citation=citation,
             paper_title="ORPO: Monolithic Preference Optimization without Reference Model",
             paper_id="2403.07691",
         )
