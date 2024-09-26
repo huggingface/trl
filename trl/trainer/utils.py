@@ -1389,11 +1389,11 @@ def generate_model_card(
 
     Args:
         base_model (`str` or `None`):
-            Base model.
+            Base model name.
         model_name (`str`):
             Model name.
         hub_model_id (`str`):
-            Hub model ID.
+            Hub model ID as `username/model_id`.
         dataset_name (`str` or `None`):
             Dataset name.
         wandb_url (`str` or `None`):
@@ -1403,11 +1403,11 @@ def generate_model_card(
         trainer_tag (`str`):
             Trainer tag.
         trainer_citation (`str` or `None`):
-            Trainer citation.
+            Trainer citation as a BibTeX entry.
         paper_title (`str` or `None`):
             Paper title.
         paper_id (`str` or `None`):
-            Paper ID.
+            ArXiv paper ID as `YYMM.NNNNN`.
 
     Returns:
         `ModelCard`:
