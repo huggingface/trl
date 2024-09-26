@@ -15,6 +15,7 @@
 import inspect
 import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
@@ -1467,6 +1468,14 @@ class BCOTrainer(Trainer):
         else:
             base_model = None
 
+        citation = textwrap.dedent("""\
+        @article{jung2024binary,
+            title        = {{Binary Classifier Optimization for Large Language Model Alignment}},
+            author       = {Seungjae Jung and Gunsoo Han and Daniel Wontae Nam and Kyoung{-}Woon On},
+            year         = 2024,
+            eprint       = {arXiv:2404.04656}
+        }""")
+
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
@@ -1475,6 +1484,7 @@ class BCOTrainer(Trainer):
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="BCO",
             trainer_tag="bco",
+            trainer_citation=citation,
             paper_title="Binary Classifier Optimization for Large Language Model Alignment",
             paper_id="2404.04656",
         )
