@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,23 +32,24 @@ python examples/scripts/xpo.py \
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
+
 from trl import (
     DPOScriptArguments,
+    LogCompletionsCallback,
     ModelConfig,
+    TrlParser,
     XPOConfig,
     XPOTrainer,
     get_kbit_device_map,
     get_quantization_config,
-    LogCompletionsCallback,
 )
-from trl.commands.cli_utils import TrlParser
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, XPOConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
-    args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    script_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     torch_dtype = (
         model_config.torch_dtype
