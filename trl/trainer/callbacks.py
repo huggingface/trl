@@ -224,11 +224,11 @@ class WinRateCallback(TrainerCallback):
             otherwise, it defaults to using the initial model.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_prompts (`int`, *optional*):
+        num_prompts (`int` or `None`, *optional*, defaults to `None`):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples
             in the evaluation dataset.
-        shuffle_order (`bool`, *optional*):
-            Whether to shuffle the order of the completions before judging. Default is `True`.
+        shuffle_order (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the order of the completions before judging.
     """
 
     def __init__(
