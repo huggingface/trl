@@ -13,6 +13,7 @@
 # limitations under the License.
 from typing import List, Optional, Union
 
+import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
@@ -223,9 +224,11 @@ class WinRateCallback(TrainerCallback):
             otherwise, it defaults to using the initial model.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_prompts (`int`, *optional*):
+        num_prompts (`int` or `None`, *optional*, defaults to `None`):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples
             in the evaluation dataset.
+        shuffle_order (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the order of the completions before judging.
     """
 
     def __init__(
@@ -233,10 +236,12 @@ class WinRateCallback(TrainerCallback):
         judge: BasePairwiseJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_prompts: int = None,
+        num_prompts: Optional[int] = None,
+        shuffle_order: bool = True,
     ):
         self.judge = judge
         self.trainer = trainer
+        self.shuffle_order = shuffle_order
         self.generation_config = generation_config
         self.ref_completions = []
 
@@ -273,6 +278,30 @@ class WinRateCallback(TrainerCallback):
                 generation_config=self.generation_config,
                 batch_size=args.per_device_eval_batch_size,
             )
+            # Compute initial win rate as a reference point
+            completions = list(zip(self.ref_completions, self.ref_completions))
+            winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
+            prompts = gather_object(prompts)
+            completions = gather_object(completions)
+            winner_indices = gather_object(winner_indices)
+
+        # Logging
+        if self.trainer.accelerator.is_main_process:
+            win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
+            self.trainer.log({"eval_win_rate": win_rate})
+
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    global_step = [str(state.global_step)] * len(prompts)
+                    data = list(zip(global_step, prompts, completions, winner_indices))
+                    # Split completions from referenece model and policy
+                    split_data = [(item[0], item[1], item[2][0], item[2][1], item[3]) for item in data]
+                    df = pd.DataFrame(
+                        split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"]
+                    )
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # At every evaluation step, we generate completions for the model and compare them with the reference
@@ -293,13 +322,28 @@ class WinRateCallback(TrainerCallback):
             )
 
             completions = list(zip(self.ref_completions, completions))
-            winner_indices = self.judge.judge(prompts, completions)
+            winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
+            prompts = gather_object(prompts)
+            completions = gather_object(completions)
             winner_indices = gather_object(winner_indices)
 
         # Logging
         if self.trainer.accelerator.is_main_process:
             win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
             self.trainer.log({"eval_win_rate": win_rate})
+
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    global_step = [str(state.global_step)] * len(prompts)
+                    data = list(zip(global_step, prompts, completions, winner_indices))
+                    # Split completions from referenece model and policy
+                    split_data = [(item[0], item[1], item[2][0], item[2][1], item[3]) for item in data]
+                    df = pd.DataFrame(
+                        split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"]
+                    )
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
 
 class LogCompletionsCallback(WandbCallback):
@@ -375,7 +419,6 @@ class LogCompletionsCallback(WandbCallback):
 
         # Build the data to log
         if self.trainer.accelerator.is_main_process:
-            # prompts = self.eval_dataset["prompt"][:]
             global_step = [str(state.global_step)] * len(prompts)
             data = list(zip(global_step, prompts, completions))
             self.table.extend(data)

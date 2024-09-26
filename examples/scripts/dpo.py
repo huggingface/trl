@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,22 +46,24 @@ python examples/scripts/dpo.py \
     --lora_alpha 16
 """
 
-from trl.commands.cli_utils import DPOScriptArguments, TrlParser
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 import torch
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from accelerate import PartialState
+
 from trl import (
     DPOConfig,
+    DPOScriptArguments,
     DPOTrainer,
     ModelConfig,
+    TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    maybe_extract_prompt,
     maybe_apply_chat_template,
+    maybe_extract_prompt,
 )
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":

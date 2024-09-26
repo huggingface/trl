@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,17 +26,17 @@ accelerate launch examples/scripts/dpo_visual.py \
     --lora_target_modules=all-linear
 """
 
-from trl.commands.cli_utils import DPOScriptArguments, TrlParser
-from accelerate import PartialState
-
 import torch
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
 from trl import (
     DPOConfig,
+    DPOScriptArguments,
     DPOTrainer,
     ModelConfig,
+    TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,

@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,19 +42,20 @@ python examples/scripts/dpo_online.py \
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
+
 from trl import (
     DPOScriptArguments,
+    LogCompletionsCallback,
     ModelConfig,
     OnlineDPOConfig,
     OnlineDPOTrainer,
+    TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    LogCompletionsCallback,
 )
-
-from trl.commands.cli_utils import TrlParser
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
 
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, OnlineDPOConfig, ModelConfig))
@@ -105,8 +105,8 @@ if __name__ == "__main__":
         model=model,
         reward_model=reward_model,
         args=training_args,
-        train_dataset=dataset[args.dataset_train_split],
-        eval_dataset=dataset[args.dataset_test_split],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )
