@@ -451,7 +451,7 @@ class DPOTrainer(Trainer):
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
         reference_free: bool = False,
-        force_use_ref_model: bool = False
+        force_use_ref_model: bool = False,
     ):
         if not isinstance(model, str) and ref_model is model:
             raise ValueError(
