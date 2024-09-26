@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import textwrap
 import warnings
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -561,6 +562,14 @@ class OnlineDPOTrainer(Trainer):
         else:
             base_model = None
 
+        citation = textwrap.dedent("""\
+        @article{guo2024direct,
+            title        = {{Direct Language Model Alignment from Online AI Feedback}},
+            author       = {Shangmin Guo and Biao Zhang and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel},
+            year         = 2024,
+            eprint       = {arXiv:2402.04792}
+        }""")
+
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
@@ -569,6 +578,7 @@ class OnlineDPOTrainer(Trainer):
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="Online DPO",
             trainer_tag="online-dpo",
+            trainer_citation=citation,
             paper_title="Direct Language Model Alignment from Online AI Feedback",
             paper_id="2402.04792",
         )
