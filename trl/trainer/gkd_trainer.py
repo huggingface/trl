@@ -40,6 +40,7 @@ if is_liger_kernel_available():
 if is_wandb_available():
     import wandb
 
+
 class GKDTrainer(SFTTrainer):
     _tag_names = ["trl", "gkd"]
 
