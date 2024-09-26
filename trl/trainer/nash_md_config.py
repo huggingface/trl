@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from typing import List, Union
+from dataclasses import dataclass, field
+from typing import List
 
 from trl.trainer.online_dpo_config import OnlineDPOConfig
 
@@ -32,4 +32,9 @@ class NashMDConfig(OnlineDPOConfig):
             epochs.
     """
 
-    mixture_coef: Union[float, List[float]] = 0.5
+    mixture_coef: List[float] = field(default_factory=lambda: [0.5])
+
+    def __post_init__(self):
+        super().__post_init__()
+        if hasattr(self.mixture_coef, "__len__") and len(self.mixture_coef) == 1:
+            self.mixture_coef = self.mixture_coef[0]

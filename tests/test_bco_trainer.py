@@ -49,19 +49,19 @@ class BCOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", True, True],
-            ["gpt2", True, False],
-            ["gpt2", False, True],
-            ["gpt2", False, False],
+            ["gpt2", True, True, "standard_unpaired_preference"],
+            ["gpt2", True, False, "standard_unpaired_preference"],
+            ["gpt2", False, True, "standard_unpaired_preference"],
+            ["gpt2", False, False, "standard_unpaired_preference"],
+            ["gpt2", True, True, "conversational_unpaired_preference"],
         ]
     )
-    def test_bco_trainer(self, name, pre_compute, eval_dataset):
+    def test_bco_trainer(self, name, pre_compute, eval_dataset, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
-                remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 eval_strategy="steps",
@@ -70,7 +70,7 @@ class BCOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             if name == "gpt2":
                 model = self.model
@@ -129,7 +129,6 @@ class BCOTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
-                remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 eval_strategy="steps",
@@ -192,7 +191,6 @@ class BCOTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
-                remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 eval_strategy="steps",
@@ -230,7 +228,6 @@ class BCOTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
-                remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 eval_strategy="steps",
@@ -289,7 +286,6 @@ class BCOTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
-                remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 eval_strategy="steps",
@@ -330,7 +326,6 @@ class BCOTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
-                remove_unused_columns=False,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 eval_strategy="steps",
@@ -376,7 +371,6 @@ class BCOTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
-                remove_unused_columns=False,
                 gradient_accumulation_steps=4,
                 learning_rate=9e-1,
                 eval_strategy="steps",
