@@ -233,8 +233,8 @@ class WinRateCallback(WandbCallback):
         judge: BasePairwiseJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_prompts: int = None,
-        shuffle_order: Optional[bool] = True,
+        num_prompts: Optional[int] = None,
+        shuffle_order: bool = True,
     ):
         super().__init__()
         self.judge = judge
