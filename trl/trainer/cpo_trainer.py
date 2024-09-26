@@ -16,6 +16,7 @@
 import inspect
 import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
@@ -989,6 +990,16 @@ class CPOTrainer(Trainer):
         else:
             base_model = None
 
+        citation = textwrap.dedent("""\
+        @inproceedings{xu2024contrastive,
+            title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
+            author       = {Haoran Xu and Amr Sharaf and Yunmo Chen and Weiting Tan and Lingfeng Shen and Benjamin Van Durme and Kenton Murray and Young Jin Kim},
+            year         = 2024,
+            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
+            publisher    = {OpenReview.net},
+            url          = {https://openreview.net/forum?id=51iwkioZpn}
+        }""")
+
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
@@ -997,6 +1008,7 @@ class CPOTrainer(Trainer):
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="CPO",
             trainer_tag="cpo",
+            trainer_citation=citation,
             paper_title="Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation",
             paper_id="2401.08417",
         )
