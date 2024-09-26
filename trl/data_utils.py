@@ -383,5 +383,4 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
     if "prompt" in example:
         if is_conversational({"chosen": example["chosen"]}) and not is_conversational({"prompt": example["prompt"]}):
             return example
-    else:
-        return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
+    return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
