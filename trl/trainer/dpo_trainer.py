@@ -1143,7 +1143,7 @@ class DPOTrainer(Trainer):
 
         # Support num_logits_to_keep, which computes necessary logits in the forward pass.
         # This saves memory for long prompts where labels are -100 (label_pad_token_id).
-        if use_num_logits_to_keep and not is_encoder_decoder:
+        if use_num_logits_to_keep:
             concatenated_batch["num_logits_to_keep"] = 0
             min_compute_index = (concatenated_batch["concatenated_labels"] != label_pad_token_id).nonzero(as_tuple=True)[1].min()
             num_logits_to_keep = concatenated_batch["concatenated_labels"].shape[1] - min_compute_index
@@ -1375,6 +1375,12 @@ class DPOTrainer(Trainer):
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
+        model_support_num_logits_to_keep = "num_logits_to_keep" in set(inspect.signature(model.forward).parameters.keys())
+        if self.use_num_logits_to_keep and not model_support_num_logits_to_keep:
+            self.use_num_logits_to_keep = False
+            warnings.warn(
+                "The model does not support num_logits_to_keep. The parameter use_num_logits_to_keep will be ignored."
+            )
         concatenated_batch = self.concatenated_inputs(
             batch,
             is_encoder_decoder=self.is_encoder_decoder,
@@ -1382,7 +1388,7 @@ class DPOTrainer(Trainer):
             label_pad_token_id=self.label_pad_token_id,
             padding_value=self.padding_value,
             device=self.accelerator.device,
-            use_num_logits_to_keep=self.use_num_logits_to_keep
+            use_num_logits_to_keep=self.use_num_logits_to_keep,
         )
         len_chosen = batch["chosen_labels"].shape[0]
 
@@ -1400,7 +1406,7 @@ class DPOTrainer(Trainer):
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        if self.use_num_logits_to_keep and not self.is_encoder_decoder:
+        if self.use_num_logits_to_keep:
             outputs = model(
                 concatenated_batch["concatenated_input_ids"],
                 attention_mask=concatenated_batch["concatenated_attention_mask"],
