@@ -6,49 +6,8 @@ For a full example have a look at  [`examples/scripts/bco.py`].
 
 ## Expected dataset format
 
-The BCO trainer expects a very specific format for the dataset as it does not require pairwise preferences. Since the model will be trained to directly optimize examples that consist of a prompt, model completion, and a label to indicate whether the completion is "good" or "bad", we expect a dataset with the following columns:
-
-- `prompt`
-- `completion`
-- `label`
-
-for example:
-
-```
-bco_dataset_dict = {
-    "prompt": [
-        "Hey, hello",
-        "How are you",
-        "What is your name?",
-        "What is your name?",
-        "Which is the best programming language?",
-        "Which is the best programming language?",
-        "Which is the best programming language?",
-    ],
-    "completion": [
-        "hi nice to meet you",
-        "leave me alone",
-        "I don't have a name",
-        "My name is Mary",
-        "Python",
-        "C++",
-        "Java",
-    ],
-    "label": [
-        True,
-        False,
-        False,
-        True,
-        True,
-        False,
-        False,
-    ],
-}
-```
-
-where the `prompt` contains the context inputs, `completion` contains the corresponding responses and `label` contains the corresponding flag that indicates if the generated completion is desired (`True`) or undesired (`False`).
-A prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays. It is required that the dataset contains at least one desirable and one undesirable completion.
-
+The [`BCOTrainer`] requires an [unpaired preference dataset](dataset_formats#unpaired-preference).
+The [`BCOTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Expected model format
 The BCO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.

@@ -50,7 +50,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --sft_model_path EleutherAI/pythia-1b-deduped \
     --reward_model_path EleutherAI/pythia-1b-deduped \
     --local_rollout_forward_batch_size 1 \
-    --deepspeed3 \
     --missing_eos_penalty 1.0
 """
 
@@ -88,7 +87,7 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset("trl-internal-testing/descriptiveness-sentiment-trl-style", split="descriptiveness")
-    eval_samples = 20
+    eval_samples = 100
     train_dataset = dataset.select(range(len(dataset) - eval_samples))
     eval_dataset = dataset.select(range(len(dataset) - eval_samples, len(dataset)))
     dataset_text_field = "prompt"

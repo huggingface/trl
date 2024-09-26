@@ -232,7 +232,7 @@ class SFTTrainer(Trainer):
                 if getattr(model, "is_loaded_in_4bit", False):
                     for _, param in model.named_parameters():
                         if param.__class__.__name__ == "Params4bit":
-                            is_sharded_qlora = param.data.device.type == "cpu"
+                            is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
                             break
                 if getattr(model, "is_loaded_in_8bit", False) or (
                     getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora

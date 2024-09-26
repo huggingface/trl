@@ -102,7 +102,7 @@ if __name__ == "__main__":
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        dataset = dataset.map(process, num_prc=training_args.dataset_num_proc)
+        dataset = dataset.map(process, num_proc=training_args.dataset_num_proc)
 
     ################
     # Training
