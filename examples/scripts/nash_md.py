@@ -65,8 +65,8 @@ from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
 
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, NashMDConfig, ModelConfig))
-    args, training_args, model_config = parser.parse_args_and_config()
-    args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    script_args, training_args, model_config = parser.parse_args_and_config()
+    script_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     torch_dtype = (
         model_config.torch_dtype
@@ -102,15 +102,15 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
 
-    dataset = load_dataset(args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name)
 
     trainer = NashMDTrainer(
         model=model,
         ref_model=ref_model,
         reward_model=reward_model,
         args=training_args,
-        train_dataset=dataset[args.dataset_train_split],
-        eval_dataset=dataset[args.dataset_test_split],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
         tokenizer=tokenizer,
     )
     generation_config = GenerationConfig(

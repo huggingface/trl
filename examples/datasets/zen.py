@@ -579,5 +579,5 @@ def main(test_size, push_to_hub, repo_id):
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
-    args = parser.parse_args_into_dataclasses()[0]
-    main(args.test_size, args.push_to_hub, args.repo_id)
+    script_args = parser.parse_args_into_dataclasses()[0]
+    main(script_args.test_size, script_args.push_to_hub, script_args.repo_id)

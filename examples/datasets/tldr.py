@@ -47,7 +47,7 @@ def to_prompt_completion(example):
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
-    args = parser.parse_args_into_dataclasses()[0]
+    script_args = parser.parse_args_into_dataclasses()[0]
 
     # Filtered reddit TL;DR dataset from https://github.com/openai/summarize-from-feedback?tab=readme-ov-file#reddit-tldr-dataset
     data_files = {
@@ -59,9 +59,9 @@ if __name__ == "__main__":
 
     dataset = dataset.map(
         to_prompt_completion,
-        num_proc=args.dataset_num_proc,
+        num_proc=script_args.dataset_num_proc,
         remove_columns=["id", "subreddit", "title", "post", "summary"],
     )
 
-    if args.push_to_hub:
-        dataset.push_to_hub(args.repo_id)
+    if script_args.push_to_hub:
+        dataset.push_to_hub(script_args.repo_id)
