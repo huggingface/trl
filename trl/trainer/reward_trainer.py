@@ -365,10 +365,12 @@ class RewardTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*):
+            model_name (`str`, *optional*, defaults to `None`):
                 The name of the model.
-            dataset_name (`str`, *optional*):
+            dataset_name (`str`, *optional*, defaults to `None`):
                 The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
             return
