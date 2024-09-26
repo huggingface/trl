@@ -15,6 +15,7 @@
 import inspect
 import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
@@ -1445,6 +1446,14 @@ class KTOTrainer(Trainer):
         else:
             base_model = None
 
+        citation = textwrap.dedent("""\
+        @article{ethayarajh2024kto,
+            title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
+            author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
+            year         = 2024,
+            eprint       = {arXiv:2402.01306},
+        }""")
+
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
@@ -1453,6 +1462,7 @@ class KTOTrainer(Trainer):
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="KTO",
             trainer_tag="kto",
+            trainer_citation=citation,
             paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",
             paper_id="2402.01306",
         )
