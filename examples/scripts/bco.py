@@ -146,7 +146,7 @@ if __name__ == "__main__":
     )
 
     # Initialize the BCO trainer
-    bco_trainer = BCOTrainer(
+    trainer = BCOTrainer(
         model,
         ref_model,
         args=training_args,
@@ -159,5 +159,9 @@ if __name__ == "__main__":
     )
 
     # Train and push the model to the Hub
-    bco_trainer.train()
-    bco_trainer.save_model(training_args.output_dir)
+    trainer.train()
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub()

@@ -999,6 +999,8 @@ class OnPolicyConfig(TrainingArguments):
             Mini batch size per GPU.
         mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
             Mini batch size across GPUs.
+        push_to_hub (`bool`, *optional*, defaults to `False`):
+            Whether to push the model to the Hub after training.
     """
 
     run_name: Optional[str] = None
@@ -1020,6 +1022,7 @@ class OnPolicyConfig(TrainingArguments):
     batch_size: Optional[int] = None
     local_mini_batch_size: Optional[int] = None
     mini_batch_size: Optional[int] = None
+    push_to_hub: bool = False
 
 
 def first_true_indices(bools: torch.Tensor, dtype=torch.long):

@@ -94,6 +94,8 @@ class AlignPropConfig:
             Absolute timestep to which the gradients are backpropagated. Used only if `truncated_backprop_rand=False`.
         truncated_rand_backprop_minmax (`Tuple[int, int]`, *optional*, defaults to `(0, 50)`):
             Range of diffusion timesteps for randomized truncated backpropagation.
+        push_to_hub (`bool`, *optional*, defaults to `False`):
+            Whether to push the final model to the Hub.
     """
 
     exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
@@ -128,6 +130,7 @@ class AlignPropConfig:
     truncated_backprop_rand: bool = True
     truncated_backprop_timestep: int = 49
     truncated_rand_backprop_minmax: Tuple[int, int] = (0, 50)
+    push_to_hub: bool = False
 
     def to_dict(self):
         output_dict = {}
