@@ -46,20 +46,33 @@ if is_peft_available():
 
 
 def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase") -> Dict[str, List[Any]]:
-    """Tokenize a batch from a reward modelling dataset."""
+    """Tokenize a batch from a PRM modeling dataset."""
     new_examples = {
-        "input_ids_chosen": [],
-        "attention_mask_chosen": [],
-        "input_ids_rejected": [],
-        "attention_mask_rejected": [],
+        "input_ids": [],
+        "attention_mask": [],
+        "labels": []
     }
-    for chosen, rejected in zip(batch["chosen"], batch["rejected"]):
-        tokenized_chosen = tokenizer(chosen)
-        tokenized_rejected = tokenizer(rejected)
-        new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
-        new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
-        new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
-        new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
+    
+    post_step_tokens = tokenizer.encode("\n", add_special_tokens=False)
+    
+    for steps, labels in zip(batch["steps"], batch["labels"]):
+        input_ids = []
+        labels = []
+        assert len(steps)==len(labels), "Steps and Labels should have the same number of elements."
+        
+        for step, label in zip(steps, labels):
+            tokenized_step = tokenizer.encode(step, add_special_tokens=False) + post_step_tokens
+            step_labels = [-100] * len(tokenized_step)
+            step_labels[-1] = label
+            tokenized_step.extend(post_step_tokens)
+            step_labels.extend([-100]* len(post_step_tokens))
+            
+            input_ids.extend(tokenized_step)
+            labels.extend(step_labels)
+            
+            new_examples["input_ids"].append(input_ids)
+            new_examples["attention_mask"].append([1]*len(input_ids))
+            new_examples["labels"].append(labels)
 
     return new_examples
 
