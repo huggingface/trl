@@ -1380,6 +1380,7 @@ def generate_model_card(
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_tag: str,
+    trainer_citation: str,
     paper_title: Optional[str],
     paper_id: Optional[str],
 ) -> ModelCard:
@@ -1401,6 +1402,8 @@ def generate_model_card(
             Trainer name.
         trainer_tag (`str`):
             Trainer tag.
+        trainer_citation (`str`):
+            Trainer citation.
         paper_title (`str` or `None`):
             Paper title.
         paper_id (`str` or `None`):
@@ -1427,6 +1430,7 @@ def generate_model_card(
         dataset_name=dataset_name,
         wandb_url=wandb_url,
         trainer_name=trainer_name,
+        trainer_citation=trainer_citation,
         paper_title=paper_title,
         paper_id=paper_id,
         trl_version=version("trl"),
