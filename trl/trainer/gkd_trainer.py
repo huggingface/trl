@@ -13,6 +13,7 @@
 # limitations under the License.
 import os
 import random
+import textwrap
 import warnings
 from copy import deepcopy
 from typing import Any, Dict, Optional, Union
@@ -281,6 +282,16 @@ class GKDTrainer(SFTTrainer):
         else:
             base_model = None
 
+        citation = textwrap.dedent("""\
+        @inproceedings{agarwal2024on-policy,
+            title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
+            author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
+            year         = 2024,
+            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+            publisher    = {OpenReview.net},
+            url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+        }""")
+
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
@@ -289,6 +300,7 @@ class GKDTrainer(SFTTrainer):
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="GKD",
             trainer_tag="gkd",
+            trainer_citation=citation,
             paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
             paper_id="2306.13649",
         )
