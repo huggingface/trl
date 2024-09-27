@@ -102,7 +102,8 @@ class GKDTrainer(SFTTrainer):
         student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
     ):
         """
-        Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1) of https://arxiv.org/abs/2306.13649 for the definition.
+        Compute the generalized Jensen-Shannon Divergence loss for knowledge distillation using F.kl_div. See Eq. (1)
+        of https://huggingface.co/papers/2306.13649 for the definition.
 
         Args:
             student_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
