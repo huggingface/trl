@@ -267,7 +267,7 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
 
 class BCOTrainer(Trainer):
     r"""
-    Initialize BCOTrainer from [BCO](https://arxiv.org/abs/2404.04656) paper.
+    Initialize BCOTrainer from [BCO](https://huggingface.co/papers/2404.04656) paper.
 
     Args:
         model (`transformers.PreTrainedModel`):
