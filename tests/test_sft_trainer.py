@@ -1055,8 +1055,8 @@ class SFTTrainerTester(unittest.TestCase):
                 peft_config=peft_config,
             )
 
-            assert "sft" in trainer.model.model_tags
-            assert "trl" in trainer.model.model_tags
+            for tag in ["sft", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
 
     @require_peft
     def test_sft_trainer_tag(self):
@@ -1081,8 +1081,8 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.eval_dataset,
             )
 
-            assert "sft" in trainer.model.model_tags
-            assert "trl" in trainer.model.model_tags
+            for tag in ["sft", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
 
     def test_sft_trainer_only_train_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
