@@ -897,6 +897,7 @@ class DPOTrainer(Trainer):
         # num_logits_to_keep is supported since transformers v4.45.0
         if self.use_num_logits_to_keep:
             import transformers
+
             transformers_version = transformers.__version__
             if Version(transformers_version) < Version("4.45.0"):
                 raise ValueError(
@@ -1145,10 +1146,14 @@ class DPOTrainer(Trainer):
         # This saves memory for long prompts where labels are -100 (label_pad_token_id).
         if use_num_logits_to_keep:
             concatenated_batch["num_logits_to_keep"] = 0
-            min_compute_index = (concatenated_batch["concatenated_labels"] != label_pad_token_id).nonzero(as_tuple=True)[1].min()
+            min_compute_index = (
+                (concatenated_batch["concatenated_labels"] != label_pad_token_id).nonzero(as_tuple=True)[1].min()
+            )
             num_logits_to_keep = concatenated_batch["concatenated_labels"].shape[1] - min_compute_index
             concatenated_batch["num_logits_to_keep"] = num_logits_to_keep.cpu()
-            concatenated_batch["concatenated_labels"] = concatenated_batch["concatenated_labels"][:, -concatenated_batch["num_logits_to_keep"]:]
+            concatenated_batch["concatenated_labels"] = concatenated_batch["concatenated_labels"][
+                :, -concatenated_batch["num_logits_to_keep"] :
+            ]
 
         return concatenated_batch
 
@@ -1375,7 +1380,9 @@ class DPOTrainer(Trainer):
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
-        model_support_num_logits_to_keep = "num_logits_to_keep" in set(inspect.signature(model.forward).parameters.keys())
+        model_support_num_logits_to_keep = "num_logits_to_keep" in set(
+            inspect.signature(model.forward).parameters.keys()
+        )
         if self.use_num_logits_to_keep and not model_support_num_logits_to_keep:
             self.use_num_logits_to_keep = False
             warnings.warn(
@@ -1411,7 +1418,7 @@ class DPOTrainer(Trainer):
                 concatenated_batch["concatenated_input_ids"],
                 attention_mask=concatenated_batch["concatenated_attention_mask"],
                 use_cache=False,
-                num_logits_to_keep=concatenated_batch["num_logits_to_keep"], # save memory
+                num_logits_to_keep=concatenated_batch["num_logits_to_keep"],  # save memory
                 **model_kwargs,
             )
         else:
