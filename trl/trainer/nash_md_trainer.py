@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import textwrap
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, IterableDataset
-from transformers import PreTrainedTokenizerBase, TrainerCallback
+from transformers import PreTrainedTokenizerBase, TrainerCallback, is_wandb_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
@@ -29,11 +31,15 @@ from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import empty_cache, get_reward, truncate_right
+from .utils import empty_cache, generate_model_card, get_reward, truncate_right
 
 
 if is_apex_available():
     from apex import amp
+
+
+if is_wandb_available():
+    import wandb
 
 
 class NashMDTrainer(OnlineDPOTrainer):
@@ -381,3 +387,53 @@ class NashMDTrainer(OnlineDPOTrainer):
             self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        citation = textwrap.dedent("""\
+        @inproceedings{munos2024nash,
+            title        = {Nash Learning from Human Feedback},
+            author       = {R{\'{e}}mi Munos and Michal Valko and Daniele Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot},
+            year         = 2024,
+            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
+            publisher    = {OpenReview.net},
+            url          = {https://openreview.net/forum?id=Y5AmNYiyCQ}
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="Nash-MD",
+            trainer_citation=citation,
+            paper_title="Nash Learning from Human Feedback",
+            paper_id="2312.00886",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

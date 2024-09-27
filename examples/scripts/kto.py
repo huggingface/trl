@@ -132,4 +132,4 @@ if __name__ == "__main__":
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
-        trainer.push_to_hub()
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

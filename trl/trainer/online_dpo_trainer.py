@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import textwrap
 import warnings
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -31,6 +33,7 @@ from transformers import (
     Trainer,
     TrainerCallback,
     is_apex_available,
+    is_wandb_available,
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction, seed_worker
@@ -46,9 +49,9 @@ from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     empty_cache,
+    generate_model_card,
     get_reward,
     prepare_deepspeed,
-    trl_sanitze_kwargs_for_tagging,
     truncate_right,
 )
 
@@ -67,6 +70,9 @@ if is_sagemaker_mp_enabled():
 
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
+
+if is_wandb_available():
+    import wandb
 
 logger = logging.get_logger(__name__)
 
@@ -236,6 +242,10 @@ class OnlineDPOTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # Add tags for models that have been loaded with the correct transformers version
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
 
         self._beta = args.beta
 
@@ -538,17 +548,49 @@ class OnlineDPOTrainer(Trainer):
             self._save_checkpoint(model, trial, metrics=metrics)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(
+    def create_model_card(
         self,
-        commit_message: Optional[str] = "End of training",
-        blocking: bool = True,
-        **kwargs,
-    ) -> str:
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "online-dpo" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        citation = textwrap.dedent("""\
+        @article{guo2024direct,
+            title        = {{Direct Language Model Alignment from Online AI Feedback}},
+            author       = {Shangmin Guo and Biao Zhang and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel},
+            year         = 2024,
+            eprint       = {arXiv:2402.04792}
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="Online DPO",
+            trainer_citation=citation,
+            paper_title="Direct Language Model Alignment from Online AI Feedback",
+            paper_id="2402.04792",
+        )
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
