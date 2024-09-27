@@ -13,6 +13,7 @@
 # limitations under the License.
 import dataclasses
 import inspect
+import os
 import warnings
 from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -33,6 +34,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
+    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
@@ -44,6 +46,7 @@ from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
+    generate_model_card,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
 )
@@ -54,6 +57,9 @@ if is_peft_available():
 
 if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
+
+if is_wandb_available():
+    import wandb
 
 
 class SFTTrainer(Trainer):
@@ -611,3 +617,40 @@ class SFTTrainer(Trainer):
             raise ValueError(
                 "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
             )
+
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="SFT",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
