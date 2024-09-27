@@ -67,7 +67,7 @@ if __name__ == "__main__":
     f["images"] = features.Sequence(features.Image(decode=True))
     dataset = dataset.cast(f)
 
-    dataset = dataset.train_test_split(test_size=0.01)
+    dataset = dataset.train_test_split(test_size=0.01, writer_batch_size=128)
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
