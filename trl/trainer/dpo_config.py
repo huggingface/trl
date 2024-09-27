@@ -40,6 +40,9 @@ class DPOConfig(TrainingArguments):
     command line.
 
     Parameters:
+        learning_rate (`float`, *optional*, defaults to `1e-6`):
+            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
+            [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -130,6 +133,7 @@ class DPOConfig(TrainingArguments):
             DPO loss. The paper recommends `rpo_alpha=1.0`.
     """
 
+    learning_rate: float = 1e-6
     beta: float = 0.1
     label_smoothing: float = 0.0
     loss_type: Literal[
