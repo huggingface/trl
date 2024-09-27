@@ -180,6 +180,8 @@ preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " 
 preference_example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
 ```
 
+Some preference datasets can be found with [the tag `dpo` on Hugging Face Hub](https://huggingface.co/datasets?other=dpo). You can also explore the [librarian-bots' DPO Collections](https://huggingface.co/collections/librarian-bots/direct-preference-optimization-datasets-66964b12835f46289b6ef2fc) to identify preference datasets.
+
 ### Unpaired preference
 
 An unpaired preference dataset is similar to a preference dataset but instead of having `"chosen"` and `"rejected"` completions for the same prompt, it includes a single `"completion"` and a `"label"` indicating whether the completion is preferred or not.
@@ -710,3 +712,15 @@ dataset = dataset.remove_columns(["completion", "label"])
 >>> dataset[0]
 {'prompt': 'The sky is'}
 ```
+
+## Vision datasets
+
+Some trainers also support fine-tuning vision language models (VLMs) on image-text pairs. In this case, the dataset must contain the key `images`, and the trainer's `tokenizer` is the VLM's `processor`. An example of such a dataset is the [openbmb/RLAIF-V-Dataset](https://huggingface.co/datasets/openbmb/RLAIF-V-Dataset) dataset. We provide this dataset in the conversational format:
+
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/rlaif-v/embed/viewer/default/train"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
