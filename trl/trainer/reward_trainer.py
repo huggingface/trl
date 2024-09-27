@@ -166,29 +166,11 @@ class RewardTrainer(Trainer):
 
         if data_collator is None:
             if tokenizer is None:
-                raise ValueError(
-                    "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
-                )
-            if type(args) is TrainingArguments:
-                if max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-            else:
-                if max_length is None and args.max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-                if max_length is None and args.max_length is not None:
-                    max_length = args.max_length
+                raise ValueError("A tokenizer must be specified when using the default RewardDataCollatorWithPadding")
+            if max_length is None:
+                max_length = 512 if type(args) is TrainingArguments or args.max_length is None else args.max_length
 
-            data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
+            data_collator = RewardDataCollatorWithPadding(tokenizer)
 
             if args.remove_unused_columns:
                 try:  # for bc before https://github.com/huggingface/transformers/pull/25435

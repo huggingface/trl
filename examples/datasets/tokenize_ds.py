@@ -39,9 +39,9 @@ class ScriptArguments:
 
 
 if __name__ == "__main__":
-    args = HfArgumentParser(ScriptArguments).parse_args_into_dataclasses()[0]
-    dataset = load_dataset(args.dataset_name)
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    script_args = HfArgumentParser(ScriptArguments).parse_args_into_dataclasses()[0]
+    dataset = load_dataset(script_args.dataset_name)
+    tokenizer = AutoTokenizer.from_pretrained(script_args.model)
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
@@ -50,5 +50,5 @@ if __name__ == "__main__":
         row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
         return row
 
-    dataset = dataset.map(process, num_proc=args.dataset_num_proc)
+    dataset = dataset.map(process, num_proc=script_args.dataset_num_proc)
     print(dataset["train"][0]["chosen"])

@@ -331,8 +331,6 @@ class RewardDataCollatorWithPadding:
             The tokenizer used for encoding the data.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
-        max_length (`Optional[int]`, `optional`, defaults to `None`):
-            The maximum length of the sequence to be processed.
         pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.
         return_tensors (`str`, `optional`, defaults to `"pt"`):
@@ -341,7 +339,6 @@ class RewardDataCollatorWithPadding:
 
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
-    max_length: Optional[int] = None
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
@@ -380,14 +377,12 @@ class RewardDataCollatorWithPadding:
         batch_chosen = self.tokenizer.pad(
             features_chosen,
             padding=self.padding,
-            max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
         batch_rejected = self.tokenizer.pad(
             features_rejected,
             padding=self.padding,
-            max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
@@ -1004,6 +999,8 @@ class OnPolicyConfig(TrainingArguments):
             Mini batch size per GPU.
         mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
             Mini batch size across GPUs.
+        push_to_hub (`bool`, *optional*, defaults to `False`):
+            Whether to push the model to the Hub after training.
     """
 
     run_name: Optional[str] = None
@@ -1025,6 +1022,7 @@ class OnPolicyConfig(TrainingArguments):
     batch_size: Optional[int] = None
     local_mini_batch_size: Optional[int] = None
     mini_batch_size: Optional[int] = None
+    push_to_hub: bool = False
 
 
 def first_true_indices(bools: torch.Tensor, dtype=torch.long):

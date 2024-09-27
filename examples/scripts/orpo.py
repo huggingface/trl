@@ -72,7 +72,7 @@ class ScriptArguments:
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, ORPOConfig, ModelConfig))
-    args, training_args, model_config = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
 
     ################
     # Model & Tokenizer
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset(args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name)
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
@@ -118,4 +118,8 @@ if __name__ == "__main__":
 
     # train and save the model
     trainer.train()
+
+    # Save and push to hub
     trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub()

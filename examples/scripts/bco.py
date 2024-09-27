@@ -104,7 +104,7 @@ def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, 
 
 if __name__ == "__main__":
     parser = HfArgumentParser((DPOScriptArguments, BCOConfig, ModelConfig))
-    args, training_args, model_args = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
 
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         model, tokenizer = setup_chat_format(model, tokenizer)
 
-    dataset = load_dataset(args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name)
 
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     )
 
     # Initialize the BCO trainer
-    bco_trainer = BCOTrainer(
+    trainer = BCOTrainer(
         model,
         ref_model,
         args=training_args,
@@ -159,5 +159,9 @@ if __name__ == "__main__":
     )
 
     # Train and push the model to the Hub
-    bco_trainer.train()
-    bco_trainer.save_model(training_args.output_dir)
+    trainer.train()
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub()
