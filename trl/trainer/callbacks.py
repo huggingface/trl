@@ -301,7 +301,7 @@ class WinRateCallback(TrainerCallback):
                     df = pd.DataFrame(
                         split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"]
                     )
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
+                    wandb.log({"win_rate_completions": wandb.Table(dataframe=df)})
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # At every evaluation step, we generate completions for the model and compare them with the reference
@@ -343,7 +343,7 @@ class WinRateCallback(TrainerCallback):
                     df = pd.DataFrame(
                         split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"]
                     )
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
+                    wandb.log({"win_rate_completions": wandb.Table(dataframe=df)})
 
 
 class LogCompletionsCallback(WandbCallback):
