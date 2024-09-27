@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,7 +15,7 @@
 pip install pillow
 
 # Tested on 8x H100 GPUs
-accelerate launch 
+accelerate launch
     --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/sft_vlm.py \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
@@ -33,29 +32,27 @@ For LLaVA-NeXT, use: (requires transformers>=4.45)
 
 For meta-llama/Llama-3.2-11B-Vision-Instruct, use: (requires transformers>=4.45.1)
     --model_name_or_path meta-llama/Llama-3.2-11B-Vision-Instruct
-    
 """
 
-from trl.commands.cli_utils import SFTScriptArguments, TrlParser
 import torch
-from accelerate import Accelerator
 from datasets import load_dataset
-
 from transformers import AutoModelForVision2Seq, AutoProcessor, LlavaForConditionalGeneration
 
 from trl import (
     ModelConfig,
     SFTConfig,
+    SFTScriptArguments,
     SFTTrainer,
+    TrlParser,
+    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    get_kbit_device_map,
 )
 
 
 if __name__ == "__main__":
     parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
-    sft_script_args, training_args, model_config = parser.parse_args_and_config()
+    script_args, training_args, model_config = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.dataset_text_field = ""  # need a dummy field
     training_args.remove_unused_columns = False
@@ -112,7 +109,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset(sft_script_args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name)
 
     ################
     # Training
@@ -121,15 +118,13 @@ if __name__ == "__main__":
         model=model,
         args=training_args,
         data_collator=collate_fn,
-        train_dataset=dataset[sft_script_args.dataset_train_split],
-        eval_dataset=dataset[sft_script_args.dataset_test_split],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
         tokenizer=processor.tokenizer,
         peft_config=get_peft_config(model_config),
     )
 
     trainer.train()
-
-    trainer.save_model(training_args.output_dir)
 
     # Save and push to hub
     trainer.save_model(training_args.output_dir)

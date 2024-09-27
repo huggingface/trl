@@ -185,7 +185,7 @@ def image_outputs_logger(image_data, global_step, accelerate_logger):
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, DDPOConfig))
-    args, training_args = parser.parse_args_into_dataclasses()
+    script_args, training_args = parser.parse_args_into_dataclasses()
     training_args.project_kwargs = {
         "logging_dir": "./logs",
         "automatic_checkpoint_naming": True,
@@ -194,12 +194,14 @@ if __name__ == "__main__":
     }
 
     pipeline = DefaultDDPOStableDiffusionPipeline(
-        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=args.use_lora
+        script_args.pretrained_model,
+        pretrained_model_revision=script_args.pretrained_revision,
+        use_lora=script_args.use_lora,
     )
 
     trainer = DDPOTrainer(
         training_args,
-        aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
+        aesthetic_scorer(script_args.hf_hub_aesthetic_model_id, script_args.hf_hub_aesthetic_model_filename),
         prompt_fn,
         pipeline,
         image_samples_hook=image_outputs_logger,
