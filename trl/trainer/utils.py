@@ -1427,7 +1427,7 @@ def generate_model_card(
     )
     card = ModelCard.from_template(
         card_data,
-        template_path=str(pkg_resources.files("trl").joinpath("templates/model_card.md")),
+        template_path=str(pkg_resources.files("trl").joinpath("templates/lm_model_card.md")),
         base_model=base_model,
         model_name=model_name,
         hub_model_id=hub_model_id,
