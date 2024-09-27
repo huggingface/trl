@@ -20,7 +20,7 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl.trainer.model_config import ModelConfig
-from trl.trainer.utils import decode_and_strip_padding, get_peft_config, pad
+from trl.trainer.utils import decode_and_strip_padding, generate_model_card, get_peft_config, pad
 
 
 if is_peft_available():
@@ -126,3 +126,46 @@ class TestDecodeAndStripPadding(unittest.TestCase):
         inputs = self.tokenizer(["Hello", "Hello"], padding=False, return_tensors="pt")
         decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
         self.assertEqual(decoded, ["Hello", "Hello"])
+
+
+class TestGenerateModelCard(unittest.TestCase):
+    def test_full(self):
+        model_card = generate_model_card(
+            base_model="username/my_base_model",
+            model_name="my_model",
+            hub_model_id="username/my_hub_model",
+            dataset_name="username/my_dataset",
+            tags=["trl", "trainer-tag"],
+            wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
+            trainer_name="My Trainer",
+            trainer_citation="@article{my_trainer, ...}",
+            paper_title="My Paper",
+            paper_id="1234.56789",
+        )
+        card_text = str(model_card)
+        assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
+        assert "my_model" in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert "datasets: username/my_dataset" in card_text
+        assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
+        assert "My Trainer" in card_text
+        assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
+        assert "[My Paper](https://huggingface.co/papers/1234.56789)" in card_text
+
+    def test_val_none(self):
+        model_card = generate_model_card(
+            base_model=None,
+            model_name="my_model",
+            hub_model_id="username/my_hub_model",
+            dataset_name=None,
+            tags=None,
+            wandb_url=None,
+            trainer_name="My Trainer",
+            trainer_citation=None,
+            paper_title=None,
+            paper_id=None,
+        )
+        card_text = str(model_card)
+        assert "my_model" in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert "My Trainer" in card_text

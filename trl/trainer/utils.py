@@ -12,18 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import dataclasses
+import importlib.resources as pkg_resources
 import json
 import random
 import warnings
 from collections import deque
 from dataclasses import dataclass
+from importlib.metadata import version
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
-from accelerate import Accelerator
-from accelerate.state import AcceleratorState, PartialState
+import torch.utils.data
+from accelerate import Accelerator, PartialState
+from accelerate.state import AcceleratorState
+from huggingface_hub import ModelCard, ModelCardData
 from rich.console import Console
 from rich.table import Table
 from torch.nn.utils.rnn import pad_sequence
@@ -1366,3 +1370,77 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     """
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
     return [d.replace(tokenizer.pad_token, "") for d in decoded]
+
+
+def generate_model_card(
+    base_model: Optional[str],
+    model_name: str,
+    hub_model_id: str,
+    dataset_name: Optional[str],
+    tags: Union[str, List[str], None],
+    wandb_url: Optional[str],
+    trainer_name: str,
+    trainer_citation: Optional[str],
+    paper_title: Optional[str],
+    paper_id: Optional[str],
+) -> ModelCard:
+    """
+    Generate a `ModelCard` from a template.
+
+    Args:
+        base_model (`str` or `None`):
+            Base model name.
+        model_name (`str`):
+            Model name.
+        hub_model_id (`str`):
+            Hub model ID as `username/model_id`.
+        dataset_name (`str` or `None`):
+            Dataset name.
+        tags (`str`, `List[str]`, or `None`):
+            Tags.
+        wandb_url (`str` or `None`):
+            Weights & Biases run URL.
+        trainer_name (`str`):
+            Trainer name.
+        trainer_citation (`str` or `None`):
+            Trainer citation as a BibTeX entry.
+        paper_title (`str` or `None`):
+            Paper title.
+        paper_id (`str` or `None`):
+            ArXiv paper ID as `YYMM.NNNNN`.
+
+    Returns:
+        `ModelCard`:
+            A ModelCard object.
+    """
+    if tags is None:
+        tags = []
+    elif isinstance(tags, str):
+        tags = [tags]
+    card_data = ModelCardData(
+        base_model=base_model,
+        datasets=dataset_name,
+        library_name="transformers",
+        licence="license",
+        model_name=model_name,
+        tags=["generated_from_trainer", *tags],
+    )
+    card = ModelCard.from_template(
+        card_data,
+        template_path=str(pkg_resources.files("trl").joinpath("templates/lm_model_card.md")),
+        base_model=base_model,
+        model_name=model_name,
+        hub_model_id=hub_model_id,
+        dataset_name=dataset_name,
+        wandb_url=wandb_url,
+        trainer_name=trainer_name,
+        trainer_citation=trainer_citation,
+        paper_title=paper_title,
+        paper_id=paper_id,
+        trl_version=version("trl"),
+        transformers_version=version("transformers"),
+        pytorch_version=version("torch"),
+        datasets_version=version("datasets"),
+        tokenizers_version=version("tokenizers"),
+    )
+    return card

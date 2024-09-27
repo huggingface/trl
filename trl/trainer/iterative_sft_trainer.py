@@ -11,8 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import warnings
-from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -26,16 +26,21 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
+    is_wandb_available,
 )
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available
 
 from ..core import PPODecorators
-from .utils import trl_sanitze_kwargs_for_tagging
+from .utils import generate_model_card
 
 
 if is_peft_available():
     from peft import PeftModel
+
+
+if is_wandb_available():
+    import wandb
 
 
 class IterativeSFTTrainer(Trainer):
@@ -137,6 +142,10 @@ class IterativeSFTTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # Add tags for models that have been loaded with the correct transformers version
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
 
         self.create_optimizer_and_scheduler(self.args.max_steps)
 
@@ -381,17 +390,39 @@ class IterativeSFTTrainer(Trainer):
 
                 self.log(logs)
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(
+    def create_model_card(
         self,
-        commit_message: Optional[str] = "End of training",
-        blocking: bool = True,
-        **kwargs,
-    ) -> str:
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "iterative-sft" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="Iterative SFT",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
