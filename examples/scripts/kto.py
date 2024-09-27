@@ -116,7 +116,7 @@ if __name__ == "__main__":
         dataset = dataset.map(format_dataset, num_proc=training_args.dataset_num_proc)
 
     # Initialize the KTO trainer
-    kto_trainer = KTOTrainer(
+    trainer = KTOTrainer(
         model,
         ref_model,
         args=training_args,
@@ -127,6 +127,9 @@ if __name__ == "__main__":
     )
 
     # Train and push the model to the Hub
-    kto_trainer.train()
-    kto_trainer.save_model(training_args.output_dir)
-    kto_trainer.push_to_hub()
+    trainer.train()
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub()

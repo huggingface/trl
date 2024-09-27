@@ -21,7 +21,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
-from accelerate import PartialState
 from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
@@ -199,24 +198,6 @@ class OnlineDPOTrainer(Trainer):
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(pad_token_id=tokenizer.pad_token_id)
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
-        with PartialState().local_main_process_first():
-            # Apply the chat template if needed
-            train_dataset = train_dataset.map(
-                maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
-            )
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
-                )
-
-            # Tokenize the dataset
-            fn_kwargs = {"is_encoder_decoder": model.config.is_encoder_decoder, "tokenizer": tokenizer}
-            train_dataset = train_dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, num_proc=args.dataset_num_proc)
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, num_proc=args.dataset_num_proc)
-
         self.stats = {
             "objective/kl": [],
             "objective/entropy": [],
@@ -370,6 +351,14 @@ class OnlineDPOTrainer(Trainer):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
+
+        # Apply chat template and tokenize the input.
+        # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
+        batch_size = len(next(iter(inputs.values())))
+        inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
+        inputs = [maybe_apply_chat_template(x, self.tokenizer) for x in inputs]
+        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.tokenizer) for x in inputs]
+        inputs = self.data_collator(inputs)
 
         # Sample 2 completations per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)

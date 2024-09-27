@@ -18,6 +18,7 @@ import unittest
 from datasets import load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
+from transformers.testing_utils import require_wandb
 
 from trl import BasePairwiseJudge, WinRateCallback
 
@@ -41,6 +42,7 @@ class TrainerWithRefModel(Trainer):
         self.ref_model = ref_model
 
 
+@require_wandb
 class WinRateCallbackTester(unittest.TestCase):
     def setUp(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
