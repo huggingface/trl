@@ -15,6 +15,8 @@ extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 # Allow prints in auxiliary scripts
 "examples/**.py" = ["T201"]
 "scripts/**.py" = ["T201"]
+# Ignore import violations in all `__init__.py` files.
+"__init__.py" = ["F401"]
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
