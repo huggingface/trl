@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-accelerate launch examples/scripts/dpo_visual.py \
+accelerate launch examples/scripts/dpo_vlm.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --model_name_or_path HuggingFaceM4/idefics2-8b \
     --per_device_train_batch_size 2 \
@@ -135,4 +135,4 @@ if __name__ == "__main__":
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
-        trainer.push_to_hub()
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

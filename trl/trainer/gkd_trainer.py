@@ -11,23 +11,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import random
+import textwrap
 import warnings
 from copy import deepcopy
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available
-from transformers import AutoModelForCausalLM, GenerationConfig, PreTrainedModel
+from transformers import AutoModelForCausalLM, GenerationConfig, PreTrainedModel, is_wandb_available
 
 from ..import_utils import is_liger_kernel_available
 from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
-from .utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache
+from .utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache, generate_model_card
 
 
 if is_deepspeed_available():
@@ -35,6 +37,9 @@ if is_deepspeed_available():
 
 if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
+
+if is_wandb_available():
+    import wandb
 
 
 class GKDTrainer(SFTTrainer):
@@ -259,3 +264,53 @@ class GKDTrainer(SFTTrainer):
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
+
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        citation = textwrap.dedent("""\
+        @inproceedings{agarwal2024on-policy,
+            title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
+            author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
+            year         = 2024,
+            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+            publisher    = {OpenReview.net},
+            url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="GKD",
+            trainer_citation=citation,
+            paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
+            paper_id="2306.13649",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
