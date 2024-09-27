@@ -62,8 +62,8 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase",
             input_ids.append(tokenizer.bos_token_id)
             labels.append(-100)
             
-        input_ids = tokenizer.encode(prompt, add_special_tokens=False)
-        labels = [-100]*len(input_ids)
+        input_ids = input_ids.append(tokenizer.encode(prompt, add_special_tokens=False))
+        labels = labels.append([-100]*len(input_ids))
         
         for step, label in zip(steps, labels):
             tokenized_step = tokenizer.encode(step, add_special_tokens=False)
