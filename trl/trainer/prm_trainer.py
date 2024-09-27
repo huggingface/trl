@@ -57,12 +57,13 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase",
             raise NotImplementedError(
                 "prm_trainer does not support training with unlabeled steps."
             )
-        input_ids = tokenizer.encode(prompt, add_special_tokens=False)
-        labels = [-100]*len(input_ids)
         
         if getattr(tokenizer, 'add_bos_token', False) and tokenizer.bos_token_id is not None:
             input_ids.append(tokenizer.bos_token_id)
             labels.append(-100)
+            
+        input_ids = tokenizer.encode(prompt, add_special_tokens=False)
+        labels = [-100]*len(input_ids)
         
         for step, label in zip(steps, labels):
             tokenized_step = tokenizer.encode(step, add_special_tokens=False)

@@ -6,14 +6,14 @@ Check out a complete flexible example at [`examples/scripts/prm_trainer.py`](htt
 
 ## Expected dataset format
 
-
+TO ADD
 
 ## Using the `PRMTrainer`
 
 After preparing your dataset, you can use the [`PRMTrainer`] in the same way as the `Trainer` class from 🤗 Transformers.
 You should pass an `AutoModelForTokenClassification` model to the [`PRMTrainer`], along with a [`PRMConfig`] which configures the hyperparameters of the training.
 
-### Leveraging 🤗 PEFT to train a reward model
+### Leveraging 🤗 PEFT to train a process-supervised reward model
 
 Just pass a `peft_config` in the keyword arguments of [`PRMTrainer`], and the trainer should automatically take care of converting the model into a PEFT model!
 
@@ -24,7 +24,7 @@ from trl import PRMTrainer, PRMConfig
 
 model = AutoModelForTokenClassification.from_pretrained("gpt2")
 peft_config = LoraConfig(
-    task_type=None,
+    task_type=TaskType.TOKEN_CLS,
     inference_mode=False,
     r=8,
     lora_alpha=32,
