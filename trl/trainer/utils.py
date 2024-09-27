@@ -745,7 +745,7 @@ def get_global_statistics(
 
 def compute_accuracy(eval_pred) -> Dict[str, float]:
     predictions, labels = eval_pred
-    if predictions.shape()==3:
+    if predictions.ndim==3:
         # token classification task
         predictions = np.argmax(predictions, axis=2)
 
