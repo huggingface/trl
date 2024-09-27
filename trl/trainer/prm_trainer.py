@@ -24,7 +24,7 @@ import torch.nn as nn
 from accelerate import PartialState
 from accelerate.utils import gather_object
 from datasets import Dataset
-from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
+from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, DataCollatorForTokenClassification
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
@@ -34,7 +34,7 @@ from ..data_utils import maybe_apply_chat_template
 from .prm_config import PRMConfig
 from .utils import (
     compute_accuracy,
-    print_rich_table,
+    trl_sanitze_kwargs_for_tagging,
 )
 
 
@@ -42,7 +42,7 @@ if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
-def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase") -> Dict[str, List[Any]]:
+def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase", max_length: int) -> Dict[str, List[Any]]:
     """Tokenize a batch from a PRM modeling dataset."""
     new_examples = {
         "input_ids": [],
@@ -52,24 +52,32 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase")
     
     post_step_tokens = tokenizer.encode("\n", add_special_tokens=False)
     
-    for steps, labels in zip(batch["steps"], batch["labels"]):
-        assert len(steps)==len(labels), "Steps and Labels should have the same number of elements."
-        input_ids = []
-        labels = []
+    for prompt, steps, labels in zip(batch["prompt"], batch["completion_steps"], batch["labels"]):
+        if len(steps)!=len(labels):
+            raise NotImplementedError(
+                "prm_trainer does not support training with unlabeled steps."
+            )
+        input_ids = tokenizer.encode(prompt, add_special_tokens=False)
+        labels = [-100]*len(input_ids)
         
         if getattr(tokenizer, 'add_bos_token', False) and tokenizer.bos_token_id is not None:
             input_ids.append(tokenizer.bos_token_id)
             labels.append(-100)
         
         for step, label in zip(steps, labels):
-            tokenized_step = tokenizer.encode(step, add_special_tokens=False) + post_step_tokens
+            tokenized_step = tokenizer.encode(step, add_special_tokens=False)
             step_labels = [-100] * len(tokenized_step)
             step_labels[-1] = label
             tokenized_step.extend(post_step_tokens)
             step_labels.extend([-100]* len(post_step_tokens))
             
-            input_ids.extend(tokenized_step)
-            labels.extend(step_labels)
+            # Avoid adding steps if the maximum length is reached as in prm training only the token after the last token is labeled.
+            if (len(input_ids)+len(tokenized_step))<(max_length-1):
+                input_ids.extend(tokenized_step)
+                labels.extend(step_labels)
+            else:
+                # exit if the maximum length is reached to avoid skipping steps in favor or shoter steps.
+                break
             
         if getattr(tokenizer, 'add_eos_token', False) and tokenizer.eos_token_id is not None:
             input_ids.append(tokenizer.eos_token_id)
@@ -101,7 +109,6 @@ class PRMTrainer(Trainer):
             None,
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        max_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
     ):
         """
@@ -134,26 +141,10 @@ class PRMTrainer(Trainer):
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        if type(args) is TrainingArguments:
-            warnings.warn(
-                "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `PRMConfig` instead.",
-                FutureWarning,
+        if not type(args) is PRMConfig:
+            raise ValueError(
+                f"args should be an instance of PRMConfig but got {type(args)}"
             )
-            if max_length is not None:
-                warnings.warn(
-                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `PRMConfig` to set `max_length` instead.",
-                    FutureWarning,
-                )
-        else:
-            if max_length is not None and args.max_length is not None:
-                raise ValueError(
-                    "You cannot specify both `max_length` and `args.max_length`. Please use the `PRMConfig` to set `max_length` once."
-                )
-            if max_length is not None and args.max_length is None:
-                warnings.warn(
-                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `PRMConfig` to set `max_length` instead.",
-                    FutureWarning,
-                )
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -185,78 +176,31 @@ class PRMTrainer(Trainer):
         if data_collator is None:
             if tokenizer is None:
                 raise ValueError(
-                    "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
+                    "A tokenizer must be specified when using the default DataCollatorForTokenClassification"
                 )
-            if type(args) is TrainingArguments:
-                if max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in PRMConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-            else:
-                if max_length is None and args.max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in PRMConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-                if max_length is None and args.max_length is not None:
-                    max_length = args.max_length
+            data_collator = DataCollatorForTokenClassification(tokenizer, max_length=args.max_length)
 
-            data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
 
-            if args.remove_unused_columns:
-                try:  # for bc before https://github.com/huggingface/transformers/pull/25435
-                    args.remove_unused_columns = False
-                except FrozenInstanceError:
-                    args = replace(args, remove_unused_columns=False)
-                # warn users
-                warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
-                    " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
-                )
-
-            self.use_reward_data_collator = True
-        else:
-            self.use_reward_data_collator = False
-
-        if "input_ids_chosen" not in train_dataset.column_names:
+        if "input_ids" not in train_dataset.column_names:
             with PartialState().local_main_process_first():
                 fn_kwargs = {"tokenizer": tokenizer}
-                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs=fn_kwargs)
                 train_dataset = train_dataset.map(
                     _tokenize,
                     batched=True,
-                    fn_kwargs=fn_kwargs,
+                    fn_kwargs={"tokenizer": tokenizer, "max_length": args.max_length},
                     num_proc=args.dataset_num_proc,
                 )
-                # This filter is important because otherwise you get samples that exceed the model's context length and
-                # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
-                # user might get surprised if N samples are missing from training.
-                train_dataset = train_dataset.filter(
-                    lambda x: len(x["input_ids_chosen"]) <= max_length and len(x["input_ids_rejected"]) <= max_length,
-                    num_proc=args.dataset_num_proc,
-                )
+ 
                 if eval_dataset is not None:
-                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs=fn_kwargs)
                     eval_dataset = eval_dataset.map(
                         _tokenize,
-                        fn_kwargs=fn_kwargs,
+                        fn_kwargs={"tokenizer": tokenizer, "max_length": args.max_length},
                         batched=True,
                         num_proc=args.dataset_num_proc,
                     )
-                    # This filter is important because otherwise you get samples that exceed the model's context length and
-                    # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
-                    # user might get surprised if N samples are missing from training.
-                    eval_dataset = eval_dataset.filter(
-                        lambda x: len(x["input_ids_chosen"]) <= max_length
-                        and len(x["input_ids_rejected"]) <= max_length,
-                        num_proc=args.dataset_num_proc,
-                    )
+
 
         super().__init__(
             model=model,
@@ -276,88 +220,17 @@ class PRMTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-    def compute_loss(
+    @wraps(Trainer.push_to_hub)
+    def push_to_hub(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
-        return_outputs=False,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        if not self.use_reward_data_collator:
-            warnings.warn(
-                "The current compute_loss is implemented for RewardDataCollatorWithPadding,"
-                " if you are using a custom data collator make sure you know what you are doing or"
-                " implement your own compute_loss method."
-            )
-        rewards_chosen = model(
-            input_ids=inputs["input_ids_chosen"],
-            attention_mask=inputs["attention_mask_chosen"],
-            return_dict=True,
-        )["logits"]
-        rewards_rejected = model(
-            input_ids=inputs["input_ids_rejected"],
-            attention_mask=inputs["attention_mask_rejected"],
-            return_dict=True,
-        )["logits"]
-        # calculate loss, optionally modulate with margin
-        if "margin" in inputs:
-            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
-        else:
-            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
-
-        if self.args.center_rewards_coefficient is not None:
-            loss += self.args.center_rewards_coefficient * torch.mean((rewards_chosen + rewards_rejected) ** 2)
-
-        if return_outputs:
-            return loss, {
-                "rewards_chosen": rewards_chosen,
-                "rewards_rejected": rewards_rejected,
-            }
-        return loss
-
-    def prediction_step(
-        self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
-        prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = None,
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
-        inputs = self._prepare_inputs(inputs)
-        if ignore_keys is None:
-            if hasattr(self.model, "config"):
-                ignore_keys = getattr(self.model.config, "keys_to_ignore_at_inference", [])
-            else:
-                ignore_keys = []
-
-        with torch.no_grad():
-            loss, logits_dict = self.compute_loss(model, inputs, return_outputs=True)
-
-        if prediction_loss_only:
-            return (loss, None, None)
-
-        loss = loss.detach()
-        logits = tuple(v for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = nested_detach(logits)
-        # Stack accepted against rejected, mean over logits
-        # and softmax to get preferences between accepted and rejected to sum to 1
-        logits = torch.stack(logits).mean(dim=2).softmax(dim=0).T
-
-        labels = torch.zeros(logits.shape[0])
-        labels = self._prepare_inputs(labels)
-
-        return loss, logits, labels
-
-    def evaluate(self, *args, **kwargs):
-        num_print_samples = kwargs.pop("num_print_samples", 4)
-        self.visualize_samples(num_print_samples)
-        return super().evaluate(*args, **kwargs)
-
-    def visualize_samples(self, num_print_samples: int):
+        commit_message: Optional[str] = "End of training",
+        blocking: bool = True,
+        **kwargs,
+    ) -> str:
         """
-        Visualize the reward model logits prediction
-
-        Args:
-            num_print_samples (`int`, defaults to `4`):
-                The number of samples to print. Set to `-1` to print all samples.
+        Overwrite the `push_to_hub` method in order to force-add the tag "prm-trainer" when pushing the
+        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
+        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
         """
-        pass
-
+        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
