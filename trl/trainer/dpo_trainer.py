@@ -29,6 +29,7 @@ from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset
 from huggingface_hub.utils._deprecation import _deprecate_arguments
+from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -57,7 +58,6 @@ from .utils import (
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
 )
-from packaging.version import Version
 
 
 if is_peft_available():
@@ -893,7 +893,7 @@ class DPOTrainer(Trainer):
                 )
 
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
-        
+
         # num_logits_to_keep is supported since transformers v4.45.0
         if self.use_num_logits_to_keep:
             import transformers
@@ -902,7 +902,7 @@ class DPOTrainer(Trainer):
                 raise ValueError(
                     f"num_logits_to_keep is only supported since transformers v4.45.0. Your current version is {transformers_version}."
                 )
-            
+
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
 

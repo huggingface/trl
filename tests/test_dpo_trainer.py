@@ -1042,7 +1042,6 @@ class DPOTrainerTester(unittest.TestCase):
             )
             assert torch.isfinite(losses).cpu().numpy().all()
 
-
     def test_dpo_trainer_use_num_logits_to_keep(self):
         model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1077,22 +1076,25 @@ class DPOTrainerTester(unittest.TestCase):
             )
 
             # Fake batch
-            chosen_labels = torch.tensor([[-100, -100, -100, -100, -100, 4, 5, -100],
-                                             [-100, -100, -100, -100, 2, 4, 5, 6]])
-            rejected_labels = torch.tensor([[-100, -100, -100, -100, 100, 7, 5, 909], 
-                                               [-100, -100, -100, -100, 88, 4, 5, 6]])
-            chosen_input_ids = torch.tensor([[700, 3, 5, 8, 9, 76, 4, 5, -100],
-                                             [700, 3, 5, 8, 9, 2, 4, 5, 6]])
-            rejected_input_ids = torch.tensor([[700, 3, 5, 8, 9, 100, 7, 5, 909], 
-                                               [700, 3, 5, 8, 9, 88, 4, 5, 6]])
-            chosen_attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1],
-                                                  [1, 1, 1, 1, 1, 1, 1, 1, 1]])
-            rejected_attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1],
-                                                    [1, 1, 1, 1, 1, 1, 1, 1, 1]])
-            
-            batch = {"chosen_labels": chosen_labels, "rejected_labels": rejected_labels,
-                     "chosen_input_ids": chosen_input_ids, "rejected_input_ids": rejected_input_ids,
-                     "chosen_attention_mask": chosen_attention_mask, "rejected_attention_mask": rejected_attention_mask}
+            chosen_labels = torch.tensor(
+                [[-100, -100, -100, -100, -100, 4, 5, -100], [-100, -100, -100, -100, 2, 4, 5, 6]]
+            )
+            rejected_labels = torch.tensor(
+                [[-100, -100, -100, -100, 100, 7, 5, 909], [-100, -100, -100, -100, 88, 4, 5, 6]]
+            )
+            chosen_input_ids = torch.tensor([[700, 3, 5, 8, 9, 76, 4, 5, -100], [700, 3, 5, 8, 9, 2, 4, 5, 6]])
+            rejected_input_ids = torch.tensor([[700, 3, 5, 8, 9, 100, 7, 5, 909], [700, 3, 5, 8, 9, 88, 4, 5, 6]])
+            chosen_attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1]])
+            rejected_attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1]])
+
+            batch = {
+                "chosen_labels": chosen_labels,
+                "rejected_labels": rejected_labels,
+                "chosen_input_ids": chosen_input_ids,
+                "rejected_input_ids": rejected_input_ids,
+                "chosen_attention_mask": chosen_attention_mask,
+                "rejected_attention_mask": rejected_attention_mask,
+            }
 
             _, _, chosen_logits, rejected_logits, _ = trainer.concatenated_forward(model, batch)
 
