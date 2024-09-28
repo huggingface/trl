@@ -106,7 +106,9 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
                 maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer}
             )
             dummy_dataset = dummy_dataset.map(
-                _tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer, "max_length": 512}
+                _tokenize,
+                batched=True,
+                fn_kwargs={"tokenizer": self.tokenizer, "max_length": 512, "post_step_separator": "\n"},
             )
             self.assertDictEqual(trainer.train_dataset[:], dummy_dataset[:])
 
@@ -121,7 +123,9 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
                 model=self.model, args=training_args, tokenizer=tokenizer, train_dataset=dummy_dataset
             )
             dummy_dataset = self.dummy_dataset.map(
-                _tokenize, batched=True, fn_kwargs={"tokenizer": tokenizer, "max_length": 512}
+                _tokenize,
+                batched=True,
+                fn_kwargs={"tokenizer": tokenizer, "max_length": 512, "post_step_separator": "\n"},
             )
             self.assertDictEqual(trainer.train_dataset[:], dummy_dataset[:])
 
@@ -148,7 +152,9 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = self.dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
             dummy_dataset = dummy_dataset.map(
-                _tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer, "max_length": 512}
+                _tokenize,
+                batched=True,
+                fn_kwargs={"tokenizer": self.tokenizer, "max_length": 512, "post_step_separator": "\n"},
             )
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
