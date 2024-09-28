@@ -68,12 +68,14 @@ def _tokenize(
         input_ids.extend(tokenizer.encode(prompt, add_special_tokens=False))
         token_level_labels.extend([-100] * len(input_ids))
 
-        for step, label in zip(steps, labels):
+        for i, (step, label) in enumerate(zip(steps, labels)):
             tokenized_step = tokenizer.encode(step, add_special_tokens=False)
             step_labels = [-100] * len(tokenized_step)
             step_labels[-1] = int(label)
-            tokenized_step.extend(post_step_tokens)
-            step_labels.extend([-100] * len(post_step_tokens))
+            
+            if i < (len(steps)-1):
+                tokenized_step.extend(post_step_tokens)
+                step_labels.extend([-100] * len(post_step_tokens))
 
             # Avoid adding steps if the maximum length is reached as in prm training only the token after the last token is labeled.
             if (len(input_ids) + len(tokenized_step)) < (max_length - 1):
