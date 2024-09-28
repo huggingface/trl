@@ -199,7 +199,11 @@ class StepwiseRewardTrainer(Trainer):
                 )
             with PartialState().local_main_process_first():
                 chat_template_kwargs = {"tokenizer": tokenizer}
-                tokenize_kwargs = {"tokenizer": tokenizer, "post_step_separator": args.post_step_separator}
+                tokenize_kwargs = {
+                    "tokenizer": tokenizer,
+                    "max_length": args.max_length,
+                    "post_step_separator": args.post_step_separator,
+                }
                 train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs=chat_template_kwargs)
                 train_dataset = train_dataset.map(
                     _tokenize,
