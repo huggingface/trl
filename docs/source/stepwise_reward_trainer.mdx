@@ -1,11 +1,11 @@
-# Stepwise Reward Models (PRMs)
+# Stepwise Reward Modeling
 
 TRL supports stepwise reward modeling (also known as process-supervised reward modeling or in short PRMs) to give feedback for each intermediate reasoning test. While the [`RewardTrainer`] trains a reward model only to score an entire solution, the [`StepwiseRewardTrainer`] trains a reward model to score each intermediate steps of the reasoning process.
 Check out a complete example at [`examples/scripts/stepwise_reward_trainer.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/stepwise_reward_modeling.py).
 
 ## Expected dataset format
 
-The [`StepwiseRewardTrainer`] requires a [steps preference dataset](dataset_formats#steps-preference). It means that the dataset should contain the columns `prompt`, `stepwise_completion` and `stepwise_labels`.
+The [`StepwiseRewardTrainer`] requires a [stepwise preference dataset](dataset_formats#stepwise-preference). It means that the dataset should contain the columns `prompt`, `stepwise_completion` and `stepwise_labels`.
 The [`StepwiseRewardTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 You can also use a pretokenized dataset, in which case the dataset should contain the following columns: `input_ids`, `attention_mask` and `labels`.
