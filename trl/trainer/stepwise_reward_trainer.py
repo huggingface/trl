@@ -49,16 +49,16 @@ if is_peft_available():
 
 
 def _tokenize(
-    batch: Dict[str, List[Any]], tokenizer: PreTrainedTokenizerBase, max_length: int
+    batch: Dict[str, List[Any]], tokenizer: PreTrainedTokenizerBase, max_length: int, post_step_separator: str
 ) -> Dict[str, List[Any]]:
     """Tokenize a batch from a stepwise preference modeling dataset."""
     new_examples = {"input_ids": [], "attention_mask": [], "labels": []}
 
-    post_step_tokens = tokenizer.encode("\n", add_special_tokens=False)
+    post_step_tokens = tokenizer.encode(post_step_separator, add_special_tokens=False)
 
     for prompt, steps, labels in zip(batch["prompt"], batch["stepwise_completion"], batch["stepwise_labels"]):
         if len(steps) != len(labels):
-            raise NotImplementedError("prm_trainer does not support training with unlabeled steps.")
+            raise NotImplementedError("StepwiseRewardTrainer does not support training with unlabeled steps.")
         input_ids = []
         token_level_labels = []
 
@@ -186,23 +186,31 @@ class StepwiseRewardTrainer(Trainer):
             if args.max_length is None:
                 args.max_length = 512
                 warnings.warn(
-                    "When the dataset isn't pretokenized, you should set `max_length` in the `PRMConfig`"
+                    "When the dataset isn't pretokenized, you should set `max_length` in the `StepwiseRewardConfig`"
                     " we have set it for you, but you should do it yourself in the future."
                 )
+            if args.post_step_separator is None:
+                args.post_step_separator = "\n"
+                warnings.warn(
+                    "When the dataset isn't pretokenized, you should set `post_step_separator` in the `StepwiseRewardConfig`"
+                    " we have set it for you to '\n', but you should do it yourself in the future."
+                )
             with PartialState().local_main_process_first():
-                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                chat_template_kwargs = {"tokenizer": tokenizer}
+                tokenize_kwargs = {"tokenizer": tokenizer, "post_step_separator": args.post_step_separator}
+                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs=chat_template_kwargs)
                 train_dataset = train_dataset.map(
                     _tokenize,
                     batched=True,
-                    fn_kwargs={"tokenizer": tokenizer, "max_length": args.max_length},
+                    fn_kwargs=tokenize_kwargs,
                     num_proc=args.dataset_num_proc,
                 )
 
                 if eval_dataset is not None:
-                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs=chat_template_kwargs)
                     eval_dataset = eval_dataset.map(
                         _tokenize,
-                        fn_kwargs={"tokenizer": tokenizer, "max_length": args.max_length},
+                        fn_kwargs=tokenize_kwargs,
                         batched=True,
                         num_proc=args.dataset_num_proc,
                     )
