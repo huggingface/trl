@@ -52,7 +52,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_online_dpo.py
+accelerate launch train_dpo.py
 ```
 
 Distributed across 8 GPUs, the training takes approximately 3 minutes. You can verify the training progress by checking the reward graph. An increasing trend in the reward margin indicates that the model is improving and generating better responses over time.
@@ -80,62 +80,45 @@ Ultimately, the best programming language will depend on your specific needs and
 
 DPO requires a [preference dataset](dataset_formats#preference). The [`DPOTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
-### Special considerations for vision language models
+## Special considerations for vision-language models
 
-[`DPOTrainer`] can be used to fine-tune vision language models (VLMs). In this case, the dataset must also contain the key `images`, and the trainer's `tokenizer` is the VLM's `processor`. For example, for Idefics2, the processor expects the dataset to have the following format:
+The [`DPOTrainer`] supports fine-tuning vision-language models (VLMs). For these models, a vision dataset is required. To learn more about the specific format for vision datasets, refer to the [Vision dataset format](dataset_formats#vision-datasets) section.
 
+Additionally, unlike standard text-based models where a `tokenizer` is used, for VLMs, you should replace the `tokenizer` with a `processor`.
 
-```py
-dpo_dataset_dict = {
-    "images": [
-        [Image.open("beach.jpg")],
-        [Image.open("street.jpg")],
-    ],
-    "prompt": [
-        "The image <image> shows",
-        "<image> The image depicts",
-    ],
-    "chosen": [
-        " a sunny beach with palm trees.",
-        " a busy street with several cars and buildings.",
-    ],
-    "rejected": [
-        " a snowy mountain with skiers.",
-        " a calm countryside with green fields.",
-    ],
-}
-```
+```diff
+- model = AutoModelForCausalLM.from_pretrained(model_id)
++ model = AutoModelForVision2Seq.from_pretrained(model_id)
 
---------------------------------------------
+- tokenizer = AutoTokenizer.from_pretrained(model_id)
++ processor = AutoProcessor.from_pretrained(model_id)
 
-## Expected model format
-
-The DPO trainer expects a model of `AutoModelForCausalLM` or `AutoModelForVision2Seq`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
-
-## Using the `DPOTrainer`
-
-For a detailed example have a look at the `examples/scripts/dpo.py` script. At a high level we need to initialize the [`DPOTrainer`] with a `model` we wish to train, a reference `ref_model` which we will use to calculate the implicit rewards of the preferred and rejected response, the `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above. Note that the `model` and `ref_model` need to have the same architecture (ie decoder only or encoder-decoder).
-
-```py
-training_args = DPOConfig(
-    beta=0.1,
-)
-dpo_trainer = DPOTrainer(
-    model,
-    ref_model,
-    args=training_args,
-    train_dataset=train_dataset,
-    tokenizer=tokenizer,  # for vision language models, use tokenizer=processor instead
+  trainer = DPOTrainer(
+      model,
+      args=training_args,
+      train_dataset=train_dataset,
+-     tokenizer=tokenizer,
++     tokenizer=processor,
 )
 ```
 
-After this one can then call:
+For a complete example of fine-tuning a vision-language model, refer to the script in [`examples/scripts/dpo_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/dpo_vlm.py).
 
-```py
-dpo_trainer.train()
+
+## Example script
+
+We provide an example script to train a model using the DPO method. The script is available in [`examples/scripts/dpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/dpo.py)
+
+To test the DPO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized), run the following command:
+
+```bash
+accelerate launch examples/scripts/dpo.py \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --dataset_name trl-lib/ultrafeedback_binarized \
+    --num_train_epochs 1 \
+    --logging_steps 25 \
+    --output_dir Qwen2-0.5B-DPO
 ```
-
-Note that the `beta` is the temperature parameter for the DPO loss, typically something in the range of `0.1` to `0.5`. We ignore the reference model as `beta` -> 0.
 
 ## Loss functions
 
