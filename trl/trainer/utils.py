@@ -632,9 +632,9 @@ class ConstantLengthDataset(IterableDataset):
         column_names = (
             dataset.column_names if isinstance(dataset, (datasets.Dataset, datasets.IterableDataset)) else None
         )
-        if column_names and "input_ids" in column_names:
+        if column_names is not None and "input_ids" in column_names:
             self.pretokenized = True
-            # since its tokenized unit of buffer size should be tokens
+            # since the dataset is tokenized, the unit of buffer size should be tokens
             self.max_buffer_size = seq_length * num_of_sequences
 
     def __len__(self):
