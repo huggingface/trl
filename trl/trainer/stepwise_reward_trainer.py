@@ -77,7 +77,7 @@ def _tokenize(
                 tokenized_step.extend(post_step_tokens)
                 step_labels.extend([-100] * len(post_step_tokens))
 
-            # Avoid adding steps if the maximum length is reached as in prm training only the token after the last token is labeled.
+            # Avoid adding steps if the maximum length is reached as in stepwise reward training only the token after the last token is labeled.
             if (len(input_ids) + len(tokenized_step)) < (max_length - 1):
                 input_ids.extend(tokenized_step)
                 token_level_labels.extend(step_labels)
@@ -118,12 +118,12 @@ class StepwiseRewardTrainer(Trainer):
         peft_config: Optional[Dict] = None,
     ):
         """
-        Initialize PRMTrainer.
+        Initialize StepwiseRewardTrainer.
 
         Args:
             model (`transformers.PreTrainedModel`):
                 The model to train, preferably an `AutoModelForTokenClassification`.
-            args (`PRMConfig`):
+            args (`StepwiseRewardConfig`):
                 The arguments to use for training.
             data_collator (`transformers.DataCollator`):
                 The data collator to use for training. If None is specified, the default data collator (`DataCollatorForTokenClassification`) will be used

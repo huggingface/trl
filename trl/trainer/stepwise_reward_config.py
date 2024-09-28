@@ -37,5 +37,5 @@ class StepwiseRewardConfig(TrainingArguments):
     """
 
     max_length: Optional[int] = None
-    post_step_separator: Optional[str] = "\n"
+    post_step_separator: Optional[str] = None
     dataset_num_proc: Optional[int] = None
