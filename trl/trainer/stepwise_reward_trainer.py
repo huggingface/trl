@@ -24,14 +24,20 @@ import torch.nn as nn
 from accelerate import PartialState
 from accelerate.utils import gather_object
 from datasets import Dataset
-from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, DataCollatorForTokenClassification
+from transformers import (
+    DataCollator,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    Trainer,
+    DataCollatorForTokenClassification,
+)
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import maybe_apply_chat_template
-from .prm_config import PRMConfig
+from .stepwise_reward_config import StepwiseRewardConfig
 from .utils import (
     compute_accuracy,
     trl_sanitze_kwargs_for_tagging,
@@ -42,62 +48,59 @@ if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
-def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase", max_length: int) -> Dict[str, List[Any]]:
-    """Tokenize a batch from a PRM modeling dataset."""
-    new_examples = {
-        "input_ids": [],
-        "attention_mask": [],
-        "labels": []
-    }
-    
+def _tokenize(
+    batch: Dict[str, List[Any]], tokenizer: PreTrainedTokenizerBase, max_length: int
+) -> Dict[str, List[Any]]:
+    """Tokenize a batch from a stepwise preference modeling dataset."""
+    new_examples = {"input_ids": [], "attention_mask": [], "labels": []}
+
     post_step_tokens = tokenizer.encode("\n", add_special_tokens=False)
-    
-    for prompt, steps, labels in zip(batch["prompt"], batch["completion_steps"], batch["labels"]):
-        if len(steps)!=len(labels):
-            raise NotImplementedError(
-                "prm_trainer does not support training with unlabeled steps."
-            )
-        
-        if getattr(tokenizer, 'add_bos_token', False) and tokenizer.bos_token_id is not None:
+
+    for prompt, steps, labels in zip(batch["prompt"], batch["stepwise_completion"], batch["stepwise_labels"]):
+        if len(steps) != len(labels):
+            raise NotImplementedError("prm_trainer does not support training with unlabeled steps.")
+        input_ids = []
+        token_level_labels = []
+
+        if getattr(tokenizer, "add_bos_token", False) and tokenizer.bos_token_id is not None:
             input_ids.append(tokenizer.bos_token_id)
-            labels.append(-100)
-            
-        input_ids = input_ids.append(tokenizer.encode(prompt, add_special_tokens=False))
-        labels = labels.append([-100]*len(input_ids))
-        
+
+        input_ids.extend(tokenizer.encode(prompt, add_special_tokens=False))
+        token_level_labels.extend([-100] * len(input_ids))
+
         for step, label in zip(steps, labels):
             tokenized_step = tokenizer.encode(step, add_special_tokens=False)
             step_labels = [-100] * len(tokenized_step)
-            step_labels[-1] = label
+            step_labels[-1] = int(label)
             tokenized_step.extend(post_step_tokens)
-            step_labels.extend([-100]* len(post_step_tokens))
-            
+            step_labels.extend([-100] * len(post_step_tokens))
+
             # Avoid adding steps if the maximum length is reached as in prm training only the token after the last token is labeled.
-            if (len(input_ids)+len(tokenized_step))<(max_length-1):
+            if (len(input_ids) + len(tokenized_step)) < (max_length - 1):
                 input_ids.extend(tokenized_step)
-                labels.extend(step_labels)
+                token_level_labels.extend(step_labels)
             else:
                 # exit if the maximum length is reached to avoid skipping steps in favor or shoter steps.
                 break
-            
-        if getattr(tokenizer, 'add_eos_token', False) and tokenizer.eos_token_id is not None:
+
+        if getattr(tokenizer, "add_eos_token", False) and tokenizer.eos_token_id is not None:
             input_ids.append(tokenizer.eos_token_id)
-            labels.append(-100)
-            
+            token_level_labels.append(-100)
+
         new_examples["input_ids"].append(input_ids)
-        new_examples["attention_mask"].append([1]*len(input_ids))
-        new_examples["labels"].append(labels)
-        
+        new_examples["attention_mask"].append([1] * len(input_ids))
+        new_examples["labels"].append(token_level_labels)
+
     return new_examples
 
 
-class PRMTrainer(Trainer):
-    _tag_names = ["trl", "prm-trainer"]
+class StepwiseRewardTrainer(Trainer):
+    _tag_names = ["trl", "stepwise-reward-trainer"]
 
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module]] = None,
-        args: Optional[PRMConfig] = None,
+        args: Optional[StepwiseRewardConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
@@ -117,11 +120,11 @@ class PRMTrainer(Trainer):
 
         Args:
             model (`transformers.PreTrainedModel`):
-                The model to train, preferably an `AutoModelForSequenceClassification`.
+                The model to train, preferably an `AutoModelForTokenClassification`.
             args (`PRMConfig`):
                 The arguments to use for training.
             data_collator (`transformers.DataCollator`):
-                The data collator to use for training. If None is specified, the default data collator (`RewardDataCollatorWithPadding`) will be used
+                The data collator to use for training. If None is specified, the default data collator (`DataCollatorForTokenClassification`) will be used
                 which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
             train_dataset (`datasets.Dataset`):
                 The dataset to use for training.
@@ -142,10 +145,8 @@ class PRMTrainer(Trainer):
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        if not type(args) is PRMConfig:
-            raise ValueError(
-                f"args should be an instance of PRMConfig but got {type(args)}"
-            )
+        if type(args) is not StepwiseRewardConfig:
+            raise ValueError(f"args should be an instance of `StepwiseRewardConfig` but got {type(args)}")
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -181,27 +182,30 @@ class PRMTrainer(Trainer):
                 )
             data_collator = DataCollatorForTokenClassification(tokenizer, max_length=args.max_length)
 
-
         if "input_ids" not in train_dataset.column_names:
+            if args.max_length is None:
+                args.max_length = 512
+                warnings.warn(
+                    "When the dataset isn't pretokenized, you should set `max_length` in the `PRMConfig`"
+                    " we have set it for you, but you should do it yourself in the future."
+                )
             with PartialState().local_main_process_first():
-                fn_kwargs = {"tokenizer": tokenizer}
-                eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs=fn_kwargs)
+                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
                 train_dataset = train_dataset.map(
                     _tokenize,
                     batched=True,
                     fn_kwargs={"tokenizer": tokenizer, "max_length": args.max_length},
                     num_proc=args.dataset_num_proc,
                 )
- 
+
                 if eval_dataset is not None:
-                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs=fn_kwargs)
+                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
                     eval_dataset = eval_dataset.map(
                         _tokenize,
                         fn_kwargs={"tokenizer": tokenizer, "max_length": args.max_length},
                         batched=True,
                         num_proc=args.dataset_num_proc,
                     )
-
 
         super().__init__(
             model=model,
@@ -229,7 +233,7 @@ class PRMTrainer(Trainer):
         **kwargs,
     ) -> str:
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "prm-trainer" when pushing the
+        Overwrite the `push_to_hub` method in order to force-add the tag "stepwise-reward-trainer" when pushing the
         model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
         Unlike the parent class, we don't use the `token` argument to mitigate security risks.
         """

@@ -42,7 +42,6 @@ from transformers.utils import (
     is_torch_npu_available,
     is_torch_xpu_available,
 )
-import evaluate
 
 from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
@@ -745,16 +744,15 @@ def get_global_statistics(
 
 def compute_accuracy(eval_pred) -> Dict[str, float]:
     predictions, labels = eval_pred
-    if predictions.ndim==3:
-        # token classification task
+    if predictions.ndim == 3:
+        # Token classification task.
+        # Used to compute the accuracy in the stepwise_reward_trainer.
         predictions = np.argmax(predictions, axis=2)
 
-        predictions = np.array([
-            p for prediction, label in zip(predictions, labels) for (p, l) in zip(prediction, label) if l != -100 
-        ])
-        labels = np.array([
-            l for prediction, label in zip(predictions, labels) for (p, l) in zip(prediction, label) if l != -100
-        ])
+        predictions = np.array(
+            [p for prediction, label in zip(predictions, labels) for (p, l) in zip(prediction, label) if l != -100]
+        )
+        labels = np.array([l for label in labels for l in label if l != -100])
     else:
         # Here, predictions is rewards_chosen and rewards_rejected.
         # We want to see how much of the time rewards_chosen > rewards_rejected.

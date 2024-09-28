@@ -19,20 +19,20 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class PRMConfig(TrainingArguments):
+class StepwiseRewardConfig(TrainingArguments):
     r"""
-    Configuration class for the [`PRMConfig`].
+    Configuration class for the [`StepwiseRewardConfig`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
     Parameters:
-        max_length (`int`):
+        max_length (`int`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + steps) in the batch.
         dataset_num_proc (`int`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
     """
 
-    max_length: int
+    max_length: Optional[int] = None
     dataset_num_proc: Optional[int] = None

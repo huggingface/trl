@@ -1,0 +1,56 @@
+# Stepwise Reward Models (PRMs)
+
+TRL supports stepwise reward modeling (also known as process-supervised reward modeling or in short PRMs) to give feedback for each intermediate reasoning test. While the [`RewardTrainer`] trains a reward model only to score an entire solution, the [`StepwiseRewardTrainer`] trains a reward model to score each intermediate steps of the reasoning process.
+Check out a complete example at [`examples/scripts/stepwise_reward_trainer.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/stepwise_reward_modeling.py).
+
+## Expected dataset format
+
+The [`StepwiseRewardTrainer`] requires a [steps preference dataset](dataset_formats#steps-preference). It means that the dataset should contain the columns `prompt`, `stepwise_completion` and `stepwise_labels`.
+The [`StepwiseRewardTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+
+You can also use a pretokenized dataset, in which case the dataset should contain the following columns: `input_ids`, `attention_mask` and `labels`.
+
+## Using the `StepwiseRewardTrainer`
+
+After preparing your dataset, you can use the [`StepwiseRewardTrainer`] in the same way as the `Trainer` class from 🤗 Transformers.
+You should pass an `AutoModelForTokenClassification` model to the [`StepwiseRewardTrainer`], along with a [`StepwiseRewardConfig`] which configures the hyperparameters of the training.
+
+### Leveraging 🤗 PEFT to train a stepwise reward model
+
+Just pass a `peft_config` in the keyword arguments of [`StepwiseRewardTrainer`], and the trainer should automatically take care of converting the model into a PEFT model!
+
+```python
+from peft import LoraConfig, TaskType
+from transformers import AutoModelForTokenClassification, AutoTokenizer
+from trl import StepwiseRewardTrainer, StepwiseRewardConfig
+
+model = AutoModelForTokenClassification.from_pretrained("gpt2", num_labels=2)
+peft_config = LoraConfig(
+    task_type=TaskType.TOKEN_CLS,
+    inference_mode=False,
+    r=8,
+    lora_alpha=32,
+    lora_dropout=0.1,
+)
+
+...
+
+trainer = StepwiseRewardTrainer(
+    model=model,
+    args=training_args,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+    peft_config=peft_config,
+)
+
+trainer.train()
+
+```
+
+## StepwiseRewardTrainer
+
+[[autodoc]] StepwiseRewardTrainer
+
+## StepwiseRewardConfig
+
+[[autodoc]] StepwiseRewardConfig
