@@ -1058,8 +1058,6 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
-                generate_during_eval=True,
-                report_to="none",
                 use_num_logits_to_keep=True,
             )
 
