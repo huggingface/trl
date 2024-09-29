@@ -1082,10 +1082,10 @@ class DPOTrainerTester(unittest.TestCase):
             rejected_labels = torch.tensor(
                 [[-100, -100, -100, -100, 100, 7, 5, 909], [-100, -100, -100, -100, 88, 4, 5, 6]]
             )
-            chosen_input_ids = torch.tensor([[700, 3, 5, 8, 9, 76, 4, 5, -100], [700, 3, 5, 8, 9, 2, 4, 5, 6]])
-            rejected_input_ids = torch.tensor([[700, 3, 5, 8, 9, 100, 7, 5, 909], [700, 3, 5, 8, 9, 88, 4, 5, 6]])
-            chosen_attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1]])
-            rejected_attention_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1]])
+            chosen_input_ids = torch.randint_like(chosen_labels, high=1000)
+            rejected_input_ids = torch.randint_like(rejected_labels, high=1000)
+            chosen_attention_mask = torch.ones_like(chosen_input_ids)
+            rejected_attention_mask = torch.ones_like(rejected_input_ids)
 
             batch = {
                 "chosen_labels": chosen_labels,
