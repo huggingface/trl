@@ -1331,7 +1331,7 @@ class DPOTrainer(Trainer):
             A Tuple of three tensors of shape ((batch_size,), (batch_size,), Optional[(batch_size,)]) containing:
             - The sum of log probabilities of the given labels under the given logits.
             - The number of non-masked tokens.
-            - The adjusted log probabilities with weighting (if use_weighting is True, otherwise None).
+            - The wpo weighting (if use_weighting is True, otherwise None).
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError(
