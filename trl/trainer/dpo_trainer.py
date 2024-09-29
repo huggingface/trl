@@ -1310,13 +1310,14 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
+    @staticmethod
     def get_batch_logps(
-        self,
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
-    ) -> Tuple[torch.FloatTensor, torch.LongTensor]:
+        use_weighting: bool = False
+    ) -> Tuple[torch.FloatTensor, torch.LongTensor, Optional[torch.FloatTensor]]:
         """Compute the log probabilities of the given labels under the given logits.
 
         Args:
@@ -1324,9 +1325,13 @@ class DPOTrainer(Trainer):
             labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
             label_pad_token_id: The label pad token id.
             is_encoder_decoder: Whether the model is an encoder-decoder model.
-
-        Returns:
-            A Tuple of two tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits in the first tensor and the number of non-masked tokens in the second tensor.
+            use_weighting: Whether to apply weighting as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
+        
+        Returns
+            A Tuple of three tensors of shape ((batch_size,), (batch_size,), Optional[(batch_size,)]) containing:
+            - The sum of log probabilities of the given labels under the given logits.
+            - The number of non-masked tokens.
+            - The adjusted log probabilities with weighting (if use_weighting is True, otherwise None).
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError(
@@ -1345,14 +1350,15 @@ class DPOTrainer(Trainer):
         
         all_logps = (per_token_logps * loss_mask).sum(-1)
         
-        avg_log_probs = None
-        if self.loss_type=="wpo":
+        all_weights = None
+        if use_weighting:
+            # eqn (2) of the WPO paper: https://huggingface.co/papers/2406.11827
             probs = F.softmax(logits, dim=-1)
-            exp_probs = torch.log((probs ** 2).sum(-1))
-            per_token_logps = per_token_logps - exp_probs
-            avg_log_probs = (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+            weights_adjustment_factor = torch.log((probs ** 2).sum(-1))
+            per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
+            all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
         
-        return all_logps, loss_mask.sum(-1), avg_log_probs
+        return all_logps, loss_mask.sum(-1), all_weights
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
@@ -1398,12 +1404,13 @@ class DPOTrainer(Trainer):
             seq_len = concatenated_batch["concatenated_labels"].shape[1]
             all_logits = all_logits[:, -seq_len:]
 
-        all_logps, size_completion, all_avg_logprobs = self.get_batch_logps(
+        all_logps, size_completion, all_weights = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
             # average_log_prob=self.loss_type == "ipo",
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
+            use_weighting=self.args.use_weighting,
         )
 
         def cross_entropy_loss(logits, labels):
@@ -1425,11 +1432,12 @@ class DPOTrainer(Trainer):
 
         if self.loss_type == "ipo":
             all_logps = all_logps / size_completion
-            
-        if self.loss_type=="wpo":
-            chosen_probs = all_avg_logprobs[:len_chosen]
-            rejected_probs = all_avg_logprobs[len_chosen:]
-            wpo_weight = torch.clamp(torch.exp(chosen_probs + rejected_probs), max=1)
+           
+        policy_weights = None 
+        if self.args.use_weighting:
+            chosen_weights = all_weights[:len_chosen]
+            rejected_weights = all_weights[len_chosen:]
+            policy_weights = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
             
 
         chosen_logps = all_logps[:len_chosen]
@@ -1439,9 +1447,9 @@ class DPOTrainer(Trainer):
         rejected_logits = all_logits[len_chosen:]
 
         if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, outputs.aux_loss)
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, policy_weights, outputs.aux_loss)
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, policy_weights, nll_loss)
 
     def get_batch_loss_metrics(
         self,
@@ -1496,7 +1504,7 @@ class DPOTrainer(Trainer):
             # RPO loss from V3 of the paper:
             losses = losses + policy_nll_loss * self.args.rpo_alpha
             
-        if policy_weights is not None:
+        if self.args.use_weighting:
             losses = losses * policy_weights
 
         prefix = "eval_" if train_eval == "eval" else ""
