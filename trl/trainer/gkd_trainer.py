@@ -100,6 +100,7 @@ class GKDTrainer(SFTTrainer):
             do_sample=True,
             top_k=0,
             use_cache=False if args.gradient_checkpointing else True,
+            eos_token_id=args.eos_token_id,
         )
 
     @staticmethod

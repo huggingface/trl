@@ -1380,9 +1380,9 @@ def generate_model_card(
     tags: Union[str, List[str], None],
     wandb_url: Optional[str],
     trainer_name: str,
-    trainer_citation: Optional[str],
-    paper_title: Optional[str],
-    paper_id: Optional[str],
+    trainer_citation: Optional[str] = None,
+    paper_title: Optional[str] = None,
+    paper_id: Optional[str] = None,
 ) -> ModelCard:
     """
     Generate a `ModelCard` from a template.
