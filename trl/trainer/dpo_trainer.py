@@ -1381,14 +1381,7 @@ class DPOTrainer(Trainer):
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
-        model_support_num_logits_to_keep = "num_logits_to_keep" in set(
-            inspect.signature(model.forward).parameters.keys()
-        )
-        if self.use_num_logits_to_keep and not model_support_num_logits_to_keep:
-            self.use_num_logits_to_keep = False
-            warnings.warn(
-                "The model does not support num_logits_to_keep. The parameter use_num_logits_to_keep will be ignored."
-            )
+
         concatenated_batch = self.concatenated_inputs(
             batch,
             is_encoder_decoder=self.is_encoder_decoder,
