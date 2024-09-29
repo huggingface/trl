@@ -1358,7 +1358,7 @@ class DPOTrainer(Trainer):
             per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
             all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
 
-        return all_logps, loss_mask.sum(-1), all_weights
+        return all_logps, loss_mask.sum(-1), all_weights.detach()
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
