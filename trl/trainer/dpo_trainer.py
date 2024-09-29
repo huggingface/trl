@@ -1310,8 +1310,8 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    @staticmethod
     def get_batch_logps(
+        self,
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         label_pad_token_id: int = -100,
@@ -1342,8 +1342,17 @@ class DPOTrainer(Trainer):
         labels[labels == label_pad_token_id] = 0
 
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-
-        return (per_token_logps * loss_mask).sum(-1), loss_mask.sum(-1)
+        
+        all_logps = (per_token_logps * loss_mask).sum(-1)
+        
+        avg_log_probs = None
+        if self.loss_type=="wpo":
+            probs = F.softmax(logits, dim=-1)
+            exp_probs = torch.log((probs ** 2).sum(-1))
+            per_token_logps = per_token_logps - exp_probs
+            avg_log_probs = (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+        
+        return all_logps, loss_mask.sum(-1), avg_log_probs
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
@@ -1389,7 +1398,7 @@ class DPOTrainer(Trainer):
             seq_len = concatenated_batch["concatenated_labels"].shape[1]
             all_logits = all_logits[:, -seq_len:]
 
-        all_logps, size_completion = self.get_batch_logps(
+        all_logps, size_completion, all_avg_logprobs = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
             # average_log_prob=self.loss_type == "ipo",
@@ -1416,6 +1425,12 @@ class DPOTrainer(Trainer):
 
         if self.loss_type == "ipo":
             all_logps = all_logps / size_completion
+            
+        if self.loss_type=="wpo":
+            chosen_probs = all_avg_logprobs[:len_chosen]
+            rejected_probs = all_avg_logprobs[len_chosen:]
+            wpo_weight = torch.clamp(torch.exp(chosen_probs + rejected_probs), max=1)
+            
 
         chosen_logps = all_logps[:len_chosen]
         rejected_logps = all_logps[len_chosen:]
@@ -1444,9 +1459,10 @@ class DPOTrainer(Trainer):
             policy_chosen_logits,
             policy_rejected_logits,
             policy_nll_loss,
-        ) = forward_output[:5]
+            policy_weights,
+        ) = forward_output[:6]
         if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
+            aux_loss = forward_output[6]
 
         # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
         if (
@@ -1479,6 +1495,9 @@ class DPOTrainer(Trainer):
         if self.args.rpo_alpha is not None:
             # RPO loss from V3 of the paper:
             losses = losses + policy_nll_loss * self.args.rpo_alpha
+            
+        if policy_weights is not None:
+            losses = losses * policy_weights
 
         prefix = "eval_" if train_eval == "eval" else ""
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
