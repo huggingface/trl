@@ -34,11 +34,11 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-args = NashMDConfig(output_dir="nash-md-qwen2", logging_steps=10)
+training_args = NashMDConfig(output_dir="nash-md-qwen2", logging_steps=10)
 trainer = NashMDTrainer(
     model=model,
     reward_model=reward_model,
-    args=args,
+    args=training_args,
     tokenizer=tokenizer,
     train_dataset=train_dataset,
 )
@@ -53,7 +53,7 @@ accelerate launch train_nash_md.py
 
 ## Expected dataset format
 
-Nash-MD requires a [prompt-only dataset](dataset_format#preference). The [`NashMDTrainer`] supports both [conversational](dataset_format#conversational-dataset-format) and [standard](dataset_format#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Nash-MD requires a [prompt-only dataset](dataset_formats#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
@@ -63,10 +63,10 @@ Make sure that the SFT model and reward model use the _same_ chat template. Othe
 
 ### Encourage EOS token generation
 
-We can want the model to generate completion within a given length. During the learning, the model will generate completion up to the maximum completion length specified in the `max_new_tokens` argument of [`NashMDConfig`]. I you want to penalize for not generating an EOS token before the maximum completion length, you can use the `missing_eos_penalty` argument of [`NashMDConfig`]:
+We may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`NashMDConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`NashMDConfig`]:
 
 ```python
-args = NashMDConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
+training_args = NashMDConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
 ```
 
 ### Logging Completions
