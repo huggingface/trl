@@ -54,7 +54,6 @@ python examples/scripts/cpo.py \
 
 from dataclasses import dataclass, field
 
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
@@ -65,7 +64,7 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 @dataclass
 class ScriptArguments:
     dataset_name: str = field(
-        default="trl-internal-testing/hh-rlhf-helpful-base-trl-style",
+        default="trl-lib/ultrafeedback_binarized",
         metadata={"help": "The name of the dataset to use."},
     )
 
@@ -92,16 +91,6 @@ if __name__ == "__main__":
     dataset = load_dataset(script_args.dataset_name)
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
-
-    def process(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
-        return row
-
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(process, num_proc=training_args.dataset_num_proc)
 
     ################
     # Training
