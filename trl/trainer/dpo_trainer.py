@@ -799,6 +799,7 @@ class DPOTrainer(Trainer):
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.use_weighting = args.use_weighting
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -1356,9 +1357,9 @@ class DPOTrainer(Trainer):
             probs = F.softmax(logits, dim=-1)
             weights_adjustment_factor = torch.log((probs**2).sum(-1))
             per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
-            all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
+            all_weights = ((per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)).detach()
 
-        return all_logps, loss_mask.sum(-1), all_weights.detach()
+        return all_logps, loss_mask.sum(-1), all_weights
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
@@ -1410,7 +1411,7 @@ class DPOTrainer(Trainer):
             # average_log_prob=self.loss_type == "ipo",
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
-            use_weighting=self.args.use_weighting,
+            use_weighting=self.use_weighting,
         )
 
         def cross_entropy_loss(logits, labels):
@@ -1434,7 +1435,7 @@ class DPOTrainer(Trainer):
             all_logps = all_logps / size_completion
 
         policy_weights = None
-        if self.args.use_weighting:
+        if self.use_weighting:
             chosen_weights = all_weights[:len_chosen]
             rejected_weights = all_weights[len_chosen:]
             policy_weights = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
@@ -1511,7 +1512,7 @@ class DPOTrainer(Trainer):
             # RPO loss from V3 of the paper:
             losses = losses + policy_nll_loss * self.args.rpo_alpha
 
-        if self.args.use_weighting:
+        if self.use_weighting:
             losses = losses * policy_weights
 
         prefix = "eval_" if train_eval == "eval" else ""
