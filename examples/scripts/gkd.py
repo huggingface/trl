@@ -46,7 +46,7 @@ python examples/scripts/gkd.py \
 
 from accelerate import PartialState
 from datasets import load_dataset
-from transformers import AutoTokenizer, GenerationConfig
+from transformers import AutoTokenizer
 
 from trl import (
     GKDConfig,
@@ -93,6 +93,7 @@ if __name__ == "__main__":
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
+        revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
         padding_side="left",
     )
@@ -124,10 +125,7 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )
-    generation_config = GenerationConfig(
-        max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
-    )
-    completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
+    completions_callback = LogCompletionsCallback(trainer, trainer.generation_config, num_prompts=8)
     trainer.add_callback(completions_callback)
     trainer.train()
 
