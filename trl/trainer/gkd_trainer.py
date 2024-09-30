@@ -100,7 +100,17 @@ class GKDTrainer(SFTTrainer):
             do_sample=True,
             top_k=0,
             use_cache=False if args.gradient_checkpointing else True,
+            pad_token_id=self.tokenizer.pad_token_id,
         )
+        # Set custom EOS tokens if they are specified by the model's generation
+        # config. This is important for models with the Llama 3 chat template,
+        # which use special tokens <|eot_id|> and <|eom_id|> to mark the end of
+        # turns or messages.
+        if (
+            hasattr(self.model.generation_config, "eos_token_id")
+            and self.model.generation_config.eos_token_id is not None
+        ):
+            self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
 
     @staticmethod
     def generalized_jsd_loss(
