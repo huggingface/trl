@@ -52,22 +52,12 @@ python examples/scripts/orpo.py \
     --lora_alpha=16
 """
 
-from dataclasses import dataclass, field
-
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import ModelConfig, ORPOConfig, ORPOTrainer, get_peft_config
+from trl import ModelConfig, ORPOConfig, ORPOTrainer, ScriptArguments, get_peft_config
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
-
-
-@dataclass
-class ScriptArguments:
-    dataset_name: str = field(
-        default="trl-internal-testing/hh-rlhf-helpful-base-trl-style",
-        metadata={"help": "The name of the dataset to use."},
-    )
 
 
 if __name__ == "__main__":

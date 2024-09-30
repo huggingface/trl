@@ -53,23 +53,19 @@ python examples/scripts/kto.py \
     --lora_alpha=16
 """
 
-from dataclasses import dataclass
-
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_unpair_preference_dataset, setup_chat_format
-
-
-# Define and parse arguments.
-@dataclass
-class ScriptArguments:
-    """
-    The arguments for the KTO training script.
-    """
-
-    dataset_name: str = "trl-lib/kto-mix-14k"
+from trl import (
+    KTOConfig,
+    KTOTrainer,
+    ModelConfig,
+    ScriptArguments,
+    get_peft_config,
+    maybe_unpair_preference_dataset,
+    setup_chat_format,
+)
 
 
 if __name__ == "__main__":
