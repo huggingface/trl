@@ -76,7 +76,7 @@ from accelerate import Accelerator
 from datasets import load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
-from trl import BCOConfig, BCOTrainer, DPOScriptArguments, ModelConfig, get_peft_config, setup_chat_format
+from trl import BCOConfig, BCOTrainer, ModelConfig, ScriptArguments, get_peft_config, setup_chat_format
 
 
 def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, model: PreTrainedModel):
@@ -103,7 +103,7 @@ def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, 
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((DPOScriptArguments, BCOConfig, ModelConfig))
+    parser = HfArgumentParser((ScriptArguments, BCOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
 
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}

@@ -53,9 +53,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
     DPOConfig,
-    DPOScriptArguments,
     DPOTrainer,
     ModelConfig,
+    ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
@@ -67,7 +67,7 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":
-    parser = TrlParser((DPOScriptArguments, DPOConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
 
     ################
