@@ -42,6 +42,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
+from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from .cpo_config import CPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
@@ -302,6 +303,17 @@ class CPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
+            # Extract the prompt if needed, and apply the chat template if needed
+            train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+                )
+
             # tokenize the dataset
             train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
             if eval_dataset is not None:
