@@ -120,6 +120,15 @@ accelerate launch examples/scripts/dpo.py \
     --output_dir Qwen2-0.5B-DPO
 ```
 
+## Logged metrics
+
+While training and evaluating we record the following reward metrics:
+
+- `rewards/chosen`: the mean difference between the log probabilities of the policy model and the reference model for the chosen responses scaled by beta
+- `rewards/rejected`: the mean difference between the log probabilities of the policy model and the reference model for the rejected responses scaled by beta
+- `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
+- `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
+
 ## Loss functions
 
 The DPO algorithm supports several loss functions. The loss function can be set using the `loss_type` parameter in the [`DPOConfig`]. The following loss functions are supported:
@@ -153,14 +162,6 @@ To ensure that we train MOEs similarly during preference-tuning, it is beneficia
 This option is enabled by setting `output_router_logits=True` in the model config (e.g. MixtralConfig).  
 To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...` (default: 0.001).
 
-## Logging
-
-While training and evaluating we record the following reward metrics:
-
-- `rewards/chosen`: the mean difference between the log probabilities of the policy model and the reference model for the chosen responses scaled by beta
-- `rewards/rejected`: the mean difference between the log probabilities of the policy model and the reference model for the rejected responses scaled by beta
-- `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
-- `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
 
 ## Accelerate DPO fine-tuning using `unsloth`
 
