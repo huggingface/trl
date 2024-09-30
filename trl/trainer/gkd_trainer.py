@@ -100,6 +100,7 @@ class GKDTrainer(SFTTrainer):
             do_sample=True,
             top_k=0,
             use_cache=False if args.gradient_checkpointing else True,
+            pad_token_id=self.tokenizer.pad_token_id,
         )
 
     @staticmethod
@@ -193,6 +194,12 @@ class GKDTrainer(SFTTrainer):
 
     @staticmethod
     def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
+        # Set custom EOS tokens if they are specified by the model's generation
+        # config. This is important for models with the Llama 3 chat template,
+        # which use special tokens <|eot_id|> and <|eom_id|> to mark the end of
+        # turns or messages.
+        if hasattr(model.generation_config, "eos_token_id") and model.generation_config.eos_token_id is not None:
+            generation_config.eos_token_id = model.generation_config.eos_token_id
         # Generate output with respect to the prompt only
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
