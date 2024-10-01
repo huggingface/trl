@@ -335,10 +335,13 @@ def chat_cli():
 
             chat.append({"role": "user", "content": user_input})
 
+            inputs = tokenizer.apply_chat_template(chat, return_tensors="pt", add_generation_prompt=True).to(
+                model.device
+            )
+            attention_mask = torch.ones_like(inputs)
             generation_kwargs = dict(
-                inputs=tokenizer.apply_chat_template(chat, return_tensors="pt", add_generation_prompt=True).to(
-                    model.device
-                ),
+                inputs=inputs,
+                attention_mask=attention_mask,
                 streamer=generation_streamer,
                 max_new_tokens=current_args.max_new_tokens,
                 do_sample=current_args.do_sample,
