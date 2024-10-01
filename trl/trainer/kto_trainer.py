@@ -518,10 +518,10 @@ class KTOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
-        # disable dropout in the model and reference model
-        disable_dropout_in_model(model)
-        if self.ref_model is not None:
-            disable_dropout_in_model(self.ref_model)
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         self.loss_type = args.loss_type
         self.max_length = max_length
