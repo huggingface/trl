@@ -605,14 +605,7 @@ class KTOTrainer(Trainer):
 
             # Get KL datasets if needed
             if self.calculate_KL:
-                # do not multiply by number of gradient accumulation steps here; for every step taken
-                # y' used to calculate KL should be same as the regular completions y
-                total_batch_size = (
-                    max(torch.cuda.device_count(), 1)
-                    * args.per_device_train_batch_size
-                )
-
-                if total_batch_size <= 1:
+                if args.per_device_train_batch_size <= 1:
                     raise ValueError(
                         "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
                     )
@@ -622,7 +615,7 @@ class KTOTrainer(Trainer):
                 train_kl_dataset = train_dataset.map(
                     _get_kl_dataset,
                     batched=True,
-                    batch_size=total_batch_size,
+                    batch_size=args.per_device_train_batch_size,
                     num_proc=args.dataset_num_proc,
                     desc="Extracting KL train dataset",
                 )
@@ -644,7 +637,7 @@ class KTOTrainer(Trainer):
                     eval_kl_dataset = eval_dataset.map(
                         _get_kl_dataset,
                         batched=True,
-                        batch_size=total_batch_size,
+                        batch_size=args.per_device_train_batch_size,
                         num_proc=args.dataset_num_proc,
                         desc="Extracting eval KL dataset",
                     )
