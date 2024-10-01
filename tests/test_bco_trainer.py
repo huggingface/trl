@@ -64,7 +64,7 @@ class BCOTrainerTester(unittest.TestCase):
                 max_steps=3,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                eval_strategy="steps",
+                eval_strategy="steps" if eval_dataset else "no",
                 beta=0.1,
                 precompute_ref_log_probs=pre_compute,
                 report_to="none",
