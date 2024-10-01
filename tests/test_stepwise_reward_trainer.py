@@ -36,7 +36,6 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
         self.tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
         self.model = AutoModelForTokenClassification.from_pretrained(self.model_id, num_labels=2)
 
-
     def test_token_level_accuracy(self):
         dummy_eval_predictions = EvalPrediction(
             torch.FloatTensor([[[0.1, 0.9], [0.1, 0.9]], [[0.1, 0.9], [0.9, 0.1]]]),
@@ -47,7 +46,9 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
 
     def test_preprocessing_conversational(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_stepwise_preference", split="train")
+            dummy_dataset = load_dataset(
+                "trl-internal-testing/zen", "conversational_stepwise_preference", split="train"
+            )
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
                 model=self.model,
@@ -55,9 +56,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
                 tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset,
             )
-            dummy_dataset = dummy_dataset.map(
-                maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer}
-            )
+            dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
             dummy_dataset = dummy_dataset.map(
                 _tokenize,
                 batched=True,
