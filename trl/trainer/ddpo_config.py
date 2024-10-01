@@ -114,6 +114,8 @@ class DDPOConfig:
             Maximum number of workers to use for async reward computation.
         negative_prompts (`Optional[str]`, *optional*, defaults to `""`):
             Comma-separated list of prompts to use as negative examples.
+        push_to_hub (`bool`, *optional*, defaults to `False`):
+            Whether to push the final model checkpoint to the Hub.
     """
 
     exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
@@ -156,6 +158,7 @@ class DDPOConfig:
     async_reward_computation: bool = False
     max_workers: int = 2
     negative_prompts: str = ""
+    push_to_hub: bool = False
 
     def to_dict(self):
         output_dict = {}

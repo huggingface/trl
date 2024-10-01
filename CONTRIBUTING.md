@@ -83,8 +83,8 @@ If your issue is well written we're already 80% of the way there by the time you
 
 New post-training methods are published on a frequent basis and those which satisfy the following criteria are good candidates to be integrated in TRL:
 
-* **Simplicity:** does the new method achieve similar performance as prior methods, but with less complexity? A good example is [Direct Preference Optimization](https://arxiv.org/abs/2305.18290) (DPO), which provided a simpler and compelling alternative to RLHF methods.
-* **Efficiency:** does the new method provide a significant improvement in training efficiency? A good example is [Odds Ratio Preference Optimization](https://arxiv.org/abs/2403.07691v2), which utilises a similar objective as DPO, but requires half the GPU VRAM.
+* **Simplicity:** does the new method achieve similar performance as prior methods, but with less complexity? A good example is Direct Preference Optimization (DPO) [[Rafailov et al, 2023]](https://huggingface.co/papers/2305.18290), which provided a simpler and compelling alternative to RLHF methods.
+* **Efficiency:** does the new method provide a significant improvement in training efficiency? A good example is Odds Ratio Preference Optimization (ORPO) [[Hong et al, 2023]](https://huggingface.co/papers/2403.07691), which utilises a similar objective as DPO, but requires half the GPU VRAM.
 
 Methods which only provide incremental improvements at the expense of added complexity or compute costs are unlikely to be included in TRL.
 

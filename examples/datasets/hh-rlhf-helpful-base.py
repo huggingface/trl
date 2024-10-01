@@ -87,10 +87,10 @@ def extract_dialogue(example: str) -> List[Dict[str, str]]:
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
-    args = parser.parse_args_into_dataclasses()[0]
+    script_args = parser.parse_args_into_dataclasses()[0]
 
     dataset = load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
-    dataset = dataset.map(extract_dialogue, num_proc=args.dataset_num_proc)
+    dataset = dataset.map(extract_dialogue, num_proc=script_args.dataset_num_proc)
 
-    if args.push_to_hub:
-        dataset.push_to_hub(args.repo_id)
+    if script_args.push_to_hub:
+        dataset.push_to_hub(script_args.repo_id)

@@ -12,95 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# flake8: noqa
-
 __version__ = "0.12.0.dev0"
 
 from typing import TYPE_CHECKING
-from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
+
+from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
 
 
 _import_structure = {
-    "core": [
-        "set_seed",
-    ],
-    "environment": [
-        "TextEnvironment",
-        "TextHistory",
-    ],
-    "extras": [
-        "BestOfNSampler",
-    ],
-    "import_utils": [
-        "is_deepspeed_available",
-        "is_diffusers_available",
-        "is_liger_kernel_available",
-        "is_llmblender_available",
-    ],
-    "models": [
-        "AutoModelForCausalLMWithValueHead",
-        "AutoModelForSeq2SeqLMWithValueHead",
-        "PreTrainedModelWrapper",
-        "create_reference_model",
-        "setup_chat_format",
-        "SUPPORTED_ARCHITECTURES",
-    ],
-    "trainer": [
-        "DataCollatorForCompletionOnlyLM",
-        "DPOConfig",
-        "DPOTrainer",
-        "CPOConfig",
-        "CPOTrainer",
-        "AlignPropConfig",
-        "AlignPropTrainer",
-        "IterativeSFTTrainer",
-        "KTOConfig",
-        "KTOTrainer",
-        "BCOConfig",
-        "BCOTrainer",
-        "ModelConfig",
-        "NashMDConfig",
-        "NashMDTrainer",
-        "OnlineDPOConfig",
-        "OnlineDPOTrainer",
-        "XPOConfig",
-        "XPOTrainer",
-        "ORPOConfig",
-        "ORPOTrainer",
-        "PPOConfig",
-        "PPOTrainer",
-        "PPOv2Config",
-        "PPOv2Trainer",
-        "RewardConfig",
-        "RewardTrainer",
-        "RLOOConfig",
-        "RLOOTrainer",
-        "SFTConfig",
-        "SFTTrainer",
-        "FDivergenceConstants",
-        "FDivergenceType",
-        "GKDTrainer",
-        "GKDConfig",
-        "WinRateCallback",
-        "BaseJudge",
-        "BaseRankJudge",
-        "BasePairwiseJudge",
-        "RandomRankJudge",
-        "RandomPairwiseJudge",
-        "PairRMJudge",
-        "HfPairwiseJudge",
-        "OpenAIPairwiseJudge",
-        "LogCompletionsCallback",
-    ],
-    "commands": [],
-    "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
-    "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
-    "multitask_prompt_tuning": [
-        "MultitaskPromptEmbedding",
-        "MultitaskPromptTuningConfig",
-        "MultitaskPromptTuningInit",
-    ],
+    "commands.cli_utils": ["DPOScriptArguments", "SFTScriptArguments", "TrlParser", "init_zero_verbose"],
+    "core": ["set_seed"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -110,6 +31,71 @@ _import_structure = {
         "maybe_unpair_preference_dataset",
         "unpair_preference_dataset",
     ],
+    "environment": ["TextEnvironment", "TextHistory"],
+    "extras": ["BestOfNSampler"],
+    "import_utils": [
+        "is_deepspeed_available",
+        "is_diffusers_available",
+        "is_liger_kernel_available",
+        "is_llmblender_available",
+    ],
+    "models": [
+        "SUPPORTED_ARCHITECTURES",
+        "AutoModelForCausalLMWithValueHead",
+        "AutoModelForSeq2SeqLMWithValueHead",
+        "PreTrainedModelWrapper",
+        "create_reference_model",
+        "setup_chat_format",
+    ],
+    "trainer": [
+        "AlignPropConfig",
+        "AlignPropTrainer",
+        "BaseJudge",
+        "BasePairwiseJudge",
+        "BaseRankJudge",
+        "BCOConfig",
+        "BCOTrainer",
+        "CPOConfig",
+        "CPOTrainer",
+        "DataCollatorForCompletionOnlyLM",
+        "DPOConfig",
+        "DPOTrainer",
+        "FDivergenceConstants",
+        "FDivergenceType",
+        "GKDConfig",
+        "GKDTrainer",
+        "HfPairwiseJudge",
+        "IterativeSFTTrainer",
+        "KTOConfig",
+        "KTOTrainer",
+        "LogCompletionsCallback",
+        "ModelConfig",
+        "NashMDConfig",
+        "NashMDTrainer",
+        "OnlineDPOConfig",
+        "OnlineDPOTrainer",
+        "OpenAIPairwiseJudge",
+        "ORPOConfig",
+        "ORPOTrainer",
+        "PairRMJudge",
+        "PPOConfig",
+        "PPOTrainer",
+        "PPOv2Config",
+        "PPOv2Trainer",
+        "RandomPairwiseJudge",
+        "RandomRankJudge",
+        "RewardConfig",
+        "RewardTrainer",
+        "RLOOConfig",
+        "RLOOTrainer",
+        "SFTConfig",
+        "SFTTrainer",
+        "WinRateCallback",
+        "XPOConfig",
+        "XPOTrainer",
+    ],
+    "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
 try:
@@ -129,73 +115,8 @@ else:
     _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
+    from .commands.cli_utils import DPOScriptArguments, SFTScriptArguments, TrlParser, init_zero_verbose
     from .core import set_seed
-    from .environment import TextEnvironment, TextHistory
-    from .extras import BestOfNSampler
-    from .import_utils import (
-        is_deepspeed_available,
-        is_diffusers_available,
-        is_liger_kernel_available,
-        is_llmblender_available,
-    )
-    from .models import (
-        AutoModelForCausalLMWithValueHead,
-        AutoModelForSeq2SeqLMWithValueHead,
-        PreTrainedModelWrapper,
-        create_reference_model,
-        setup_chat_format,
-        SUPPORTED_ARCHITECTURES,
-    )
-    from .trainer import (
-        DataCollatorForCompletionOnlyLM,
-        DPOConfig,
-        DPOTrainer,
-        CPOConfig,
-        CPOTrainer,
-        AlignPropConfig,
-        AlignPropTrainer,
-        IterativeSFTTrainer,
-        KTOConfig,
-        KTOTrainer,
-        BCOConfig,
-        BCOTrainer,
-        ModelConfig,
-        NashMDConfig,
-        NashMDTrainer,
-        OnlineDPOConfig,
-        OnlineDPOTrainer,
-        XPOConfig,
-        XPOTrainer,
-        ORPOConfig,
-        ORPOTrainer,
-        PPOConfig,
-        PPOTrainer,
-        PPOv2Config,
-        PPOv2Trainer,
-        RewardConfig,
-        RewardTrainer,
-        RLOOConfig,
-        RLOOTrainer,
-        SFTConfig,
-        SFTTrainer,
-        FDivergenceConstants,
-        FDivergenceType,
-        GKDTrainer,
-        GKDConfig,
-        WinRateCallback,
-        BaseJudge,
-        BaseRankJudge,
-        BasePairwiseJudge,
-        RandomRankJudge,
-        RandomPairwiseJudge,
-        PairRMJudge,
-        HfPairwiseJudge,
-        OpenAIPairwiseJudge,
-        LogCompletionsCallback,
-    )
-    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
-    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
-    from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
@@ -205,6 +126,71 @@ if TYPE_CHECKING:
         maybe_unpair_preference_dataset,
         unpair_preference_dataset,
     )
+    from .environment import TextEnvironment, TextHistory
+    from .extras import BestOfNSampler
+    from .import_utils import (
+        is_deepspeed_available,
+        is_diffusers_available,
+        is_liger_kernel_available,
+        is_llmblender_available,
+    )
+    from .models import (
+        SUPPORTED_ARCHITECTURES,
+        AutoModelForCausalLMWithValueHead,
+        AutoModelForSeq2SeqLMWithValueHead,
+        PreTrainedModelWrapper,
+        create_reference_model,
+        setup_chat_format,
+    )
+    from .trainer import (
+        AlignPropConfig,
+        AlignPropTrainer,
+        BaseJudge,
+        BasePairwiseJudge,
+        BaseRankJudge,
+        BCOConfig,
+        BCOTrainer,
+        CPOConfig,
+        CPOTrainer,
+        DataCollatorForCompletionOnlyLM,
+        DPOConfig,
+        DPOTrainer,
+        FDivergenceConstants,
+        FDivergenceType,
+        GKDConfig,
+        GKDTrainer,
+        HfPairwiseJudge,
+        IterativeSFTTrainer,
+        KTOConfig,
+        KTOTrainer,
+        LogCompletionsCallback,
+        ModelConfig,
+        NashMDConfig,
+        NashMDTrainer,
+        OnlineDPOConfig,
+        OnlineDPOTrainer,
+        OpenAIPairwiseJudge,
+        ORPOConfig,
+        ORPOTrainer,
+        PairRMJudge,
+        PPOConfig,
+        PPOTrainer,
+        PPOv2Config,
+        PPOv2Trainer,
+        RandomPairwiseJudge,
+        RandomRankJudge,
+        RewardConfig,
+        RewardTrainer,
+        RLOOConfig,
+        RLOOTrainer,
+        SFTConfig,
+        SFTTrainer,
+        WinRateCallback,
+        XPOConfig,
+        XPOTrainer,
+    )
+    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
+    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 
     try:
         if not is_diffusers_available():

@@ -57,7 +57,7 @@ def to_prompt_completion(example, tokenizer):
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
-    args = parser.parse_args_into_dataclasses()[0]
+    script_args = parser.parse_args_into_dataclasses()[0]
 
     dataset = load_dataset(
         "json",
@@ -65,11 +65,11 @@ if __name__ == "__main__":
         split="train",
     )
 
-    dataset = dataset.filter(samples_not_all_same, num_proc=args.dataset_num_proc)
+    dataset = dataset.filter(samples_not_all_same, num_proc=script_args.dataset_num_proc)
 
     dataset = dataset.map(
         to_prompt_completion,
-        num_proc=args.dataset_num_proc,
+        num_proc=script_args.dataset_num_proc,
         remove_columns=["query", "sample0", "sample1", "sample2", "sample3", "best"],
         fn_kwargs={"tokenizer": AutoTokenizer.from_pretrained("gpt2")},
     )
@@ -77,5 +77,5 @@ if __name__ == "__main__":
     # train_size taken from https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/launch.py#L79)
     dataset = dataset.train_test_split(train_size=4992)
 
-    if args.push_to_hub:
-        dataset.push_to_hub(args.repo_id)
+    if script_args.push_to_hub:
+        dataset.push_to_hub(script_args.repo_id)

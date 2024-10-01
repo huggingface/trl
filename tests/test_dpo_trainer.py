@@ -782,7 +782,8 @@ class DPOTrainerTester(unittest.TestCase):
                 peft_config=lora_config,
             )
 
-            assert trainer.model.model_tags == trainer._tag_names
+            for tag in ["dpo", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
 
     @require_peft
     def test_dpo_tags(self):
@@ -817,7 +818,8 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-            assert trainer.model.model_tags == trainer._tag_names
+            for tag in ["dpo", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
 
     @require_peft
     def test_dpo_lora_force_use_ref(self):
