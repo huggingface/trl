@@ -15,7 +15,7 @@
 Full training:
 python examples/scripts/stepwise_reward_modeling.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --dataset_name trl-lib/PLACEHOLDER \
+    --dataset_name trl-lib/zen \
     --output_dir Qwen2-0.5B-Reward \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
@@ -29,7 +29,7 @@ python examples/scripts/stepwise_reward_modeling.py \
 LoRA:
 python examples/scripts/stepwise_reward_modeling.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --dataset_name trl-lib/PLACEHOLDER \
+    --dataset_name trl-lib/zen \
     --output_dir Qwen2-0.5B-Reward-LoRA \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
@@ -104,7 +104,7 @@ if __name__ == "__main__":
     ##############
     # Load dataset
     ##############
-    dataset = load_dataset(args.dataset_name)
+    dataset = load_dataset(args.dataset_name, data_dir="conversational_stepwise_preference")
 
     ##########
     # Training
