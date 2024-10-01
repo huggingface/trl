@@ -51,7 +51,7 @@ kto_dataset_dict = {
 
 where the `prompt` contains the context inputs, `completion` contains the corresponding responses and `label` contains the corresponding flag that indicates if the generated completion is desired (`True`) or undesired (`False`).
 A prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays. 
-In theory, the dataset must contain at least one desirable and one undesirable completion; however, some people have success running KTO on _only_ desirable or undesirable data (in the latter case, it is best to use a conservative learning rate).
+In theory, the dataset must contain at least one desirable and one undesirable completion; however, some people have had success running KTO on _only_ desirable or undesirable data (in the latter case, it is best to use a conservative learning rate).
 
 
 ## Expected model format
