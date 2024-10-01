@@ -104,7 +104,7 @@ if __name__ == "__main__":
     # Training
     ################
     trainer = SFTTrainer(
-        model=model_config.model_name_or_path,
+        model=model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
