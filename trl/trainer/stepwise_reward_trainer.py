@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import os
 import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
@@ -30,6 +31,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
     DataCollatorForTokenClassification,
+    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
@@ -41,24 +43,28 @@ from .stepwise_reward_config import StepwiseRewardConfig
 from .utils import (
     compute_accuracy,
     trl_sanitze_kwargs_for_tagging,
+    generate_model_card,
 )
 
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    
+if is_wandb_available():
+    import wandb
 
 
 def _tokenize(
-    batch: Dict[str, List[Any]], tokenizer: PreTrainedTokenizerBase, max_length: int, post_step_separator: str
+    batch: Dict[str, List[Any]], tokenizer: PreTrainedTokenizerBase, max_length: int, step_separator: str
 ) -> Dict[str, List[Any]]:
     """Tokenize a batch from a stepwise preference modeling dataset."""
     new_examples = {"input_ids": [], "attention_mask": [], "labels": []}
 
-    post_step_tokens = tokenizer.encode(post_step_separator, add_special_tokens=False)
+    post_step_tokens = tokenizer.encode(step_separator, add_special_tokens=False)
 
     for prompt, steps, labels in zip(batch["prompt"], batch["stepwise_completion"], batch["stepwise_labels"]):
         if len(steps) != len(labels):
-            raise NotImplementedError("StepwiseRewardTrainer does not support training with unlabeled steps.")
+            raise ValueError("`stepwise_labels` and `stepwise_completion` should have the same length.")
         input_ids = []
         token_level_labels = []
 
@@ -191,10 +197,10 @@ class StepwiseRewardTrainer(Trainer):
                     "When the dataset isn't pretokenized, you should set `max_length` in the `StepwiseRewardConfig`"
                     " we have set it for you, but you should do it yourself in the future."
                 )
-            if args.post_step_separator is None:
-                args.post_step_separator = "\n"
+            if args.step_separator is None:
+                args.step_separator = "\n"
                 warnings.warn(
-                    "When the dataset isn't pretokenized, you should set `post_step_separator` in the `StepwiseRewardConfig`"
+                    "When the dataset isn't pretokenized, you should set `step_separator` in the `StepwiseRewardConfig`"
                     " we have set it for you to '\n', but you should do it yourself in the future."
                 )
             with PartialState().local_main_process_first():
@@ -202,7 +208,7 @@ class StepwiseRewardTrainer(Trainer):
                 tokenize_kwargs = {
                     "tokenizer": tokenizer,
                     "max_length": args.max_length,
-                    "post_step_separator": args.post_step_separator,
+                    "step_separator": args.step_separator,
                 }
                 train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs=chat_template_kwargs)
                 train_dataset = train_dataset.map(
@@ -238,6 +244,42 @@ class StepwiseRewardTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
+            
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="StepwiseReward",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
 
     @wraps(Trainer.push_to_hub)
     def push_to_hub(

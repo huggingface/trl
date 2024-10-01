@@ -46,12 +46,12 @@
       title: PPOv2
     - local: reward_trainer
       title: Reward
+    - local: stepwise_reward_trainer
+      title: StepwiseReward
     - local: rloo_trainer
       title: RLOO
     - local: sft_trainer
       title: SFT
-    - local: stepwise_reward_trainer
-      title: StepwiseReward
     - local: iterative_sft_trainer
       title: Iterative SFT
     - local: xpo_trainer
