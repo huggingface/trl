@@ -44,7 +44,7 @@ model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 train_dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
 
-training_args = DPOConfig(output_dir="dpo-qwen2", logging_steps=10)
+training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", logging_steps=10)
 trainer = DPOTrainer(model=model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
