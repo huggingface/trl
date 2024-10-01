@@ -29,7 +29,7 @@ class SCoREConfig(OnlineDPOConfig):
     # Prompts
     system_message: str = field(
         default="You are a helpful AI assistant. Provide accurate and concise responses.",
-        metadata={"help": "System message to be used in ChatML format"}
+        metadata={"help": "System message to be used in ChatML format"},
     )
 
     correction_instruction: str = field(
@@ -49,8 +49,8 @@ class SCoREConfig(OnlineDPOConfig):
         super().__post_init__()
 
         # Ensure that the correction instruction ends with a space
-        if not self.correction_instruction.endswith(" "):
-            self.correction_instruction += " "
+        if not self.correction_instruction.startswith(" "):
+            self.correction_instruction = " " + self.correction_instruction
 
         # Ensure that the prefixes end with a space
         if not self.first_attempt_prefix.endswith(" "):

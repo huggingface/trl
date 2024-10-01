@@ -21,7 +21,6 @@ from transformers import PreTrainedTokenizerBase
 
 from ..data_utils import maybe_apply_chat_template
 from .online_dpo_trainer import OnlineDPOTrainer
-from .score_config import SCoREConfig
 from .utils import get_reward
 
 
@@ -63,9 +62,7 @@ class SCoRETrainer(OnlineDPOTrainer):
         context_length = prompts["input_ids"].shape[1]
         first_completion = first_attempt[:, context_length:]
         correction_instruction = (
-            self.tokenizer.encode(
-                self.args.correction_instruction, return_tensors="pt", add_special_tokens=False
-            )
+            self.tokenizer.encode(self.args.correction_instruction, return_tensors="pt", add_special_tokens=False)
             .repeat(prompts["input_ids"].shape[0], 1)
             .to(first_attempt.device)
         )
@@ -100,10 +97,11 @@ class SCoRETrainer(OnlineDPOTrainer):
 
         # Compute reward for second attempt against ground truth
         second_attempt_reward = self._compute_rewards(second_attempt, prompts, ground_truth_completions)
+        ground_truth_reward = self._compute_rewards(ground_truth_completions, prompts, ground_truth_completions)
 
         # Compute loss
         kl_loss = self.beta * kl_div
-        reward_loss = -second_attempt_reward.mean()
+        reward_loss = -(second_attempt_reward - ground_truth_reward).mean()
 
         # reinforce loss
         loss = kl_loss + reward_loss
@@ -117,7 +115,7 @@ class SCoRETrainer(OnlineDPOTrainer):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
-        
+
         # Apply chat template and tokenize the input.
         # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
         batch_size = len(next(iter(inputs.values())))
@@ -198,7 +196,7 @@ class SCoRETrainer(OnlineDPOTrainer):
 
     @staticmethod
     def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> Dict[str, Any]:
-        """Tokenize a single row from a DPO specific dataset."""
+        """Tokenize a single row from a SFT specific dataset."""
         if not is_encoder_decoder:
             prompt_tokens = tokenizer(feature["prompt"], add_special_tokens=False)
             # Add BOS token to head of prompt. Avoid adding if it's already there
@@ -210,23 +208,13 @@ class SCoRETrainer(OnlineDPOTrainer):
 
             # Tokenize the ground-truth completion
             completion_tokens = tokenizer(feature["completion"], add_special_tokens=False)
-
-            # Combine prompt and completion
-            batch = {
-                "prompt_input_ids": prompt_tokens["input_ids"],
-                "prompt_attention_mask": prompt_tokens["attention_mask"],
-                "completion_input_ids": completion_tokens["input_ids"],
-                "completion_attention_mask": completion_tokens["attention_mask"],
-            }
         else:
             prompt_tokens = tokenizer(feature["prompt"], add_special_tokens=True)
             completion_tokens = tokenizer(feature["completion"], add_special_tokens=False)
 
-            batch = {
-                "prompt_input_ids": prompt_tokens["input_ids"],
-                "prompt_attention_mask": prompt_tokens["attention_mask"],
-                "completion_input_ids": completion_tokens["input_ids"],
-                "completion_attention_mask": completion_tokens["attention_mask"],
-            }
-
-        return batch
+        return {
+            "prompt_input_ids": prompt_tokens["input_ids"],
+            "prompt_attention_mask": prompt_tokens["attention_mask"],
+            "completion_input_ids": completion_tokens["input_ids"],
+            "completion_attention_mask": completion_tokens["attention_mask"],
+        }
