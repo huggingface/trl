@@ -59,22 +59,24 @@ Distributed across 8 GPUs, the training takes approximately 3 minutes. You can v
 
 ![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/dpo-qwen2-reward-margin.png)
 
-To see how the [trained model](https://huggingface.co/trl-lib/dpo-qwen2) performs, use the following code to generate completions:
+To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-DPO) performs, use the following code to generate completions:
 
-```python
->>> from transformers import pipeline
->>> generator = pipeline("text-generation", model="trl-lib/dpo-qwen2", device="cuda")
->>> question = "What is the best programming language?"
->>> output = generator([{"role": "user", "content": question}], max_new_tokens=200, return_full_text=False)[0]
->>> print(output["generated_text"])
-The choice of the best programming language depends on several factors, including your level of experience, skills, and interests, as well as your personal preferences and needs.
+<pre><code>
+<span style="color: blue;">&lt;quentin_gallouedec&gt;</span>:
+What is the best programming language?
 
-Some popular choices for beginners include Python, Java, JavaScript, and C++. These languages are widely used in various fields such as web development, data analysis, artificial intelligence, and game development.
+<span style="color: green;">&lt;trl-lib/Qwen2-0.5B-DPO&gt;</span>:
+Starting from v4.46, the `logits` model output will have the same type as the model (except at train time, where it will always be FP32).
+The best programming language for specific applications can vary depending on the use case and knowledge level of the programmer. Here are some general factors that can be used as input to choose the best programming language:
 
-For professionals or those with more advanced knowledge, languages like C++, Ruby, and Swift can be very useful. These languages have a strong community and offer better support for complex tasks.
+ 1. Ease of use: Some programming languages are more user-friendly than others, such as Python, Java, or Ruby. Python is popular due to its simplicity and great scalability.
+ 2. Versatility: The ability to work with a wide range of data structures and frameworks can define the language as versatile.
+ 3. Ease of learning: Different programming languages have different learning curves, so users must be willing to take some time to master one.
+ 4. Community support: The broader community of developers and enthusiasts in the selected programming language can provide great support and resources.
+ 5. Reusability: Languages that emphasize code reuse and can be easily modifiable can be more suitable for software development.
 
-Ultimately, the best programming language will depend on your specific needs and goals. It's recommended to try out different languages and see which one you find most suitable for your work.
-```
+The best programming language based on these factors is subjective and depends on what the programmer intends to accomplish.
+</code></pre>
 
 ## Expected dataset format
 
@@ -189,8 +191,8 @@ First install `unsloth` according to the [official documentation](https://github
 + model = FastLanguageModel.get_peft_model(model)
   train_dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
 
-- training_args = DPOConfig(output_dir="dpo-qwen2", logging_steps=10)
-+ training_args = DPOConfig(output_dir="dpo-qwen2", logging_steps=10, bf16=True)
+- training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", logging_steps=10)
++ training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", logging_steps=10, bf16=True)
   trainer = DPOTrainer(model=model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset)
   trainer.train()
 
