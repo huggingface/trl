@@ -73,7 +73,11 @@ RUNNING_NAME = "running.pt"
 
 
 def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
-    """Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions."""
+    """
+    Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions.
+    For best results, mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched 
+    outputs y used to estimate the rewards in that batch, just paired with different x.
+    """
     batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
     batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
     return batch
@@ -601,14 +605,16 @@ class KTOTrainer(Trainer):
 
             # Get KL datasets if needed
             if self.calculate_KL:
+                # do not multiply by number of gradient accumulation steps here; for every step taken
+                # y' used to calculate KL should be same as the regular completions y
                 total_batch_size = (
                     max(torch.cuda.device_count(), 1)
                     * args.per_device_train_batch_size
-                    * args.gradient_accumulation_steps
                 )
+
                 if total_batch_size <= 1:
                     raise ValueError(
-                        "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
+                        "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
                     )
 
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
