@@ -81,12 +81,12 @@ The *format* of a dataset refers to how the data is structured, typically catego
     <td>
       <pre><code>{"prompt": "Two apples and one orange cost 1.5 euros. Four apples and one orange cost 2.5 euros. What's the price of an apple?",
  "stepwise_completion": ["Let a represent the price of an apple.", "Let b represent the price of an orange"],
- "stepwise_labels": ["True", "True"]}</code></pre>
+ "stepwise_labels": [True, True]}</code></pre>
     </td>
     <td>
       <pre><code>{"prompt": [{"role": "system", "content": "You are a very skilled mathematician."}, {"role": "user", "content": "Two apples and one orange cost 1.5 euros. Four apples and one orange cost 2.5 euros. What's the price of an apple?"}],
  "stepwise_completion": ["Let a represent the price of an apple.", "Let b represent the price of an orange"],
- "stepwise_labels": ["True", "True"]}</code></pre>
+ "stepwise_labels": [True, True]}</code></pre>
     </td>
   </tr>
 </table>
@@ -206,7 +206,7 @@ unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "
 A stepwise preference dataset is similar to an unpaired preference dataset but instead of having a single `"completion"` and `"label"`, it includes a `"stepwise_completion"` column that splits the completion into a list of steps and a `"stepwise_labels"` indicating whether each step is correct or not.
 
 ```python
-steps_preference_example = {"prompt": "Two apples and one orange cost 1.5 euros. Four apples and one orange cost 2.5 euros. What's the price of an apple?", "stepwise_completion": ["Let a represent the price of an apple.", "Let b represent the price of an orange"], "stepwise_labels": ["True", "True"]}
+steps_preference_example = {"prompt": "Two apples and one orange cost 1.5 euros. Four apples and one orange cost 2.5 euros. What's the price of an apple?", "stepwise_completion": ["Let a represent the price of an apple.", "Let b represent the price of an orange"], "stepwise_labels": [True, True]}
 ```
 
 ## Which dataset format to use?

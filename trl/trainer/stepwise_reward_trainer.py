@@ -49,7 +49,7 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-    
+
 if is_wandb_available():
     import wandb
 
@@ -244,7 +244,7 @@ class StepwiseRewardTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
-            
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
