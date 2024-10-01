@@ -439,7 +439,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 num_train_epochs=2,
@@ -466,7 +465,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 num_train_epochs=2,
@@ -518,7 +516,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -545,7 +542,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -572,7 +568,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -596,7 +591,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
