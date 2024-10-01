@@ -89,6 +89,7 @@ class KTOConfig(TrainingArguments):
     truncation_mode: str = "keep_end"
     generate_during_eval: bool = False
     is_encoder_decoder: Optional[bool] = None
+    disable_dropout: bool = True
     precompute_ref_log_probs: bool = False
     model_init_kwargs: Optional[Dict[str, Any]] = None
     ref_model_init_kwargs: Optional[Dict[str, Any]] = None
