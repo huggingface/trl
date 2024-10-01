@@ -1380,9 +1380,9 @@ def generate_model_card(
     tags: Union[str, List[str], None],
     wandb_url: Optional[str],
     trainer_name: str,
-    trainer_citation: Optional[str],
-    paper_title: Optional[str],
-    paper_id: Optional[str],
+    trainer_citation: Optional[str] = None,
+    paper_title: Optional[str] = None,
+    paper_id: Optional[str] = None,
 ) -> ModelCard:
     """
     Generate a `ModelCard` from a template.
@@ -1402,11 +1402,11 @@ def generate_model_card(
             Weights & Biases run URL.
         trainer_name (`str`):
             Trainer name.
-        trainer_citation (`str` or `None`):
+        trainer_citation (`str` or `None`, defaults to `None`):
             Trainer citation as a BibTeX entry.
-        paper_title (`str` or `None`):
+        paper_title (`str` or `None`, defaults to `None`):
             Paper title.
-        paper_id (`str` or `None`):
+        paper_id (`str` or `None`, defaults to `None`):
             ArXiv paper ID as `YYMM.NNNNN`.
 
     Returns:
