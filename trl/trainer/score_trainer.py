@@ -33,6 +33,7 @@ class SCoRETrainer(OnlineDPOTrainer):
             {
                 "kl_div/first_attempt": [],
                 "reward/reward_diff": [],
+                "loss/policy": [],
             }
         )
 
@@ -89,24 +90,32 @@ class SCoRETrainer(OnlineDPOTrainer):
         # Create a mask for non-padding tokens
         non_padding_mask = (first_attempt["input_ids"][:, context_length:] != self.tokenizer.pad_token_id).float()
 
-        kl_div = F.kl_div(ref_first_attempt_logprobs, first_attempt_logprobs, reduction="none", log_target=True).sum(
-            -1
-        )
-        kl_div = (kl_div * non_padding_mask).sum() / non_padding_mask.sum()
+        # Gather the log probabilities of the actual tokens
+        first_attempt_tokens = first_attempt["input_ids"][:, context_length:]
+        first_attempt_logprobs = torch.gather(first_attempt_logprobs, 2, first_attempt_tokens.unsqueeze(-1)).squeeze(-1)
+        ref_first_attempt_logprobs = torch.gather(ref_first_attempt_logprobs, 2, first_attempt_tokens.unsqueeze(-1)).squeeze(-1)
+
+        # Mask out padding tokens
+        first_attempt_logprobs = torch.masked_fill(first_attempt_logprobs, ~non_padding_mask.bool(), 0)
+        ref_first_attempt_logprobs = torch.masked_fill(ref_first_attempt_logprobs, ~non_padding_mask.bool(), 0)
+
+        # Compute KL divergence
+        kl_div = (first_attempt_logprobs - ref_first_attempt_logprobs) * non_padding_mask
+        kl_div = kl_div.sum(-1).mean()
 
         # Compute reward for second attempt against ground truth
         reward_diff = self._compute_rewards(second_attempt, prompts, ground_truth_completions)
 
-        # Compute loss
+        # Compute REINFORCE loss with KL penalty
+        policy_loss = -(first_attempt_logprobs.sum(-1) * reward_diff).mean()
         kl_loss = self.beta * kl_div
-        reward_loss = -reward_diff.mean()
 
-        # reinforce loss
-        loss = kl_loss + reward_loss
+        loss = policy_loss + kl_loss
 
         # Log statistics
         self.stats["kl_div/first_attempt"].append(kl_div.mean().item())
         self.stats["reward/reward_diff"].append(reward_diff.mean().item())
+        self.stats["loss/policy"].append(policy_loss.item())
 
         return loss
 
