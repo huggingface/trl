@@ -31,9 +31,8 @@ class SCoRETrainer(OnlineDPOTrainer):
         # Add SCoRE-specific statistics
         self.stats.update(
             {
-                "loss/stage1": [],
                 "kl_div/first_attempt": [],
-                "reward/second_attempt": [],
+                "reward/reward_diff": [],
             }
         )
 
@@ -96,20 +95,18 @@ class SCoRETrainer(OnlineDPOTrainer):
         kl_div = (kl_div * non_padding_mask).sum() / non_padding_mask.sum()
 
         # Compute reward for second attempt against ground truth
-        second_attempt_reward = self._compute_rewards(second_attempt, prompts, ground_truth_completions)
-        ground_truth_reward = self._compute_rewards(ground_truth_completions, prompts, ground_truth_completions)
+        reward_diff = self._compute_rewards(second_attempt, prompts, ground_truth_completions)
 
         # Compute loss
         kl_loss = self.beta * kl_div
-        reward_loss = -(second_attempt_reward - ground_truth_reward).mean()
+        reward_loss = -reward_diff.mean()
 
         # reinforce loss
         loss = kl_loss + reward_loss
 
         # Log statistics
-        self.stats["loss/stage1"].append(loss.item())
         self.stats["kl_div/first_attempt"].append(kl_div.mean().item())
-        self.stats["reward/second_attempt"].append(second_attempt_reward.mean().item())
+        self.stats["reward/reward_diff"].append(reward_diff.mean().item())
 
         return loss
 
@@ -170,8 +167,12 @@ class SCoRETrainer(OnlineDPOTrainer):
         )
 
         if self.args.missing_eos_penalty is not None:
-            contain_eos = torch.any(completions["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
-            generated_scores[~contain_eos] -= self.args.missing_eos_penalty
+            completion_contain_eos = torch.any(completions["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
+            generated_scores[~completion_contain_eos] -= self.args.missing_eos_penalty
+            ground_truth_contain_eos = torch.any(
+                ground_truth_completions["input_ids"] == self.tokenizer.eos_token_id, dim=-1
+            )
+            ground_truth_scores[~ground_truth_contain_eos] -= self.args.missing_eos_penalty
 
         return generated_scores - ground_truth_scores
 
