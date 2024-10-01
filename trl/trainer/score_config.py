@@ -27,8 +27,13 @@ class SCoREConfig(OnlineDPOConfig):
     """
 
     # Prompts
+    system_message: str = field(
+        default="You are a helpful AI assistant. Provide accurate and concise responses.",
+        metadata={"help": "System message to be used in ChatML format"}
+    )
+
     correction_instruction: str = field(
-        default="The previous response may contain errors. Please review and correct any mistakes: ",
+        default="The previous response may contain errors. Please review and correct any mistakes.",
         metadata={"help": "Instruction for self-correction in the second attempt"},
     )
 

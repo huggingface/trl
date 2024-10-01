@@ -19,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import PreTrainedTokenizerBase
 
+from ..data_utils import maybe_apply_chat_template
 from .online_dpo_trainer import OnlineDPOTrainer
 from .score_config import SCoREConfig
 from .utils import get_reward
@@ -27,7 +28,6 @@ from .utils import get_reward
 class SCoRETrainer(OnlineDPOTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.score_config = SCoREConfig()
 
         # Add SCoRE-specific statistics
         self.stats.update(
@@ -39,23 +39,23 @@ class SCoRETrainer(OnlineDPOTrainer):
         )
 
     def _generate_completions(self, model, prompts):
-        with self.accelerator.unwrap_model(model) as unwrapped_model:
-            # Generate first attempt
-            first_attempt = unwrapped_model.generate(
-                input_ids=prompts["input_ids"],
-                attention_mask=prompts["attention_mask"],
-                generation_config=self.generation_config,
-            )
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        # Generate first attempt
+        first_attempt = unwrapped_model.generate(
+            input_ids=prompts["input_ids"],
+            attention_mask=prompts["attention_mask"],
+            generation_config=self.generation_config,
+        )
 
-            # Prepare input for second attempt
-            second_attempt_prompt = self._prepare_second_attempt_prompt(prompts, first_attempt)
+        # Prepare input for second attempt
+        second_attempt_prompt = self._prepare_second_attempt_prompt(prompts, first_attempt)
 
-            # Generate second attempt
-            second_attempt = unwrapped_model.generate(
-                input_ids=second_attempt_prompt["input_ids"],
-                attention_mask=second_attempt_prompt["attention_mask"],
-                generation_config=self.generation_config,
-            )
+        # Generate second attempt
+        second_attempt = unwrapped_model.generate(
+            input_ids=second_attempt_prompt["input_ids"],
+            attention_mask=second_attempt_prompt["attention_mask"],
+            generation_config=self.generation_config,
+        )
 
         return first_attempt, second_attempt
 
@@ -64,7 +64,7 @@ class SCoRETrainer(OnlineDPOTrainer):
         first_completion = first_attempt[:, context_length:]
         correction_instruction = (
             self.tokenizer.encode(
-                self.score_config.correction_instruction, return_tensors="pt", add_special_tokens=False
+                self.args.correction_instruction, return_tensors="pt", add_special_tokens=False
             )
             .repeat(prompts["input_ids"].shape[0], 1)
             .to(first_attempt.device)
@@ -102,7 +102,7 @@ class SCoRETrainer(OnlineDPOTrainer):
         second_attempt_reward = self._compute_rewards(second_attempt, prompts, ground_truth_completions)
 
         # Compute loss
-        kl_loss = self.score_config.beta * kl_div
+        kl_loss = self.beta * kl_div
         reward_loss = -second_attempt_reward.mean()
 
         # reinforce loss
@@ -117,10 +117,16 @@ class SCoRETrainer(OnlineDPOTrainer):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         model.train()
-        ref_model = self.ref_model
-        ref_model.eval()
-
+        
+        # Apply chat template and tokenize the input.
+        # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
+        batch_size = len(next(iter(inputs.values())))
+        inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
+        inputs = [maybe_apply_chat_template(x, self.tokenizer) for x in inputs]
+        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.tokenizer) for x in inputs]
+        inputs = self.data_collator(inputs)
         inputs = self._prepare_inputs(inputs)
+
         prompts = {
             "input_ids": inputs["prompt_input_ids"],
             "attention_mask": inputs["prompt_attention_mask"],
@@ -139,7 +145,7 @@ class SCoRETrainer(OnlineDPOTrainer):
 
         # Compute Stage I loss
         loss = self._compute_stage1_loss(
-            model, ref_model, first_attempt_data, second_attempt_data, prompts, ground_truth_completions
+            model, self.ref_model, first_attempt_data, second_attempt_data, prompts, ground_truth_completions
         )
 
         if self.args.n_gpu > 1:
