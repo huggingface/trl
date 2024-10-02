@@ -47,7 +47,6 @@ python examples/scripts/dpo.py \
 """
 
 import torch
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -60,8 +59,6 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    maybe_apply_chat_template,
-    maybe_extract_prompt,
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
@@ -114,12 +111,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(maybe_extract_prompt, num_proc=training_args.dataset_num_proc)
-        dataset = dataset.map(
-            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
-        )
 
     ##########
     # Training
