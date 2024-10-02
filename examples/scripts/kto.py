@@ -98,7 +98,7 @@ if __name__ == "__main__":
     dataset = load_dataset(script_args.dataset_name)
 
     # If needed, reformat a DPO-formatted dataset (prompt, chosen, rejected) to a KTO-format (prompt, completion, label)
-    dataset = maybe_unpair_preference_dataset(dataset, num_proc=training_args.dataset_num_proc)
+    # dataset = maybe_unpair_preference_dataset(dataset, num_proc=training_args.dataset_num_proc)
 
     # Apply chat template
     def format_dataset(example):
@@ -106,8 +106,8 @@ if __name__ == "__main__":
             example["prompt"] = tokenizer.apply_chat_template(example["prompt"], tokenize=False)
             example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
         else:
-            example["prompt"] = tokenizer.apply_chat_template(example["completion"][:-1], tokenize=False)
-            example["completion"] = tokenizer.apply_chat_template([example["completion"][-1]], tokenize=False)
+            example["prompt"] = tokenizer.apply_chat_template(example["prompt"], tokenize=False)
+            example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
         return example
 
     # Compute that only on the main process for faster data processing.
