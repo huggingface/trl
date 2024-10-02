@@ -1148,7 +1148,7 @@ def get_calibrated_reward(
         model, concatenated_responses, pad_token_id, context_length
     )
 
-    reward_logits = reward_logits[:len_responses] - reward_logits[len_responses:]
+    reward_logits = torch.nn.functional.sigmoid(reward_logits[:len_responses] - reward_logits[len_responses:])
     # computes the calibrated rewards as done in eqn (5) of the CGPO paper: https://arxiv.org/pdf/2409.20370
     final_rewards = torch.nn.functional.sigmoid(final_rewards[:len_responses] - final_rewards[len_responses:])
     sequence_lengths = sequence_lengths[:len_responses]
