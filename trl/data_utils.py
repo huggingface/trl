@@ -387,3 +387,87 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
         if (chosen_conv and prompt_conv) or (not chosen_conv and not prompt_conv):
             return example
     return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
+
+
+def pack_examples(examples: Dict[str, List[List]], seq_length: int) -> Dict[str, List[List]]:
+    """
+    Pack examples into chunks of size `seq_length`.
+
+    Args:
+        examples (`Dict[str, List[List]]`):
+            Dictionary of examples with keys as strings and values as lists of lists.
+        seq_length (`int`):
+            Maximum sequence length.
+
+    Returns:
+        `Dict[str, List[List]]`: Dictionary of examples with keys as strings and values as lists of lists.
+
+    Example:
+
+    ```python
+    >>> from trl import pack_examples
+    >>> examples = {
+    ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+    ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+    ... }
+    >>> pack_examples(examples, seq_length=5)
+    {'input_ids': [[1, 2, 3, 4, 5], [6, 7, 8]], 'attention_mask': [[0, 1, 1, 0, 0], [1, 1, 1]]}
+    >>> pack_examples(examples, seq_length=2)
+    {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
+    ```
+    """
+    # Join  all the values into a single list
+    examples = {k: sum(v, []) for k, v in examples.items()}
+    # Split the values into chunks of size seq_length
+    examples = {k: [v[i : i + seq_length] for i in range(0, len(v), seq_length)] for k, v in examples.items()}
+    return examples
+
+
+def pack_dataset(
+    dataset: Dataset,
+    seq_length: int,
+    batch_size: int = 1000,
+    num_proc: Optional[int] = None,
+    desc: Optional[str] = None,
+) -> Dataset:
+    """
+    Pack a dataset into chunks of size `seq_length`.
+
+    Args:
+        dataset (`Dataset`):
+            Dataset to pack.
+        seq_length (`int`):
+            Sequence length.
+        batch_size (`int`, *optional*, defaults to `1000`):
+            Batch size for packing the dataset.
+        num_proc (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes to use for processing the dataset.
+        desc (`Optional[str]`, *optional*, defaults to `None`):
+            Description for the progress bar.
+
+    Returns:
+        `Dataset`: Packed dataset.
+
+    Example:
+
+    ```python
+    >>> from datasets import Dataset
+    >>> from trl import pack_dataset
+    >>> dataset = Dataset.from_dict({
+    ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+    ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+    ... })
+    >>> pack_dataset(dataset, seq_length=5).to_dict()
+    {'input_ids': [[1, 2, 3, 4, 5], [6, 7, 8]], 'attention_mask': [[0, 1, 1, 0, 0], [1, 1, 1]]}
+    >>> pack_dataset(dataset, seq_length=2).to_dict()
+    {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
+    ```
+    """
+    return dataset.map(
+        pack_examples,
+        batched=True,
+        batch_size=batch_size,
+        fn_kwargs={"seq_length": seq_length},
+        num_proc=num_proc,
+        desc=desc,
+    )
