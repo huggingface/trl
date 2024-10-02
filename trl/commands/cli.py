@@ -31,11 +31,10 @@ from .. import (
     is_liger_kernel_available,
     is_llmblender_available,
 )
-from .cli_utils import get_git_commit_hash
+from .cli_utils import get_git_commit_hash, populate_supported_commands
 
 
-SUPPORTED_COMMANDS = ["sft", "dpo", "chat", "kto", "env"]
-
+SUPPORTED_COMMANDS = populate_supported_commands()
 
 def print_env():
     accelerate_config = accelerate_config_str = "not found"
