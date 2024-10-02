@@ -18,7 +18,6 @@ import inspect
 import logging
 import os
 import glob
-import functools
 import subprocess
 import sys
 from pathlib import Path
@@ -310,7 +309,6 @@ def get_git_commit_hash(package_name):
         return f"Error: {str(e)}"
 
 
-@functools.cache
 def populate_supported_commands():
     # Path to the script examples directory
     trl_dir = Path(__file__).resolve().parent.parent.parent
