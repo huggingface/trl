@@ -268,7 +268,7 @@ class UnpairPreferenceDatasetTester(unittest.TestCase):
 
 
 class ExtractPromptTester(unittest.TestCase):
-    example_implicit_prompt = {
+    example_implicit_prompt_conversational = {
         "chosen": [
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
@@ -279,7 +279,7 @@ class ExtractPromptTester(unittest.TestCase):
         ],
     }
 
-    example_explicit_prompt = {
+    example_explicit_prompt_conversational = {
         "prompt": [
             {"role": "user", "content": "What color is the sky?"},
         ],
@@ -291,30 +291,68 @@ class ExtractPromptTester(unittest.TestCase):
         ],
     }
 
-    def test_extract_prompt(self):
+    example_implicit_prompt_standard = {
+        "chosen": "The sky is blue.",
+        "rejected": "The sky is green.",
+    }
+
+    example_explicit_prompt_standard = {
+        "prompt": "The sky is",
+        "chosen": " blue.",
+        "rejected": " green.",
+    }
+
+    def test_extract_prompt_conversational(self):
         # Test that the prompt is correctly extracted from the dataset
-        example_extracted_prompt = extract_prompt(self.example_implicit_prompt)
+        example_extracted_prompt = extract_prompt(self.example_implicit_prompt_conversational)
         self.assertEqual(
             example_extracted_prompt,
-            self.example_explicit_prompt,
+            self.example_explicit_prompt_conversational,
             "The prompt is not correctly extracted from the dataset.",
         )
 
-    def test_maybe_extract_prompt(self):
+    def test_maybe_extract_prompt_conversational(self):
         # Test that the prompt is correctly extracted from the dataset with maybe_extract_prompt
-        example_extracted_prompt = maybe_extract_prompt(self.example_implicit_prompt)
+        example_extracted_prompt = maybe_extract_prompt(self.example_implicit_prompt_conversational)
         self.assertEqual(
             example_extracted_prompt,
-            self.example_explicit_prompt,
+            self.example_explicit_prompt_conversational,
             "The prompt is not correctly extracted from the dataset.",
         )
 
-    def test_maybe_extract_prompt_already_explicit(self):
+    def test_maybe_extract_prompt_conversational_already_explicit(self):
         # Test that the prompt remains unchanged with maybe_extract_prompt
-        example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt)
+        example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt_conversational)
         self.assertEqual(
             example_extracted_prompt,
-            self.example_explicit_prompt,
+            self.example_explicit_prompt_conversational,
+            "The prompt should remain unchanged.",
+        )
+
+    def test_extract_prompt_standard(self):
+        # Test that the prompt is correctly extracted from the dataset
+        example_extracted_prompt = extract_prompt(self.example_implicit_prompt_standard)
+        self.assertEqual(
+            example_extracted_prompt,
+            self.example_explicit_prompt_standard,
+            "The prompt is not correctly extracted from the dataset.",
+        )
+
+    def test_maybe_extract_prompt_standard(self):
+        # Test that the prompt is correctly extracted from the dataset with maybe_extract_prompt
+        example_extracted_prompt = maybe_extract_prompt(self.example_implicit_prompt_standard)
+        self.assertEqual(
+            example_extracted_prompt,
+            self.example_explicit_prompt_standard,
+            "The prompt is not correctly extracted from the dataset.",
+        )
+
+    def test_maybe_extract_prompt_standard_already_explicit(self):
+        # Test that the prompt remains unchanged with maybe_extract_prompt
+        example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt_standard)
+        self.assertEqual(
+            example_extracted_prompt,
+            self.example_explicit_prompt_standard,
             "The prompt should remain unchanged.",
         )
 
