@@ -232,6 +232,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             batch["labels"] = batch["labels"][attn_mask.bool()].unsqueeze(0)
             batch["labels"][batch["position_ids"] == 0] = self.ignore_index
 
+            # Calculate cumulative sequence lengths for queries and keys to prevent graph breaks during further computations.
             flattened_position_ids = batch["position_ids"].flatten()
             indices_q = torch.arange(
                 flattened_position_ids.size(0), device=flattened_position_ids.device, dtype=torch.int32
@@ -246,7 +247,8 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             )
             batch["cu_seq_lens_k"] = batch["cu_seq_lens_q"]
 
-            batch["max_length_k"] = flattened_position_ids.max() + 1
+            # Determine maximum sequence lengths to prevent graph breaks during further computations.
+            batch["max_length_k"] = flattened_position_ids.max().item() + 1
             batch["max_length_q"] = batch["max_length_k"]
 
         return batch
