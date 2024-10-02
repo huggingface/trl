@@ -15,12 +15,18 @@
 import unittest
 
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl.trainer.model_config import ModelConfig
-from trl.trainer.utils import decode_and_strip_padding, generate_model_card, get_peft_config, pad
+from trl.trainer.utils import (
+    decode_and_strip_padding,
+    generate_model_card,
+    get_peft_config,
+    pad,
+    get_calibrated_reward,
+)
 
 
 if is_peft_available():
@@ -170,5 +176,26 @@ class TestGenerateModelCard(unittest.TestCase):
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "My Trainer" in card_text
 
-class TestGetReward(unittest.TestCase):
-    pass
+
+class TestGetCalibratedReward(unittest.TestCase):
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def test_basic_functionality(self):
+        textual_query_responses = ["The color of the sky is blue.", "The color of the sun is yellow."]
+        textual_baseline_responses = [
+            "The color of the sky is dependent of the color of the sun.",
+            "The color of the sun is dependent of the color of the sky.",
+        ]
+
+        query_responses = self.tokenizer(textual_query_responses, padding=True, return_tensors="pt")["input_ids"]
+        baseline_responses = self.tokenizer(textual_baseline_responses, padding=True, return_tensors="pt")["input_ids"]
+
+        _, scores, _ = get_calibrated_reward(
+            self.model, query_responses, baseline_responses, self.tokenizer.pad_token_id, 5
+        )
+
+        self.assertTrue(torch.all((scores >= 0) & (scores <= 1)).item(), "At least one element is not between 0 and 1")

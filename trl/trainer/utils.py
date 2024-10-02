@@ -1053,7 +1053,10 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long):
 
 
 def get_reward(
-    model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int, baseline_responses: torch.Tensor = None
+    model: torch.nn.Module,
+    query_responses: torch.Tensor,
+    pad_token_id: int,
+    context_length: int,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Computes the reward logits and the rewards for a given model and query responses.
@@ -1067,8 +1070,6 @@ def get_reward(
             The token ID representing the pad token.
         context_length (`int`):
             The length of the context in the query responses.
-        baseline_responses (`torch.Tensor`):
-            The tensor containing the baseline responses for reward calibration. See section 4.1.1 of https://arxiv.org/pdf/2409.20370 for more information.
 
     Returns:
         tuple:
@@ -1102,6 +1103,62 @@ def get_reward(
         ].squeeze(-1),
         sequence_lengths,
     )
+
+
+def get_calibrated_reward(
+    model: torch.nn.Module,
+    query_responses: torch.Tensor,
+    baseline_responses: torch.Tensor,
+    pad_token_id: int,
+    context_length: int,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Computes the reward logits and the calibrated rewards for a given model, query responses and baseline responses.
+    Please refer to section 4.1.1 eqn (5) of the CGPO paper https://arxiv.org/pdf/2409.20370
+
+    Args:
+        model (`torch.nn.Module`):
+            The model used to compute the reward logits.
+        query_responses (`torch.Tensor`):
+            The tensor containing the query responses.
+        baseline_responses (`torch.Tensor`):
+            The tensor containing the baseline responses.
+        pad_token_id (`int`):
+            The token ID representing the pad token.
+        context_length (`int`):
+            The length of the context in the query responses.
+        baseline_responses (`torch.Tensor`):
+            The tensor containing the baseline responses for reward calibration. See section 4.1.1 of https://arxiv.org/pdf/2409.20370 for more information.
+
+    Returns:
+        tuple:
+            - `reward_logits` (`torch.Tensor`):
+                The calibrated logits for the reward model.
+            - `final_rewards` (`torch.Tensor`):
+                The final calibrated rewards for each query response.
+            - `sequence_lengths` (`torch.Tensor`):
+                The lengths of the sequences in the query responses.
+    """
+    len_responses = query_responses.shape[0]
+    max_length = max(query_responses.shape[1], baseline_responses.shape[1])
+    query_responses = pad_to_length(query_responses, max_length, pad_value=pad_token_id)
+    baseline_responses = pad_to_length(baseline_responses, max_length, pad_value=pad_token_id)
+
+    concatenated_responses = torch.cat(
+        (query_responses, baseline_responses),
+        dim=0,
+    )
+
+    reward_logits, final_rewards, sequence_lengths = get_reward(
+        model, concatenated_responses, pad_token_id, context_length
+    )
+
+    reward_logits = reward_logits[:len_responses] - reward_logits[len_responses:]
+    # computes the calibrated rewards as done in eqn (5) of the CGPO paper: https://arxiv.org/pdf/2409.20370
+    final_rewards = torch.nn.functional.sigmoid(final_rewards[:len_responses] - final_rewards[len_responses:])
+    sequence_lengths = sequence_lengths[:len_responses]
+
+    return reward_logits, final_rewards, sequence_lengths
 
 
 def forward(

@@ -95,7 +95,7 @@ _import_structure = {
         "XPOTrainer",
     ],
     "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
+    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config", "get_calibrated_reward"],
 }
 
 try:
@@ -190,7 +190,7 @@ if TYPE_CHECKING:
         XPOTrainer,
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
-    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
+    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config, get_calibrated_reward
 
     try:
         if not is_diffusers_available():
