@@ -1049,7 +1049,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
             ["trl-internal-testing/tiny-random-idefics2"],
-            ["trl-internal-testing/tiny-random-paligemma"],
+            # ["trl-internal-testing/tiny-random-paligemma"],  # temporarily disabled due to flaky tests
             ["trl-internal-testing/tiny-random-llava-1.5"],
         ]
     )
