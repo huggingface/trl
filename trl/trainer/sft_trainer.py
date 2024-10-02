@@ -511,7 +511,7 @@ class SFTTrainer(Trainer):
         dataset,
         dataset_text_field: str,
         max_seq_length,
-        formatting_func: Optional[Callable]=None,
+        formatting_func: Optional[Callable] = None,
         add_special_tokens=True,
         remove_unused_columns=True,
     ):
@@ -566,7 +566,7 @@ class SFTTrainer(Trainer):
         max_seq_length,
         num_of_sequences,
         chars_per_token,
-        formatting_func:Optional[Callable]=None,
+        formatting_func: Optional[Callable] = None,
         append_concat_token=True,
         add_special_tokens=True,
     ):
@@ -603,7 +603,6 @@ class SFTTrainer(Trainer):
                 "Make sure that your dataset has enough samples to at least yield one packed sequence."
             ) from exc
         return packed_dataset
-
 
     def create_model_card(
         self,
