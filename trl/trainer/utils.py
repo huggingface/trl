@@ -233,11 +233,15 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             batch["labels"][batch["position_ids"] == 0] = self.ignore_index
 
             flattened_position_ids = batch["position_ids"].flatten()
-            indices_q = torch.arange(flattened_position_ids.size(0), device=flattened_position_ids.device, dtype=torch.int32)
+            indices_q = torch.arange(
+                flattened_position_ids.size(0), device=flattened_position_ids.device, dtype=torch.int32
+            )
             batch["cu_seq_lens_q"] = torch.cat(
                 (
                     indices_q[flattened_position_ids == 0],
-                    torch.tensor(flattened_position_ids.size(), device=flattened_position_ids.device, dtype=torch.int32),
+                    torch.tensor(
+                        flattened_position_ids.size(), device=flattened_position_ids.device, dtype=torch.int32
+                    ),
                 )
             )
             batch["cu_seq_lens_k"] = batch["cu_seq_lens_q"]
