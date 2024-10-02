@@ -1053,7 +1053,7 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long):
 
 
 def get_reward(
-    model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
+    model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int, baseline_responses: torch.Tensor = None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Computes the reward logits and the rewards for a given model and query responses.
@@ -1067,6 +1067,8 @@ def get_reward(
             The token ID representing the pad token.
         context_length (`int`):
             The length of the context in the query responses.
+        baseline_responses (`torch.Tensor`):
+            The tensor containing the baseline responses for reward calibration. See section 4.1.1 of https://arxiv.org/pdf/2409.20370 for more information.
 
     Returns:
         tuple:

@@ -169,3 +169,6 @@ class TestGenerateModelCard(unittest.TestCase):
         assert "my_model" in card_text
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "My Trainer" in card_text
+
+class TestGetReward(unittest.TestCase):
+    pass
