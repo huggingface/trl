@@ -68,7 +68,7 @@ class TrainerArgTester(unittest.TestCase):
                 max_density_ratio=20.0,
             )
             trainer = BCOTrainer(
-                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
