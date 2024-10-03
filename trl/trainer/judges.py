@@ -132,8 +132,8 @@ class BasePairwiseJudge(BaseJudge):
             In such cases, the caller should handle these invalid indices appropriately, possibly by implementing fallback logic or error handling.
         """
         raise NotImplementedError("Judge subclasses must implement the `judge` method.")
-    
-    
+
+
 class BaseConstraintJudge(BaseJudge):
     """
     Base class for pairwise judges.
@@ -143,7 +143,7 @@ class BaseConstraintJudge(BaseJudge):
     def judge(self, prompts: List[str], completions: List[str], shuffle_order: bool = True) -> List[int]:
         """
         Judge the completion for a given prompt. Used to assess if a completion satisfies a constraint.
-        
+
         This base class should be used to implement constraint-based evaluation as done in section 4.1.4 of the CGPO paper (https://arxiv.org/pdf/2409.20370).
         It is relevant for assessing whether or not a prompt completion pair satisfies a specific contraint.
 
@@ -164,15 +164,16 @@ class BaseConstraintJudge(BaseJudge):
         """
         raise NotImplementedError("Judge subclasses must implement the `judge` method.")
 
+
 class RandomConstraintJudge(BaseConstraintJudge):
     """
     Random binary judge, for testing purposes.
     """
 
     def judge(self, prompts, completions, shuffle_order=True):
-        return [random.choice([0,1]) for _ in len(prompts)]
-    
-    
+        return [random.choice([0, 1]) for _ in len(prompts)]
+
+
 class RandomRankJudge(BaseRankJudge):
     """
     Random rank, for testing purposes.
@@ -343,25 +344,25 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
         # Return the ranks
         return ranks
 
-    
+
 class MixtureOfConstraintJudges(BaseConstraintJudge):
     """
     Unify the decision of multiple BaseConstraintJudge.
 
     This class returns 0 ("violated") if it fails on any of the constraint judges (ie a judge returns 0 or -1) and returns 1 ("satisfied") otherwise.
-    
+
     It is an implementation of the Mixture of Judges as described in the CGPO paper: https://arxiv.org/pdf/2409.20370
-    
+
     Args:
         judges (List[BaseConstraintJudge]): A list of BaseConstraintJudge.
     """
-    
+
     def __init__(self, judges: List[BaseConstraintJudge]):
         self.judges = judges
 
     def judge(self, prompts: List[str], completions: List[str], shuffle_order: bool = True) -> List[int]:
         all_constraint_judgments = [judge.judge(prompts, completions, shuffle_order) for judge in self.judges]
-        
+
         return [
             1 if all(constraint_judgment == 1 for constraint_judgment in constraint_judgments) else 0
             for constraint_judgments in zip(*all_constraint_judgments)
