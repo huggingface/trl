@@ -279,6 +279,7 @@ class CPOTrainer(Trainer):
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
+        self.processing_class = processing_class
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
             warnings.warn(
@@ -309,13 +310,9 @@ class CPOTrainer(Trainer):
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # tokenize the dataset
-            train_dataset = train_dataset.map(
-                self.tokenize_row, fn_kwargs={"processing_class": processing_class}, num_proc=args.dataset_num_proc
-            )
+            train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    self.tokenize_row, fn_kwargs={"processing_class": processing_class}, num_proc=args.dataset_num_proc
-                )
+                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
 
         super().__init__(
             model=model,
@@ -340,7 +337,7 @@ class CPOTrainer(Trainer):
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
 
-    def build_tokenized_answer(self, prompt, answer, processing_class):
+    def build_tokenized_answer(self, prompt, answer):
         """
         Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
         It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
@@ -348,8 +345,8 @@ class CPOTrainer(Trainer):
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
 
-        full_tokenized = processing_class(prompt + answer, add_special_tokens=False)
-        prompt_input_ids = processing_class(prompt, add_special_tokens=False)["input_ids"]
+        full_tokenized = self.processing_class(prompt + answer, add_special_tokens=False)
+        prompt_input_ids = self.processing_class(prompt, add_special_tokens=False)["input_ids"]
 
         answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
         answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
@@ -390,12 +387,7 @@ class CPOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
-    def tokenize_row(
-        self,
-        feature,
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
-        model: Optional[Union[PreTrainedModel, nn.Module]] = None,
-    ) -> Dict:
+    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
         """Tokenize a single row from a CPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -419,16 +411,16 @@ class CPOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            prompt_tokens = processing_class(prompt, add_special_tokens=False)
+            prompt_tokens = self.processing_class(prompt, add_special_tokens=False)
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
 
             if not isinstance(chosen, str):
                 raise ValueError(f"chosen should be an str but got {type(chosen)}")
-            chosen_tokens = self.build_tokenized_answer(prompt, chosen, processing_class)
+            chosen_tokens = self.build_tokenized_answer(prompt, chosen)
 
             if not isinstance(rejected, str):
                 raise ValueError(f"rejected should be an str but got {type(rejected)}")
-            rejected_tokens = self.build_tokenized_answer(prompt, rejected, processing_class)
+            rejected_tokens = self.build_tokenized_answer(prompt, rejected)
 
             # Last prompt token might get merged by tokenizer and
             # it should not be included for generation if that happens
@@ -455,7 +447,7 @@ class CPOTrainer(Trainer):
 
             # add BOS token to head of prompt. Avoid adding if it's already there
             prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
-                processing_class.bos_token_id,
+                self.processing_class.bos_token_id,
                 prompt_len_input_ids,
                 prompt_tokens,
                 chosen_prompt_len_input_ids,
@@ -466,7 +458,7 @@ class CPOTrainer(Trainer):
 
             # add EOS token to end of answer. Avoid adding if it's already there
             chosen_tokens, rejected_tokens = add_eos_token_if_needed(
-                processing_class.eos_token_id, chosen_tokens, rejected_tokens
+                self.processing_class.eos_token_id, chosen_tokens, rejected_tokens
             )
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
@@ -516,13 +508,13 @@ class CPOTrainer(Trainer):
                     batch[f"{k}{type_key}"] = tokens
 
         else:
-            chosen_tokens = processing_class(
+            chosen_tokens = self.processing_class(
                 chosen, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
-            rejected_tokens = processing_class(
+            rejected_tokens = self.processing_class(
                 rejected, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
-            prompt_tokens = processing_class(
+            prompt_tokens = self.processing_class(
                 prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
             )
 
