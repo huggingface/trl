@@ -720,16 +720,6 @@ class KTOTrainer(Trainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
-    # Hot fix to avoid error when setting tokenizer after https://github.com/huggingface/transformers/pull/32385
-    # Should be removed when fixed in transformers, or whenhttps://github.com/huggingface/trl/pull/2162 is merged.
-    @property
-    def tokenizer(self):
-        return self.processing_class
-
-    @tokenizer.setter
-    def tokenizer(self, tokenizer):
-        self.processing_class = tokenizer
-
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
