@@ -136,7 +136,7 @@ class BasePairwiseJudge(BaseJudge):
 
 class BaseConstraintJudge(BaseJudge):
     """
-    Base class for pairwise judges.
+    Base class for constraint judges.
     """
 
     @abstractmethod
@@ -167,7 +167,7 @@ class BaseConstraintJudge(BaseJudge):
 
 class RandomConstraintJudge(BaseConstraintJudge):
     """
-    Random binary judge, for testing purposes.
+    Random constraint judge, for testing purposes.
     """
 
     def judge(self, prompts, completions, shuffle_order=True):
