@@ -162,7 +162,7 @@ class TrainerArgTester(unittest.TestCase):
                 rpo_alpha=0.5,
             )
             trainer = DPOTrainer(
-                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
             )
             self.assertEqual(trainer.args.beta, 0.5)
             self.assertEqual(trainer.args.label_smoothing, 0.5)
