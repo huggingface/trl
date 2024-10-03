@@ -35,11 +35,13 @@ _import_structure = {
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
         "BaseJudge",
+        "BaseBinaryJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
         "PairRMJudge",
+        "RandomBinaryJudge",
         "RandomPairwiseJudge",
         "RandomRankJudge",
     ],
@@ -99,11 +101,13 @@ if TYPE_CHECKING:
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .judges import (
         BaseJudge,
+        BaseBinaryJudge,
         BasePairwiseJudge,
         BaseRankJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
         PairRMJudge,
+        RandomBinaryJudge,
         RandomPairwiseJudge,
         RandomRankJudge,
     )

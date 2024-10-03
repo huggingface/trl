@@ -132,8 +132,47 @@ class BasePairwiseJudge(BaseJudge):
             In such cases, the caller should handle these invalid indices appropriately, possibly by implementing fallback logic or error handling.
         """
         raise NotImplementedError("Judge subclasses must implement the `judge` method.")
+    
+    
+class BaseConstraintJudge(BaseJudge):
+    """
+    Base class for pairwise judges.
+    """
 
+    @abstractmethod
+    def judge(self, prompts: List[str], completions: List[str], shuffle_order: bool = True) -> List[int]:
+        """
+        Judge the completion for a given prompt. Used to assess if a completion satisfies a constraint.
+        
+        This base class should be used to implement constraint-based evaluation as done in section 4.1.4 of the CGPO paper (https://arxiv.org/pdf/2409.20370).
+        It is relevant for assessing whether or not a prompt completion pair satisfies a specific contraint.
 
+        Args:
+            prompts (`List[str]`): List of prompts.
+            completions (`List[str]`): List of completions.
+            shuffle_order (`bool`): Whether to shuffle the order of the completions to avoid positional bias.
+
+        Returns:
+            List[int]: A list of binary labels:
+                - 1 indicates that the completion satisfies the evaluated constraint.
+                - 0 indicates that the completion does not satisfy the evaluated constraint.
+
+        Note:
+            If the judge returns -1 for any prompt, it indicates that the inner process used to compute the preference has failed.
+            For instance, this could occur if the underlying language model or rule based contraint returned an invalid answer.
+            In such cases, the caller should handle these invalid indices appropriately, possibly by implementing fallback logic or error handling.
+        """
+        raise NotImplementedError("Judge subclasses must implement the `judge` method.")
+
+class RandomConstraintJudge(BaseConstraintJudge):
+    """
+    Random binary judge, for testing purposes.
+    """
+
+    def judge(self, prompts, completions, shuffle_order=True):
+        return [random.choice([0,1]) for _ in len(prompts)]
+    
+    
 class RandomRankJudge(BaseRankJudge):
     """
     Random rank, for testing purposes.
@@ -303,3 +342,5 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
 
         # Return the ranks
         return ranks
+
+    
