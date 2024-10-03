@@ -216,6 +216,16 @@ class RLOOTrainer(Trainer):
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
+    # Hot fix to avoid error when setting tokenizer after https://github.com/huggingface/transformers/pull/32385
+    # Should be removed when fixed in transformers, or whenhttps://github.com/huggingface/trl/pull/2162 is merged.
+    @property
+    def tokenizer(self):
+        return self.processing_class
+
+    @tokenizer.setter
+    def tokenizer(self, tokenizer):
+        self.processing_class = tokenizer
+
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
 
