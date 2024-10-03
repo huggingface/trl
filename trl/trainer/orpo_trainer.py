@@ -351,6 +351,16 @@ class ORPOTrainer(Trainer):
         model.eval()
         return model
 
+    # Hot fix to avoid error when setting tokenizer after https://github.com/huggingface/transformers/pull/32385
+    # Should be removed when fixed in transformers, or whenhttps://github.com/huggingface/trl/pull/2162 is merged.
+    @property
+    def tokenizer(self):
+        return self.processing_class
+
+    @tokenizer.setter
+    def tokenizer(self, tokenizer):
+        self.processing_class = tokenizer
+
     def build_tokenized_answer(self, prompt, answer):
         """
         Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
