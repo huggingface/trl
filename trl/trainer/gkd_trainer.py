@@ -54,7 +54,9 @@ class GKDTrainer(SFTTrainer):
     ):
         # add remove_unused_columns=False to the the dataclass args
         args.remove_unused_columns = False
-        kwargs["data_collator"] = DataCollatorForChatML(tokenizer=kwargs["tokenizer"], max_length=args.max_seq_length)
+        kwargs["data_collator"] = DataCollatorForChatML(
+            tokenizer=kwargs["processing_class"], max_length=args.max_seq_length
+        )
 
         super().__init__(*sft_args, args=args, **kwargs)
 
@@ -100,7 +102,7 @@ class GKDTrainer(SFTTrainer):
             do_sample=True,
             top_k=0,
             use_cache=False if args.gradient_checkpointing else True,
-            pad_token_id=self.tokenizer.pad_token_id,
+            pad_token_id=self.processing_class.pad_token_id,
         )
         # Set custom EOS tokens if they are specified by the model's generation
         # config. This is important for models with the Llama 3 chat template,
@@ -235,7 +237,7 @@ class GKDTrainer(SFTTrainer):
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.tokenizer.pad_token_id
+                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
