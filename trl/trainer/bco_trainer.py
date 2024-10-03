@@ -624,7 +624,7 @@ class BCOTrainer(Trainer):
                 fn_kwargs = {
                     "prefix": "",
                     "is_encoder_decoder": self.is_encoder_decoder,
-                    "tokenizer": self.processing_class,
+                    "tokenizer": processing_class,
                     "max_length": self.max_length,
                     "truncation_mode": self.truncation_mode,
                     "label_pad_token_id": self.label_pad_token_id,
