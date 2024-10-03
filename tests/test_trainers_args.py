@@ -273,7 +273,7 @@ class TrainerArgTester(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
             trainer = OnlineDPOTrainer(
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
