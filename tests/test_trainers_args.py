@@ -110,7 +110,7 @@ class TrainerArgTester(unittest.TestCase):
                 model_init_kwargs={"trust_remote_code": True},
                 dataset_num_proc=4,
             )
-            trainer = CPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = CPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer)
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
