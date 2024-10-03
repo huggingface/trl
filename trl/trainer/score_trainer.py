@@ -29,13 +29,11 @@ class SCoRETrainer(OnlineDPOTrainer):
         super().__init__(*args, **kwargs)
 
         # Add SCoRE-specific statistics
-        self.stats.update(
-            {
-                "kl_div/first_attempt": [],
-                "reward/reward_diff": [],
-                "loss/policy": [],
-            }
-        )
+        self.stats = {
+            "kl_div/first_attempt": [],
+            "reward/reward_diff": [],
+            "loss/policy": [],
+        }
 
     def _generate_completions(self, model, prompts):
         unwrapped_model = self.accelerator.unwrap_model(model)
@@ -80,6 +78,12 @@ class SCoRETrainer(OnlineDPOTrainer):
         first_attempt_logits = model(first_attempt["input_ids"], attention_mask=first_attempt["attention_mask"]).logits
         first_attempt_logprobs = F.log_softmax(first_attempt_logits[:, context_length - 1 : -1], dim=-1)
 
+        # Compute logprobs for second attempt
+        second_attempt_logits = model(
+            second_attempt["input_ids"], attention_mask=second_attempt["attention_mask"]
+        ).logits
+        second_attempt_logprobs = F.log_softmax(second_attempt_logits[:, context_length - 1 : -1], dim=-1)
+
         # Compute KL divergence for first attempt
         with torch.no_grad():
             ref_first_attempt_logits = ref_model(
@@ -89,15 +93,30 @@ class SCoRETrainer(OnlineDPOTrainer):
 
         # Create a mask for non-padding tokens
         non_padding_mask = (first_attempt["input_ids"][:, context_length:] != self.tokenizer.pad_token_id).float()
+        second_attempt_non_padding_mask = (
+            second_attempt["input_ids"][:, context_length:] != self.tokenizer.pad_token_id
+        ).float()
 
         # Gather the log probabilities of the actual tokens
         first_attempt_tokens = first_attempt["input_ids"][:, context_length:]
-        first_attempt_logprobs = torch.gather(first_attempt_logprobs, 2, first_attempt_tokens.unsqueeze(-1)).squeeze(-1)
-        ref_first_attempt_logprobs = torch.gather(ref_first_attempt_logprobs, 2, first_attempt_tokens.unsqueeze(-1)).squeeze(-1)
+        first_attempt_logprobs = torch.gather(first_attempt_logprobs, 2, first_attempt_tokens.unsqueeze(-1)).squeeze(
+            -1
+        )
+        ref_first_attempt_logprobs = torch.gather(
+            ref_first_attempt_logprobs, 2, first_attempt_tokens.unsqueeze(-1)
+        ).squeeze(-1)
+
+        second_attempt_tokens = second_attempt["input_ids"][:, context_length:]
+        second_attempt_logprobs = torch.gather(
+            second_attempt_logprobs, 2, second_attempt_tokens.unsqueeze(-1)
+        ).squeeze(-1)
 
         # Mask out padding tokens
         first_attempt_logprobs = torch.masked_fill(first_attempt_logprobs, ~non_padding_mask.bool(), 0)
         ref_first_attempt_logprobs = torch.masked_fill(ref_first_attempt_logprobs, ~non_padding_mask.bool(), 0)
+        second_attempt_logprobs = torch.masked_fill(
+            second_attempt_logprobs, ~second_attempt_non_padding_mask.bool(), 0
+        )
 
         # Compute KL divergence
         kl_div = (first_attempt_logprobs - ref_first_attempt_logprobs) * non_padding_mask
@@ -106,14 +125,14 @@ class SCoRETrainer(OnlineDPOTrainer):
         # Compute reward for second attempt against ground truth
         reward_diff = self._compute_rewards(second_attempt, prompts, ground_truth_completions)
 
-        # Compute REINFORCE loss with KL penalty
-        policy_loss = -(first_attempt_logprobs.sum(-1) * reward_diff).mean()
+        # Compute REINFORCE loss with KL penalty of the 2nd attempt
+        policy_loss = -(second_attempt_logprobs.sum(-1) * reward_diff).mean()
         kl_loss = self.beta * kl_div
 
         loss = policy_loss + kl_loss
 
         # Log statistics
-        self.stats["kl_div/first_attempt"].append(kl_div.mean().item())
+        self.stats["kl_div/first_attempt"].append(kl_div.item())
         self.stats["reward/reward_diff"].append(reward_diff.mean().item())
         self.stats["loss/policy"].append(policy_loss.item())
 
