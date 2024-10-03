@@ -171,7 +171,7 @@ class RandomConstraintJudge(BaseConstraintJudge):
     """
 
     def judge(self, prompts, completions, shuffle_order=True):
-        return [random.choice([0, 1]) for _ in len(prompts)]
+        return [random.choice([0, 1]) for _ in range(len(prompts))]
 
 
 class RandomRankJudge(BaseRankJudge):
