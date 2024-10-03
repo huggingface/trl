@@ -14,7 +14,14 @@
 
 import unittest
 
-from trl import HfPairwiseJudge, PairRMJudge, RandomPairwiseJudge, RandomRankJudge, RandomConstraintJudge, MixtureOfConstraintJudges
+from trl import (
+    HfPairwiseJudge,
+    MixtureOfConstraintJudges,
+    PairRMJudge,
+    RandomConstraintJudge,
+    RandomPairwiseJudge,
+    RandomRankJudge,
+)
 
 
 class TestJudges(unittest.TestCase):
@@ -22,18 +29,28 @@ class TestJudges(unittest.TestCase):
         prompts = ["The capital of France is", "The biggest planet in the solar system is"]
         completions = [["Paris", "Marseille"], ["Saturn", "Jupiter"]]
         return prompts, completions
-    
+
     def test_mixture_of_constraint_judge(self):
         moj = MixtureOfConstraintJudges(judges=[RandomConstraintJudge(), RandomConstraintJudge()])
-        prompts = ["The capital of France is", "The capital of France is", "The biggest planet in the solar system is", "The biggest planet in the solar system is"]
+        prompts = [
+            "The capital of France is",
+            "The capital of France is",
+            "The biggest planet in the solar system is",
+            "The biggest planet in the solar system is",
+        ]
         completions = ["Paris", "Marseille", "Saturn", "Jupiter"]
         judgements = moj.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(judgements), 4)
         self.assertTrue(all(judgement in {0, 1, -1} for judgement in judgements))
-    
+
     def test_random_constraint_judge(self):
         judge = RandomConstraintJudge()
-        prompts = ["The capital of France is", "The capital of France is", "The biggest planet in the solar system is", "The biggest planet in the solar system is"]
+        prompts = [
+            "The capital of France is",
+            "The capital of France is",
+            "The biggest planet in the solar system is",
+            "The biggest planet in the solar system is",
+        ]
         completions = ["Paris", "Marseille", "Saturn", "Jupiter"]
         judgements = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(judgements), 4)
