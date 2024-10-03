@@ -44,6 +44,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available
 
+from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
@@ -815,6 +816,17 @@ class DPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
+            # Extract the prompt if needed, and apply the chat template if needed
+            train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+                )
+
             # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
             fn_kwargs = {
                 "tokenizer": self.tokenizer,
@@ -894,6 +906,16 @@ class DPOTrainer(Trainer):
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
+
+    # Hot fix to avoid error when setting tokenizer after https://github.com/huggingface/transformers/pull/32385
+    # Should be removed when fixed in transformers, or whenhttps://github.com/huggingface/trl/pull/2162 is merged.
+    @property
+    def tokenizer(self):
+        return self.processing_class
+
+    @tokenizer.setter
+    def tokenizer(self, tokenizer):
+        self.processing_class = tokenizer
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
