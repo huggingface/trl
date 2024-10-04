@@ -192,7 +192,7 @@ class RLOOTrainer(Trainer):
             self.train_dataset,
             batch_size=self.local_dataloader_batch_size,
             shuffle=True,
-            collate_fn=DataCollatorWithPadding(processing_class),
+            collate_fn=DataCollatorWithPadding(self.processing_class),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
