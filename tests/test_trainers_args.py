@@ -146,7 +146,7 @@ class TrainerArgTester(unittest.TestCase):
                 is_encoder_decoder=True,
                 disable_dropout=False,
                 # generate_during_eval=True, # ignore this one, it requires wandb
-                precompute_ref_log_probs=True,
+                # precompute_ref_log_probs=True, # can't be True if sync_ref_model is True, so we just test sync_ref_model
                 dataset_num_proc=4,
                 model_init_kwargs={"trust_remote_code": True},
                 ref_model_init_kwargs={"trust_remote_code": True},
@@ -176,7 +176,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.is_encoder_decoder, True)
             self.assertEqual(trainer.args.disable_dropout, False)
             # self.assertEqual(trainer.args.generate_during_eval, True)
-            self.assertEqual(trainer.args.precompute_ref_log_probs, True)
+            # self.assertEqual(trainer.args.precompute_ref_log_probs, True)
             self.assertEqual(trainer.args.dataset_num_proc, 4)
             self.assertEqual(trainer.args.model_init_kwargs, {"trust_remote_code": True})
             self.assertEqual(trainer.args.ref_model_init_kwargs, {"trust_remote_code": True})
