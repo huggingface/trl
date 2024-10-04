@@ -104,7 +104,7 @@ class SFTTrainer(Trainer):
     _tag_names = ["trl", "sft"]
 
     @_deprecate_arguments(
-        version="1.0.0",
+        version="0.13.0",
         deprecated_args=[
             "dataset_text_field",
             "packing",
