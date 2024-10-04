@@ -681,7 +681,7 @@ class DPOTrainer(Trainer):
             self.ref_model = create_reference_model(model)
 
         if processing_class is None:
-            raise ValueError("tokenizer must be specified to tokenize a DPO dataset.")
+            raise ValueError("processing_class must be specified to tokenize a DPO dataset.")
 
         if max_length is not None:
             warnings.warn(
