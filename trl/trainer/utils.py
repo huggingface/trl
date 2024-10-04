@@ -265,17 +265,17 @@ class DataCollatorForChatML:
             assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
             last_assistant_message = assistant_messages[-1]["content"]
             prompt = formatted_chat.rsplit(last_assistant_message, 1)[0]
-            completion = last_assistant_message
+            completion = last_assistant_message + formatted_chat.rsplit(last_assistant_message, 1)[1]
 
             prompts.append(prompt)
             completions.append(completion)
 
         # Tokenize prompts and completions
         tokenized_prompts = self.tokenizer(
-            prompts, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
+            prompts, truncation=True, max_length=self.max_length, padding=False, return_tensors=None, add_special_tokens=False
         )
         tokenized_completions = self.tokenizer(
-            completions, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
+            completions, truncation=True, max_length=self.max_length, padding=False, return_tensors=None, add_special_tokens=False
         )
 
         # Combine prompts and completions
