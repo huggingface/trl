@@ -1,5 +1,7 @@
 # PPOv2 Trainer
 
+[![](https://img.shields.io/badge/All_models-PPO-blue)](https://huggingface.co/models?other=ppo)
+
 TRL supports training LLMs with [Proximal Policy Optimization (PPO)](https://huggingface.co/papers/1707.06347).
 
 References:
