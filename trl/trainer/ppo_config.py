@@ -19,9 +19,9 @@ from ..trainer.utils import OnPolicyConfig
 
 
 @dataclass
-class PPOv2Config(OnPolicyConfig):
+class PPOConfig(OnPolicyConfig):
     r"""
-    Configuration class for the [`PPOv2Trainer`].
+    Configuration class for the [`PPOTrainer`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the

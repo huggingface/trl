@@ -56,7 +56,7 @@ from ..trainer.utils import (
     print_rich_table,
     truncate_response,
 )
-from .ppov2_config import PPOv2Config
+from .ppo_config import PPOConfig
 from .utils import generate_model_card
 
 
@@ -84,12 +84,12 @@ class PolicyAndValueWrapper(nn.Module):
         return self.policy(**kwargs), logits
 
 
-class PPOv2Trainer(Trainer):
+class PPOTrainer(Trainer):
     _tag_names = ["trl", "ppo"]
 
     def __init__(
         self,
-        config: PPOv2Config,
+        config: PPOConfig,
         tokenizer: PreTrainedTokenizer,
         policy: nn.Module,
         ref_policy: nn.Module,
