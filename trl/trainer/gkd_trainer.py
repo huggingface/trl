@@ -25,10 +25,13 @@ from accelerate.utils import is_deepspeed_available
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
