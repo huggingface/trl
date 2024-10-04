@@ -137,6 +137,8 @@ if TYPE_CHECKING:
         ModelConfig,
         OnlineDPOConfig,
         OnlineDPOTrainer,
+        GRPOConfig,
+        GRPOTrainer,
         ORPOConfig,
         ORPOTrainer,
         PPOConfig,
