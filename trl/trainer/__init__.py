@@ -101,8 +101,8 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .judges import (
-        BaseJudge,
         BaseConstraintJudge,
+        BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,
         HfPairwiseJudge,

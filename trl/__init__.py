@@ -148,8 +148,8 @@ if TYPE_CHECKING:
     from .trainer import (
         AlignPropConfig,
         AlignPropTrainer,
-        BaseJudge,
         BaseConstraintJudge,
+        BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,
         BCOConfig,
