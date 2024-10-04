@@ -25,7 +25,7 @@ def test_sft_cli():
             check=True,
         )
     except BaseException as exc:
-        raise AssertionError("An error occured while running the CLI, please double check") from exc
+        raise AssertionError("An error occurred while running the CLI, please double check") from exc
 
 
 @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
@@ -37,7 +37,7 @@ def test_dpo_cli():
             check=True,
         )
     except BaseException as exc:
-        raise AssertionError("An error occured while running the CLI, please double check") from exc
+        raise AssertionError("An error occurred while running the CLI, please double check") from exc
 
 
 def test_env_cli():

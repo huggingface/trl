@@ -163,16 +163,6 @@ class IterativeSFTTrainer(Trainer):
 
         PPODecorators.optimize_device_cache = self.optimize_device_cache
 
-    # Hot fix to avoid error when setting tokenizer after https://github.com/huggingface/transformers/pull/32385
-    # Should be removed when fixed in transformers, or whenhttps://github.com/huggingface/trl/pull/2162 is merged.
-    @property
-    def tokenizer(self):
-        return self.processing_class
-
-    @tokenizer.setter
-    def tokenizer(self, tokenizer):
-        self.processing_class = tokenizer
-
     def prepare_model_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor):
         if attention_mask is None:
             attention_mask = [torch.ones_like(ids) for ids in input_ids]
