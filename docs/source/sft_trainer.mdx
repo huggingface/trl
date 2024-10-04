@@ -19,7 +19,6 @@ from trl import SFTConfig, SFTTrainer
 dataset = load_dataset("stanfordnlp/imdb", split="train")
 
 training_args = SFTConfig(
-    dataset_text_field="text",
     max_seq_length=512,
     output_dir="/tmp",
 )
@@ -112,10 +111,7 @@ collator = DataCollatorForCompletionOnlyLM(instruction_template=instruction_temp
 
 trainer = SFTTrainer(
     model,
-    args=SFTConfig(
-        output_dir="/tmp",
-        dataset_text_field = "text",
-    ),
+    args=SFTConfig(output_dir="/tmp"),
     train_dataset=dataset,
     data_collator=collator,
 )
@@ -273,7 +269,7 @@ To properly format your input make sure to process all the examples by looping o
 
 ```python
 ...
-training_args = SFTConfig(packing=True, dataset_text_field="text",)
+training_args = SFTConfig(packing=True)
 
 trainer = SFTTrainer(
     "facebook/opt-350m",
@@ -580,11 +576,7 @@ model = FastLanguageModel.get_peft_model(
     random_state=3407,
 )
 
-training_args = SFTConfig(
-    output_dir="./output",
-    max_seq_length=max_seq_length,
-    dataset_text_field="text",
-)
+training_args = SFTConfig(output_dir="./output", max_seq_length=max_seq_length)
 
 trainer = SFTTrainer(
     model=model,
@@ -741,10 +733,9 @@ print(collated_data.keys())  # dict_keys(['input_ids', 'attention_mask', 'pixel_
 
 ### Training the vision-language model
 
-Now that we have prepared the data and defined the collator, we can proceed with training the model. To ensure that the data is not processed as text-only, we need to set a couple of arguments in the `SFTConfig`, specifically `dataset_text_field` and `remove_unused_columns`. We also need to set `skip_prepare_dataset` to `True` to avoid the default processing of the dataset. Below is an example of how to set up the `SFTTrainer`.
+Now that we have prepared the data and defined the collator, we can proceed with training the model. To ensure that the data is not processed as text-only, we need to set a couple of arguments in the `SFTConfig`, specifically `remove_unused_columns` and `skip_prepare_dataset` to `True` to avoid the default processing of the dataset. Below is an example of how to set up the `SFTTrainer`.
 
 ```python
-training_args.dataset_text_field = ""  # needs a dummy field
 training_args.remove_unused_columns = False
 training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 

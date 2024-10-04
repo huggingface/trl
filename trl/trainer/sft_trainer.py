@@ -331,9 +331,9 @@ class SFTTrainer(Trainer):
         if args.dataset_kwargs is None:
             args.dataset_kwargs = {}
 
-        if formatting_func is None and args.dataset_text_field is None:
+        if formatting_func is None:
             # check if dataset has ChatML format or instruction format and is supported
-            # if not stays #None
+            # if not stays None
             formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
             # if a template is detected, we don't need to add special tokens again
             if formatting_func is not None:
@@ -445,9 +445,9 @@ class SFTTrainer(Trainer):
         dataset,
         tokenizer,
         packing,
-        dataset_text_field,
+        dataset_text_field: str,
         max_seq_length,
-        formatting_func,
+        formatting_func: Optional[Callable],
         num_of_sequences,
         chars_per_token,
         remove_unused_columns=True,
@@ -481,13 +481,6 @@ class SFTTrainer(Trainer):
         ) and not isinstance(dataset, datasets.IterableDataset):
             return dataset
 
-        # If we aren't skipping data preparation, then a dataset_text_field or formatting_func must be provided.
-        if dataset_text_field is None and formatting_func is None:
-            raise ValueError(
-                "You need to provide either `dataset_text_field` or `formatting_func` argument. Alternatively, you "
-                "can skip the dataset preparation by using `SFTConfig(dataset_kwargs={'skip_prepare_dataset': True})`."
-            )
-
         if not packing:
             return self._prepare_non_packed_dataloader(
                 tokenizer,
@@ -516,18 +509,16 @@ class SFTTrainer(Trainer):
         self,
         tokenizer,
         dataset,
-        dataset_text_field,
+        dataset_text_field: str,
         max_seq_length,
-        formatting_func=None,
+        formatting_func: Optional[Callable] = None,
         add_special_tokens=True,
         remove_unused_columns=True,
     ):
-        use_formatting_func = formatting_func is not None and dataset_text_field is None
-
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
             outputs = tokenizer(
-                element[dataset_text_field] if not use_formatting_func else formatting_func(element),
+                element[dataset_text_field] if formatting_func is None else formatting_func(element),
                 add_special_tokens=add_special_tokens,
                 truncation=True,
                 padding=False,
@@ -536,7 +527,7 @@ class SFTTrainer(Trainer):
                 return_length=False,
             )
 
-            if use_formatting_func and not isinstance(formatting_func(element), list):
+            if formatting_func is not None and not isinstance(formatting_func(element), list):
                 raise ValueError(
                     "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
                 )
@@ -571,52 +562,47 @@ class SFTTrainer(Trainer):
         self,
         tokenizer,
         dataset,
-        dataset_text_field,
+        dataset_text_field: str,
         max_seq_length,
         num_of_sequences,
         chars_per_token,
-        formatting_func=None,
+        formatting_func: Optional[Callable] = None,
         append_concat_token=True,
         add_special_tokens=True,
     ):
-        if dataset_text_field is not None or formatting_func is not None:
-            if tokenizer is None:
-                raise ValueError("You need to pass a tokenizer when using `dataset_text_field` with `SFTTrainer`.")
+        if tokenizer is None:
+            raise ValueError("You need to pass a tokenizer with `SFTTrainer`.")
 
-            constant_length_iterator = ConstantLengthDataset(
-                tokenizer,
-                dataset,
-                dataset_text_field=dataset_text_field,
-                formatting_func=formatting_func,
-                seq_length=max_seq_length,
-                infinite=False,
-                num_of_sequences=num_of_sequences,
-                chars_per_token=chars_per_token,
-                eos_token_id=tokenizer.eos_token_id,
-                append_concat_token=append_concat_token,
-                add_special_tokens=add_special_tokens,
+        constant_length_iterator = ConstantLengthDataset(
+            tokenizer,
+            dataset,
+            dataset_text_field=None if formatting_func is not None else dataset_text_field,
+            formatting_func=formatting_func,
+            seq_length=max_seq_length,
+            infinite=False,
+            num_of_sequences=num_of_sequences,
+            chars_per_token=chars_per_token,
+            eos_token_id=tokenizer.eos_token_id,
+            append_concat_token=append_concat_token,
+            add_special_tokens=add_special_tokens,
+        )
+
+        if isinstance(dataset, datasets.IterableDataset):
+            return constant_length_iterator
+
+        def data_generator(constant_length_iterator):
+            yield from constant_length_iterator
+
+        try:
+            packed_dataset = Dataset.from_generator(
+                data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
             )
-
-            if isinstance(dataset, datasets.IterableDataset):
-                return constant_length_iterator
-
-            def data_generator(constant_length_iterator):
-                yield from constant_length_iterator
-
-            try:
-                packed_dataset = Dataset.from_generator(
-                    data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
-                )
-            except (DatasetGenerationError, SchemaInferenceError) as exc:
-                raise ValueError(
-                    "Error occurred while packing the dataset. "
-                    "Make sure that your dataset has enough samples to at least yield one packed sequence."
-                ) from exc
-            return packed_dataset
-        else:
+        except (DatasetGenerationError, SchemaInferenceError) as exc:
             raise ValueError(
-                "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
-            )
+                "Error occurred while packing the dataset. "
+                "Make sure that your dataset has enough samples to at least yield one packed sequence."
+            ) from exc
+        return packed_dataset
 
     def create_model_card(
         self,
