@@ -181,24 +181,15 @@ trainer.train()
 `DPOTrainer` implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train Llama 3 and many other models. Here is a basic example on how to use the `DPOTrainer`:
 
 ```python
-from trl import DPOConfig, DPOTrainer, maybe_extract_prompt, maybe_apply_chat_template
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import DPOConfig, DPOTrainer
 
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
-dataset = dataset.map(maybe_extract_prompt)
-dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
-
 training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
-trainer = DPOTrainer(
-    args=training_args,
-    model=model,
-    tokenizer=tokenizer,
-    train_dataset=dataset,
-)
+trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, tokenizer=tokenizer)
 trainer.train()
 ```
 
