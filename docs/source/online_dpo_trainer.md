@@ -1,6 +1,6 @@
 # Online DPO Trainer
 
-[![](https://img.shields.io/badge/All_models-Online_DPO-blue)](https://huggingface.co/models?other=online-dpo)
+[![](https://img.shields.io/badge/All_models-Online_DPO-blue)](https://huggingface.co/models?other=online-dpo,trl)
 
 ## Overview 
 

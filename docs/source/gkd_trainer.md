@@ -1,6 +1,6 @@
 # Generalized Knowledge Distillation Trainer
 
-[![](https://img.shields.io/badge/All_models-GKD-blue)](https://huggingface.co/models?other=gkd)
+[![](https://img.shields.io/badge/All_models-GKD-blue)](https://huggingface.co/models?other=gkd,trl)
 
 ## Overview
 

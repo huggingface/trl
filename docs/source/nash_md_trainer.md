@@ -1,6 +1,6 @@
 # Nash-MD Trainer
 
-[![](https://img.shields.io/badge/All_models-Nash--MD-blue)](https://huggingface.co/models?other=nash-md)
+[![](https://img.shields.io/badge/All_models-Nash--MD-blue)](https://huggingface.co/models?other=nash-md,trl)
 
 ## Overview
 
