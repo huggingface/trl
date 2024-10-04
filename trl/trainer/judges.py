@@ -354,7 +354,7 @@ class MixtureOfConstraintJudges(BaseConstraintJudge):
     It is an implementation of the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370)
 
     Args:
-        judges (List[BaseConstraintJudge]): A list of BaseConstraintJudge.
+        judges (`List[BaseConstraintJudge]`): A list of [`BaseConstraintJudge`].
     """
 
     def __init__(self, judges: List[BaseConstraintJudge]):
