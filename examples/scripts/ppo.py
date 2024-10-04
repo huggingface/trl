@@ -45,13 +45,15 @@ class ScriptArguments:
 
 
 parser = HfArgumentParser((ScriptArguments, PPOConfig))
-args, ppo_config = parser.parse_args_into_dataclasses()
+script_args, ppo_config = parser.parse_args_into_dataclasses()
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
 
-trl_model_class = AutoModelForCausalLMWithValueHead if not args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
+trl_model_class = (
+    AutoModelForCausalLMWithValueHead if not script_args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
+)
 
 tokenizer = AutoTokenizer.from_pretrained(ppo_config.model_name)
 tokenizer.pad_token = tokenizer.eos_token
@@ -74,9 +76,9 @@ def build_dataset(query_dataset, dataset_num_proc, input_min_text_length=2, inpu
             The dataloader for the dataset.
     """
     # load imdb with datasets
-    ds = load_dataset(query_dataset, split="train")
-    ds = ds.rename_columns({"text": "review"})
-    ds = ds.filter(lambda x: len(x["review"]) > 200, num_proc=dataset_num_proc)
+    dataset = load_dataset(query_dataset, split="train")
+    dataset = dataset.rename_columns({"text": "review"})
+    dataset = dataset.filter(lambda x: len(x["review"]) > 200, num_proc=dataset_num_proc)
 
     input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
@@ -85,9 +87,9 @@ def build_dataset(query_dataset, dataset_num_proc, input_min_text_length=2, inpu
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
-    ds = ds.map(tokenize, num_proc=dataset_num_proc)
-    ds.set_format(type="torch")
-    return ds
+    dataset = dataset.map(tokenize, num_proc=dataset_num_proc)
+    dataset.set_format(type="torch")
+    return dataset
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
@@ -105,14 +107,14 @@ def collator(data):
 set_seed(ppo_config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
-if not args.use_peft:
-    ref_model = trl_model_class.from_pretrained(ppo_config.model_name, trust_remote_code=args.trust_remote_code)
+if not script_args.use_peft:
+    ref_model = trl_model_class.from_pretrained(ppo_config.model_name, trust_remote_code=script_args.trust_remote_code)
     device_map = None
     peft_config = None
 else:
     peft_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
+        r=script_args.lora_r,
+        lora_alpha=script_args.lora_alpha,
         bias="none",
         task_type="CAUSAL_LM",
     )
@@ -122,7 +124,7 @@ else:
 
 model = trl_model_class.from_pretrained(
     ppo_config.model_name,
-    trust_remote_code=args.trust_remote_code,
+    trust_remote_code=script_args.trust_remote_code,
     device_map=device_map,
     peft_config=peft_config,
 )

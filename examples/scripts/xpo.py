@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,25 +32,24 @@ python examples/scripts/xpo.py \
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
-from accelerate import PartialState
+
 from trl import (
     DPOScriptArguments,
+    LogCompletionsCallback,
     ModelConfig,
+    TrlParser,
     XPOConfig,
     XPOTrainer,
     get_kbit_device_map,
     get_quantization_config,
-    maybe_apply_chat_template,
-    LogCompletionsCallback,
 )
-from trl.commands.cli_utils import TrlParser
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, XPOConfig, ModelConfig))
-    args, training_args, model_config = parser.parse_args_and_config()
-    args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    script_args, training_args, model_config = parser.parse_args_and_config()
+    script_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     torch_dtype = (
         model_config.torch_dtype
@@ -87,20 +85,15 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
-    dataset = load_dataset(args.dataset_name)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(
-            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
-        )
+    dataset = load_dataset(script_args.dataset_name)
 
     trainer = XPOTrainer(
         model=model,
         ref_model=ref_model,
         reward_model=reward_model,
         args=training_args,
-        train_dataset=dataset[args.dataset_train_split],
-        eval_dataset=dataset[args.dataset_test_split],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
         tokenizer=tokenizer,
     )
     generation_config = GenerationConfig(
@@ -111,5 +104,7 @@ if __name__ == "__main__":
     # train the model
     trainer.train()
 
-    # save the model
+    # Save and push to hub
     trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

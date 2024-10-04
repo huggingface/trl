@@ -106,8 +106,8 @@ def image_outputs_logger(image_pair_data, global_step, accelerate_logger):
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, AlignPropConfig))
-    args, alignprop_config = parser.parse_args_into_dataclasses()
-    alignprop_config.project_kwargs = {
+    script_args, training_args = parser.parse_args_into_dataclasses()
+    training_args.project_kwargs = {
         "logging_dir": "./logs",
         "automatic_checkpoint_naming": True,
         "total_limit": 5,
@@ -115,11 +115,13 @@ if __name__ == "__main__":
     }
 
     pipeline = DefaultDDPOStableDiffusionPipeline(
-        args.pretrained_model, pretrained_model_revision=args.pretrained_revision, use_lora=args.use_lora
+        script_args.pretrained_model,
+        pretrained_model_revision=script_args.pretrained_revision,
+        use_lora=script_args.use_lora,
     )
     trainer = AlignPropTrainer(
-        alignprop_config,
-        aesthetic_scorer(args.hf_hub_aesthetic_model_id, args.hf_hub_aesthetic_model_filename),
+        training_args,
+        aesthetic_scorer(script_args.hf_hub_aesthetic_model_id, script_args.hf_hub_aesthetic_model_filename),
         prompt_fn,
         pipeline,
         image_samples_hook=image_outputs_logger,
@@ -127,4 +129,7 @@ if __name__ == "__main__":
 
     trainer.train()
 
-    trainer.push_to_hub(args.hf_hub_model_id)
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

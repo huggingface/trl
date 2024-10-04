@@ -61,13 +61,13 @@ The CPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that 
 For a detailed example have a look at the `examples/scripts/cpo.py` script. At a high level we need to initialize the `CPOTrainer` with a `model` we wish to train. **Note that CPOTrainer eliminates the need to use the reference model, simplifying the optimization process.** The `beta` refers to the hyperparameter of the implicit reward, and the dataset contains the 3 entries listed above.
 
 ```py
-cpo_config = CPOConfig(
+training_args = CPOConfig(
     beta=0.1,
 )
 
 cpo_trainer = CPOTrainer(
     model,
-    args=cpo_config,
+    args=training_args,
     train_dataset=train_dataset,
     tokenizer=tokenizer,
 )

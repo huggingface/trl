@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,26 +42,25 @@ python examples/scripts/dpo_online.py \
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
-from accelerate import PartialState
+
 from trl import (
     DPOScriptArguments,
+    LogCompletionsCallback,
     ModelConfig,
     OnlineDPOConfig,
     OnlineDPOTrainer,
+    TrlParser,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    maybe_apply_chat_template,
-    LogCompletionsCallback,
 )
-
-from trl.commands.cli_utils import TrlParser
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
 
 if __name__ == "__main__":
     parser = TrlParser((DPOScriptArguments, OnlineDPOConfig, ModelConfig))
-    args, training_args, model_config = parser.parse_args_and_config()
-    args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    script_args, training_args, model_config = parser.parse_args_and_config()
+    script_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
     torch_dtype = (
         model_config.torch_dtype
@@ -101,19 +99,14 @@ if __name__ == "__main__":
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    dataset = load_dataset(args.dataset_name)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(
-            maybe_apply_chat_template, num_proc=training_args.dataset_num_proc, fn_kwargs={"tokenizer": tokenizer}
-        )
+    dataset = load_dataset(script_args.dataset_name)
 
     trainer = OnlineDPOTrainer(
         model=model,
         reward_model=reward_model,
         args=training_args,
-        train_dataset=dataset[args.dataset_train_split],
-        eval_dataset=dataset[args.dataset_test_split],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_config),
     )
@@ -123,3 +116,8 @@ if __name__ == "__main__":
     completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
     trainer.add_callback(completions_callback)
     trainer.train()
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

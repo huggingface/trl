@@ -13,6 +13,7 @@
 # limitations under the License.
 from typing import List, Optional, Union
 
+import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
@@ -47,7 +48,7 @@ def _generate_completions(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
     accelerator: Accelerator,
-    generation_config: GenerationConfig,
+    generation_config: Optional[GenerationConfig],
     batch_size: int = 1,
 ) -> List[str]:
     """
@@ -223,9 +224,11 @@ class WinRateCallback(TrainerCallback):
             otherwise, it defaults to using the initial model.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_prompts (`int`, *optional*):
+        num_prompts (`int` or `None`, *optional*, defaults to `None`):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples
             in the evaluation dataset.
+        shuffle_order (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the order of the completions before judging.
     """
 
     def __init__(
@@ -233,10 +236,12 @@ class WinRateCallback(TrainerCallback):
         judge: BasePairwiseJudge,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_prompts: int = None,
+        num_prompts: Optional[int] = None,
+        shuffle_order: bool = True,
     ):
         self.judge = judge
         self.trainer = trainer
+        self.shuffle_order = shuffle_order
         self.generation_config = generation_config
         self.ref_completions = []
 
@@ -253,7 +258,17 @@ class WinRateCallback(TrainerCallback):
         tokenizer = kwargs["tokenizer"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
-        model = getattr(self.trainer, "ref_model", kwargs["model"])  # get the ref model if any, else use the model
+        # Use the reference model if available, otherwise use the initial model
+        model = getattr(self.trainer, "ref_model", None)
+        # At this point, there are two cases where `ref_model` is None:
+        # 1. The method doesn't require a reference model.
+        # 2. The method uses a reference model, but `ref_model` is set to None.
+        #    This occurs when using PEFT, where the reference model can be obtained by simply disabling the model's adapter.
+        #    In theory, we should disable the adapter here, but since it's zero-initialized at the start of training,
+        #    the model behaves identically with or without the adapter.
+        #    Therefore, there's no need to explicitly disable it at this point.
+        if model is None:
+            model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
             self.ref_completions = _generate_completions(
                 prompts,
@@ -263,6 +278,30 @@ class WinRateCallback(TrainerCallback):
                 generation_config=self.generation_config,
                 batch_size=args.per_device_eval_batch_size,
             )
+            # Compute initial win rate as a reference point
+            completions = list(zip(self.ref_completions, self.ref_completions))
+            winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
+            prompts = gather_object(prompts)
+            completions = gather_object(completions)
+            winner_indices = gather_object(winner_indices)
+
+        # Logging
+        if self.trainer.accelerator.is_main_process:
+            win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
+            self.trainer.log({"eval_win_rate": win_rate})
+
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    global_step = [str(state.global_step)] * len(prompts)
+                    data = list(zip(global_step, prompts, completions, winner_indices))
+                    # Split completions from referenece model and policy
+                    split_data = [(item[0], item[1], item[2][0], item[2][1], item[3]) for item in data]
+                    df = pd.DataFrame(
+                        split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"]
+                    )
+                    wandb.log({"win_rate_completions": wandb.Table(dataframe=df)})
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # At every evaluation step, we generate completions for the model and compare them with the reference
@@ -283,13 +322,28 @@ class WinRateCallback(TrainerCallback):
             )
 
             completions = list(zip(self.ref_completions, completions))
-            winner_indices = self.judge.judge(prompts, completions)
+            winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
+            prompts = gather_object(prompts)
+            completions = gather_object(completions)
             winner_indices = gather_object(winner_indices)
 
         # Logging
         if self.trainer.accelerator.is_main_process:
             win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
             self.trainer.log({"eval_win_rate": win_rate})
+
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    global_step = [str(state.global_step)] * len(prompts)
+                    data = list(zip(global_step, prompts, completions, winner_indices))
+                    # Split completions from referenece model and policy
+                    split_data = [(item[0], item[1], item[2][0], item[2][1], item[3]) for item in data]
+                    df = pd.DataFrame(
+                        split_data, columns=["step", "prompt", "reference_model", "policy", "winner_index"]
+                    )
+                    wandb.log({"win_rate_completions": wandb.Table(dataframe=df)})
 
 
 class LogCompletionsCallback(WandbCallback):
@@ -312,7 +366,7 @@ class LogCompletionsCallback(WandbCallback):
         num_prompts (`int`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in the evaluation dataset.
         freq (`int`, *optional*):
-            The frequency at which to log completions. If not provided, defaults to the trainer's `logging_steps`.
+            The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
 
     def __init__(
@@ -342,8 +396,8 @@ class LogCompletionsCallback(WandbCallback):
         if state.global_step == self._last_logged_step:
             return
 
-        # Only log every `freq` steps (if no `freq` is provided, log every `logging_steps` steps)
-        freq = self.freq or state.logging_steps
+        # Only log every `freq` steps (if no `freq` is provided, log every `eval_steps` steps)
+        freq = self.freq or state.eval_steps
         if state.global_step % freq != 0:
             return
 
@@ -365,7 +419,6 @@ class LogCompletionsCallback(WandbCallback):
 
         # Build the data to log
         if self.trainer.accelerator.is_main_process:
-            # prompts = self.eval_dataset["prompt"][:]
             global_step = [str(state.global_step)] * len(prompts)
             data = list(zip(global_step, prompts, completions))
             self.table.extend(data)
