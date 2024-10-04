@@ -393,7 +393,7 @@ class DPOTrainer(Trainer):
     _tag_names = ["trl", "dpo"]
 
     @_deprecate_arguments(
-        version="1.0.0",
+        version="0.13.0",
         deprecated_args=[
             "beta",
             "label_smoothing",
