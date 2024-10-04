@@ -27,8 +27,6 @@
     title: Supervised Fine-Tuning
   - local: ppo_trainer
     title: PPO Trainer
-  - local: grpo_trainer
-    title: GRPO Trainer
   - local: ppov2_trainer
     title: PPOv2 Trainer
   - local: rloo_trainer
