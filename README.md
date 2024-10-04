@@ -133,7 +133,7 @@ training_args = RewardConfig(output_dir="Qwen2.5-0.5B-Reward", per_device_train_
 trainer = RewardTrainer(
     args=training_args,
     model=model,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=dataset,
 )
 trainer.train()

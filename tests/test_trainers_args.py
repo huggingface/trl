@@ -329,7 +329,7 @@ class TrainerArgTester(unittest.TestCase):
                 model=model,
                 args=training_args,
                 train_dataset=dataset,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.dataset_num_proc, 4)
