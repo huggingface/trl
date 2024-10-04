@@ -393,7 +393,7 @@ class DPOTrainer(Trainer):
     _tag_names = ["trl", "dpo"]
 
     @_deprecate_arguments(
-        version="1.0.0",
+        version="0.13.0",
         deprecated_args=[
             "beta",
             "label_smoothing",
@@ -906,16 +906,6 @@ class DPOTrainer(Trainer):
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
-
-    # Hot fix to avoid error when setting tokenizer after https://github.com/huggingface/transformers/pull/32385
-    # Should be removed when fixed in transformers, or whenhttps://github.com/huggingface/trl/pull/2162 is merged.
-    @property
-    def tokenizer(self):
-        return self.processing_class
-
-    @tokenizer.setter
-    def tokenizer(self, tokenizer):
-        self.processing_class = tokenizer
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
