@@ -29,16 +29,20 @@ from huggingface_hub.utils._deprecation import _deprecate_arguments
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    BaseImageProcessor,
     DataCollator,
     DataCollatorForLanguageModeling,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..import_utils import is_liger_kernel_available
@@ -82,8 +86,11 @@ class SFTTrainer(Trainer):
             The dataset to use for training. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
         eval_dataset (Optional[Union[`datasets.Dataset`, Dict[`str`, `datasets.Dataset`]]]):
             The dataset to use for evaluation. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
-        tokenizer (`Optional[transformers.PreTrainedTokenizer]`):
-            The tokenizer to use for training. If not specified, the tokenizer associated to the model will be used.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
+            This supercedes the `tokenizer` argument, which is now deprecated.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
         compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to None):
@@ -120,6 +127,7 @@ class SFTTrainer(Trainer):
         ],
         custom_message="Deprecated positional argument(s) used in SFTTrainer, please use the SFTConfig to set these arguments instead.",
     )
+    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.14.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
@@ -127,7 +135,9 @@ class SFTTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -284,10 +294,10 @@ class SFTTrainer(Trainer):
                 ):
                     peft_module_casting_to_bf16(model)
 
-        if tokenizer is None:
-            tokenizer = AutoTokenizer.from_pretrained(model.config._name_or_path)
-            if getattr(tokenizer, "pad_token", None) is None:
-                tokenizer.pad_token = tokenizer.eos_token
+        if processing_class is None:
+            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
+            if getattr(processing_class, "pad_token", None) is None:
+                processing_class.pad_token = processing_class.eos_token
 
         if max_seq_length is not None:
             warnings.warn(
@@ -297,7 +307,7 @@ class SFTTrainer(Trainer):
 
         if args.max_seq_length is None:
             # to overcome some issues with broken tokenizers
-            args.max_seq_length = min(tokenizer.model_max_length, 1024)
+            args.max_seq_length = min(processing_class.model_max_length, 1024)
 
             warnings.warn(
                 f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {args.max_seq_length}"
@@ -334,14 +344,14 @@ class SFTTrainer(Trainer):
         if formatting_func is None:
             # check if dataset has ChatML format or instruction format and is supported
             # if not stays None
-            formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
+            formatting_func = get_formatting_func_from_dataset(train_dataset, processing_class)
             # if a template is detected, we don't need to add special tokens again
             if formatting_func is not None:
                 args.dataset_kwargs["add_special_tokens"] = False
 
         if not args.packing:
             if data_collator is None:
-                data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+                data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
         if num_of_sequences is not None:
             warnings.warn(
@@ -360,7 +370,7 @@ class SFTTrainer(Trainer):
             if train_dataset is not None:
                 train_dataset = self._prepare_dataset(
                     train_dataset,
-                    tokenizer,
+                    processing_class,
                     args.packing,
                     args.dataset_text_field,
                     args.max_seq_length,
@@ -379,7 +389,7 @@ class SFTTrainer(Trainer):
                 for _eval_dataset_name, _eval_dataset in _eval_datasets.items():
                     _eval_datasets[_eval_dataset_name] = self._prepare_dataset(
                         _eval_dataset,
-                        tokenizer,
+                        processing_class,
                         eval_packing,
                         args.dataset_text_field,
                         args.max_seq_length,
@@ -392,10 +402,10 @@ class SFTTrainer(Trainer):
                 if not _multiple:
                     eval_dataset = _eval_datasets["singleton"]
 
-        if tokenizer.padding_side is not None and tokenizer.padding_side != "right":
+        if processing_class.padding_side is not None and processing_class.padding_side != "right":
             warnings.warn(
-                "You passed a tokenizer with `padding_side` not equal to `right` to the SFTTrainer. This might lead to some unexpected behaviour due to "
-                "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
+                "You passed a processing_class with `padding_side` not equal to `right` to the SFTTrainer. This might lead to some unexpected behaviour due to "
+                "overflow issues when training a model in half-precision. You might consider adding `processing_class.padding_side = 'right'` to your code."
             )
 
         super().__init__(
@@ -404,7 +414,7 @@ class SFTTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -443,7 +453,7 @@ class SFTTrainer(Trainer):
     def _prepare_dataset(
         self,
         dataset,
-        tokenizer,
+        processing_class,
         packing,
         dataset_text_field: str,
         max_seq_length,
@@ -483,7 +493,7 @@ class SFTTrainer(Trainer):
 
         if not packing:
             return self._prepare_non_packed_dataloader(
-                tokenizer,
+                processing_class,
                 dataset,
                 dataset_text_field,
                 max_seq_length,
@@ -494,7 +504,7 @@ class SFTTrainer(Trainer):
 
         else:
             return self._prepare_packed_dataloader(
-                tokenizer,
+                processing_class,
                 dataset,
                 dataset_text_field,
                 max_seq_length,
@@ -507,7 +517,7 @@ class SFTTrainer(Trainer):
 
     def _prepare_non_packed_dataloader(
         self,
-        tokenizer,
+        processing_class,
         dataset,
         dataset_text_field: str,
         max_seq_length,
@@ -517,7 +527,7 @@ class SFTTrainer(Trainer):
     ):
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
-            outputs = tokenizer(
+            outputs = processing_class(
                 element[dataset_text_field] if formatting_func is None else formatting_func(element),
                 add_special_tokens=add_special_tokens,
                 truncation=True,
@@ -560,7 +570,7 @@ class SFTTrainer(Trainer):
 
     def _prepare_packed_dataloader(
         self,
-        tokenizer,
+        processing_class,
         dataset,
         dataset_text_field: str,
         max_seq_length,
@@ -570,11 +580,11 @@ class SFTTrainer(Trainer):
         append_concat_token=True,
         add_special_tokens=True,
     ):
-        if tokenizer is None:
-            raise ValueError("You need to pass a tokenizer with `SFTTrainer`.")
+        if processing_class is None:
+            raise ValueError("You need to pass a processing_class with `SFTTrainer`.")
 
         constant_length_iterator = ConstantLengthDataset(
-            tokenizer,
+            processing_class,
             dataset,
             dataset_text_field=None if formatting_func is not None else dataset_text_field,
             formatting_func=formatting_func,
@@ -582,7 +592,7 @@ class SFTTrainer(Trainer):
             infinite=False,
             num_of_sequences=num_of_sequences,
             chars_per_token=chars_per_token,
-            eos_token_id=tokenizer.eos_token_id,
+            eos_token_id=processing_class.eos_token_id,
             append_concat_token=append_concat_token,
             add_special_tokens=add_special_tokens,
         )
