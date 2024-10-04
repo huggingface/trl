@@ -1,5 +1,7 @@
 # RLOO Trainer
 
+[![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo)
+
 TRL supports training LLMs with REINFORCE Leave-One-Out (RLOO). The idea is that instead of using a value function, RLOO generates K completions for each prompt. For each completion, RLOO uses the mean scores from the other K-1 completions as a baseline to calculate the advantage. RLOO also models the entire completion as a single action, where as PPO models each token as an action. Note that REINFORCE / A2C is a special case of PPO, when the number of PPO epochs is 1 and the number of mini-batches is 1, which is how we implement RLOO in TRL.
 
 References:
