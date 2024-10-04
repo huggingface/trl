@@ -360,7 +360,7 @@ class MixtureOfConstraintJudges(BaseConstraintJudge):
     def __init__(self, judges: List[BaseConstraintJudge]):
         self.judges = judges
 
-    def judge(self, prompts: List[str], completions: List[str], shuffle_order: bool = True) -> List[int]:
+    def judge(self, prompts: List[str], completions: List[str], shuffle_order: bool = True) -> List[bool]:
         all_constraint_judgments = [judge.judge(prompts, completions, shuffle_order) for judge in self.judges]
 
         return [
