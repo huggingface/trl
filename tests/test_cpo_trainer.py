@@ -37,15 +37,16 @@ class CPOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", "sigmoid"],
-            ["t5", "hinge"],
-            ["gpt2", "ipo"],
-            ["t5", "ipo"],
-            ["gpt2", "simpo"],
-            ["t5", "simpo"],
+            ["gpt2", "sigmoid", "standard_preference"],
+            ["t5", "hinge", "standard_implicit_prompt_preference"],
+            ["gpt2", "ipo", "conversational_preference"],
+            ["t5", "ipo", "conversational_implicit_prompt_preference"],
+            ["gpt2", "simpo", "standard_preference"],
+            ["t5", "simpo", "standard_implicit_prompt_preference"],
+            ["gpt2", "hinge", "conversational_preference"],
         ]
     )
-    def test_cpo_trainer(self, name, loss_type):
+    def test_cpo_trainer(self, name, loss_type, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = CPOConfig(
                 output_dir=tmp_dir,
@@ -61,7 +62,7 @@ class CPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             if name == "gpt2":
                 model = self.model
@@ -93,7 +94,15 @@ class CPOTrainerTester(unittest.TestCase):
                     assert not torch.equal(param, new_param)
 
     @require_peft
-    def test_cpo_trainer_with_lora(self):
+    @parameterized.expand(
+        [
+            ("standard_preference",),
+            ("standard_implicit_prompt_preference",),
+            ("conversational_preference",),
+            ("conversational_implicit_prompt_preference",),
+        ]
+    )
+    def test_cpo_trainer_with_lora(self, config_name):
         from peft import LoraConfig
 
         lora_config = LoraConfig(
@@ -118,7 +127,7 @@ class CPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             trainer = CPOTrainer(
                 model=self.model,

@@ -194,20 +194,20 @@ unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "
 
 Choosing the right dataset format depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset formats supported by each TRL trainer.
 
-| Trainer                 | Expected dataset format      |
-| ----------------------- | ---------------------------- |
-| [`BCOTrainer`]          | Unpaired preference          |
-| [`CPOTrainer`]          | Preference (explicit prompt) |
-| [`DPOTrainer`]          | Preference (explicit prompt) |
-| [`IterativeSFTTrainer`] | Unpaired preference          |
-| [`KTOTrainer`]          | Unpaired preference          |
-| [`NashMDTrainer`]       | Prompt-only                  |
-| [`OnlineDPOTrainer`]    | Prompt-only                  |
-| [`ORPOTrainer`]         | Preference (explicit prompt) |
-| [`PPOv2Trainer`]        | Tokenized language modeling  |
-| [`RewardTrainer`]       | Preference (implicit prompt) |
-| [`SFTTrainer`]          | Language modeling            |
-| [`XPOTrainer`]          | Prompt-only                  |
+| Trainer                 | Expected dataset format                                 |
+| ----------------------- | ------------------------------------------------------- |
+| [`BCOTrainer`]          | [Unpaired preference](#unpaired-preference)             |
+| [`CPOTrainer`]          | [Preference (explicit prompt recommended)](#preference) |
+| [`DPOTrainer`]          | [Preference (explicit prompt recommended)](#preference) |
+| [`IterativeSFTTrainer`] | [Unpaired preference](#unpaired-preference)             |
+| [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference)             |
+| [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                             |
+| [`OnlineDPOTrainer`]    | [Prompt-only](#prompt-only)                             |
+| [`ORPOTrainer`]         | [Preference (explicit prompt)](#preference)             |
+| [`PPOv2Trainer`]        | Tokenized language modeling                             |
+| [`RewardTrainer`]       | [Preference (implicit prompt recommended)](#preference) |
+| [`SFTTrainer`]          | [Language modeling](#language-modeling)                 |
+| [`XPOTrainer`]          | [Prompt-only](#prompt-only)                             |
 
 <Tip>
 
