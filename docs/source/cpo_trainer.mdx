@@ -29,7 +29,7 @@ model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 train_dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
 
-training_args = CPOConfig(output_dir="cpo-qwen2", logging_steps=10)
+training_args = CPOConfig(output_dir="Qwen2-0.5B-CPO", logging_steps=10)
 trainer = CPOTrainer(model=model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
