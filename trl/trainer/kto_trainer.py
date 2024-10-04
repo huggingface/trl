@@ -34,9 +34,12 @@ from datasets import Dataset, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainerCallback,
     TrainingArguments,
@@ -308,7 +311,9 @@ class KTOTrainer(Trainer):
         args: KTOConfig = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        processing_class: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         data_collator: Optional[DataCollator] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
