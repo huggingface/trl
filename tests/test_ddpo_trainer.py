@@ -15,8 +15,9 @@ import gc
 import unittest
 
 import torch
+from transformers.utils import is_peft_available
 
-from trl import is_diffusers_available, is_peft_available
+from trl import is_diffusers_available
 
 from .testing_utils import require_diffusers
 
@@ -40,7 +41,7 @@ class DDPOTrainerTester(unittest.TestCase):
     """
 
     def setUp(self):
-        self.ddpo_config = DDPOConfig(
+        self.training_args = DDPOConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,
             per_prompt_stat_tracking_buffer_size=32,
@@ -56,7 +57,7 @@ class DDPOTrainerTester(unittest.TestCase):
             pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=False
         )
 
-        self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
+        self.trainer = DDPOTrainer(self.training_args, scorer_function, prompt_function, pipeline)
 
         return super().setUp()
 
@@ -106,7 +107,7 @@ class DDPOTrainerWithLoRATester(DDPOTrainerTester):
     """
 
     def setUp(self):
-        self.ddpo_config = DDPOConfig(
+        self.training_args = DDPOConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,
             per_prompt_stat_tracking_buffer_size=32,
@@ -122,6 +123,6 @@ class DDPOTrainerWithLoRATester(DDPOTrainerTester):
             pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=True
         )
 
-        self.trainer = DDPOTrainer(self.ddpo_config, scorer_function, prompt_function, pipeline)
+        self.trainer = DDPOTrainer(self.training_args, scorer_function, prompt_function, pipeline)
 
         return super().setUp()

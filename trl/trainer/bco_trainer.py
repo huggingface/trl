@@ -15,11 +15,11 @@
 import inspect
 import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from functools import wraps
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
@@ -39,26 +39,28 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
+    is_sklearn_available,
+    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_peft_available, is_sklearn_available, is_wandb_available
+from ..data_utils import maybe_apply_chat_template
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .bco_config import BCOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
     disable_dropout_in_model,
+    generate_model_card,
     pad_to_length,
     peft_module_casting_to_bf16,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-
 
 if is_wandb_available():
     import wandb
@@ -148,11 +150,11 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
 
     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
     in case the prompt + completion responses is/are too long. First
-        we truncate the prompt; if we're still too long, we truncate the completion.
+    we truncate the prompt; if we're still too long, we truncate the completion.
 
     We also create the labels for the completion responses, which are of length equal to
-        the sum of the length of the prompt and the completion response, with
-        label_pad_token_id  for the prompt tokens.
+    the sum of the length of the prompt and the completion response, with
+    label_pad_token_id  for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -265,7 +267,7 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
 
 class BCOTrainer(Trainer):
     r"""
-    Initialize BCOTrainer from [BCO](https://arxiv.org/abs/2404.04656) paper.
+    Initialize BCOTrainer from [BCO](https://huggingface.co/papers/2404.04656) paper.
 
     Args:
         model (`transformers.PreTrainedModel`):
@@ -327,8 +329,19 @@ class BCOTrainer(Trainer):
         embedding_func: Optional[Callable] = None,
         embedding_tokenizer: Optional[PreTrainedTokenizerBase] = None,
     ):
-        if type(args) == TrainingArguments:
-            raise ValueError("Please use `BCOConfig` instead TrainingArguments.")
+        if not is_sklearn_available():
+            raise ImportError(
+                "BCOTrainer requires the scikit-learn library. Please install it with `pip install scikit-learn`."
+            )
+
+        if type(args) is TrainingArguments:
+            raise ValueError("Please use `BCOConfig` instead `TrainingArguments`.")
+
+        if not isinstance(model, str) and ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+            )
 
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
@@ -550,6 +563,14 @@ class BCOTrainer(Trainer):
         self.embedding_tokenizer = embedding_tokenizer
 
         with PartialState().local_main_process_first():
+            # Apply the chat template if needed
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(
+                    maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+                )
             # Shuffle the datasets
             train_dataset = train_dataset.shuffle(seed=args.data_seed)
             if eval_dataset is not None:
@@ -1205,11 +1226,13 @@ class BCOTrainer(Trainer):
         if all_num_chosen > 0:
             metrics["rewards/chosen_sum"] = self.accelerator.gather(chosen_rewards.nansum()).nansum().item()
             metrics["logps/chosen_sum"] = self.accelerator.gather(policy_chosen_logps.nansum()).nansum().item()
+            metrics["logits/chosen_sum"] = self.accelerator.gather(policy_chosen_logits.nansum()).nansum().item()
             metrics["count/chosen"] = all_num_chosen
 
         if all_num_rejected > 0:
             metrics["rewards/rejected_sum"] = self.accelerator.gather(rejected_rewards.nansum()).nansum().item()
             metrics["logps/rejected_sum"] = self.accelerator.gather(policy_rejected_logps.nansum()).nansum().item()
+            metrics["logits/rejected_sum"] = self.accelerator.gather(policy_rejected_logits.nansum()).nansum().item()
             metrics["count/rejected"] = all_num_rejected
 
         loss = losses.nanmean()
@@ -1410,14 +1433,14 @@ class BCOTrainer(Trainer):
         for split in ["chosen", "rejected"]:
             if f"count/{split}" in self._stored_metrics[train_eval]:
                 count_sum = torch.Tensor(self._stored_metrics[train_eval][f"count/{split}"]).sum().item()
-                logs[f"{prefix}rewards/{split}"] = (
-                    torch.Tensor(self._stored_metrics[train_eval][f"rewards/{split}_sum"]).sum().item() / count_sum
-                )
-                logs[f"{prefix}logps/{split}"] = (
-                    torch.Tensor(self._stored_metrics[train_eval][f"logps/{split}_sum"]).sum().item() / count_sum
-                )
-                for key in [f"count/{split}", f"rewards/{split}_sum", f"logps/{split}_sum"]:
-                    del self._stored_metrics[train_eval][key]
+                for metric in ["rewards", "logps", "logits"]:
+                    logs[f"{prefix}{metric}/{split}"] = (
+                        torch.Tensor(self._stored_metrics[train_eval][f"{metric}/{split}_sum"]).sum().item()
+                        / count_sum
+                    )
+                    # delete obsolete metric
+                    del self._stored_metrics[train_eval][f"{metric}/{split}_sum"]
+                del self._stored_metrics[train_eval][f"count/{split}"]
         # calculate reward margin
         if f"{prefix}rewards/chosen" in logs and f"{prefix}rewards/rejected" in logs:
             logs[f"{prefix}rewards/margins"] = logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
@@ -1427,17 +1450,50 @@ class BCOTrainer(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(
+    def create_model_card(
         self,
-        commit_message: Optional[str] = "End of training",
-        blocking: bool = True,
-        **kwargs,
-    ) -> str:
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "bco" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or None, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        citation = textwrap.dedent("""\
+        @article{jung2024binary,
+            title        = {{Binary Classifier Optimization for Large Language Model Alignment}},
+            author       = {Seungjae Jung and Gunsoo Han and Daniel Wontae Nam and Kyoung{-}Woon On},
+            year         = 2024,
+            eprint       = {arXiv:2404.04656}
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="BCO",
+            trainer_citation=citation,
+            paper_title="Binary Classifier Optimization for Large Language Model Alignment",
+            paper_id="2404.04656",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

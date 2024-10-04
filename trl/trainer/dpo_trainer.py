@@ -13,12 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from functools import wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import torch
@@ -36,12 +37,14 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
+    is_wandb_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_peft_available, is_wandb_available
+from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
@@ -52,9 +55,9 @@ from .utils import (
     add_eos_token_if_needed,
     cap_exp,
     disable_dropout_in_model,
+    generate_model_card,
     pad_to_length,
     peft_module_casting_to_bf16,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
@@ -122,7 +125,7 @@ def _process_prompt(
         )
         prompt_tokens = []
         for prompt, image in zip(prompts, images):
-            tokens = processor(prompt, images=image, **processor_kwargs)
+            tokens = processor(images=image, text=prompt, **processor_kwargs)
             tokens = {k: v[0] for k, v in tokens.items()}
             if not isinstance(tokens["input_ids"], list):
                 tokens["input_ids"] = tokens["input_ids"].tolist()
@@ -254,8 +257,10 @@ def _tokenize_encoder_decoder(
     args: DPOConfig,
     model: Optional[PreTrainedModel],
 ) -> None:
-    chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_target_length, add_special_tokens=True)
-    rejected_tokens = tokenizer(rejected, truncation=True, max_length=args.max_target_length, add_special_tokens=True)
+    chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_completion_length, add_special_tokens=True)
+    rejected_tokens = tokenizer(
+        rejected, truncation=True, max_length=args.max_completion_length, add_special_tokens=True
+    )
     prompt_tokens = tokenizer(prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True)
 
     batch["chosen_labels"] = chosen_tokens["input_ids"]
@@ -299,7 +304,7 @@ def _build_tokenized_answer(
                 if "add_special_tokens" in inspect.signature(processor).parameters
                 else {}
             )
-            tokenized = processor(text, images=images, **processor_kwargs)
+            tokenized = processor(images=images, text=text, **processor_kwargs)
             tokenized = {k: v[0] for k, v in tokenized.items()}
             if not isinstance(tokenized["input_ids"], list):
                 tokenized["input_ids"] = tokenized["input_ids"].tolist()
@@ -388,7 +393,7 @@ class DPOTrainer(Trainer):
     _tag_names = ["trl", "dpo"]
 
     @_deprecate_arguments(
-        version="1.0.0",
+        version="0.13.0",
         deprecated_args=[
             "beta",
             "label_smoothing",
@@ -449,6 +454,12 @@ class DPOTrainer(Trainer):
         reference_free: bool = False,
         force_use_ref_model: bool = False,
     ):
+        if not isinstance(model, str) and ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+            )
+
         if model_init_kwargs is not None:
             warnings.warn(
                 "You passed `model_init_kwargs` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
@@ -692,14 +703,14 @@ class DPOTrainer(Trainer):
             warnings.warn(
                 "You passed `max_target_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
-            args.max_target_length = max_target_length
-        if args.max_target_length is None and self.is_encoder_decoder:
+            args.max_completion_length = max_target_length
+        if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
-                "When using an encoder decoder architecture, you should set `max_target_length` in the DPOConfig's init"
+                "When using an encoder decoder architecture, you should set `max_completion_length` in the DPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            args.max_target_length = 128
+            args.max_completion_length = 128
 
         if label_pad_token_id != -100:
             warnings.warn(
@@ -752,7 +763,7 @@ class DPOTrainer(Trainer):
             )
             args.truncation_mode = truncation_mode
         self.truncation_mode = args.truncation_mode
-        self.max_target_length = args.max_target_length
+        self.max_completion_length = args.max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
@@ -805,6 +816,17 @@ class DPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
+            # Extract the prompt if needed, and apply the chat template if needed
+            train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+                )
+
             # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
             fn_kwargs = {
                 "tokenizer": self.tokenizer,
@@ -1035,21 +1057,13 @@ class DPOTrainer(Trainer):
         with torch.no_grad(), compte_ref_context_manager:
             if self.ref_model is None:
                 with self.null_ref_context():
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.model, padded_batch)
+                    reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                        self.model, padded_batch
+                    )[:2]
             else:
-                (
-                    reference_chosen_logps,
-                    reference_rejected_logps,
-                    _,
-                    _,
-                    _,
-                ) = self.concatenated_forward(self.ref_model, padded_batch)
+                reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                    self.ref_model, padded_batch
+                )[:2]
 
         return reference_chosen_logps, reference_rejected_logps
 
@@ -1458,21 +1472,13 @@ class DPOTrainer(Trainer):
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            _,
-                            _,
-                            _,
-                        ) = self.concatenated_forward(self.model, batch)
+                        reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                            self.model, batch
+                        )[:2]
                 else:
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.ref_model, batch)
+                    reference_chosen_logps, reference_rejected_logps = self.concatenated_forward(
+                        self.ref_model, batch
+                    )[:2]
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             policy_chosen_logps,
@@ -1684,17 +1690,52 @@ class DPOTrainer(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(
+    def create_model_card(
         self,
-        commit_message: Optional[str] = "End of training",
-        blocking: bool = True,
-        **kwargs,
-    ) -> str:
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "dpo" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        citation = textwrap.dedent("""\
+        @inproceedings{rafailov2023direct,
+            title        = {{Direct Preference Optimization: Your Language Model is Secretly a Reward Model}},
+            author       = {Rafael Rafailov and Archit Sharma and Eric Mitchell and Christopher D. Manning and Stefano Ermon and Chelsea Finn},
+            year         = 2023,
+            booktitle    = {Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023},
+            url          = {http://papers.nips.cc/paper_files/paper/2023/hash/a85b405ed65c6477a4fe8302b5e06ce7-Abstract-Conference.html},
+            editor       = {Alice Oh and Tristan Naumann and Amir Globerson and Kate Saenko and Moritz Hardt and Sergey Levine},
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="DPO",
+            trainer_citation=citation,
+            paper_title="Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+            paper_id="2305.18290",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

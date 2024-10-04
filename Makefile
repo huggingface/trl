@@ -1,4 +1,4 @@
-.PHONY: test precommit benchmark_core benchmark_aux common_tests slow_tests test_examples tests_gpu
+.PHONY: test precommit common_tests slow_tests test_examples tests_gpu
 
 check_dirs := examples tests trl
 
@@ -16,12 +16,7 @@ test:
 
 precommit:
 	pre-commit run --all-files
-
-benchmark_core:
-	bash ./benchmark/benchmark_core.sh
-
-benchmark_aux:
-	bash ./benchmark/benchmark_aux.sh
+	python scripts/add_copyrights.py
 
 tests_gpu:
 	python -m pytest tests/test_* $(if $(IS_GITHUB_CI),--report-log "common_tests.log",)

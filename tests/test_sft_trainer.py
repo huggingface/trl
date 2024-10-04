@@ -19,20 +19,20 @@ import unittest
 import numpy as np
 import pytest
 import torch
-from datasets import Dataset, Image, Sequence
+from datasets import Dataset, Image, Sequence, load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoProcessor,
     AutoTokenizer,
     LlavaForConditionalGeneration,
     TrainingArguments,
+    is_vision_available,
 )
+from transformers.testing_utils import require_peft, require_vision
+from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.import_utils import is_peft_available, is_pil_available
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
-
-from .testing_utils import require_peft, requires_pil
 
 
 def formatting_prompts_func(example):
@@ -51,7 +51,7 @@ def formatting_prompts_func_batched(example):
 if is_peft_available():
     from peft import LoraConfig, PeftModel
 
-if is_pil_available():
+if is_vision_available():
     from PIL import Image as PILImage
 
 
@@ -94,44 +94,12 @@ class SFTTrainerTester(unittest.TestCase):
                 ],
             }
         )
-        self.dummy_chatml_dataset = Dataset.from_dict(
-            {
-                "messages": [
-                    [
-                        {"role": "system", "content": "You are helpful"},
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                        {"role": "user", "content": "What is 2+2?"},
-                        {"role": "assistant", "content": "4"},
-                        {"role": "user", "content": "What is 3+3?"},
-                        {"role": "assistant", "content": "6"},
-                    ],
-                    [
-                        {"role": "system", "content": "You are helpful"},
-                        {"role": "user", "content": "Hello"},
-                        {"role": "assistant", "content": "Hi, how can I help you?"},
-                    ],
-                ]
-            }
-        )
-        self.dummy_instruction_dataset = Dataset.from_list(
-            [
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-                {"prompt": "What is 2+2?", "completion": "4"},
-                {"prompt": "What is 3+3?", "completion": "6"},
-                {"prompt": "What is 4+4?", "completion": "8"},
-            ]
+        self.conversational_lm_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        self.standard_prompt_completion_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_completion"
         )
 
-        if is_pil_available():
+        if is_vision_available():
             self.dummy_vsft_instruction_dataset = Dataset.from_dict(
                 {
                     "messages": [
@@ -178,7 +146,6 @@ class SFTTrainerTester(unittest.TestCase):
         self.train_dataset = ConstantLengthDataset(
             self.tokenizer,
             self.dummy_dataset,
-            dataset_text_field=None,
             formatting_func=formatting_prompts_func,
             seq_length=16,
             num_of_sequences=16,
@@ -187,7 +154,6 @@ class SFTTrainerTester(unittest.TestCase):
         self.eval_dataset = ConstantLengthDataset(
             self.tokenizer,
             self.dummy_dataset,
-            dataset_text_field=None,
             formatting_func=formatting_prompts_func,
             seq_length=16,
             num_of_sequences=16,
@@ -197,7 +163,6 @@ class SFTTrainerTester(unittest.TestCase):
         formatted_dataset = ConstantLengthDataset(
             self.tokenizer,
             self.dummy_dataset,
-            dataset_text_field=None,
             formatting_func=formatting_prompts_func,
         )
 
@@ -274,29 +239,10 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
+            # Shoud work as SFTTrainer natively supports conversational lm dataset
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
-                max_steps=2,
-                eval_steps=1,
-                save_steps=1,
-                per_device_train_batch_size=2,
-                packing=True,
-                report_to="none",
-            )
-
-            with pytest.raises(ValueError):
-                _ = SFTTrainer(
-                    model=self.model,
-                    args=training_args,
-                    train_dataset=self.dummy_dataset,
-                )
-            # this should work since the dummy chatml include the correct format
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -309,13 +255,13 @@ class SFTTrainerTester(unittest.TestCase):
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
-                train_dataset=self.dummy_chatml_dataset,
+                train_dataset=self.conversational_lm_dataset["train"],
             )
 
+            # Same, but without packing
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -326,14 +272,13 @@ class SFTTrainerTester(unittest.TestCase):
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
-                train_dataset=self.dummy_chatml_dataset,
+                train_dataset=self.conversational_lm_dataset["train"],
             )
-            # this should work since the dummy instruction dataset is the correct format
 
+            # Same, but with packing with `max_seq_length`
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -345,13 +290,13 @@ class SFTTrainerTester(unittest.TestCase):
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
-                train_dataset=self.dummy_instruction_dataset,
+                train_dataset=self.standard_prompt_completion_dataset["train"],
             )
 
+            # Same but with prompt completion dataset
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -362,13 +307,13 @@ class SFTTrainerTester(unittest.TestCase):
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
-                train_dataset=self.dummy_instruction_dataset,
+                train_dataset=self.standard_prompt_completion_dataset["train"],
             )
 
+            # Should work as dummy dataset are supported with a formatting function
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -377,7 +322,6 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
                 report_to="none",
             )
-            # This should work
             _ = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -385,20 +329,19 @@ class SFTTrainerTester(unittest.TestCase):
                 formatting_func=formatting_prompts_func,
             )
 
+            # This should not work because not enough data for one sample
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                max_steps=2,
+                eval_steps=1,
+                save_steps=1,
+                per_device_train_batch_size=2,
+                max_seq_length=1024,  # make sure there is NOT at least 1 packed sequence
+                packing=True,
+                report_to="none",
+            )
             with pytest.raises(ValueError):
-                # This should not work because not enough data for one sample
-                training_args = SFTConfig(
-                    output_dir=tmp_dir,
-                    dataloader_drop_last=True,
-                    eval_strategy="steps",
-                    max_steps=2,
-                    eval_steps=1,
-                    save_steps=1,
-                    per_device_train_batch_size=2,
-                    max_seq_length=1024,  # make sure there is NOT at least 1 packed sequence
-                    packing=True,
-                    report_to="none",
-                )
                 _ = SFTTrainer(
                     model=self.model,
                     args=training_args,
@@ -411,7 +354,6 @@ class SFTTrainerTester(unittest.TestCase):
                 training_args = SFTConfig(
                     output_dir=tmp_dir,
                     dataloader_drop_last=True,
-                    eval_strategy="steps",
                     max_steps=2,
                     eval_steps=1,
                     save_steps=1,
@@ -430,7 +372,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 eval_steps=1,
                 save_steps=1,
@@ -477,12 +418,10 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
-                dataset_text_field="text",
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
@@ -504,12 +443,10 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
-                dataset_text_field="text",
                 max_seq_length=16,
                 report_to="none",
             )
@@ -556,11 +493,9 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                dataset_text_field="text",
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
@@ -583,7 +518,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -610,7 +544,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
@@ -634,11 +567,9 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                dataset_text_field="text",
                 max_seq_length=16,
                 report_to="none",
             )
@@ -857,7 +788,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.eval_dataset,
             )
 
-            trainer.model = trainer._trl_activate_neftune(trainer.model)
+            trainer.model = trainer._activate_neftune(trainer.model)
 
             device = trainer.model.get_input_embeddings().weight.device
             trainer.model.train()
@@ -1021,7 +952,7 @@ class SFTTrainerTester(unittest.TestCase):
                 peft_config=peft_config,
             )
 
-            trainer.model = trainer._trl_activate_neftune(trainer.model)
+            trainer.model = trainer._activate_neftune(trainer.model)
 
             assert isinstance(trainer.model, PeftModel)
 
@@ -1084,7 +1015,8 @@ class SFTTrainerTester(unittest.TestCase):
                 peft_config=peft_config,
             )
 
-            assert trainer.model.model_tags == trainer._tag_names
+            for tag in ["sft", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
 
     @require_peft
     def test_sft_trainer_tag(self):
@@ -1109,7 +1041,35 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.eval_dataset,
             )
 
-            assert trainer.model.model_tags == trainer._tag_names
+            for tag in ["sft", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
+
+    def test_sft_trainer_only_train_packing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+                packing=True,
+                max_seq_length=16,  # make sure there is at least 1 packed sequence
+                eval_packing=False,
+                report_to="none",
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.conversational_lm_dataset["train"],
+                eval_dataset=self.conversational_lm_dataset["test"],
+            )
+
+            assert len(trainer.train_dataset["input_ids"]) == 21  # with the used dataset, we end up with 21 sequences
+            assert len(trainer.eval_dataset["input_ids"]) == len(self.conversational_lm_dataset["test"])
 
     def test_sft_trainer_eval_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1122,22 +1082,22 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
+                max_seq_length=16,  # make sure there is at least 1 packed sequence
                 packing=True,
-                max_seq_length=32,  # make sure there is at least 1 packed sequence
-                eval_packing=False,
                 report_to="none",
             )
-
             trainer = SFTTrainer(
                 model=self.model_id,
                 args=training_args,
-                train_dataset=self.dummy_chatml_dataset,
-                eval_dataset=self.dummy_chatml_dataset,
+                train_dataset=self.conversational_lm_dataset["train"],
+                eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            assert len(trainer.train_dataset["input_ids"]) == 1
-            assert len(trainer.eval_dataset["input_ids"]) != 1
+            assert len(trainer.train_dataset["input_ids"]) == 21  # with the used dataset, we end up with 21 sequences
+            assert len(trainer.eval_dataset["input_ids"]) == 2  # with the used dataset, we end up with 2 sequence
 
+    def test_sft_trainer_no_packing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
@@ -1147,44 +1107,21 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
-                max_seq_length=32,  # make sure there is at least 1 packed sequence
-                packing=True,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model=self.model_id,
-                args=training_args,
-                train_dataset=self.dummy_chatml_dataset,
-                eval_dataset=self.dummy_chatml_dataset,
-            )
-
-            assert len(trainer.train_dataset["input_ids"]) == 1
-            assert len(trainer.eval_dataset["input_ids"]) == 1
-
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                eval_strategy="steps",
-                max_steps=4,
-                eval_steps=2,
-                save_steps=2,
-                per_device_train_batch_size=2,
-                gradient_checkpointing=True,
-                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                max_seq_length=16,  # make sure there is at least 1 packed sequence
                 packing=False,
                 report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model_id,
                 args=training_args,
-                train_dataset=self.dummy_chatml_dataset,
-                eval_dataset=self.dummy_chatml_dataset,
+                train_dataset=self.conversational_lm_dataset["train"],
+                eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            assert len(trainer.train_dataset["input_ids"]) != 1
-            assert len(trainer.eval_dataset["input_ids"]) != 1
+            assert len(trainer.train_dataset["input_ids"]) == len(self.conversational_lm_dataset["train"])
+            assert len(trainer.eval_dataset["input_ids"]) == len(self.conversational_lm_dataset["test"])
 
-    @requires_pil
+    @require_vision
     def test_sft_trainer_skip_prepare_dataset(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -1197,7 +1134,6 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 remove_unused_columns=False,
-                dataset_text_field="text",  # need a dummy field
                 dataset_kwargs={"skip_prepare_dataset": True},
                 report_to="none",
             )
@@ -1216,7 +1152,6 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
-                eval_strategy="steps",
                 max_steps=4,
                 eval_steps=2,
                 save_steps=2,
@@ -1235,7 +1170,7 @@ class SFTTrainerTester(unittest.TestCase):
             )
             assert trainer.train_dataset.features == self.dummy_dataset.features
 
-    @requires_pil
+    @require_vision
     def test_sft_trainer_llava(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -1248,7 +1183,6 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
                 remove_unused_columns=False,
-                dataset_text_field="",  # need a dummy field
                 dataset_kwargs={"skip_prepare_dataset": True},
                 report_to="none",
             )

@@ -58,13 +58,13 @@ And its `continuation` value:
 
 We want to increase the chance for the model to generate toxic prompts so we get more learning signal. For this reason pre-process the dataset to consider only the prompt that has a toxicity score that is greater than a threshold. We can do this in a few lines of code:
 ```python
-ds = load_dataset("allenai/real-toxicity-prompts", split="train")
+train_dataset = load_dataset("allenai/real-toxicity-prompts", split="train")
 
 def filter_fn(sample):
     toxicity = sample["prompt"]["toxicity"]
     return toxicity is not None and toxicity > 0.3
 
-ds = ds.filter(filter_fn, batched=False)
+train_dataset = train_dataset.filter(filter_fn, batched=False)
 ```
 
 ### Reward function
