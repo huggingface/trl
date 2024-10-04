@@ -11,8 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import warnings
-from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -26,38 +26,52 @@ from transformers import (
     PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
+    is_wandb_available,
 )
 from transformers.trainer_utils import EvalLoopOutput
+from transformers.utils import is_peft_available
 
 from ..core import PPODecorators
-from ..import_utils import is_peft_available
-from .utils import trl_sanitze_kwargs_for_tagging
+from .utils import generate_model_card
 
 
 if is_peft_available():
     from peft import PeftModel
 
 
+if is_wandb_available():
+    import wandb
+
+
 class IterativeSFTTrainer(Trainer):
     """
     The IterativeSFTTrainer can be used to finetune models with methods that requires some steps between optimization.
 
-    Attributes:
-        **model** (`PreTrainedModel`) -- Model to be optimized, either an 'AutoModelForCausalLM' or an 'AutoModelForSeq2SeqLM'.
+    Args:
+        model (`PreTrainedModel`):
+            Model to be optimized, either an 'AutoModelForCausalLM' or an 'AutoModelForSeq2SeqLM'.
             Check the documentation of `PreTrainedModel` for more details.
-        **args** (`transformers.TrainingArguments`): -- The arguments to use for training.
-        **tokenizer** (`PreTrainedTokenizerBase`) -- Tokenizer to be used for encoding the
-            data. Check the documentation of `transformers.PreTrainedTokenizer` and
+        args (`transformers.TrainingArguments`):
+            The arguments to use for training.
+        tokenizer (`PreTrainedTokenizerBase`):
+            Tokenizer to be used for encoding the data. Check the documentation of `transformers.PreTrainedTokenizer` and
             `transformers.PreTrainedTokenizerFast` for more details.
-        **optimizers** (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`): -- The optimizer and scheduler to use for training.
-        **data_collator** (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*) -- Data collator to be used for training and
-            passed along the dataloader.
-        **eval_dataset** (`datasets.Dataset`): The dataset to use for evaluation.
-        **max_length** (`int`, defaults to `None`): -- The maximum length of the input.
-        **truncation_mode** (`str`, defaults to `keep_end`): -- The truncation mode to use, either `keep_end` or `keep_start`.
-        **preprocess_logits_for_metrics** (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`): -- The function to use to preprocess the logits before computing the metrics.
-        **compute_metrics** (`Callable[[EvalPrediction], Dict]`, *optional*): -- The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
-        **optimize_device_cache ** (`bool`, *optional*, defaults to `False`) -- Optimize CUDA cache for slightly more memory-efficient training.
+        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            The optimizer and scheduler to use for training.
+        data_collator (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*):
+            Data collator to be used for training and passed along the dataloader.
+        eval_dataset (`datasets.Dataset`):
+            The dataset to use for evaluation.
+        max_length (`int`, defaults to `None`):
+            The maximum length of the input.
+        truncation_mode (`str`, defaults to `keep_end`):
+            The truncation mode to use, either `keep_end` or `keep_start`.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
+            The function to use to preprocess the logits before computing the metrics.
+        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
+        optimize_device_cache (`bool`, *optional*, defaults to `False`):
+            Optimize CUDA cache for slightly more memory-efficient training.
     """
 
     _tag_names = ["trl", "iterative-sft"]
@@ -129,6 +143,10 @@ class IterativeSFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Add tags for models that have been loaded with the correct transformers version
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
+
         self.create_optimizer_and_scheduler(self.args.max_steps)
 
         # prepare model, optimizer and lr_scheduler
@@ -199,6 +217,7 @@ class IterativeSFTTrainer(Trainer):
                 List of string containing the text input.
             texts_labels (List[`str`]):
                 List of string containing the text labels.
+
         Returns:
             `tuple`: The input data.
         """
@@ -252,6 +271,7 @@ class IterativeSFTTrainer(Trainer):
                 List of strings containing the text input (if not provided, input_ids will directly be used)
             texts_labels (List[`str`], *optional*):
                 List of strings containing the text labels (if set to None, will default to text)
+
         Returns:
             `dict[str, Any]`: A summary of the training statistics
         """
@@ -370,17 +390,39 @@ class IterativeSFTTrainer(Trainer):
 
                 self.log(logs)
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(
+    def create_model_card(
         self,
-        commit_message: Optional[str] = "End of training",
-        blocking: bool = True,
-        **kwargs,
-    ) -> str:
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "iterative-sft" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="Iterative SFT",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

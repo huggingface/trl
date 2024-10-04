@@ -13,6 +13,7 @@
 # limitations under the License.
 import dataclasses
 import inspect
+import os
 import warnings
 from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -33,19 +34,19 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
+    is_wandb_available,
 )
-from transformers.modeling_utils import unwrap_model
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
+from transformers.utils import is_peft_available
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
-from ..import_utils import is_liger_available, is_peft_available
-from .callbacks import RichProgressCallback
+from ..import_utils import is_liger_kernel_available
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
-    neftune_post_forward_hook,
+    generate_model_card,
     peft_module_casting_to_bf16,
     trl_sanitze_kwargs_for_tagging,
 )
@@ -54,8 +55,11 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
-if is_liger_available():
+if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
+
+if is_wandb_available():
+    import wandb
 
 
 class SFTTrainer(Trainer):
@@ -100,7 +104,7 @@ class SFTTrainer(Trainer):
     _tag_names = ["trl", "sft"]
 
     @_deprecate_arguments(
-        version="1.0.0",
+        version="0.13.0",
         deprecated_args=[
             "dataset_text_field",
             "packing",
@@ -153,6 +157,12 @@ class SFTTrainer(Trainer):
             # Manually copy token values as TrainingArguments.to_dict() redacts them
             args_as_dict.update({k: getattr(args, k) for k in args_as_dict.keys() if k.endswith("_token")})
             args = SFTConfig(**args_as_dict)
+
+        if neftune_noise_alpha is not None:
+            warnings.warn(
+                "You passed a `neftune_noise_alpha` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
+            )
+            args.neftune_noise_alpha = neftune_noise_alpha
 
         if model_init_kwargs is not None:
             warnings.warn(
@@ -228,7 +238,7 @@ class SFTTrainer(Trainer):
                 if getattr(model, "is_loaded_in_4bit", False):
                     for _, param in model.named_parameters():
                         if param.__class__.__name__ == "Params4bit":
-                            is_sharded_qlora = param.data.device.type == "cpu"
+                            is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
                             break
                 if getattr(model, "is_loaded_in_8bit", False) or (
                     getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora
@@ -307,16 +317,6 @@ class SFTTrainer(Trainer):
             args.dataset_batch_size = dataset_batch_size
         self.dataset_batch_size = args.dataset_batch_size
 
-        self._trainer_supports_neftune = hasattr(args, "neftune_noise_alpha")
-        if neftune_noise_alpha is not None and self._trainer_supports_neftune:
-            args.neftune_noise_alpha = neftune_noise_alpha
-            warnings.warn(
-                "You passed a `neftune_noise_alpha` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
-            )
-            # self.neftune_noise_alpha is done at Trainer level
-        elif not self._trainer_supports_neftune:
-            self.neftune_noise_alpha = neftune_noise_alpha
-
         if dataset_text_field is not None:
             warnings.warn(
                 "You passed a `dataset_text_field` argument to the SFTTrainer, the value you passed will override the one in the `SFTConfig`."
@@ -331,26 +331,15 @@ class SFTTrainer(Trainer):
         if args.dataset_kwargs is None:
             args.dataset_kwargs = {}
 
-        if formatting_func is None and args.dataset_text_field is None:
+        if formatting_func is None:
             # check if dataset has ChatML format or instruction format and is supported
-            # if not stays #None
+            # if not stays None
             formatting_func = get_formatting_func_from_dataset(train_dataset, tokenizer)
             # if a template is detected, we don't need to add special tokens again
             if formatting_func is not None:
                 args.dataset_kwargs["add_special_tokens"] = False
 
         if not args.packing:
-            # If we aren't skipping data preparation, then a dataset_text_field
-            # or formatting_func must be provided.
-            if (
-                args.dataset_text_field is None
-                and formatting_func is None
-                and not args.dataset_kwargs.get("skip_prepare_dataset", False)
-            ):
-                raise ValueError(
-                    "You passed `packing=False` to the SFTTrainer/SFTConfig, but you didn't pass a `dataset_text_field` or `formatting_func` argument."
-                )
-
             if data_collator is None:
                 data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
@@ -427,41 +416,14 @@ class SFTTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-        if self.args.max_steps > 0 and args.packing:
-            warnings.warn(
-                "You passed `packing=True` to the SFTTrainer/SFTConfig, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
-            )
-            self.train_dataset.infinite = True
-        elif self.args.max_steps == -1 and args.packing:
-            self.train_dataset.infinite = False
-
-        if any(isinstance(callback, RichProgressCallback) for callback in self.callback_handler.callbacks):
-            for callback in self.callback_handler.callbacks:
-                # Remove the PrinterCallback to avoid duplicated prints in case we passed a `RichProgressCallback`
-                if callback.__class__.__name__ == "PrinterCallback":
-                    self.callback_handler.pop_callback(callback)
-
-    @wraps(Trainer.train)
-    def train(self, *args, **kwargs):
-        # Activate neftune right before training.
-        if self.neftune_noise_alpha is not None and not self._trainer_supports_neftune:
-            self.model = self._trl_activate_neftune(self.model)
-
-        output = super().train(*args, **kwargs)
-
-        # After training we make sure to retrieve back the original forward pass method
-        # for the embedding layer by removing the forward post hook.
-        if self.neftune_noise_alpha is not None and not self._trainer_supports_neftune:
-            unwrapped_model = unwrap_model(self.model)
-            if is_peft_available() and isinstance(unwrapped_model, PeftModel):
-                embeddings = unwrapped_model.base_model.model.get_input_embeddings()
-            else:
-                embeddings = unwrapped_model.get_input_embeddings()
-
-            self.neftune_hook_handle.remove()
-            del embeddings.neftune_noise_alpha
-
-        return output
+        if self.train_dataset is not None:
+            if self.args.max_steps > 0 and args.packing:
+                warnings.warn(
+                    "You passed `packing=True` to the SFTTrainer/SFTConfig, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
+                )
+                self.train_dataset.infinite = True
+            elif self.args.max_steps == -1 and args.packing:
+                self.train_dataset.infinite = False
 
     @wraps(Trainer.push_to_hub)
     def push_to_hub(
@@ -483,9 +445,9 @@ class SFTTrainer(Trainer):
         dataset,
         tokenizer,
         packing,
-        dataset_text_field,
+        dataset_text_field: str,
         max_seq_length,
-        formatting_func,
+        formatting_func: Optional[Callable],
         num_of_sequences,
         chars_per_token,
         remove_unused_columns=True,
@@ -547,19 +509,16 @@ class SFTTrainer(Trainer):
         self,
         tokenizer,
         dataset,
-        dataset_text_field,
+        dataset_text_field: str,
         max_seq_length,
-        formatting_func=None,
+        formatting_func: Optional[Callable] = None,
         add_special_tokens=True,
         remove_unused_columns=True,
     ):
-        use_formatting_func = formatting_func is not None and dataset_text_field is None
-        self._dataset_sanity_checked = False
-
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
             outputs = tokenizer(
-                element[dataset_text_field] if not use_formatting_func else formatting_func(element),
+                element[dataset_text_field] if formatting_func is None else formatting_func(element),
                 add_special_tokens=add_special_tokens,
                 truncation=True,
                 padding=False,
@@ -568,13 +527,10 @@ class SFTTrainer(Trainer):
                 return_length=False,
             )
 
-            if use_formatting_func and not self._dataset_sanity_checked:
-                if not isinstance(formatting_func(element), list):
-                    raise ValueError(
-                        "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
-                    )
-                else:
-                    self._dataset_sanity_checked = True
+            if formatting_func is not None and not isinstance(formatting_func(element), list):
+                raise ValueError(
+                    "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
+                )
 
             return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
 
@@ -606,65 +562,81 @@ class SFTTrainer(Trainer):
         self,
         tokenizer,
         dataset,
-        dataset_text_field,
+        dataset_text_field: str,
         max_seq_length,
         num_of_sequences,
         chars_per_token,
-        formatting_func=None,
+        formatting_func: Optional[Callable] = None,
         append_concat_token=True,
         add_special_tokens=True,
     ):
-        if dataset_text_field is not None or formatting_func is not None:
-            if tokenizer is None:
-                raise ValueError("You need to pass a tokenizer when using `dataset_text_field` with `SFTTrainer`.")
+        if tokenizer is None:
+            raise ValueError("You need to pass a tokenizer with `SFTTrainer`.")
 
-            constant_length_iterator = ConstantLengthDataset(
-                tokenizer,
-                dataset,
-                dataset_text_field=dataset_text_field,
-                formatting_func=formatting_func,
-                seq_length=max_seq_length,
-                infinite=False,
-                num_of_sequences=num_of_sequences,
-                chars_per_token=chars_per_token,
-                eos_token_id=tokenizer.eos_token_id,
-                append_concat_token=append_concat_token,
-                add_special_tokens=add_special_tokens,
+        constant_length_iterator = ConstantLengthDataset(
+            tokenizer,
+            dataset,
+            dataset_text_field=None if formatting_func is not None else dataset_text_field,
+            formatting_func=formatting_func,
+            seq_length=max_seq_length,
+            infinite=False,
+            num_of_sequences=num_of_sequences,
+            chars_per_token=chars_per_token,
+            eos_token_id=tokenizer.eos_token_id,
+            append_concat_token=append_concat_token,
+            add_special_tokens=add_special_tokens,
+        )
+
+        if isinstance(dataset, datasets.IterableDataset):
+            return constant_length_iterator
+
+        def data_generator(constant_length_iterator):
+            yield from constant_length_iterator
+
+        try:
+            packed_dataset = Dataset.from_generator(
+                data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
             )
-
-            if isinstance(dataset, datasets.IterableDataset):
-                return constant_length_iterator
-
-            def data_generator(constant_length_iterator):
-                yield from constant_length_iterator
-
-            try:
-                packed_dataset = Dataset.from_generator(
-                    data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
-                )
-            except (DatasetGenerationError, SchemaInferenceError) as exc:
-                raise ValueError(
-                    "Error occurred while packing the dataset. "
-                    "Make sure that your dataset has enough samples to at least yield one packed sequence."
-                ) from exc
-            return packed_dataset
-        else:
+        except (DatasetGenerationError, SchemaInferenceError) as exc:
             raise ValueError(
-                "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
-            )
+                "Error occurred while packing the dataset. "
+                "Make sure that your dataset has enough samples to at least yield one packed sequence."
+            ) from exc
+        return packed_dataset
 
-    def _trl_activate_neftune(self, model):
-        r"""
-        Activates the neftune as presented in this code: https://github.com/neelsjain/NEFTune and paper: https://huggingface.co/papers/2310.05914
-        Since in transformers Trainer we do have an `_activate_neftune` method, we need to rename this method to avoid conflicts.
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        unwrapped_model = unwrap_model(model)
-        if is_peft_available() and isinstance(unwrapped_model, PeftModel):
-            embeddings = unwrapped_model.base_model.model.get_input_embeddings()
-        else:
-            embeddings = unwrapped_model.get_input_embeddings()
+        Creates a draft of a model card using the information available to the `Trainer`.
 
-        embeddings.neftune_noise_alpha = self.neftune_noise_alpha
-        hook_handle = embeddings.register_forward_hook(neftune_post_forward_hook)
-        self.neftune_hook_handle = hook_handle
-        return model
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="SFT",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

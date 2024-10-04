@@ -16,6 +16,7 @@ State dict utilities: utility methods for converting state dicts easily
 File copied from diffusers to avoid import issues and make TRL compatible
 with most of diffusers versions.
 """
+
 import enum
 
 
@@ -58,12 +59,10 @@ DIFFUSERS_OLD_TO_DIFFUSERS = {
     ".to_out_lora.down": ".out_proj.lora_linear_layer.down",
 }
 
-
 DIFFUSERS_STATE_DICT_MAPPINGS = {
     StateDictType.DIFFUSERS_OLD: DIFFUSERS_OLD_TO_DIFFUSERS,
     StateDictType.PEFT: PEFT_TO_DIFFUSERS,
 }
-
 
 KEYS_TO_ALWAYS_REPLACE = {
     ".processor.": ".",

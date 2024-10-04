@@ -22,9 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-from transformers.generation import TopKLogitsWarper, TopPLogitsWarper
-
-from .import_utils import is_npu_available, is_xpu_available
+from transformers import TopKLogitsWarper, TopPLogitsWarper, is_torch_npu_available, is_torch_xpu_available
 
 
 try:
@@ -114,20 +112,6 @@ def stack_dicts(stats_dicts: List[Dict]) -> Dict:
     return results
 
 
-def add_suffix(input_dict: Dict, suffix: str) -> Dict:
-    """Add suffix to dict keys."""
-    return {k + suffix: v for k, v in input_dict.items()}
-
-
-def pad_to_size(tensor: torch.Tensor, size: int, dim: int = 1, padding: int = 50256) -> torch.Tensor:
-    """Pad tensor to size."""
-    t_size = tensor.size()[dim]
-    if t_size == size:
-        return tensor
-    else:
-        return torch.nn.functional.pad(tensor, (0, size - t_size), "constant", padding)
-
-
 def logprobs_from_logits(logits: torch.Tensor, labels: torch.Tensor, gather: bool = True) -> torch.Tensor:
     """
     See: https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591
@@ -201,14 +185,6 @@ def entropy_from_logits(logits: torch.Tensor) -> torch.Tensor:
     return entropy
 
 
-def average_torch_dicts(list_of_dicts: List[Dict]) -> Dict:
-    """Average values of a list of dicts with torch tensors."""
-    average_dict = dict()
-    for key in list_of_dicts[0].keys():
-        average_dict[key] = torch.mean(torch.stack([d[key] for d in list_of_dicts]), axis=0)
-    return average_dict
-
-
 def stats_to_np(stats_dict: Dict) -> Dict:
     """Cast all torch.tensors in dict to numpy arrays."""
     new_dict = dict()
@@ -252,9 +228,9 @@ def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if is_xpu_available():
+    if is_torch_xpu_available():
         torch.xpu.manual_seed_all(seed)
-    elif is_npu_available():
+    elif is_torch_npu_available():
         torch.npu.manual_seed_all(seed)
     else:
         torch.cuda.manual_seed_all(seed)
@@ -280,11 +256,11 @@ class PPODecorators:
     def empty_device_cache(cls):
         yield
         if cls.optimize_device_cache:
-            if is_xpu_available():
+            if is_torch_xpu_available():
                 gc.collect()
                 torch.xpu.empty_cache()
                 gc.collect()
-            elif is_npu_available():
+            elif is_torch_npu_available():
                 gc.collect()
                 torch.npu.empty_cache()
                 gc.collect()

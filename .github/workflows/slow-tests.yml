@@ -19,7 +19,8 @@ jobs:
       fail-fast: false
       matrix:
         docker-image-name: ["huggingface/trl-latest-gpu:latest", "huggingface/trl-source-gpu:latest"]
-    runs-on: [self-hosted, single-gpu, nvidia-gpu, t4, ci]
+    runs-on:
+      group: aws-g4dn-2xlarge
     env:
       CUDA_VISIBLE_DEVICES: "0"
       TEST_TYPE: "single_gpu_${{ matrix.docker-image-name }}"
@@ -55,7 +56,8 @@ jobs:
       fail-fast: false
       matrix:
         docker-image-name: ["huggingface/trl-latest-gpu:latest", "huggingface/trl-source-gpu:latest"]
-    runs-on: [self-hosted, multi-gpu, nvidia-gpu, t4, ci]
+    runs-on:
+      group: aws-g4dn-2xlarge
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
       TEST_TYPE: "multi_gpu_${{ matrix.docker-image-name }}"

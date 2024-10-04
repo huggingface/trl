@@ -64,7 +64,7 @@ class TextHistory:
         """
         Initialize TextHistory.
 
-        args:
+        Args:
             text (`str`): The text of the first segment.
             tokens (`torch.LongTensor`): The tokens of the first segment.
             system (`bool`, *optional*): Whether the first segment is a system or user segment.
@@ -90,7 +90,7 @@ class TextHistory:
         """
         Append a new segment to the history.
 
-        args:
+        Args:
             text (`str`): The text of the new segment.
             tokens (`torch.LongTensor`): The tokens of the new segment.
             system (`bool`, *optional*): Whether the new segment is a system or user segment.
@@ -422,7 +422,7 @@ class TextEnvironment:
         """
         Generate responses for a list of query tensors.
 
-        args:
+        Args:
             query_tensors (list[torch.Tensor]): A list of query tensors to generate responses for.
             batch_size (int): The batch size to use for generation.
             pad_to_multiple_of (int): The padding length to use for generation.

@@ -12,51 +12,69 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import os
 import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
-from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import torch
 import torch.nn as nn
+from accelerate import PartialState
 from accelerate.utils import gather_object
 from datasets import Dataset
-from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
+from transformers import (
+    DataCollator,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
+    is_wandb_available,
+)
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_peft_available
+from ..data_utils import maybe_apply_chat_template
 from .reward_config import RewardConfig
-from .utils import RewardDataCollatorWithPadding, compute_accuracy, print_rich_table, trl_sanitze_kwargs_for_tagging
+from .utils import (
+    RewardDataCollatorWithPadding,
+    compute_accuracy,
+    decode_and_strip_padding,
+    generate_model_card,
+    print_rich_table,
+)
 
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
+if is_wandb_available():
+    import wandb
+
+
+def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase") -> Dict[str, List[Any]]:
+    """Tokenize a batch from a reward modelling dataset."""
+    new_examples = {
+        "input_ids_chosen": [],
+        "attention_mask_chosen": [],
+        "input_ids_rejected": [],
+        "attention_mask_rejected": [],
+    }
+    for chosen, rejected in zip(batch["chosen"], batch["rejected"]):
+        tokenized_chosen = tokenizer(chosen)
+        tokenized_rejected = tokenizer(rejected)
+        new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
+        new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
+        new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
+        new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
+
+    return new_examples
+
 
 class RewardTrainer(Trainer):
-    r"""
-    The RewardTrainer can be used to train your custom Reward Model. It is a subclass of the
-    `transformers.Trainer` class and inherits all of its attributes and methods. It is recommended to use
-    an `AutoModelForSequenceClassification` as the reward model. The reward model should be trained on a dataset
-    of paired examples, where each example is a tuple of two sequences. The reward model should be trained to
-    predict which example in the pair is more relevant to the task at hand.
-
-    The reward trainer expects a very specific format for the dataset. The dataset should contain two 4 entries at least
-    if you don't use the default `RewardDataCollatorWithPadding` data collator. The entries should be named
-    - `input_ids_chosen`
-    - `attention_mask_chosen`
-    - `input_ids_rejected`
-    - `attention_mask_rejected`
-
-    Optionally, you can also pass a `margin` entry to the dataset. This entry should contain the margin used to modulate the
-    loss of the reward model as outlined in https://ai.meta.com/research/publications/llama-2-open-foundation-and-fine-tuned-chat-models/.
-    If you don't pass a margin, no margin will be used.
-    """
-
     _tag_names = ["trl", "reward-trainer"]
 
     def __init__(
@@ -105,12 +123,10 @@ class RewardTrainer(Trainer):
                 The optimizer and scheduler to use for training.
             preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
                 The function to use to preprocess the logits before computing the metrics.
-            max_length (`int`, defaults to `None`):
-                The maximum length of the sequences in the batch. This argument is required if you want to use the default data collator.
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        if type(args) == TrainingArguments:
+        if type(args) is TrainingArguments:
             warnings.warn(
                 "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `RewardConfig` instead.",
                 FutureWarning,
@@ -160,29 +176,11 @@ class RewardTrainer(Trainer):
 
         if data_collator is None:
             if tokenizer is None:
-                raise ValueError(
-                    "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
-                )
-            if type(args) == TrainingArguments:
-                if max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-            else:
-                if max_length is None and args.max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-                if max_length is None and args.max_length is not None:
-                    max_length = args.max_length
+                raise ValueError("A tokenizer must be specified when using the default RewardDataCollatorWithPadding")
+            if max_length is None:
+                max_length = 512 if type(args) is TrainingArguments or args.max_length is None else args.max_length
 
-            data_collator = RewardDataCollatorWithPadding(tokenizer, max_length=max_length)
+            data_collator = RewardDataCollatorWithPadding(tokenizer)
 
             if args.remove_unused_columns:
                 try:  # for bc before https://github.com/huggingface/transformers/pull/25435
@@ -199,6 +197,41 @@ class RewardTrainer(Trainer):
             self.use_reward_data_collator = True
         else:
             self.use_reward_data_collator = False
+
+        if "input_ids_chosen" not in train_dataset.column_names:
+            with PartialState().local_main_process_first():
+                fn_kwargs = {"tokenizer": tokenizer}
+                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                train_dataset = train_dataset.map(
+                    _tokenize,
+                    batched=True,
+                    fn_kwargs=fn_kwargs,
+                    num_proc=args.dataset_num_proc,
+                )
+                # This filter is important because otherwise you get samples that exceed the model's context length and
+                # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
+                # user might get surprised if N samples are missing from training.
+                train_dataset = train_dataset.filter(
+                    lambda x: len(x["input_ids_chosen"]) <= max_length and len(x["input_ids_rejected"]) <= max_length,
+                    num_proc=args.dataset_num_proc,
+                )
+                if eval_dataset is not None:
+                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                    eval_dataset = eval_dataset.map(
+                        _tokenize,
+                        fn_kwargs=fn_kwargs,
+                        batched=True,
+                        num_proc=args.dataset_num_proc,
+                    )
+                    # This filter is important because otherwise you get samples that exceed the model's context length and
+                    # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
+                    # user might get surprised if N samples are missing from training.
+                    eval_dataset = eval_dataset.filter(
+                        lambda x: len(x["input_ids_chosen"]) <= max_length
+                        and len(x["input_ids_rejected"]) <= max_length,
+                        num_proc=args.dataset_num_proc,
+                    )
+
         super().__init__(
             model=model,
             args=args,
@@ -304,8 +337,8 @@ class RewardTrainer(Trainer):
         table = defaultdict(list)
         for _, inputs in enumerate(eval_dataloader):
             _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
-            chosen_text = self.tokenizer.batch_decode(inputs["input_ids_chosen"], skip_special_tokens=True)
-            rejected_text = self.tokenizer.batch_decode(inputs["input_ids_rejected"], skip_special_tokens=True)
+            chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.tokenizer)
+            rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.tokenizer)
             table["chosen_text"].extend(gather_object(chosen_text))
             table["rejected_text"].extend(gather_object(rejected_text))
             table["logits"].extend(
@@ -322,17 +355,39 @@ class RewardTrainer(Trainer):
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(
+    def create_model_card(
         self,
-        commit_message: Optional[str] = "End of training",
-        blocking: bool = True,
-        **kwargs,
-    ) -> str:
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "reward-trainer" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="Reward",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
