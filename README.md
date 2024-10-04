@@ -166,7 +166,7 @@ dataset = dataset.map(lambda x: tokenizer(x["prompt"]), remove_columns="prompt")
 training_args = RLOOConfig(output_dir="Qwen2.5-0.5B-RL")
 trainer = RLOOTrainer(
     config=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     policy=policy,
     ref_policy=ref_policy,
     reward_model=reward_model,
