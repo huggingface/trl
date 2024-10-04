@@ -494,7 +494,6 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=self.model,
                 ref_model=self.ref_model,
-                beta=0.1,
                 args=training_args,
                 processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
