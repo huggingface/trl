@@ -48,55 +48,56 @@ Consult the 🤗 Accelerate [documentation](https://huggingface.co/docs/accelera
 
 ## Use different optimizers
 
-By default, the `PPOTrainer` creates a `torch.optim.Adam` optimizer. You can create and define a different optimizer and pass it to `PPOTrainer`:
-```python
-import torch
-from transformers import GPT2Tokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+By default, the `DPOTrainer` creates a `torch.optim.Adam` optimizer. You can create and define a different optimizer and pass it to `DPOTrainer`:
+```diff
+  from datasets import load_dataset
+  from transformers import AutoModelForCausalLM, AutoTokenizer
++ from torch import optim
+  from trl import DPOConfig, DPOTrainer
 
-# 1. load a pretrained model
-model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+  model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+  tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+  dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
+  training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 
-# 2. define config
-ppo_config = {'batch_size': 1, 'learning_rate':1e-5}
-config = PPOConfig(**ppo_config)
++ optimizer = optim.SGD(model.parameters(), lr=training_args.learning_rate)
 
-
-# 2. Create optimizer
-optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate)
-
-
-# 3. initialize trainer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, optimizer=optimizer)
+  trainer = DPOTrainer(
+      model=model,
+      args=training_args,
+      train_dataset=dataset,
+      tokenizer=tokenizer,
++     optimizers=(optimizer, None),
+  )
+  trainer.train()
 ```
 
 For memory efficient fine-tuning, you can also pass `Adam8bit` optimizer from `bitsandbytes`:
 
-```python
-import torch
-import bitsandbytes as bnb
+```diff
++ import bitsandbytes as bnb
+  from datasets import load_dataset
+  from transformers import AutoModelForCausalLM, AutoTokenizer
+  from trl import DPOConfig, DPOTrainer
 
-from transformers import GPT2Tokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+  model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+  tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+  dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
+  training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 
-# 1. load a pretrained model
-model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
++ optimizer = bnb.optim.Adam8bit(model.parameters(), lr=training_args.learning_rate)
 
-# 2. define config
-ppo_config = {'batch_size': 1, 'learning_rate':1e-5}
-config = PPOConfig(**ppo_config)
-
-
-# 2. Create optimizer
-optimizer = bnb.optim.Adam8bit(model.parameters(), lr=config.learning_rate)
-
-# 3. initialize trainer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, optimizer=optimizer)
+  trainer = DPOTrainer(
+      model=model,
+      args=training_args,
+      train_dataset=dataset,
+      tokenizer=tokenizer,
++     optimizers=(optimizer, None),
+  )
+  trainer.train()
 ```
+
+
 
 ### Use LION optimizer
 
