@@ -146,7 +146,6 @@ class SFTTrainerTester(unittest.TestCase):
         self.train_dataset = ConstantLengthDataset(
             self.tokenizer,
             self.dummy_dataset,
-            dataset_text_field=None,
             formatting_func=formatting_prompts_func,
             seq_length=16,
             num_of_sequences=16,
@@ -155,7 +154,6 @@ class SFTTrainerTester(unittest.TestCase):
         self.eval_dataset = ConstantLengthDataset(
             self.tokenizer,
             self.dummy_dataset,
-            dataset_text_field=None,
             formatting_func=formatting_prompts_func,
             seq_length=16,
             num_of_sequences=16,
@@ -165,7 +163,6 @@ class SFTTrainerTester(unittest.TestCase):
         formatted_dataset = ConstantLengthDataset(
             self.tokenizer,
             self.dummy_dataset,
-            dataset_text_field=None,
             formatting_func=formatting_prompts_func,
         )
 
@@ -242,24 +239,6 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            # Shouldn't work as `dataset_text_field` is missing from the arguments
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                max_steps=2,
-                eval_steps=1,
-                save_steps=1,
-                per_device_train_batch_size=2,
-                packing=True,
-                report_to="none",
-            )
-            with pytest.raises(ValueError):
-                _ = SFTTrainer(
-                    model=self.model,
-                    args=training_args,
-                    train_dataset=self.dummy_dataset,
-                )
-
             # Shoud work as SFTTrainer natively supports conversational lm dataset
             training_args = SFTConfig(
                 output_dir=tmp_dir,
@@ -443,7 +422,6 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
-                dataset_text_field="text",
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
@@ -469,7 +447,6 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
-                dataset_text_field="text",
                 max_seq_length=16,
                 report_to="none",
             )
@@ -519,7 +496,6 @@ class SFTTrainerTester(unittest.TestCase):
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                dataset_text_field="text",
                 max_seq_length=16,
                 num_of_sequences=16,
                 packing=True,
@@ -594,7 +570,6 @@ class SFTTrainerTester(unittest.TestCase):
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                dataset_text_field="text",
                 max_seq_length=16,
                 report_to="none",
             )
@@ -1159,7 +1134,6 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 remove_unused_columns=False,
-                dataset_text_field="text",  # need a dummy field
                 dataset_kwargs={"skip_prepare_dataset": True},
                 report_to="none",
             )
@@ -1209,7 +1183,6 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
                 remove_unused_columns=False,
-                dataset_text_field="",  # need a dummy field
                 dataset_kwargs={"skip_prepare_dataset": True},
                 report_to="none",
             )

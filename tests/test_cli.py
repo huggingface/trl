@@ -20,12 +20,12 @@ import unittest
 def test_sft_cli():
     try:
         subprocess.run(
-            "trl sft --max_steps 1 --output_dir tmp-sft --model_name_or_path trl-internal-testing/tiny-random-LlamaForCausalLM --dataset_name stanfordnlp/imdb --learning_rate 1e-4 --lr_scheduler_type cosine --dataset_text_field text",
+            "trl sft --max_steps 1 --output_dir tmp-sft --model_name_or_path trl-internal-testing/tiny-random-LlamaForCausalLM --dataset_name stanfordnlp/imdb --learning_rate 1e-4 --lr_scheduler_type cosine",
             shell=True,
             check=True,
         )
     except BaseException as exc:
-        raise AssertionError("An error occured while running the CLI, please double check") from exc
+        raise AssertionError("An error occurred while running the CLI, please double check") from exc
 
 
 @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
@@ -37,7 +37,7 @@ def test_dpo_cli():
             check=True,
         )
     except BaseException as exc:
-        raise AssertionError("An error occured while running the CLI, please double check") from exc
+        raise AssertionError("An error occurred while running the CLI, please double check") from exc
 
 
 def test_env_cli():
