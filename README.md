@@ -1,8 +1,10 @@
+# TRL - Transformer Reinforcement Learning
+
 <div style="text-align: center">
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl_banner_dark.png">
 </div>
 
-# TRL - Transformer Reinforcement Learning
+<hr> <br>
 
 <h3 align="center">
     <p>Full stack library to post-train large language models.</p>
@@ -31,12 +33,15 @@ The library is built on top of [🤗 Transformers](https://github.com/huggingfac
 ## Highlights
 
 - **`Efficient and scalable`**: 
-    - [🤗 Accelerate](https://github.com/huggingface/accelerate) is the backbone of TRL that model training to scale from a single GPU to a large scale multi-node cluster with methods such as DDP and DeepSpeed.
-    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to train even the largest models on modest hardware with quantisation and methods such as LoRA or QLoRA.
+    - [🤗 Accelerate](https://github.com/huggingface/accelerate) is the backbone of TRL that models training to scale from a single GPU to a large-scale multi-node cluster with methods such as DDP and DeepSpeed.
+    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to train of even the largest models on modest hardware with quantization and methods such as LoRA or QLoRA.
     - [Unsloth](https://github.com/unslothai/unsloth) is also integrated and allows to significantly speed up training with dedicated kernels.
+      
 - **`CLI`**: With the [CLI](https://huggingface.co/docs/trl/clis) you can fine-tune and chat with LLMs without writing any code using a single command and a flexible config system.
 - **`Trainers`**: The trainer classes are an abstraction to apply many fine-tuning methods with ease such as the [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer), [`PPOTrainer`](https://huggingface.co/docs/trl/ppov2_trainer), and [`ORPOTrainer`](https://huggingface.co/docs/trl/orpo_trainer).
+
 - **`AutoModels`**: The [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) & [`AutoModelForSeq2SeqLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForSeq2SeqLMWithValueHead) classes add an additional value head to the model which allows to train them with RL algorithms such as PPO.
+
 - **`Examples`**: Fine-tune Llama for chat applications or apply full RLHF using adapters etc, following the [examples](https://github.com/huggingface/trl/tree/main/examples).
 
 ## Installation
@@ -51,7 +56,7 @@ pip install trl
 
 ### From source
 
-If you want to use the latest features before an official release you can install from source:
+If you want to use the latest features before an official release you can install them from source:
 
 ```bash
 pip install git+https://github.com/huggingface/trl.git
@@ -67,7 +72,7 @@ git clone https://github.com/huggingface/trl.git
 
 ## Command Line Interface (CLI)
 
-You can use TRL Command Line Interface (CLI) to quickly get started with Supervised Fine-tuning (SFT) and Direct Preference Optimization (DPO), or vibe check your model with the chat CLI: 
+You can use the TRL Command Line Interface (CLI) to quickly get started with Supervised Fine-tuning (SFT) and Direct Preference Optimization (DPO), or vibe check your model with the chat CLI: 
 
 **SFT:**
 
@@ -95,7 +100,7 @@ For more flexibility and control over training, TRL provides dedicated trainer c
 
 ### `SFTTrainer`
 
-Here is a basic example on how to use the `SFTTrainer`:
+Here is a basic example of how to use the `SFTTrainer`:
 
 ```python
 from trl import SFTConfig, SFTTrainer
@@ -114,7 +119,7 @@ trainer.train()
 
 ### `RewardTrainer`
 
-Here is a basic example on how to use the `RewardTrainer`:
+Here is a basic example of how to use the `RewardTrainer`:
 
 ```python
 from trl import RewardConfig, RewardTrainer
@@ -178,7 +183,7 @@ trainer.train()
 
 ### `DPOTrainer`
 
-`DPOTrainer` implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train Llama 3 and many other models. Here is a basic example on how to use the `DPOTrainer`:
+`DPOTrainer` implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train Llama 3 and many other models. Here is a basic example of how to use the `DPOTrainer`:
 
 ```python
 from datasets import load_dataset
@@ -195,7 +200,7 @@ trainer.train()
 
 ## Development
 
-If you want to contribute to `trl` or customizing it to your needs make sure to read the [contribution guide](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md) and make sure you make a dev install:
+If you want to contribute to `trl` or customize it to your needs make sure to read the [contribution guide](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md) and make sure you make a dev install:
 
 ```bash
 git clone https://github.com/huggingface/trl.git
@@ -215,3 +220,7 @@ make dev
   howpublished = {\url{https://github.com/huggingface/trl}}
 }
 ```
+
+## License
+
+This repository's source code is available under the [MIT License](LICENSE).
