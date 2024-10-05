@@ -100,7 +100,6 @@ def _tokenize_kto(
     if model is None:
         prompt = features["prompt"]
         output = features["completion"]
-        labels = features["label"]
         images = features.get("images", [None] * len(features["prompt"]))
 
         prompt_tokens = _process_prompt(prompt, processor, tokenizer, images)
@@ -116,12 +115,17 @@ def _tokenize_kto(
 
         _append_prompt_tokens_to_batch(batch, prompt_tokens)
 
-        # Add labels to the batch
-        batch["label"] = labels
+        batch.update({
+            "prompt": prompt,
+            "completion": completion,
+            "label": features["label"], # True for desired output, False for undesired
+        })
 
         if prefix != "":
             for k in list(batch.keys()):
-                batch[prefix + k] = batch.pop(k)
+                batch[f"{prefix}{k}"] = batch.pop(k)
+
+        print([ batch[k][0] for k in batch ])
     else:
         _tokenize_encoder_decoder_kto(
             batch, tokenizer, features["prompt"], features["completion"], features["label"], args, model, prefix
@@ -143,6 +147,7 @@ def _tokenize_encoder_decoder_kto(
     output_tokens = tokenizer(output, truncation=True, max_length=args.max_completion_length, add_special_tokens=True)
     prompt_tokens = tokenizer(prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True)
 
+    batch[f"{prefix}completion_attention_mask"] = output_tokens["attention_mask"]
     batch[f"{prefix}completion_labels"] = output_tokens["input_ids"]
     batch[f"{prefix}prompt_input_ids"] = prompt_tokens["input_ids"]
     batch[f"{prefix}prompt_attention_mask"] = prompt_tokens["attention_mask"]
