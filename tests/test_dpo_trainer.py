@@ -1049,7 +1049,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
             ["trl-internal-testing/tiny-random-idefics2"],
-            # ["trl-internal-testing/tiny-random-paligemma"],  # temporarily disabled due to flaky tests
+            ["trl-internal-testing/tiny-random-paligemma"],
             ["trl-internal-testing/tiny-random-llava-1.5"],
         ]
     )
@@ -1093,15 +1093,6 @@ class DPOVisionTrainerTester(unittest.TestCase):
         model = AutoModelForVision2Seq.from_pretrained(model_id)
         ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
         processor = AutoProcessor.from_pretrained(model_id)
-
-        # Apply chat template to the dataset
-        def apply_chat_template(example):
-            example["prompt"] = processor.apply_chat_template(example["prompt"])
-            example["chosen"] = processor.apply_chat_template(example["chosen"])
-            example["rejected"] = processor.apply_chat_template(example["rejected"])
-            return example
-
-        dataset = dataset.map(apply_chat_template)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
