@@ -10,10 +10,10 @@ CPO aims to mitigate two fundamental shortcomings of SFT. First, SFT’s methodo
 
 ## Quick start
 
-This example demonstrates how to train a model using the CPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [Capybara dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
+This example demonstrates how to train a model using the CPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/Capybara-Preferences/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -29,7 +29,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-train_dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
+train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 training_args = CPOConfig(output_dir="Qwen2-0.5B-CPO", logging_steps=10)
 trainer = CPOTrainer(model=model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset)
