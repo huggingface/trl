@@ -211,6 +211,7 @@ class CGPOTrainer(Trainer):
         self.beta = args.beta
         self.kl_threshold = args.kl_threshold
         self.lamb = args.lamb
+        self._tag_names.append(args.rlhf_optimizer)
 
         super().__init__(
             model=model,
@@ -324,10 +325,11 @@ class CGPOTrainer(Trainer):
             )
 
         baseline_judgements = self.moj.judge(inputs["prompt"], inputs["completion"])
+        baseline_judgements = torch.tensor(baseline_judgements, device=self.model.device, dtype=torch.bool)
 
         # reshaping for filtering
         rewards = inputs["rewards"].view(bs, self.k)
-        judgements = inputs["judgements"].view(bs, self.k)
+        judgements = inputs["judgements"].view(bs, self.k).bool()
         prompt_completion_ids = prompt_completion_ids.view(bs, self.k, -1)
         prompt_completion_mask = prompt_completion_mask.view(bs, self.k, -1)
 
@@ -339,7 +341,7 @@ class CGPOTrainer(Trainer):
 
         best_idx = torch.argmax(masked_calibrated_rewards, dim=1)
         no_positive_completion = masked_calibrated_rewards.sum(dim=1) == 0
-        use_baseline_mask = (no_positive_completion & (baseline_judgements != 0)).unsqueeze(-1)
+        use_baseline_mask = (no_positive_completion & baseline_judgements).unsqueeze(-1)
 
         if use_baseline_mask.sum() != 0:
             # we need to pad the samples as both baseline and completions will be used in the same batch
@@ -399,7 +401,7 @@ class CGPOTrainer(Trainer):
         context_length = inputs["context_length"]
 
         rewards = inputs["rewards"].view(bs, self.k)
-        judgements = inputs["judgements"].view(bs, self.k)
+        judgements = inputs["judgements"].view(bs, self.k).bool()
 
         prompt_completion_ids = inputs["prompt_completion_ids"].view(bs, self.k, -1)
         prompt_completion_mask = inputs["prompt_completion_mask"].view(bs, self.k, -1)
@@ -479,7 +481,7 @@ class CGPOTrainer(Trainer):
         rewards = torch.cat(rewards, dim=0)
 
         inputs["rewards"] = rewards
-        inputs["judgements"] = torch.tensor(judgements, device=self.model.device)
+        inputs["judgements"] = torch.tensor(judgements, device=self.model.device, dtype=torch.float)
         inputs["bs"] = bs
         inputs["context_length"] = context_length
         inputs["prompt_completion_ids"] = prompt_completion_ids
