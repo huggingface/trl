@@ -75,9 +75,11 @@ class KTOConfig(TrainingArguments):
             from a string.
         dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model.
     """
 
-    learning_rate: float = 5e-7
+    learning_rate: float = 1e-6
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
     max_completion_length: Optional[int] = None
@@ -90,6 +92,7 @@ class KTOConfig(TrainingArguments):
     truncation_mode: str = "keep_end"
     generate_during_eval: bool = False
     is_encoder_decoder: Optional[bool] = None
+    disable_dropout: bool = True
     precompute_ref_log_probs: bool = False
     model_init_kwargs: Optional[Dict[str, Any]] = None
     ref_model_init_kwargs: Optional[Dict[str, Any]] = None
