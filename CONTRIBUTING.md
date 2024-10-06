@@ -81,7 +81,7 @@ If your issue is well written we're already 80% of the way there by the time you
 
 ## Do you want to implement a new trainer?
 
-New post-training methods are published frequently and those that satisfy the following criteria are good candidates to be integrated in TRL:
+New post-training methods are published frequently and those that satisfy the following criteria are good candidates to be integrated into TRL:
 
 * **Simplicity:** Does the new method achieve similar performance as prior methods, but with less complexity? A good example is Direct Preference Optimization (DPO) [[Rafailov et al, 2023]](https://huggingface.co/papers/2305.18290), which provided a simpler and compelling alternative to RLHF methods.
 * **Efficiency:** Does the new method provide a significant improvement in training efficiency? A good example is Odds Ratio Preference Optimization (ORPO) [[Hong et al, 2023]](https://huggingface.co/papers/2403.07691), which utilizes a similar objective as DPO but requires half the GPU VRAM.
