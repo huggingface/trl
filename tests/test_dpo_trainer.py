@@ -1152,15 +1152,6 @@ class DPOVisionTrainerTester(unittest.TestCase):
         ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
         processor = AutoProcessor.from_pretrained(model_id)
 
-        # Apply chat template to the dataset
-        def apply_chat_template(example):
-            example["prompt"] = processor.apply_chat_template(example["prompt"])
-            example["chosen"] = processor.apply_chat_template(example["chosen"])
-            example["rejected"] = processor.apply_chat_template(example["rejected"])
-            return example
-
-        dataset = dataset.map(apply_chat_template)
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,

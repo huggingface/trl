@@ -1,5 +1,7 @@
 # Online DPO Trainer
 
+[![](https://img.shields.io/badge/All_models-Online_DPO-blue)](https://huggingface.co/models?other=online-dpo)
+
 ## Overview 
 
 Online DPO was proposed in [Direct Language Model Alignment from Online AI Feedback](https://huggingface.co/papers/2402.04792) by Shangmin Guo, Biao Zhang, Tianlin Liu, Tianqi Liu, Misha Khalman, Felipe Llinares, Alexandre Rame, Thomas Mesnard, Yao Zhao, Bilal Piot, Johan Ferret, and Mathieu Blondel. 
@@ -38,11 +40,7 @@ train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
 training_args = OnlineDPOConfig(output_dir="online-dpo-qwen2", logging_steps=10)
 trainer = OnlineDPOTrainer(
-    model=model,
-    reward_model=reward_model,
-    args=training_args,
-    tokenizer=tokenizer,
-    train_dataset=train_dataset,
+    model=model, reward_model=reward_model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset
 )
 trainer.train()
 ```
