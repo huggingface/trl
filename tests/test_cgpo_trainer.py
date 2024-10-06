@@ -15,17 +15,14 @@
 import tempfile
 import unittest
 
-import numpy as np
-import pytest
 import torch
-from datasets import Dataset, load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForSequenceClassification
-from transformers.testing_utils import require_bitsandbytes, require_peft
+from datasets import load_dataset
 from parameterized import parameterized
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+
 from trl import CGPOConfig, CGPOTrainer
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 from trl.trainer.cgpo_trainer import MixtureOfConstraintJudges
-import random
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 class CGPOTrainerTester(unittest.TestCase):

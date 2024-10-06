@@ -14,8 +14,9 @@
 # limitations under the License.
 
 import os
-import warnings
+import random
 import textwrap
+import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import datasets
@@ -26,7 +27,6 @@ import torch.utils.data
 from datasets import Dataset
 from torch.utils.data import IterableDataset
 from transformers import (
-    DataCollator,
     GenerationConfig,
     PreTrainedTokenizerBase,
     Trainer,
@@ -42,16 +42,16 @@ from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .cgpo_config import CGPOConfig
 from .utils import (
-    batch_generation,
-    disable_dropout_in_model,
-    generate_model_card,
-    get_reward,
-    prepare_deepspeed,
-    truncate_right,
     DataCollatorForChatML,
     DataCollatorForChatMLTestingCGPO,
+    batch_generation,
+    disable_dropout_in_model,
     first_true_indices,
+    generate_model_card,
+    get_reward,
     pad_to_length,
+    prepare_deepspeed,
+    truncate_right,
 )
 
 
@@ -65,8 +65,6 @@ if is_wandb_available():
     import wandb
 
 logger = logging.get_logger(__name__)
-
-import random
 
 
 class MixtureOfConstraintJudges:
