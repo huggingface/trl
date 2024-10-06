@@ -550,6 +550,9 @@ class KTOTrainer(Trainer):
 
                     # merge the datasets
                     eval_dataset = concatenate_datasets([tokenized_eval_dataset, tokenized_eval_kl_dataset], axis=1)
+            else:
+                train_dataset = tokenized_train_dataset
+                eval_dataset = tokenized_eval_dataset if eval_dataset is not None else None
 
             # calculate dataset desirability balance
             num_desirable = max(sum(train_dataset["label"]), 1)
@@ -923,7 +926,7 @@ class KTOTrainer(Trainer):
             model_kwargs["output_router_logits"] = True
 
         outputs = model(
-            batch["completion_input_ids"],
+            batch["completion_decoder_input_ids"] if self.is_encoder_decoder else batch["completion_input_ids"],
             attention_mask=batch["completion_attention_mask"],
             **model_kwargs,
         )
