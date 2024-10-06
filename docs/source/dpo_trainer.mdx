@@ -25,10 +25,10 @@ Read more about DPO algorithm in the [original paper](https://huggingface.co/pap
 
 ## Quick start
 
-This example demonstrates how to train a model using the DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [Capybara dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
+This example demonstrates how to train a model using the DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/Capybara-Preferences/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -44,7 +44,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-train_dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
+train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", logging_steps=10)
 trainer = DPOTrainer(model=model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset)
@@ -190,7 +190,7 @@ First install `unsloth` according to the [official documentation](https://github
 - tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 + model, tokenizer = FastLanguageModel.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 + model = FastLanguageModel.get_peft_model(model)
-  train_dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
+  train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 - training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", logging_steps=10)
 + training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", logging_steps=10, bf16=True)
