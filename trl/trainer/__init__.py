@@ -25,6 +25,8 @@ _import_structure = {
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
     "callbacks": ["LogCompletionsCallback", "RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
+    "cgpo_config": ["CGPOConfig"],
+    "cgpo_trainer": ["CGPOTrainer"],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
     "ddpo_config": ["DDPOConfig"],
@@ -89,6 +91,8 @@ if TYPE_CHECKING:
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
     from .callbacks import LogCompletionsCallback, RichProgressCallback, SyncRefModelCallback, WinRateCallback
+    from .cgpo_config import CGPOConfig
+    from .cgpo_trainer import CGPOTrainer
     from .cpo_config import CPOConfig
     from .cpo_trainer import CPOTrainer
     from .ddpo_config import DDPOConfig
