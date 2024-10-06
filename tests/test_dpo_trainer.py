@@ -782,7 +782,8 @@ class DPOTrainerTester(unittest.TestCase):
                 peft_config=lora_config,
             )
 
-            assert trainer.model.model_tags == trainer._tag_names
+            for tag in ["dpo", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
 
     @require_peft
     def test_dpo_tags(self):
@@ -817,7 +818,8 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-            assert trainer.model.model_tags == trainer._tag_names
+            for tag in ["dpo", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
 
     @require_peft
     def test_dpo_lora_force_use_ref(self):
@@ -1091,15 +1093,6 @@ class DPOVisionTrainerTester(unittest.TestCase):
         model = AutoModelForVision2Seq.from_pretrained(model_id)
         ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
         processor = AutoProcessor.from_pretrained(model_id)
-
-        # Apply chat template to the dataset
-        def apply_chat_template(example):
-            example["prompt"] = processor.apply_chat_template(example["prompt"])
-            example["chosen"] = processor.apply_chat_template(example["chosen"])
-            example["rejected"] = processor.apply_chat_template(example["rejected"])
-            return example
-
-        dataset = dataset.map(apply_chat_template)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(

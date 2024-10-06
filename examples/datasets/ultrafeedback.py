@@ -81,20 +81,22 @@ def to_unpaired_preference(example, model_name, aspect):
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
-    args = parser.parse_args_into_dataclasses()[0]
+    script_args = parser.parse_args_into_dataclasses()[0]
 
     dataset = load_dataset("openbmb/UltraFeedback", split="train")
 
     dataset = dataset.filter(
-        lambda example: args.model_name in example["models"], batched=False, num_proc=args.dataset_num_proc
+        lambda example: script_args.model_name in example["models"],
+        batched=False,
+        num_proc=script_args.dataset_num_proc,
     )
     dataset = dataset.map(
         to_unpaired_preference,
         remove_columns=["source", "instruction", "models", "completions", "correct_answers", "incorrect_answers"],
-        fn_kwargs={"model_name": args.model_name, "aspect": args.aspect},
-        num_proc=args.dataset_num_proc,
+        fn_kwargs={"model_name": script_args.model_name, "aspect": script_args.aspect},
+        num_proc=script_args.dataset_num_proc,
     )
     dataset = dataset.train_test_split(test_size=0.05, seed=42)
 
-    if args.push_to_hub:
-        dataset.push_to_hub(args.repo_id)
+    if script_args.push_to_hub:
+        dataset.push_to_hub(script_args.repo_id)

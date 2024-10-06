@@ -15,7 +15,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from datasets import load_dataset
+from datasets import features, load_dataset
 from transformers import HfArgumentParser
 
 
@@ -27,46 +27,47 @@ class ScriptArguments:
     Args:
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the dataset to the Hugging Face Hub.
-        repo_id (`str`, *optional*, defaults to `"trl-lib/tldr-preference"`):
+        repo_id (`str`, *optional*, defaults to `"trl-lib/rlaif-v"`):
             Hugging Face repository ID to push the dataset to.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of workers to use for dataset processing.
     """
 
     push_to_hub: bool = False
-    repo_id: str = "trl-lib/tldr-preference"
+    repo_id: str = "trl-lib/rlaif-v"
     dataset_num_proc: Optional[int] = None
 
 
-def to_preference(example):
-    info = example["info"]
-    if example["batch"] in ["batch0_cnndm", "cnndm0", "cnndm2"]:  # CNN Daily Mail batches
-        article = info["article"].replace("\n\n", "\n")
-        prompt = f"TITLE: {info['title']}\n\n{article}\n\nTL;DR:"
-    elif example["batch"] in [f"batch{i}" for i in range(3, 23)] + ["edit_b2_eval_test"]:  # Reddit batches
-        post = info["post"].replace("\n\n", "\n")
-        prompt = f"SUBREDDIT: r/{info['subreddit']}\n\nTITLE: {info['title']}\n\nPOST: {post}\n\nTL;DR:"
-    else:
-        raise ValueError(f"Unknown batch: {example['batch']}")
-
-    chosen_idx = example["choice"]
-    rejected_idx = 1 - chosen_idx
-    chosen = example["summaries"][chosen_idx]["text"]
-    rejected = example["summaries"][rejected_idx]["text"]
-    return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
+def to_conversational(example):
+    """
+    Convert prompt from "xxx" to [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "xxx"}]}]
+    and chosen and rejected from "xxx" to [{"role": "assistant", "content": [{"type": "text", "text": "xxx"}]}].
+    Images are wrapped into a list.
+    """
+    prompt = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": example["question"]}]}]
+    chosen = [{"role": "assistant", "content": [{"type": "text", "text": example["chosen"]}]}]
+    rejected = [{"role": "assistant", "content": [{"type": "text", "text": example["rejected"]}]}]
+    return {"prompt": prompt, "images": [example["image"]], "chosen": chosen, "rejected": rejected}
 
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
 
-    dataset = load_dataset("openai/summarize_from_feedback", "comparisons")
-
+    dataset = load_dataset("openbmb/RLAIF-V-Dataset", split="train")
     dataset = dataset.map(
-        to_preference,
+        to_conversational,
         num_proc=script_args.dataset_num_proc,
-        remove_columns=["info", "summaries", "choice", "worker", "batch", "split", "extra"],
+        remove_columns=dataset.column_names,
+        writer_batch_size=128,
     )
+
+    # Cast the images to Sequence[Image] to avoid bytes format
+    f = dataset.features
+    f["images"] = features.Sequence(features.Image(decode=True))
+    dataset = dataset.cast(f)
+
+    dataset = dataset.train_test_split(test_size=0.01, writer_batch_size=128)
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)

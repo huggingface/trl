@@ -111,7 +111,7 @@ def chat():
         init_zero_verbose()
         trl_examples_dir = os.path.dirname(__file__)
 
-    command = f"accelerate launch {trl_examples_dir}/scripts/chat.py {' '.join(sys.argv[2:])}"
+    command = f"python {trl_examples_dir}/scripts/chat.py {' '.join(sys.argv[2:])}"
 
     try:
         subprocess.run(
