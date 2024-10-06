@@ -24,6 +24,8 @@
       title: AlignProp
     - local: bco_trainer
       title: BCO
+    - local: cgpo_trainer
+      title: CGPO
     - local: cpo_trainer
       title: CPO
     - local: ddpo_trainer

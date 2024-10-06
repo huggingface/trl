@@ -221,7 +221,7 @@ class CGPOTrainer(Trainer):
         self.k = args.k
         self.rlhf_optimizer = args.rlhf_optimizer
         self.beta = args.beta
-        self.max_kl = args.max_kl
+        self.kl_threshold = args.kl_threshold
         self.lamb = args.lamb
 
         super().__init__(
@@ -304,7 +304,7 @@ class CGPOTrainer(Trainer):
         with torch.no_grad():
             # kl_div is used as a regularization term here
             kl_div = logprobs - ref_logprobs
-        kl_div_regularization = torch.clamp(1 - kl_div / self.max_kl, min=0)
+        kl_div_regularization = torch.clamp(1 - kl_div / self.kl_threshold, min=0)
         calibrated_regularized_rewards = judgements * calibrated_rewards * kl_div_regularization
 
         losses = -logprobs * (calibrated_regularized_rewards - calibrated_regularized_rewards.mean())
@@ -386,7 +386,7 @@ class CGPOTrainer(Trainer):
         )
 
         with torch.no_grad():
-            masked_kl_div = (logprobs - ref_logprobs) < self.max_kl
+            masked_kl_div = (logprobs - ref_logprobs) < self.kl_threshold
         filtered_calibrated_rewards = masked_kl_div * best_masked_calibrated_rewards
 
         # compute loss as done in eqn (18) of the CGPO paper: https://huggingface.co/papers/2409.20370
