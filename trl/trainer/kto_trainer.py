@@ -87,8 +87,6 @@ def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
     outputs y used to estimate the rewards in that batch, just paired with different x.
     """
     batch["completion"] = [batch["completion"][-1]] + batch["completion"][:-1]
-    batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
-    batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
     return batch
 
 
