@@ -16,7 +16,6 @@
 import os
 import random
 import textwrap
-import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import datasets
@@ -42,7 +41,6 @@ from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .cgpo_config import CGPOConfig
 from .utils import (
-    DataCollatorForChatML,
     DataCollatorForChatMLTestingCGPO,
     batch_generation,
     disable_dropout_in_model,
@@ -88,11 +86,8 @@ class CGPOTrainer(Trainer):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         mixture_of_judges (`MixtureOfConstraintJudges`):
             The mixtures of judges to check if completions satisfy a set of contraints.
-        args (`OnlineDPOConfig`):
-            The online DPO config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+        args (`CGPOConfig`):
+            The CGPO config arguments to use for training.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -121,7 +116,6 @@ class CGPOTrainer(Trainer):
         reward_model: Union[PreTrainedModel, nn.Module, None] = None,
         mixture_of_judges: Optional[MixtureOfConstraintJudges] = None,
         args: Optional[CGPOConfig] = None,
-        data_collator: Optional[DataCollatorForChatML] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset], "datasets.Dataset"]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
@@ -194,13 +188,7 @@ class CGPOTrainer(Trainer):
         if self.reward_model is not None:
             self.reward_model.eval()
 
-        if not isinstance(data_collator, DataCollatorForChatML):
-            # Improve the warning messaeg
-            warnings.warn(
-                "`CPGOTrainer` only supports training with a `DataCollatorForChatML` collator instance. "
-                f"Received `{type(data_collator).__name__}` instead. We will replace it with a `DataCollatorForChatML` collator."
-            )
-            data_collator = DataCollatorForChatMLTestingCGPO(tokenizer, max_length=args.max_length)
+        data_collator = DataCollatorForChatMLTestingCGPO(tokenizer, max_length=args.max_length)
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
@@ -252,6 +240,11 @@ class CGPOTrainer(Trainer):
             if self.ref_model is not None:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
 
+        self.stats = {
+            "constraints/judgements": [],
+            "constraints/rewards": [],
+        }
+
     def _get_batch_logprobs(
         self,
         input_ids: torch.Tensor,
@@ -291,8 +284,8 @@ class CGPOTrainer(Trainer):
 
         baseline_rewards = baseline_rewards.repeat_interleave(repeats=self.k, dim=0)
 
-        rewards = torch.tensor(inputs["rewards"], device=self.model.device)
-        judgements = torch.tensor(inputs["judgements"], device=self.model.device)
+        rewards = inputs["rewards"]
+        judgements = inputs["judgements"]
 
         calibrated_rewards = torch.sigmoid(rewards - baseline_rewards)
 
@@ -334,7 +327,7 @@ class CGPOTrainer(Trainer):
 
         # reshaping for filtering
         rewards = inputs["rewards"].view(bs, self.k)
-        judgements = torch.tensor(inputs["judgements"], device=self.model.device).view(bs, self.k)
+        judgements = inputs["judgements"].view(bs, self.k)
         prompt_completion_ids = prompt_completion_ids.view(bs, self.k, -1)
         prompt_completion_mask = prompt_completion_mask.view(bs, self.k, -1)
 
@@ -386,7 +379,9 @@ class CGPOTrainer(Trainer):
         )
 
         with torch.no_grad():
-            masked_kl_div = (logprobs - ref_logprobs) < self.kl_threshold
+            kl_div = logprobs - ref_logprobs
+
+        masked_kl_div = kl_div < self.kl_threshold
         filtered_calibrated_rewards = masked_kl_div * best_masked_calibrated_rewards
 
         # compute loss as done in eqn (18) of the CGPO paper: https://huggingface.co/papers/2409.20370
@@ -403,8 +398,8 @@ class CGPOTrainer(Trainer):
         bs = inputs["bs"]
         context_length = inputs["context_length"]
 
-        rewards = torch.tensor(inputs["rewards"], device=self.model.device).view(bs, self.k)
-        judgements = torch.tensor(inputs["judgements"], device=self.model.device, dtype=torch.bool).view(bs, self.k)
+        rewards = inputs["rewards"].view(bs, self.k)
+        judgements = inputs["judgements"].view(bs, self.k)
 
         prompt_completion_ids = inputs["prompt_completion_ids"].view(bs, self.k, -1)
         prompt_completion_mask = inputs["prompt_completion_mask"].view(bs, self.k, -1)
@@ -448,7 +443,7 @@ class CGPOTrainer(Trainer):
             query_responses_ids, _ = batch_generation(
                 unwrapped_model,
                 prompt_ids,
-                self.k,
+                bs,
                 self.tokenizer.pad_token_id,
                 self.generation_config,
             )
@@ -468,8 +463,8 @@ class CGPOTrainer(Trainer):
         prompt_completion_mask = torch.cat((prompt_ids != self.tokenizer.pad_token_id, completion_mask), dim=1)
 
         rewards = []
-        for i in range(0, prompt_completion_ids.shape[0], self.k):
-            mini_batch_prompt_completion_ids = prompt_completion_ids[i : i + self.k]
+        for i in range(0, prompt_completion_ids.shape[0], bs):
+            mini_batch_prompt_completion_ids = prompt_completion_ids[i : i + bs]
             with torch.no_grad():
                 _, mini_batch_rewards, _ = get_reward(
                     self.reward_model,
@@ -484,7 +479,7 @@ class CGPOTrainer(Trainer):
         rewards = torch.cat(rewards, dim=0)
 
         inputs["rewards"] = rewards
-        inputs["judgements"] = judgements
+        inputs["judgements"] = torch.tensor(judgements, device=self.model.device)
         inputs["bs"] = bs
         inputs["context_length"] = context_length
         inputs["prompt_completion_ids"] = prompt_completion_ids
@@ -499,6 +494,9 @@ class CGPOTrainer(Trainer):
         else:
             raise ValueError(f"{self.rlhf_optimizer} not supported.", "Choose between `codpo`, `crraft` and `crpg`.")
 
+        self.stats["constraints/judgements"].append(self.accelerator.gather(inputs["judgements"]).mean().item())
+        self.stats["constraints/rewards"].append(self.accelerator.gather(inputs["rewards"]).mean().item())
+
         if self.use_apex:
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                 scaled_loss.backward()
@@ -506,6 +504,41 @@ class CGPOTrainer(Trainer):
             self.accelerator.backward(loss)
 
         return loss.detach() / self.args.gradient_accumulation_steps
+
+    # Same as Trainer.evaluate but log our metrics
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval):
+        if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
+            logs: Dict[str, float] = {}
+
+            # all_gather + mean() to get average loss over all processes
+            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            if grad_norm is not None:
+                logs["grad_norm"] = grad_norm.detach().item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+            logs["learning_rate"] = self._get_learning_rate()
+
+            # Add our metrics
+            for key, val in self.stats.items():
+                logs[key] = sum(val) / len(val)
+            self.stats = {key: [] for key in self.stats}  # reset stats
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
+
+            self.log(logs)
+
+        metrics = None
+        if self.control.should_evaluate:
+            metrics = self._evaluate(trial, ignore_keys_for_eval)
+
+        if self.control.should_save:
+            self._save_checkpoint(model, trial, metrics=metrics)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def create_model_card(
         self,
