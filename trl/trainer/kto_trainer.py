@@ -116,16 +116,14 @@ def _tokenize_kto(
         _append_prompt_tokens_to_batch(batch, prompt_tokens)
 
         batch.update({
-            "prompt": prompt,
-            "completion": completion,
+            "prompt": features["prompt"],
+            "completion": features["completion"],
             "label": features["label"], # True for desired output, False for undesired
         })
 
         if prefix != "":
             for k in list(batch.keys()):
                 batch[f"{prefix}{k}"] = batch.pop(k)
-
-        print([ batch[k][0] for k in batch ])
     else:
         _tokenize_encoder_decoder_kto(
             batch, tokenizer, features["prompt"], features["completion"], features["label"], args, model, prefix
