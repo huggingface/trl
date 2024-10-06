@@ -73,7 +73,11 @@ RUNNING_NAME = "running.pt"
 
 
 def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
-    """Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions."""
+    """
+    Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions.
+    For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched
+    outputs y used to estimate the rewards in that batch, just paired with different x.
+    """
     batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
     batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
     return batch
@@ -514,10 +518,10 @@ class KTOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
-        # disable dropout in the model and reference model
-        disable_dropout_in_model(model)
-        if self.ref_model is not None:
-            disable_dropout_in_model(self.ref_model)
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         self.loss_type = args.loss_type
         self.max_length = max_length
@@ -601,14 +605,9 @@ class KTOTrainer(Trainer):
 
             # Get KL datasets if needed
             if self.calculate_KL:
-                total_batch_size = (
-                    max(torch.cuda.device_count(), 1)
-                    * args.per_device_train_batch_size
-                    * args.gradient_accumulation_steps
-                )
-                if total_batch_size <= 1:
+                if args.per_device_train_batch_size <= 1:
                     raise ValueError(
-                        "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
+                        "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
                     )
 
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
@@ -616,7 +615,7 @@ class KTOTrainer(Trainer):
                 train_kl_dataset = train_dataset.map(
                     _get_kl_dataset,
                     batched=True,
-                    batch_size=total_batch_size,
+                    batch_size=args.per_device_train_batch_size,
                     num_proc=args.dataset_num_proc,
                     desc="Extracting KL train dataset",
                 )
@@ -638,7 +637,7 @@ class KTOTrainer(Trainer):
                     eval_kl_dataset = eval_dataset.map(
                         _get_kl_dataset,
                         batched=True,
-                        batch_size=total_batch_size,
+                        batch_size=args.per_device_train_batch_size,
                         num_proc=args.dataset_num_proc,
                         desc="Extracting eval KL dataset",
                     )
