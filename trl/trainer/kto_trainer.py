@@ -352,7 +352,9 @@ class KTOTrainer(Trainer):
         if model is not None:
             self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
         else:
-            warnings.warn("No model provided, cannot determine if it is a vision model. Setting is_vision_model to False.")
+            warnings.warn(
+                 "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
+             )
             self.is_vision_model = False
 
         if self.is_vision_model:
