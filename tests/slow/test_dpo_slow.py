@@ -86,8 +86,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=self.dataset,
-                eval_dataset=self.dataset,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
             )
 
             # train the model
@@ -143,8 +143,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=self.dataset,
-                eval_dataset=self.dataset,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
                 peft_config=self.peft_config,
             )
 
@@ -207,8 +207,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 ref_model=None,
                 args=training_args,
                 tokenizer=tokenizer,
-                train_dataset=self.dataset,
-                eval_dataset=self.dataset,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
                 peft_config=self.peft_config,
             )
 
