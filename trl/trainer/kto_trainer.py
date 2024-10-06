@@ -513,7 +513,7 @@ class KTOTrainer(Trainer):
                     fn_kwargs=fn_kwargs,
                     batched=True,
                     num_proc=args.dataset_num_proc,
-                    remove_columns=[c for c in train_kl_dataset.column_names if c in tokenized_train_dataset.column_names],
+                    remove_columns=[c for c in train_kl_dataset.column_names if "completion_" not in c],
                     desc="Processing tokenized train KL dataset",
                 )
 
@@ -535,7 +535,7 @@ class KTOTrainer(Trainer):
                         fn_kwargs=fn_kwargs,
                         batched=True,
                         num_proc=args.dataset_num_proc,
-                        remove_columns=[c for c in eval_kl_dataset.column_names if c in tokenized_eval_dataset.column_names],
+                        remove_columns=[c for c in eval_kl_dataset.column_names if "completion_" not in c],
                         desc="Processing tokenized eval KL dataset",
                     )
 
