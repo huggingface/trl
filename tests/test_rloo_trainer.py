@@ -82,16 +82,15 @@ def test_rloo_reward():
 
 
 class RLOOTrainerTester(unittest.TestCase):
-
     def setUp(self):
-        self.sft_model_id = 'trl-internal-testing/dummy-GPT2-correct-vocab'
-        self.reward_model_id = 'trl-internal-testing/dummy-GPT2-correct-vocab'
+        self.sft_model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.reward_model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
 
         self.policy_model = AutoModelForCausalLM.from_pretrained(self.sft_model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id)
         self.policy_ref_model = AutoModelForCausalLM.from_pretrained(self.sft_model_id)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.sft_model_id, padding_side='left')
+        self.tokenizer = AutoTokenizer.from_pretrained(self.sft_model_id, padding_side="left")
         self.tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'user' %}{{ ' ' }}{% endif %}{{ message['content'] }}{% if not loop.last %}{{ '  ' }}{% endif %}{% endfor %}{{ eos_token }}"
         self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
@@ -104,9 +103,9 @@ class RLOOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_text = {'content': 'Hello World!', 'role': 'user'}
+            dummy_text = {"content": "Hello World!", "role": "user"}
             dummy_data = self.tokenizer.apply_chat_template(dummy_text)
-            dummy_dataset = Dataset.from_dict({'input_ids': dummy_data})
+            dummy_dataset = Dataset.from_dict({"input_ids": dummy_data})
 
             trainer = RLOOTrainer(
                 config=training_args,
