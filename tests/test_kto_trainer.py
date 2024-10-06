@@ -134,18 +134,12 @@ class KTOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 report_to="none",
                 truncation_mode="keep_end",
+                max_length=16,
+                max_prompt_length=8,
+                max_completion_length=4,
             )
 
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
-            trainer = KTOTrainer(
-                model=self.model,
-                ref_model=self.ref_model,
-                args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
 
             fn_kwargs = {
                 "prefix": "",
@@ -165,10 +159,15 @@ class KTOTrainerTester(unittest.TestCase):
             self.assertListEqual(tokenized_train_dataset["completion"], train_dataset["completion"])
             self.assertListEqual(tokenized_train_dataset["label"], train_dataset["label"])
             self.assertListEqual(tokenized_train_dataset["prompt_input_ids"][0], [50256, 5377, 11141])
-            self.assertListEqual(tokenized_train_dataset["prompt_attention_mask"][0], [1, 1, 1])        
-            self.assertListEqual(tokenized_train_dataset["completion_input_ids"][0], [50256, 5377, 11141, 318, 1365, 621, 8253, 13, 50256])
+            self.assertListEqual(tokenized_train_dataset["prompt_attention_mask"][0], [1, 1, 1])
+            self.assertListEqual(
+                tokenized_train_dataset["completion_input_ids"][0],
+                [50256, 5377, 11141, 318, 1365, 621, 8253, 13, 50256],
+            )
             self.assertListEqual(tokenized_train_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1, 1, 1])
-            self.assertListEqual(tokenized_train_dataset["completion_labels"][0], [-100, -100, -100, 318, 1365, 621, 8253, 13, 50256])
+            self.assertListEqual(
+                tokenized_train_dataset["completion_labels"][0], [-100, -100, -100, 318, 1365, 621, 8253, 13, 50256]
+            )
 
             # Test corruption of (prompt, completion) pairs for KL dataset
             for batch_size in [2, 3]:
