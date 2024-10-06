@@ -23,7 +23,6 @@ from copy import deepcopy
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.amp as amp
 import torch.nn as nn
@@ -32,7 +31,6 @@ from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
-from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers import (
     AutoModelForCausalLM,
     DataCollator,
@@ -43,10 +41,20 @@ from transformers import (
     TrainingArguments,
     is_wandb_available,
 )
+from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
 from ..models import PreTrainedModelWrapper, create_reference_model
+from .dpo_trainer import (
+    _add_special_tokens,
+    _adjust_prompt_length,
+    _append_prompt_tokens_to_batch,
+    _build_sequence_tokens,
+    _process_answer,
+    _process_prompt,
+    _truncate_tokens,
+)
 from .kto_config import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,
@@ -55,8 +63,6 @@ from .utils import (
     pad_to_length,
     peft_module_casting_to_bf16,
 )
-
-from .dpo_trainer import _tokenize as dpo_tokenize, _process_prompt, _process_answer, _adjust_prompt_length, _add_special_tokens, _truncate_tokens, _build_sequence_tokens, _append_prompt_tokens_to_batch
 
 
 if is_peft_available():
@@ -69,7 +75,7 @@ if is_deepspeed_available():
     import deepspeed
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
+    from transformers import PreTrainedModel
 
 RUNNING_NAME = "running.pt"
 
@@ -77,7 +83,7 @@ RUNNING_NAME = "running.pt"
 def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
     """
     Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions.
-    For best results, mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched 
+    For best results, mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched
     outputs y used to estimate the rewards in that batch, just paired with different x.
     """
     batch["completion"] = [batch["completion"][-1]] + batch["completion"][:-1]
@@ -90,7 +96,7 @@ def _tokenize_kto(
     args: "KTOConfig",
     processor: Optional[Callable] = None,
     model: Optional[PreTrainedModel] = None,
-    prefix: str=""
+    prefix: str = "",
 ) -> Dict[str, List]:
     """
     Tokenizes and processes a batch of input features for KTO using adapted DPO tokenization functions.
@@ -115,11 +121,13 @@ def _tokenize_kto(
 
         _append_prompt_tokens_to_batch(batch, prompt_tokens)
 
-        batch.update({
-            "prompt": features["prompt"],
-            "completion": features["completion"],
-            "label": features["label"], # True for desired output, False for undesired
-        })
+        batch.update(
+            {
+                "prompt": features["prompt"],
+                "completion": features["completion"],
+                "label": features["label"],  # True for desired output, False for undesired
+            }
+        )
 
         if prefix != "":
             for k in list(batch.keys()):
@@ -140,7 +148,7 @@ def _tokenize_encoder_decoder_kto(
     labels: List[bool],
     args: "KTOConfig",
     model: Optional[PreTrainedModel],
-    prefix: str=""
+    prefix: str = "",
 ) -> None:
     output_tokens = tokenizer(output, truncation=True, max_length=args.max_completion_length, add_special_tokens=True)
     prompt_tokens = tokenizer(prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True)
@@ -353,8 +361,8 @@ class KTOTrainer(Trainer):
             self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
         else:
             warnings.warn(
-                 "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
-             )
+                "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
+            )
             self.is_vision_model = False
 
         if self.is_vision_model:
@@ -395,7 +403,6 @@ class KTOTrainer(Trainer):
             )
             args.max_prompt_length = 128
 
-        max_completion_length = None
         if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
                 "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the KTOTrainer's init"
@@ -472,7 +479,7 @@ class KTOTrainer(Trainer):
                 "processor": self.processor if self.is_vision_model else None,
                 "model": model if self.is_encoder_decoder else None,
             }
-            
+
             # Tokenize and prepare the training datasets
             tokenized_train_dataset = train_dataset.map(
                 _tokenize_kto,

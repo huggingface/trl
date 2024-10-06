@@ -59,7 +59,7 @@ from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_unpair_preference_dataset, setup_chat_format
+from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
 
 
 # Define and parse arguments.
