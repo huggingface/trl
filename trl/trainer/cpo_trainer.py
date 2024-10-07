@@ -1018,6 +1018,13 @@ class CPOTrainer(Trainer):
         else:
             base_model = None
 
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
         citation = textwrap.dedent("""\
         @inproceedings{xu2024contrastive,
             title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
