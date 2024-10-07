@@ -572,6 +572,13 @@ class RLOOTrainer(Trainer):
         else:
             base_model = None
 
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
         citation = textwrap.dedent("""\
         @inproceedings{ahmadian2024back,
             title        = {{Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs}},

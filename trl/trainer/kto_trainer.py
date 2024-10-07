@@ -1459,6 +1459,13 @@ class KTOTrainer(Trainer):
         else:
             base_model = None
 
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
         citation = textwrap.dedent("""\
         @article{ethayarajh2024kto,
             title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
