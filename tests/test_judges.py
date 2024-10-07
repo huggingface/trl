@@ -109,7 +109,7 @@ class TestJudges(unittest.TestCase):
 
     def test_pair_rm_judge(self):
         judge = PairRMJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
