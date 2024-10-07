@@ -32,7 +32,7 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 training_args = CPOConfig(output_dir="Qwen2-0.5B-CPO", logging_steps=10)
-trainer = CPOTrainer(model=model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset)
+trainer = CPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
 

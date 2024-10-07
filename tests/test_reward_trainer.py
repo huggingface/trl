@@ -46,7 +46,7 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
             training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
-                model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
             dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer})
@@ -59,7 +59,7 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
             training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
-                model=self.model, args=training_args, tokenizer=tokenizer, train_dataset=dummy_dataset
+                model=self.model, args=training_args, processing_class=tokenizer, train_dataset=dummy_dataset
             )
             dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": tokenizer})
             self.assertDictEqual(trainer.train_dataset[:], dummy_dataset[:])
@@ -69,7 +69,7 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
             training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
-                model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
             trainer.train()
@@ -89,7 +89,7 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer})
             training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
-                model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
             trainer.train()
@@ -117,7 +117,7 @@ class RewardTrainerTester(unittest.TestCase):
             trainer = RewardTrainer(
                 model=self.model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset,
                 peft_config=peft_config,
             )
@@ -165,7 +165,7 @@ class RewardTrainerTester(unittest.TestCase):
             trainer = RewardTrainer(
                 model=self.model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset,
                 peft_config=peft_config,
             )
@@ -218,7 +218,7 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
             training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
-                model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
 
             batch = [dummy_dataset[0]]
@@ -237,6 +237,6 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
             training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
-                model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             self.assertEqual(trainer.model.model_tags, trainer._tag_names)

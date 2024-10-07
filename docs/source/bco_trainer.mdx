@@ -32,7 +32,7 @@ bco_trainer = BCOTrainer(
     model_ref,
     args=training_args,
     train_dataset=train_dataset,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
 )
 ```
 After this one can then call:
@@ -75,7 +75,7 @@ bco_trainer = BCOTrainer(
     model_ref,
     args=training_args,
     train_dataset=train_dataset,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     embedding_func=embedding_func,
     embedding_tokenizer=self.embedding_tokenizer,
 )

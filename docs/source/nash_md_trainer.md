@@ -41,7 +41,7 @@ trainer = NashMDTrainer(
     model=model,
     reward_model=reward_model,
     args=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=train_dataset,
 )
 trainer.train()
