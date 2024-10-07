@@ -40,6 +40,8 @@ class CGPOConfig(TrainingArguments):
         lamb (`float`, *optional*, defaults to `5.0`):
             Only used when rlhf_optimizer is set to `codpo`.
             Parameter controlling the importance of the regularization term added to the vanilla DPO loss.
+        local_generation_batch_size (`int`, *optional*, defaults to `None`):
+             The size of the local mini-batch used during the generation phase.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
         max_length (`int`, *optional*, defaults to `None`):
@@ -59,6 +61,7 @@ class CGPOConfig(TrainingArguments):
     kl_threshold: float = None
     beta: float = 0.1
     lamb: float = 5.0
+    local_generation_batch_size: int = None
     max_new_tokens: int = 64
     max_length: int = None
     temperature: float = 0.9

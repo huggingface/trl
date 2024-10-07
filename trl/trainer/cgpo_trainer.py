@@ -211,6 +211,9 @@ class CGPOTrainer(Trainer):
         self.beta = args.beta
         self.kl_threshold = args.kl_threshold
         self.lamb = args.lamb
+        self.local_generation_batch_size = (
+            args.local_generation_batch_size if args.local_generation_batch_size else args.per_device_train_batch_size
+        )
         self._tag_names.append(args.rlhf_optimizer)
 
         super().__init__(
@@ -283,27 +286,46 @@ class CGPOTrainer(Trainer):
                 context_length,
             )
 
-        baseline_rewards = baseline_rewards.repeat_interleave(repeats=self.k, dim=0)
+        inputs["baseline_rewards"] = baseline_rewards.repeat_interleave(repeats=self.k, dim=0)
 
-        rewards = inputs["rewards"]
-        judgements = inputs["judgements"]
+        total_loss = torch.tensor(0.0, device=self.model.device)
+        for i in range(self.k):
+            # simulate gradient accumulation to avoid computing OOM with a batch of size bs* self.k
+            mini_batch_rewards = inputs["rewards"][i * bs : (i + 1) * bs]
+            mini_batch_judgements = inputs["judgements"][i * bs : (i + 1) * bs]
+            mini_batch_prompt_completion_ids = inputs["prompt_completion_ids"][i * bs : (i + 1) * bs]
+            mini_batch_prompt_completion_mask = inputs["prompt_completion_mask"][i * bs : (i + 1) * bs]
+            mini_batch_baseline_rewards = inputs["baseline_rewards"][i * bs : (i + 1) * bs]
 
-        calibrated_rewards = torch.sigmoid(rewards - baseline_rewards)
+            mini_batch_calibrated_rewards = torch.sigmoid(mini_batch_rewards - mini_batch_baseline_rewards)
 
-        # compute kl_divergence
-        logprobs, ref_logprobs = self._get_batch_logprobs(
-            inputs["prompt_completion_ids"], inputs["prompt_completion_mask"], context_length
-        )
+            # compute kl_divergence
+            logprobs, ref_logprobs = self._get_batch_logprobs(
+                mini_batch_prompt_completion_ids, mini_batch_prompt_completion_mask, context_length
+            )
 
-        with torch.no_grad():
-            # kl_div is used as a regularization term here
-            kl_div = logprobs - ref_logprobs
-        kl_div_regularization = torch.clamp(1 - kl_div / self.kl_threshold, min=0)
-        calibrated_regularized_rewards = judgements * calibrated_rewards * kl_div_regularization
+            with torch.no_grad():
+                # kl_div is used as a regularization term here
+                kl_div = logprobs - ref_logprobs
+            kl_div_regularization = torch.clamp(1 - kl_div / self.kl_threshold, min=0)
 
-        losses = -logprobs * (calibrated_regularized_rewards - calibrated_regularized_rewards.mean())
+            calibrated_regularized_rewards = (
+                mini_batch_judgements * mini_batch_calibrated_rewards * kl_div_regularization
+            )
 
-        return losses.sum() / bs
+            losses = -logprobs * (calibrated_regularized_rewards - calibrated_regularized_rewards.mean())
+
+            loss = losses.mean() / self.k
+
+            if self.use_apex:
+                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                self.accelerator.backward(loss)
+
+            total_loss += loss
+
+        return total_loss
 
     def crraft_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """Implementation of the Calibrated Regularized Reward Ranking Finetuning (CRRAFT) policy opttimizer."""
@@ -323,6 +345,11 @@ class CGPOTrainer(Trainer):
                 self.tokenizer.pad_token_id,
                 inputs["context_length"],
             )
+
+        if self.args.missing_eos_penalty is not None:
+            baseline_ids = inputs["prompt_baseline_ids"][:, context_length:]
+            contain_eos_token = torch.any(baseline_ids == self.tokenizer.eos_token_id, dim=-1)
+            baseline_rewards[~contain_eos_token] -= self.args.missing_eos_penalty
 
         baseline_judgements = self.moj.judge(inputs["prompt"], inputs["completion"])
         baseline_judgements = torch.tensor(baseline_judgements, device=self.model.device, dtype=torch.bool)
@@ -390,11 +417,19 @@ class CGPOTrainer(Trainer):
         losses = -logprobs * filtered_calibrated_rewards
 
         # simulate skipping samples instead of using .mean()
-        return (
+        loss = (
             losses.sum() / filtered_calibrated_rewards.sum()
             if filtered_calibrated_rewards.sum() != 0
             else losses.sum()
         )
+
+        if self.use_apex:
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            self.accelerator.backward(loss)
+
+        return loss
 
     def codpo_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         bs = inputs["bs"]
@@ -434,7 +469,15 @@ class CGPOTrainer(Trainer):
         # eqn (14) in the paper
         losses = -(F.logsigmoid(self.beta * logits) + self.lamb / chosen_length * chosen_logprobs)
 
-        return losses.mean()
+        loss = losses.mean()
+
+        if self.use_apex:
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            self.accelerator.backward(loss)
+
+        return loss
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         bs, context_length = inputs["prompt_ids"].shape
@@ -445,7 +488,7 @@ class CGPOTrainer(Trainer):
             query_responses_ids, _ = batch_generation(
                 unwrapped_model,
                 prompt_ids,
-                bs,
+                self.local_generation_batch_size,
                 self.tokenizer.pad_token_id,
                 self.generation_config,
             )
@@ -466,6 +509,7 @@ class CGPOTrainer(Trainer):
 
         rewards = []
         for i in range(0, prompt_completion_ids.shape[0], bs):
+            # operate on a mini batch of size batch_size instead of size batch_size * self.k
             mini_batch_prompt_completion_ids = prompt_completion_ids[i : i + bs]
             with torch.no_grad():
                 _, mini_batch_rewards, _ = get_reward(
@@ -477,8 +521,11 @@ class CGPOTrainer(Trainer):
 
             rewards.append(mini_batch_rewards)
 
-        # TO DO: Add penalty for samples that do not contain the eos token
         rewards = torch.cat(rewards, dim=0)
+        # Completions that do not contain an eos token id are penalized.
+        if self.args.missing_eos_penalty is not None:
+            contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
+            rewards[~contain_eos_token] -= self.args.missing_eos_penalty
 
         inputs["rewards"] = rewards
         inputs["judgements"] = torch.tensor(judgements, device=self.model.device, dtype=torch.float)
@@ -498,12 +545,6 @@ class CGPOTrainer(Trainer):
 
         self.stats["constraints/judgements"].append(self.accelerator.gather(inputs["judgements"]).mean().item())
         self.stats["constraints/rewards"].append(self.accelerator.gather(inputs["rewards"]).mean().item())
-
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss)
 
         return loss.detach() / self.args.gradient_accumulation_steps
 
