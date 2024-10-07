@@ -133,7 +133,7 @@ training_args = RewardConfig(output_dir="Qwen2.5-0.5B-Reward", per_device_train_
 trainer = RewardTrainer(
     args=training_args,
     model=model,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=dataset,
 )
 trainer.train()
@@ -166,7 +166,7 @@ dataset = dataset.map(lambda x: tokenizer(x["prompt"]), remove_columns="prompt")
 training_args = RLOOConfig(output_dir="Qwen2.5-0.5B-RL")
 trainer = RLOOTrainer(
     config=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     policy=policy,
     ref_policy=ref_policy,
     reward_model=reward_model,
@@ -189,7 +189,7 @@ model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
-trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, tokenizer=tokenizer)
+trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, processing_class=tokenizer)
 trainer.train()
 ```
 

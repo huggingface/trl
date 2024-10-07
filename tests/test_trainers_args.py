@@ -68,7 +68,7 @@ class TrainerArgTester(unittest.TestCase):
                 max_density_ratio=20.0,
             )
             trainer = BCOTrainer(
-                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
@@ -110,7 +110,7 @@ class TrainerArgTester(unittest.TestCase):
                 model_init_kwargs={"trust_remote_code": True},
                 dataset_num_proc=4,
             )
-            trainer = CPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = CPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer)
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
@@ -162,7 +162,7 @@ class TrainerArgTester(unittest.TestCase):
                 rpo_alpha=0.5,
             )
             trainer = DPOTrainer(
-                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
             )
             self.assertEqual(trainer.args.beta, 0.5)
             self.assertEqual(trainer.args.label_smoothing, 0.5)
@@ -214,7 +214,7 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
             )
             trainer = KTOTrainer(
-                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
@@ -246,7 +246,7 @@ class TrainerArgTester(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
             trainer = NashMDTrainer(
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
@@ -273,7 +273,7 @@ class TrainerArgTester(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
             trainer = OnlineDPOTrainer(
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
@@ -306,7 +306,7 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
             )
 
-            trainer = ORPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = ORPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer)
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
@@ -329,7 +329,7 @@ class TrainerArgTester(unittest.TestCase):
                 model=model,
                 args=training_args,
                 train_dataset=dataset,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.dataset_num_proc, 4)
@@ -380,7 +380,7 @@ class TrainerArgTester(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
             trainer = XPOTrainer(
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
