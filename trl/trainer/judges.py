@@ -482,7 +482,7 @@ class MixtureOfConstraintJudges(BaseConstraintJudge):
     """
     Unify the decision of multiple BaseConstraintJudge.
 
-    This class returns 0 ("violated") if it fails on any of the constraint judges (ie a judge returns 0 or -1) and returns 1 ("satisfied") otherwise.
+    This class returns False if it fails on any of the constraint judges (ie a judge returns 0 or -1) and returns True otherwise.
 
     It is an implementation of the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370)
 
