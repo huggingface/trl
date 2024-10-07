@@ -112,7 +112,7 @@ class RLOOTrainerTester(unittest.TestCase):
                 policy=self.policy_model,
                 reward_model=self.reward_model,
                 ref_policy=self.policy_ref_model,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset,
                 eval_dataset=dummy_dataset,
             )
