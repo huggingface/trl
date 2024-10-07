@@ -391,6 +391,13 @@ class RewardTrainer(Trainer):
         else:
             base_model = None
 
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,

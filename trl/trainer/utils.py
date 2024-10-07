@@ -1389,7 +1389,7 @@ def generate_model_card(
     model_name: str,
     hub_model_id: str,
     dataset_name: Optional[str],
-    tags: Union[str, List[str], None],
+    tags: List[str],
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
@@ -1408,7 +1408,7 @@ def generate_model_card(
             Hub model ID as `username/model_id`.
         dataset_name (`str` or `None`):
             Dataset name.
-        tags (`str`, `List[str]`, or `None`):
+        tags (`List[str]`):
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
@@ -1425,10 +1425,6 @@ def generate_model_card(
         `ModelCard`:
             A ModelCard object.
     """
-    if tags is None:
-        tags = []
-    elif isinstance(tags, str):
-        tags = [tags]
     card_data = ModelCardData(
         base_model=base_model,
         datasets=dataset_name,
