@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,6 +35,8 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
+    is_torch_npu_available,
+    is_torch_xpu_available,
     LogitsProcessor, LogitsProcessorList
 )
 
@@ -53,7 +55,7 @@ from ..core import (
     stack_dicts,
     stats_to_np,
 )
-from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
+from ..import_utils import is_torch_greater_2_0
 from ..models import (
     SUPPORTED_ARCHITECTURES,
     PreTrainedModelWrapper,
@@ -175,7 +177,7 @@ class VASTrainer(BaseTrainer):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
                 will be preprocessed by removing the columns that are not used by the model. If none is passed,
                 a warning will be raised in a multi-GPU setting.
-            optimizer (Optional[`torch.optim.Optimizer`]):
+            optimizer (`Optional[torch.optim.Optimizer]`):
                 Optimizer used for training. If `None`, the `Adam` is used as default.
             data_collator (Optional[function]):
                 Data collator function that is going to be used for `prepare_dataloader` method. Note this collator
@@ -183,7 +185,7 @@ class VASTrainer(BaseTrainer):
             num_shared_layers (Optional[int]):
                 Number of shared layers between the model and the reference model. If `None`, all layers are shared.
                 used only if `ref_model` is `None`.
-            lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
+            lr_scheduler (`Optional[torch.optim.lr_scheduler]`):
                 Learning rate scheduler used for training.
             training_data_collator (Optional[function]):
                 Custom data collator used for training.
@@ -370,9 +372,9 @@ class VASTrainer(BaseTrainer):
         if not getattr(self.model, "is_sequential_parallel", False):
             self.current_device = self.accelerator.device
         else:
-            if is_xpu_available():
+            if is_torch_xpu_available():
                 self.current_device = torch.device("xpu:0")
-            elif is_npu_available():
+            elif is_torch_npu_available():
                 self.current_device = torch.device("npu:0")
             else:
                 self.current_device = torch.device("cuda:0")
