@@ -266,7 +266,7 @@ class FactualityConstraintJudge(BaseConstraintJudge):
         self.client = InferenceClient(model=model, token=token)
         self.system_prompt = system_prompt or DEFAULT_FACTUALITY_SYSTEM_PROMPT
 
-    def judge(self, prompts, completions, gold_answers=None, shuffle_order=True):
+    def judge(self, prompts, completions, gold_answers=None, shuffle_order=True) -> List[int]:
         if gold_answers is None:
             raise ValueError(
                 "The FactualityConstraintJudge expects `gold_answers` to judge the factuality of the `completions`."
@@ -332,7 +332,7 @@ class SafetyConstraintJudge(BaseConstraintJudge):
                 "Please refer to `https://huggingface.co/meta-llama/Meta-Llama-Guard-2-8B` to see examples of safety labels.",
             )
 
-    def judge(self, prompts, completions, gold_answers=None, shuffle_order=True):
+    def judge(self, prompts, completions, gold_answers=None, shuffle_order=True) -> List[int]:
         if not (len(prompts) == len(completions) == len(gold_answers)):
             raise ValueError("The SafetyConstraintJudge expects the same number of `prompts` and `completions`.")
 
@@ -501,6 +501,6 @@ class MixtureOfConstraintJudges(BaseConstraintJudge):
         ]
 
         return [
-            1 if all(constraint_judgment == 1 for constraint_judgment in constraint_judgments) else 0
+            True if all(constraint_judgment == 1 for constraint_judgment in constraint_judgments) else False
             for constraint_judgments in zip(*all_constraint_judgments)
         ]
