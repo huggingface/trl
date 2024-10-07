@@ -50,7 +50,7 @@ class TestJudges(unittest.TestCase):
         completions = ["Paris", "Marseille", "Saturn", "Jupiter"]
         judgements = moj.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(judgements), 4)
-        self.assertTrue(all(judgement in {0, 1, -1} for judgement in judgements))
+        self.assertTrue(all(judgement in {True, False} for judgement in judgements))
 
     def test_random_constraint_judge(self):
         judge = RandomConstraintJudge()
