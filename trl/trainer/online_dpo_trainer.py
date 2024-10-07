@@ -27,15 +27,18 @@ from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainerCallback,
     is_apex_available,
     is_wandb_available,
 )
-from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
@@ -100,8 +103,10 @@ class OnlineDPOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         peft_config (`Dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
@@ -127,7 +132,9 @@ class OnlineDPOTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset], "datasets.Dataset"]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -158,9 +165,9 @@ class OnlineDPOTrainer(Trainer):
         if args is None:
             raise ValueError("`args` must be provided.")
 
-        # Check that the tokenizer is provided
-        if tokenizer is None:
-            raise ValueError("`tokenizer` must be provided.")
+        # Check that the processing_class is provided
+        if processing_class is None:
+            raise ValueError("`processing_class` must be provided.")
 
         # Convert to PEFT model if peft_config is provided
         if peft_config is not None:
@@ -202,7 +209,7 @@ class OnlineDPOTrainer(Trainer):
 
         # Define the collator is not provided
         if data_collator is None:
-            data_collator = DPODataCollatorWithPadding(pad_token_id=tokenizer.pad_token_id)
+            data_collator = DPODataCollatorWithPadding(pad_token_id=processing_class.pad_token_id)
 
         self.stats = {
             "objective/kl": [],
@@ -236,7 +243,7 @@ class OnlineDPOTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
@@ -366,8 +373,8 @@ class OnlineDPOTrainer(Trainer):
         # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
         batch_size = len(next(iter(inputs.values())))
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
-        inputs = [maybe_apply_chat_template(x, self.tokenizer) for x in inputs]
-        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.tokenizer) for x in inputs]
+        inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
+        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
         inputs = self.data_collator(inputs)
 
         # Sample 2 completations per prompt of size `max_new_tokens` from the model
@@ -385,7 +392,7 @@ class OnlineDPOTrainer(Trainer):
 
         completion_ids = output[:, context_length:]
         completion_ids, completion_mask = truncate_right(
-            completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+            completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
@@ -414,12 +421,12 @@ class OnlineDPOTrainer(Trainer):
 
             # Get the reward from the reward model
             _, scores, _ = get_reward(
-                self.reward_model, prompt_completion_ids, self.tokenizer.pad_token_id, context_length
+                self.reward_model, prompt_completion_ids, self.processing_class.pad_token_id, context_length
             )
 
         # Filter completion. Ensure that the sample contains stop_token_id
         # Completions not passing that filter will receive a lower score.
-        contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
+        contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
         if self.args.missing_eos_penalty is not None:
             scores[~contain_eos_token] -= self.args.missing_eos_penalty
 

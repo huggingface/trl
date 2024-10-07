@@ -25,9 +25,12 @@ from accelerate import PartialState
 from accelerate.utils import gather_object
 from datasets import Dataset
 from transformers import (
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainingArguments,
     is_wandb_available,
@@ -84,7 +87,9 @@ class RewardTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -111,8 +116,10 @@ class RewardTrainer(Trainer):
                 The dataset to use for training.
             eval_dataset (`datasets.Dataset`):
                 The dataset to use for evaluation.
-            tokenizer (`transformers.PreTrainedTokenizerBase`):
-                The tokenizer to use for training. This argument is required if you want to use the default data collator.
+            processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+                Processing class used to process the data. If provided, will be used to automatically process the inputs
+                for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+                reuse the fine-tuned model.
             model_init (`Callable[[], transformers.PreTrainedModel]`):
                 The model initializer to use for training. If None is specified, the default model initializer will be used.
             compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
@@ -175,12 +182,14 @@ class RewardTrainer(Trainer):
             compute_metrics = compute_accuracy
 
         if data_collator is None:
-            if tokenizer is None:
-                raise ValueError("A tokenizer must be specified when using the default RewardDataCollatorWithPadding")
+            if processing_class is None:
+                raise ValueError(
+                    "A processing_class must be specified when using the default RewardDataCollatorWithPadding"
+                )
             if max_length is None:
                 max_length = 512 if type(args) is TrainingArguments or args.max_length is None else args.max_length
 
-            data_collator = RewardDataCollatorWithPadding(tokenizer)
+            data_collator = RewardDataCollatorWithPadding(processing_class)
 
             if args.remove_unused_columns:
                 try:  # for bc before https://github.com/huggingface/transformers/pull/25435
@@ -200,8 +209,8 @@ class RewardTrainer(Trainer):
 
         if "input_ids_chosen" not in train_dataset.column_names:
             with PartialState().local_main_process_first():
-                fn_kwargs = {"tokenizer": tokenizer}
-                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                fn_kwargs = {"tokenizer": processing_class}
+                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class})
                 train_dataset = train_dataset.map(
                     _tokenize,
                     batched=True,
@@ -216,7 +225,9 @@ class RewardTrainer(Trainer):
                     num_proc=args.dataset_num_proc,
                 )
                 if eval_dataset is not None:
-                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                    eval_dataset = eval_dataset.map(
+                        maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}
+                    )
                     eval_dataset = eval_dataset.map(
                         _tokenize,
                         fn_kwargs=fn_kwargs,
@@ -238,7 +249,7 @@ class RewardTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -337,8 +348,8 @@ class RewardTrainer(Trainer):
         table = defaultdict(list)
         for _, inputs in enumerate(eval_dataloader):
             _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
-            chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.tokenizer)
-            rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.tokenizer)
+            chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.processing_class)
+            rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.processing_class)
             table["chosen_text"].extend(gather_object(chosen_text))
             table["rejected_text"].extend(gather_object(rejected_text))
             table["logits"].extend(

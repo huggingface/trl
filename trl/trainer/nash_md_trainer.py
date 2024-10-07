@@ -20,8 +20,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, IterableDataset
-from transformers import PreTrainedTokenizerBase, TrainerCallback, is_wandb_available
-from transformers.modeling_utils import PreTrainedModel
+from transformers import (
+    BaseImageProcessor,
+    FeatureExtractionMixin,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    TrainerCallback,
+    is_wandb_available,
+)
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_apex_available
@@ -65,8 +72,10 @@ class NashMDTrainer(OnlineDPOTrainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         peft_config (`Dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
@@ -91,7 +100,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         data_collator: Optional[Callable] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -106,7 +117,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -175,7 +186,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         # Process model completions
         model_completion_ids = model_output[:, context_length:]
         model_completion_ids, model_completion_mask = truncate_right(
-            model_completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+            model_completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
         model_data = {
             "input_ids": torch.cat((prompts["input_ids"], model_completion_ids), dim=1),
@@ -185,7 +196,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         # Process reference model completions
         mixture_completion_ids = mixture_output[:, context_length:]
         mixture_completion_ids, mixture_completion_mask = truncate_right(
-            mixture_completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+            mixture_completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
         mixture_data = {
             "input_ids": torch.cat((prompts["input_ids"], mixture_completion_ids), dim=1),
@@ -197,16 +208,16 @@ class NashMDTrainer(OnlineDPOTrainer):
     def _compute_rewards(self, model_data, mixture_data, context_length):
         with torch.no_grad():
             _, model_scores, _ = get_reward(
-                self.reward_model, model_data["input_ids"], self.tokenizer.pad_token_id, context_length
+                self.reward_model, model_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
             _, mixture_scores, _ = get_reward(
-                self.reward_model, mixture_data["input_ids"], self.tokenizer.pad_token_id, context_length
+                self.reward_model, mixture_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
 
         # Apply EOS penalty if needed
         if self.args.missing_eos_penalty is not None:
-            model_contain_eos = torch.any(model_data["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
-            mixture_contain_eos = torch.any(mixture_data["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
+            model_contain_eos = torch.any(model_data["input_ids"] == self.processing_class.eos_token_id, dim=-1)
+            mixture_contain_eos = torch.any(mixture_data["input_ids"] == self.processing_class.eos_token_id, dim=-1)
             model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
             mixture_scores[~mixture_contain_eos] -= self.args.missing_eos_penalty
 
@@ -308,8 +319,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["rewards/accuracies"].append(gather_mean(accuracy))
 
         # Log EOS token statistics
-        model_eos = (model_data["input_ids"][:, context_length:] == self.tokenizer.eos_token_id).any(dim=1)
-        mixture_eos = (mixture_data["input_ids"][:, context_length:] == self.tokenizer.eos_token_id).any(dim=1)
+        model_eos = (model_data["input_ids"][:, context_length:] == self.processing_class.eos_token_id).any(dim=1)
+        mixture_eos = (mixture_data["input_ids"][:, context_length:] == self.processing_class.eos_token_id).any(dim=1)
         self.stats["val/model_contain_eos_token"].append(gather_mean(model_eos.float()))
         self.stats["val/ref_contain_eos_token"].append(gather_mean(mixture_eos.float()))
 
@@ -323,8 +334,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         # Apply chat template and tokenize the input
         batch_size = len(next(iter(inputs.values())))
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
-        inputs = [maybe_apply_chat_template(x, self.tokenizer) for x in inputs]
-        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.tokenizer) for x in inputs]
+        inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
+        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
         inputs = self.data_collator(inputs)
 
         # need the prompt_ only

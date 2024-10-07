@@ -16,13 +16,27 @@ import random
 import textwrap
 import warnings
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import is_deepspeed_available
-from transformers import AutoModelForCausalLM, GenerationConfig, PreTrainedModel, is_wandb_available
+from datasets import Dataset
+from transformers import (
+    AutoModelForCausalLM,
+    BaseImageProcessor,
+    DataCollator,
+    FeatureExtractionMixin,
+    GenerationConfig,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    is_wandb_available,
+)
+from transformers.trainer_callback import TrainerCallback
+from transformers.trainer_utils import EvalPrediction
+from transformers.utils import is_peft_available
 
 from ..import_utils import is_liger_kernel_available
 from ..models import PreTrainedModelWrapper
@@ -38,6 +52,9 @@ if is_deepspeed_available():
 if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
+if is_peft_available():
+    from peft import PeftConfig
+
 if is_wandb_available():
     import wandb
 
@@ -47,16 +64,42 @@ class GKDTrainer(SFTTrainer):
 
     def __init__(
         self,
-        teacher_model: Union[PreTrainedModel, nn.Module, str],
+        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
+        teacher_model: Union[PreTrainedModel, nn.Module, str] = None,
         args: Optional[GKDConfig] = None,
-        *sft_args,
-        **kwargs,
+        data_collator: Optional[DataCollator] = None,  # type: ignore
+        train_dataset: Optional[Dataset] = None,
+        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
+        model_init: Optional[Callable[[], PreTrainedModel]] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        peft_config: Optional["PeftConfig"] = None,
+        formatting_func: Optional[Callable] = None,
     ):
         # add remove_unused_columns=False to the the dataclass args
         args.remove_unused_columns = False
-        kwargs["data_collator"] = DataCollatorForChatML(tokenizer=kwargs["tokenizer"], max_length=args.max_seq_length)
+        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_seq_length)
 
-        super().__init__(*sft_args, args=args, **kwargs)
+        super().__init__(
+            model,
+            args=args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=processing_class,
+            model_init=model_init,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            peft_config=peft_config,
+            formatting_func=formatting_func,
+        )
 
         if args.teacher_model_init_kwargs is None:
             teacher_model_init_kwargs = {}
@@ -100,7 +143,7 @@ class GKDTrainer(SFTTrainer):
             do_sample=True,
             top_k=0,
             use_cache=False if args.gradient_checkpointing else True,
-            pad_token_id=self.tokenizer.pad_token_id,
+            pad_token_id=self.processing_class.pad_token_id,
         )
         # Set custom EOS tokens if they are specified by the model's generation
         # config. This is important for models with the Llama 3 chat template,
@@ -235,7 +278,7 @@ class GKDTrainer(SFTTrainer):
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.tokenizer.pad_token_id
+                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
