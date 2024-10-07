@@ -13,8 +13,14 @@
 # limitations under the License.
 import platform
 import subprocess
+import tempfile
+import unittest
 
 import torch
+from datasets import Dataset
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+
+from trl import RLOOConfig, RLOOTrainer
 
 
 def test():
@@ -26,6 +32,8 @@ python examples/scripts/rloo/rloo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10 \
     --model_name_or_path EleutherAI/pythia-14m \
+    --sft_model_path EleutherAI/pythia-14m \
+    --reward_model_path EleutherAI/pythia-14m \
     --missing_eos_penalty 1.0 \
     --save_strategy no \
     --stop_token eos
@@ -71,3 +79,42 @@ def test_rloo_reward():
     baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
     vec_advantages = rlhf_reward - baseline
     torch.testing.assert_close(vec_advantages.flatten(), advantages)
+
+
+class RLOOTrainerTester(unittest.TestCase):
+    def setUp(self):
+        self.sft_model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.reward_model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+
+        self.policy_model = AutoModelForCausalLM.from_pretrained(self.sft_model_id)
+        self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id)
+        self.policy_ref_model = AutoModelForCausalLM.from_pretrained(self.sft_model_id)
+
+        self.tokenizer = AutoTokenizer.from_pretrained(self.sft_model_id, padding_side="left")
+        self.tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'user' %}{{ ' ' }}{% endif %}{{ message['content'] }}{% if not loop.last %}{{ '  ' }}{% endif %}{% endfor %}{{ eos_token }}"
+        self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+
+    def test_rloo_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = RLOOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                total_episodes=1,
+                report_to="none",
+            )
+
+            dummy_text = {"content": "Hello World!", "role": "user"}
+            dummy_data = self.tokenizer.apply_chat_template(dummy_text)
+            dummy_dataset = Dataset.from_dict({"input_ids": dummy_data})
+
+            trainer = RLOOTrainer(
+                config=training_args,
+                policy=self.policy_model,
+                reward_model=self.reward_model,
+                ref_policy=self.policy_ref_model,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            trainer._save_checkpoint(trainer.model, trial=None)
