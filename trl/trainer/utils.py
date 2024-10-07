@@ -11,16 +11,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import dataclasses
+import importlib.resources as pkg_resources
+import json
 import random
 import warnings
 from collections import deque
 from dataclasses import dataclass
+from importlib.metadata import version
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
-from accelerate.state import AcceleratorState, PartialState
+import torch.utils.data
+from accelerate import Accelerator, PartialState
+from accelerate.state import AcceleratorState
+from huggingface_hub import ModelCard, ModelCardData
 from rich.console import Console
 from rich.table import Table
 from torch.nn.utils.rnn import pad_sequence
@@ -28,12 +35,19 @@ from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
+    GenerationConfig,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
 )
+from transformers.utils import (
+    is_peft_available,
+    is_torch_mlu_available,
+    is_torch_npu_available,
+    is_torch_xpu_available,
+)
 
-from ..import_utils import is_peft_available, is_unsloth_available, is_xpu_available
+from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
 
@@ -44,7 +58,7 @@ if is_peft_available():
 class AdaptiveKLController:
     """
     Adaptive KL controller described in the paper:
-    https://arxiv.org/pdf/1909.08593.pdf
+    https://huggingface.co/papers/1909.08593
     """
 
     def __init__(self, init_kl_coef, target, horizon):
@@ -95,6 +109,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
+        padding_free: bool = False,
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
@@ -124,6 +139,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             )
 
         self.ignore_index = ignore_index
+        self.padding_free = padding_free
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
@@ -208,20 +224,117 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 if len(response_token_ids_idxs) < len(human_token_ids_idxs):
                     batch["labels"][i, human_token_ids_idxs[-1] :] = self.ignore_index
 
+        if self.padding_free:
+            # remove padding, `attention_mask` and add `position_ids`
+            attn_mask = batch.pop("attention_mask")
+            batch["input_ids"] = batch["input_ids"][attn_mask.bool()].unsqueeze(0)
+            batch["position_ids"] = attn_mask.cumsum(1)[attn_mask.bool()].unsqueeze(0) - 1
+            batch["labels"] = batch["labels"][attn_mask.bool()].unsqueeze(0)
+            batch["labels"][batch["position_ids"] == 0] = self.ignore_index
+
         return batch
+
+
+@dataclass
+class DataCollatorForChatML:
+    """
+    Data collator for ChatML format datasets.
+    """
+
+    tokenizer: PreTrainedTokenizerBase
+    ignore_index: int = -100
+    max_length: int = None
+    messages_key: str = "messages"
+
+    def __post_init__(self):
+        if self.tokenizer.pad_token_id is None:
+            raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
+        if self.max_length is None:
+            # set a sensible default
+            self.max_length = min(self.tokenizer.model_max_length, 1024)
+
+    def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        prompts = []
+        completions = []
+
+        for example in examples:
+            messages = example[self.messages_key]
+            formatted_chat = self.tokenizer.apply_chat_template(messages, tokenize=False)
+
+            # Split the formatted chat into prompt and completion
+            assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
+            last_assistant_message = assistant_messages[-1]["content"]
+            prompt = formatted_chat.rsplit(last_assistant_message, 1)[0]
+            completion = last_assistant_message
+
+            prompts.append(prompt)
+            completions.append(completion)
+
+        # Tokenize prompts and completions
+        tokenized_prompts = self.tokenizer(
+            prompts, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
+        )
+        tokenized_completions = self.tokenizer(
+            completions, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
+        )
+
+        # Combine prompts and completions
+        input_ids = []
+        attention_mask = []
+        labels = []
+
+        for prompt, completion in zip(tokenized_prompts["input_ids"], tokenized_completions["input_ids"]):
+            combined_input_ids = prompt + completion
+            combined_attention_mask = [1] * len(combined_input_ids)
+
+            # Create labels for one-token ahead task, masking the prompt
+            combined_labels = [self.ignore_index] * len(prompt) + completion[:-1]
+            combined_labels.append(self.tokenizer.eos_token_id)  # Add EOS token as final target
+
+            input_ids.append(combined_input_ids)
+            attention_mask.append(combined_attention_mask)
+            labels.append(combined_labels)
+
+        # first convert to list of tensors
+        input_ids = [torch.tensor(ids) for ids in input_ids]
+        attention_mask = [torch.tensor(mask) for mask in attention_mask]
+        labels = [torch.tensor(label) for label in labels]
+
+        # pad the input_ids, attention_mask and labels to the same length across the batch
+        input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
+        attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
+        labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
+
+        # pad the tokenized_prompts on the left to the same length convert to tensor first
+        prompts_input_ids = [torch.tensor(ids) for ids in tokenized_prompts["input_ids"]]
+        prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
+
+        # prompt attention mask
+        prompt_attention_mask = pad(
+            [torch.tensor([1] * len(ids)) for ids in tokenized_prompts["input_ids"]],
+            padding_side="left",
+            padding_value=0,
+        )
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+            "prompts": prompts_input_ids,
+            "prompt_attention_mask": prompt_attention_mask,
+        }
 
 
 @dataclass
 class RewardDataCollatorWithPadding:
     r"""
     Reward DataCollator class that pads the inputs to the maximum length of the batch.
+
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
-        max_length (`Optional[int]`, `optional`, defaults to `None`):
-            The maximum length of the sequence to be processed.
         pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.
         return_tensors (`str`, `optional`, defaults to `"pt"`):
@@ -230,7 +343,6 @@ class RewardDataCollatorWithPadding:
 
     tokenizer: PreTrainedTokenizerBase
     padding: Union[bool, str] = True
-    max_length: Optional[int] = None
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
@@ -269,14 +381,12 @@ class RewardDataCollatorWithPadding:
         batch_chosen = self.tokenizer.pad(
             features_chosen,
             padding=self.padding,
-            max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
         batch_rejected = self.tokenizer.pad(
             features_rejected,
             padding=self.padding,
-            max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
@@ -346,6 +456,7 @@ def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str =
 class DPODataCollatorWithPadding:
     r"""
     DPO DataCollator class that pads the tokenized inputs to the maximum length of the batch.
+
     Args:
         pad_token_id (`int` defaults to 0):
             The tokenizer's pad_token_id.
@@ -431,32 +542,34 @@ class ConstantLengthDataset(IterableDataset):
     The dataset also formats the text before tokenization with a specific format that is provided
     by the user.
 
-        Args:
-            tokenizer (`transformers.PreTrainedTokenizer`):
-                The processor used for processing the data.
-            dataset (`dataset.Dataset`):
-                Dataset with text files.
-            dataset_text_field (`str`, **optional**):
-                Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
-            formatting_func (`Callable`, **optional**):
-                Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-                pattern such as `"### Question: {question} ### Answer: {answer}"`
-            infinite (`bool`, *optional*, defaults to `False`):
-                If True the iterator is reset after dataset reaches end else stops.
-            seq_length (`int`, *optional*, defaults to `1024`):
-                Length of token sequences to return.
-            num_of_sequences (`int`, *optional*, defaults to `1024`):
-                Number of token sequences to keep in buffer.
-            chars_per_token (`int`, *optional*, defaults to `3.6`):
-                Number of characters per token used to estimate number of tokens in text buffer.
-            eos_token_id (`int`, *optional*, defaults to `0`):
-                Id of the end of sequence token if the passed tokenizer does not have an EOS token.
-            shuffle ('bool', *optional*, defaults to True)
-                Shuffle the examples before they are returned
-            append_concat_token ('bool', *optional*, defaults to True)
-                If true, appends `eos_token_id` at the end of each sample being packed.
-            add_special_tokens ('bool', *optional*, defaults to True)
-                If true, tokenizers adds special tokens to each sample being packed.
+    Args:
+        tokenizer (`transformers.PreTrainedTokenizer`):
+            The processor used for processing the data.
+        dataset (`dataset.Dataset`):
+            Dataset with text files.
+        dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
+            Name of the field in the dataset that contains the text. Only one of `dataset_text_field` and
+            `formatting_func` should be provided.
+        formatting_func (`Callable`, *optional*):
+            Function that formats the text before tokenization. Usually it is recommended to have follows a certain
+            pattern such as `"### Question: {question} ### Answer: {answer}"`. Only one of `dataset_text_field` and
+            `formatting_func` should be provided.
+        infinite (`bool`, *optional*, defaults to `False`):
+            If True the iterator is reset after dataset reaches end else stops.
+        seq_length (`int`, *optional*, defaults to `1024`):
+            Length of token sequences to return.
+        num_of_sequences (`int`, *optional*, defaults to `1024`):
+            Number of token sequences to keep in buffer.
+        chars_per_token (`int`, *optional*, defaults to `3.6`):
+            Number of characters per token used to estimate number of tokens in text buffer.
+        eos_token_id (`int`, *optional*, defaults to `0`):
+            Id of the end of sequence token if the passed tokenizer does not have an EOS token.
+        shuffle (`bool`, *optional*, defaults to `True`)
+            Shuffle the examples before they are returned
+        append_concat_token (`bool`, *optional*, defaults to `True`)
+            If true, appends `eos_token_id` at the end of each sample being packed.
+        add_special_tokens (`bool`, *optional*, defaults to `True`)
+            If true, tokenizers adds special tokens to each sample being packed.
     """
 
     def __init__(
@@ -491,10 +604,19 @@ class ConstantLengthDataset(IterableDataset):
         self.shuffle = shuffle
         self.append_concat_token = append_concat_token
         self.add_special_tokens = add_special_tokens
-        if formatting_func is None:
-            self.formatting_func = lambda x: x[dataset_text_field]
-        else:
+
+        if dataset_text_field is not None and formatting_func is not None:
+            warnings.warn(
+                "Only one of `dataset_text_field` and `formatting_func` should be provided. "
+                "Ignoring `dataset_text_field` and using `formatting_func`."
+            )
+
+        if formatting_func is not None:
             self.formatting_func = formatting_func
+        elif dataset_text_field is not None:
+            self.formatting_func = lambda x: x[dataset_text_field]
+        else:  # neither is provided
+            raise ValueError("Either `dataset_text_field` or `formatting_func` should be provided.")
 
         if formatting_func is not None:
             if formatting_func.__code__.co_argcount > 1:
@@ -524,6 +646,8 @@ class ConstantLengthDataset(IterableDataset):
                     else:
                         more_examples = False
                         break
+            if self.shuffle:
+                random.shuffle(buffer)
             tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
                 "input_ids"
             ]
@@ -538,6 +662,7 @@ class ConstantLengthDataset(IterableDataset):
                 if len(input_ids) == self.seq_length:
                     examples.append(input_ids)
             if self.shuffle:
+                # Shuffle again, otherwise split examples occur in consecutive tensors.
                 random.shuffle(examples)
             for example in examples:
                 self.current_size += 1
@@ -547,17 +672,18 @@ class ConstantLengthDataset(IterableDataset):
                 }
 
 
+@dataclass
 class RunningMoments:
-    def __init__(self, accelerator):
-        """
-        Calculates the running mean and standard deviation of a data stream. Reference:
-        https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
-        """
-        self.mean = 0
-        self.std = 1
-        self.var = 1
-        self.count = 1e-24
-        self.accelerator = accelerator
+    """
+    Calculates the running mean and standard deviation of a data stream. Reference:
+    https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+    """
+
+    accelerator: Accelerator
+    mean: float = 0
+    std: float = 1
+    var: float = 1
+    count: float = 1e-24
 
     @torch.no_grad()
     def update(self, xs: torch.Tensor) -> Tuple[float, float]:
@@ -579,16 +705,36 @@ class RunningMoments:
         old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
         tot_sum = old_sum + new_sum
 
-        self.mean += delta * xs_count / tot_count
-        self.var = tot_sum / tot_count
-        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt()
+        self.mean += (delta * xs_count / tot_count).item()
+        new_var = tot_sum / tot_count
+        self.std = (new_var * tot_count / (tot_count - 1)).float().sqrt().item()
+        self.var = new_var.item()
         self.count = tot_count
 
         return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
 
+    def save_to_json(self, json_path: str):
+        """Save the content of this instance in JSON format inside `json_path`."""
+        # save everything except accelerator
+        if self.accelerator.is_main_process:
+            save_dict = dataclasses.asdict(self, dict_factory=lambda x: {k: v for (k, v) in x if k != "accelerator"})
+            json_string = json.dumps(save_dict, indent=2, sort_keys=True) + "\n"
+            with open(json_path, "w", encoding="utf-8") as f:
+                f.write(json_string)
+
+    @classmethod
+    def load_from_json(cls, accelerator: Accelerator, json_path: str):
+        """Create an instance from the content of `json_path`."""
+        # load everything except accelerator
+        with open(json_path, encoding="utf-8") as f:
+            text = f.read()
+        return cls(accelerator=accelerator, **json.loads(text))
+
 
 @torch.no_grad()
-def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu") -> Tuple[float, float, int]:
+def get_global_statistics(
+    accelerator, xs: torch.Tensor, mask=None, device="cpu"
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """
     Computes element-wise mean and variance of the tensor across processes. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
@@ -603,7 +749,7 @@ def get_global_statistics(accelerator, xs: torch.Tensor, mask=None, device="cpu"
     sum_var = accelerator.reduce(sum_var)
     global_var = sum_var / count
 
-    return global_mean.to(device), global_var.to(device), count.to(device)
+    return global_mean.to(device), global_var.to(device), count.item()
 
 
 def compute_accuracy(eval_pred) -> Dict[str, float]:
@@ -690,35 +836,6 @@ class PerPromptStatTracker:
         return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
 
 
-def neftune_post_forward_hook(module, input, output):
-    """
-    Implements the NEFTune forward pass for the model using forward hooks. Note this works only for
-    torch.nn.Embedding layers. This method is slightly adapted from the original source code
-    that can be found here: https://github.com/neelsjain/NEFTune
-
-    Simply add it to your model as follows:
-    ```python
-    model = ...
-    model.embed_tokens.neftune_noise_alpha = 0.1
-    model.embed_tokens.register_forward_hook(neftune_post_forward_hook)
-    ```
-
-    Args:
-        module (`torch.nn.Module`):
-            The embedding module where the hook is attached. Note that you need to set
-            `module.neftune_noise_alpha` to the desired noise alpha value.
-        input (`torch.Tensor`):
-            The input tensor to the model.
-        output (`torch.Tensor`):
-            The output tensor of the model (i.e. the embeddings).
-    """
-    if module.training:
-        dims = torch.tensor(output.size(1) * output.size(2))
-        mag_norm = module.neftune_noise_alpha / torch.sqrt(dims)
-        output = output + torch.zeros_like(output).uniform_(-mag_norm, mag_norm)
-    return output
-
-
 def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
@@ -754,6 +871,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
             bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
             bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
+            bnb_4bit_quant_storage=model_config.torch_dtype,
         )
     elif model_config.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
@@ -766,7 +884,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
 
 
 def get_kbit_device_map() -> Optional[Dict[str, int]]:
-    if is_xpu_available():
+    if is_torch_xpu_available():
         return {"": f"xpu:{PartialState().local_process_index}"}
     elif torch.cuda.is_available():
         return {"": PartialState().local_process_index}
@@ -785,12 +903,13 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         )
 
     peft_config = LoraConfig(
+        task_type=model_config.lora_task_type,
         r=model_config.lora_r,
+        target_modules=model_config.lora_target_modules,
         lora_alpha=model_config.lora_alpha,
         lora_dropout=model_config.lora_dropout,
         bias="none",
-        task_type=model_config.lora_task_type,
-        target_modules=model_config.lora_target_modules,
+        use_rslora=model_config.use_rslora,
         modules_to_save=model_config.lora_modules_to_save,
     )
 
@@ -804,6 +923,7 @@ def get_exp_cap(value, decimal=4):
     E.g.
       For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
     ```
+
     Args:
         value (`torch.Tensor`):
             The input tensor to obtain the data type
@@ -836,9 +956,7 @@ def print_rich_table(df: pd.DataFrame) -> Table:
 SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}{{ eos_token }}"
 # SIMPLE_SFT_CHAT_TEMPLATE simply ends things with an EOS token, this helps the SFT model learn to end the completions with EOS tokens
 
-SIMPLE_QUERY_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['content']}}{% endfor %}"
-# SIMPLE_QUERY_CHAT_TEMPLATE is a variant of SIMPLE_SFT_CHAT_TEMPLATE, which does not end the content with EOS token. The idea
-# is to have the generated response to end with an EOS token, but the query itself should not end with EOS tokens.
+SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
 
 
 @dataclass
@@ -848,53 +966,78 @@ class OnlineTrainerState(TrainerState):
 
 @dataclass
 class OnPolicyConfig(TrainingArguments):
-    # common config
+    r"""
+    Base configuration class for on-policy trainers.
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
+
+    Parameters:
+        run_name (`Optional[str]`, *optional*, defaults to `None`):
+            Name of the run.
+        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes to use for processing the dataset.
+        num_mini_batches (`int`, *optional*, defaults to `1`):
+            Number of minibatches to split a batch into.
+        total_episodes (`Optional[int]`, *optional*, defaults to `None`):
+            Total number of episodes in the dataset.
+        local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
+            Per rank no grad forward pass in the rollout phase.
+        num_sample_generations (`int`, *optional*, defaults to `10`):
+            Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
+        response_length (`int`, *optional*, defaults to `53`):
+            Length of the response.
+        stop_token (`Optional[str]`, *optional*, defaults to `None`):
+            Stop token.
+        stop_token_id (`Optional[int]`, *optional*, defaults to `None`):
+            Truncation token id.
+        temperature (`float`, *optional*, defaults to `0.7`):
+            Sampling temperature.
+        missing_eos_penalty (`Optional[float]`, *optional*, defaults to `None`):
+            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
+            to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
+            value.
+        sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
+            Path to the SFT model.
+        world_size (`Optional[int]`, *optional*, defaults to `None`):
+            Number of processes (GPUs) to use for the training.
+        num_total_batches (`Optional[int]`, *optional*, defaults to `None`):
+            Number of total batches to train.
+        micro_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
+        local_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
+        batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`).
+        local_mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Mini batch size per GPU.
+        mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Mini batch size across GPUs.
+        push_to_hub (`bool`, *optional*, defaults to `False`):
+            Whether to push the model to the Hub after training.
+    """
+
     run_name: Optional[str] = None
-    """a unique name of this run"""
-    sanity_check: bool = False
-    """wether to run in debug mode"""
-
-    # batch size related config
+    dataset_num_proc: Optional[int] = None
     num_mini_batches: int = 1
-    """Number of minibatches to split a batch into"""
     total_episodes: Optional[int] = None
-    """The total number of episodes in the dataset"""
     local_rollout_forward_batch_size: int = 64
-    """per rank no grad forward pass in the rollout phase"""
     num_sample_generations: int = 10
-    """the number of debugging samples generations (i.e., `generate_completions` calls) throughout training"""
-
-    # other config
     response_length: int = 53
-    """the length of the response"""
     stop_token: Optional[Literal["eos"]] = None
-    """the stop token"""
     stop_token_id: Optional[int] = None
-    """the truncation token id"""
     temperature: float = 0.7
-    """the sampling temperature"""
-    penalty_reward_value: int = -1
-    """the reward value for responses that do not contain `stop_token_id`"""
-    non_eos_penalty: bool = False
-    """whether to penalize responses that do not contain `stop_token_id`"""
+    missing_eos_penalty: Optional[float] = None
     sft_model_path: str = "EleutherAI/pythia-160m"
-    """the path to the sft model"""
-
-    # various batch sizes
     world_size: Optional[int] = None
-    """The number of processes (GPUs) to use"""
     num_total_batches: Optional[int] = None
-    """The number of total batches to train"""
     micro_batch_size: Optional[int] = None
-    """The micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)"""
     local_batch_size: Optional[int] = None
-    """The batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)"""
     batch_size: Optional[int] = None
-    """The batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`)"""
     local_mini_batch_size: Optional[int] = None
-    """the mini batch size per GPU"""
     mini_batch_size: Optional[int] = None
-    """the mini batch size across GPUs"""
+    push_to_hub: bool = False
 
 
 def first_true_indices(bools: torch.Tensor, dtype=torch.long):
@@ -1080,7 +1223,7 @@ def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Te
 
 
 def generate(
-    lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: dict
+    lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: GenerationConfig
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Generates sequences from the language model backbone in a way that does not affect padding tokens.
@@ -1092,8 +1235,8 @@ def generate(
             The tensor containing the input queries.
         pad_token_id (`int`):
             The token ID representing the pad token.
-        generation_config (`dict`):
-            The configuration dictionary for generation settings.
+        generation_config (`GenerationConfig`):
+            The configuration for the generation process.
 
     Returns:
         tuple:
@@ -1124,7 +1267,7 @@ def batch_generation(
     queries: torch.Tensor,
     local_rollout_forward_batch_size: int,
     pad_token_id: int,
-    generation_config: dict,
+    generation_config: GenerationConfig,
 ):
     query_responses = []
     logitss = []
@@ -1139,3 +1282,172 @@ def batch_generation(
         query_responses.append(query_response)
         logitss.append(logits)
     return torch.cat(query_responses, 0), torch.cat(logitss, 0)
+
+
+def add_bos_token_if_needed(
+    bos_token_id: Optional[int],
+    prompt_len_input_ids: int,
+    prompt_tokens: Dict[str, List[int]],
+    chosen_prompt_len_input_ids: int,
+    chosen_tokens: Dict[str, List[int]],
+    rejected_prompt_len_input_ids: int,
+    rejected_tokens: Dict[str, List[int]],
+):
+    if bos_token_id is not None:
+        if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
+            prompt_tokens["prompt_input_ids"] = [bos_token_id] + prompt_tokens["prompt_input_ids"]
+            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+        if chosen_prompt_len_input_ids == 0 or bos_token_id != chosen_tokens["prompt_input_ids"][0]:
+            chosen_tokens["prompt_input_ids"] = [bos_token_id] + chosen_tokens["prompt_input_ids"]
+            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+        if rejected_prompt_len_input_ids == 0 or bos_token_id != rejected_tokens["prompt_input_ids"][0]:
+            rejected_tokens["prompt_input_ids"] = [bos_token_id] + rejected_tokens["prompt_input_ids"]
+            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+    return prompt_tokens, chosen_tokens, rejected_tokens
+
+
+def add_eos_token_if_needed(
+    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
+):
+    if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
+        chosen_tokens["input_ids"].append(eos_token_id)
+        chosen_tokens["attention_mask"].append(1)
+    if len(rejected_tokens["input_ids"]) == 0 or eos_token_id != rejected_tokens["input_ids"][-1]:
+        rejected_tokens["input_ids"].append(eos_token_id)
+        rejected_tokens["attention_mask"].append(1)
+    return chosen_tokens, rejected_tokens
+
+
+def truncate_right(
+    input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Truncates the input tensor from the right side after the first occurrence of the stop token.
+
+    Args:
+        input_ids (`torch.Tensor`):
+            The tensor containing the responses to be truncated
+        stop_token_id (`int`):
+            The token ID representing the stop token where truncation occurs
+        pad_token_id (`int`):
+            The token ID representing the pad token used to fill the truncated responses
+
+    Returns:
+        tuple:
+            - `output_ids` (`torch.Tensor`):
+                The truncated responses tensor with pad tokens filled after the stop token
+            - `mask` (`torch.Tensor`):
+                The mask tensor to indicate the padding tokens
+    """
+    trunc_idxs = first_true_indices(input_ids == stop_token_id).unsqueeze(-1)
+    new_size = [1] * (len(input_ids.size()) - 1) + [input_ids.shape[1]]
+    idxs = torch.arange(input_ids.shape[1], device=input_ids.device).view(*new_size)
+    output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)
+    mask = torch.masked_fill(torch.ones_like(input_ids), idxs > trunc_idxs, 0)
+    return output_ids, mask
+
+
+def empty_cache() -> None:
+    """Empties the cache of the available torch device.
+
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA)
+    and empties the cache of the first available device it finds.
+
+    If none of the specific devices are available, it defaults to emptying the CUDA cache.
+    """
+    if is_torch_xpu_available():
+        torch.xpu.empty_cache()
+    elif is_torch_mlu_available():
+        torch.mlu.empty_cache()
+    elif is_torch_npu_available():
+        torch.npu.empty_cache()
+    else:
+        torch.cuda.empty_cache()
+
+
+def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> List[str]:
+    """
+    Decodes the input tensor and strips the padding tokens.
+
+    Args:
+        inputs (`torch.Tensor`):
+            The input tensor to be decoded.
+        tokenizer (`transformers.PreTrainedTokenizerBase`):
+            The tokenizer used to decode the input tensor.
+
+    Returns:
+        `List[str]`:
+            The list of decoded strings with padding tokens stripped.
+    """
+    decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
+    return [d.replace(tokenizer.pad_token, "") for d in decoded]
+
+
+def generate_model_card(
+    base_model: Optional[str],
+    model_name: str,
+    hub_model_id: str,
+    dataset_name: Optional[str],
+    tags: List[str],
+    wandb_url: Optional[str],
+    trainer_name: str,
+    trainer_citation: Optional[str] = None,
+    paper_title: Optional[str] = None,
+    paper_id: Optional[str] = None,
+) -> ModelCard:
+    """
+    Generate a `ModelCard` from a template.
+
+    Args:
+        base_model (`str` or `None`):
+            Base model name.
+        model_name (`str`):
+            Model name.
+        hub_model_id (`str`):
+            Hub model ID as `username/model_id`.
+        dataset_name (`str` or `None`):
+            Dataset name.
+        tags (`List[str]`):
+            Tags.
+        wandb_url (`str` or `None`):
+            Weights & Biases run URL.
+        trainer_name (`str`):
+            Trainer name.
+        trainer_citation (`str` or `None`, defaults to `None`):
+            Trainer citation as a BibTeX entry.
+        paper_title (`str` or `None`, defaults to `None`):
+            Paper title.
+        paper_id (`str` or `None`, defaults to `None`):
+            ArXiv paper ID as `YYMM.NNNNN`.
+
+    Returns:
+        `ModelCard`:
+            A ModelCard object.
+    """
+    card_data = ModelCardData(
+        base_model=base_model,
+        datasets=dataset_name,
+        library_name="transformers",
+        licence="license",
+        model_name=model_name,
+        tags=["generated_from_trainer", *tags],
+    )
+    card = ModelCard.from_template(
+        card_data,
+        template_path=str(pkg_resources.files("trl").joinpath("templates/lm_model_card.md")),
+        base_model=base_model,
+        model_name=model_name,
+        hub_model_id=hub_model_id,
+        dataset_name=dataset_name,
+        wandb_url=wandb_url,
+        trainer_name=trainer_name,
+        trainer_citation=trainer_citation,
+        paper_title=paper_title,
+        paper_id=paper_id,
+        trl_version=version("trl"),
+        transformers_version=version("transformers"),
+        pytorch_version=version("torch"),
+        datasets_version=version("datasets"),
+        tokenizers_version=version("tokenizers"),
+    )
+    return card

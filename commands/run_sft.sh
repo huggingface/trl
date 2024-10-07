@@ -3,7 +3,7 @@
 # but defaults to QLoRA + PEFT
 OUTPUT_DIR="test_sft/"
 MODEL_NAME="trl-internal-testing/tiny-random-LlamaForCausalLM"
-DATASET_NAME="imdb"
+DATASET_NAME="stanfordnlp/imdb"
 MAX_STEPS=5
 BATCH_SIZE=2
 SEQ_LEN=128
@@ -41,7 +41,6 @@ accelerate launch $EXTRA_ACCELERATE_ARGS \
     --dataset_name $DATASET_NAME \
     --output_dir $OUTPUT_DIR \
     --max_steps $MAX_STEPS \
-    --dataset_text_field 'text' \
     --per_device_train_batch_size $BATCH_SIZE \
     --max_seq_length $SEQ_LEN \
     $EXTRA_TRAINING_ARGS

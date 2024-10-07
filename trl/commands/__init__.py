@@ -1,5 +1,3 @@
-# flake8: noqa
-
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,19 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# flake8: noqa
 
 from typing import TYPE_CHECKING
-from ..import_utils import _LazyModule, OptionalDependencyNotAvailable
+
+from ..import_utils import OptionalDependencyNotAvailable, _LazyModule
 
 
 _import_structure = {
-    "cli_utils": ["SFTScriptArguments", "init_zero_verbose", "DPOScriptArguments", "TrlParser", "YamlConfigParser"],
+    "cli_utils": ["DPOScriptArguments", "SFTScriptArguments", "TrlParser", "YamlConfigParser", "init_zero_verbose"],
 }
 
-
 if TYPE_CHECKING:
-    from .cli_utils import SFTScriptArguments, init_zero_verbose, DPOScriptArguments, TrlParser, YamlConfigParser
+    from .cli_utils import DPOScriptArguments, SFTScriptArguments, TrlParser, YamlConfigParser, init_zero_verbose
 else:
     import sys
 

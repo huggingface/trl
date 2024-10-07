@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import tempfile
 import unittest
 
@@ -19,11 +33,10 @@ class DummyModel(nn.Module):
 
 
 class TestRichProgressCallback(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.dummy_model = DummyModel()
-        cls.dummy_train_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 5)
-        cls.dummy_val_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 101)
+    def setUp(self):
+        self.dummy_model = DummyModel()
+        self.dummy_train_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 5)
+        self.dummy_val_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 101)
 
     def test_rich_progress_callback_logging(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -35,6 +35,8 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
+    is_torch_npu_available,
+    is_torch_xpu_available,
 )
 
 from ..core import (
@@ -52,7 +54,7 @@ from ..core import (
     stack_dicts,
     stats_to_np,
 )
-from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
+from ..import_utils import is_torch_greater_2_0
 from ..models import (
     SUPPORTED_ARCHITECTURES,
     PreTrainedModelWrapper,
@@ -67,6 +69,7 @@ if is_deepspeed_available():
 
 MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
+library_name: transformers
 tags:
 - trl
 - ppo
@@ -174,7 +177,7 @@ class PPOTrainer(BaseTrainer):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
                 will be preprocessed by removing the columns that are not used by the model. If none is passed,
                 a warning will be raised in a multi-GPU setting.
-            optimizer (Optional[`torch.optim.Optimizer`]):
+            optimizer (`Optional[torch.optim.Optimizer]`):
                 Optimizer used for training. If `None`, the `Adam` is used as default.
             data_collator (Optional[function]):
                 Data collator function that is going to be used for `prepare_dataloader` method. Note this collator
@@ -182,11 +185,15 @@ class PPOTrainer(BaseTrainer):
             num_shared_layers (Optional[int]):
                 Number of shared layers between the model and the reference model. If `None`, all layers are shared.
                 used only if `ref_model` is `None`.
-            lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
+            lr_scheduler (`Optional[torch.optim.lr_scheduler]`):
                 Learning rate scheduler used for training.
             training_data_collator (Optional[function]):
                 Custom data collator used for training.
         """
+        warnings.warn(
+            "`PPOTrainer` is deprecated and will be removed in trl v0.12. Please use `PPOv2Trainer` instead.",
+            FutureWarning,
+        )
         super().__init__(config)
 
         # initial seed for reproducible experiments
@@ -374,9 +381,9 @@ class PPOTrainer(BaseTrainer):
         if not getattr(self.model, "is_sequential_parallel", False):
             self.current_device = self.accelerator.device
         else:
-            if is_xpu_available():
+            if is_torch_xpu_available():
                 self.current_device = torch.device("xpu:0")
-            elif is_npu_available():
+            elif is_torch_npu_available():
                 self.current_device = torch.device("npu:0")
             else:
                 self.current_device = torch.device("cuda:0")
@@ -615,6 +622,7 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the scores.
             masks (List[`torch.LongTensor`], *optional*):
                 list of optional tensors containing the masks of shape (`response_length`)
+
         Returns:
             `tuple`: The input processed data.
         """
@@ -987,6 +995,7 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses, shape (`batch_size`, `response_length`)
             return_logits (`bool`, *optional*, defaults to `False`):
                 Whether to return all_logits. Set to `False` if logits are not needed to reduce memory consumption.
+
         Returns:
             (tuple):
                 - all_logprobs (`torch.FloatTensor`): Log probabilities of the responses,

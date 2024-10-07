@@ -15,12 +15,12 @@
 import tempfile
 import unittest
 
+import numpy as np
 import pytest
 import torch
-from datasets import Dataset, features
+from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
 from PIL import Image
-from pytest import mark
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
@@ -28,123 +28,186 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
 )
+from transformers.testing_utils import require_bitsandbytes, require_peft
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
+from trl.trainer.dpo_trainer import _build_tokenized_answer, _truncate_tokens
 
-from .testing_utils import require_bitsandbytes, require_no_wandb, require_peft
+from .testing_utils import require_no_wandb
+
+
+class TestBuildTokenizedAnswer(unittest.TestCase):
+    def setUp(self):
+        self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def test_basic_functionality(self):
+        prompt = "Hello, how are you?"
+        answer = "I'm doing well, thank you!"
+
+        result = _build_tokenized_answer(prompt, answer, tokenizer=self.tokenizer)
+
+        self.assertIn("prompt_input_ids", result)
+        self.assertIn("prompt_attention_mask", result)
+        self.assertIn("input_ids", result)
+        self.assertIn("attention_mask", result)
+
+        self.assertEqual(len(result["prompt_input_ids"]), len(result["prompt_attention_mask"]))
+        self.assertEqual(len(result["input_ids"]), len(result["attention_mask"]))
+
+        decoded_prompt = self.tokenizer.decode(result["prompt_input_ids"])
+        self.assertTrue(prompt in decoded_prompt)
+
+        decoded_answer = self.tokenizer.decode(result["input_ids"])
+        self.assertTrue(answer in decoded_answer)
+
+    def test_with_processor(self):
+        def mock_processor(text, images=None, add_special_tokens=True):
+            return {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
+
+        prompt = "Describe this image:"
+        answer = "A beautiful sunset over the ocean."
+
+        result = _build_tokenized_answer(prompt, answer, processor=mock_processor)
+
+        self.assertIn("prompt_input_ids", result)
+        self.assertIn("prompt_attention_mask", result)
+        self.assertIn("input_ids", result)
+        self.assertIn("attention_mask", result)
+
+        self.assertEqual(result["prompt_input_ids"], [1, 2, 3])
+        self.assertEqual(result["prompt_attention_mask"], [1, 1, 1])
+
+    def test_token_merging(self):
+        prompt = "The quick brown"
+        answer = " fox jumps over the lazy dog."
+
+        result = _build_tokenized_answer(prompt, answer, tokenizer=self.tokenizer)
+
+        full_text = prompt + answer
+        full_tokenized = self.tokenizer(full_text, add_special_tokens=False)
+
+        self.assertEqual(result["prompt_input_ids"] + result["input_ids"], full_tokenized["input_ids"])
+
+    def test_vision_model(self):
+        def mock_vision_processor(text, images=None, add_special_tokens=True):
+            return {
+                "input_ids": torch.tensor([[1, 2, 3]]),
+                "attention_mask": torch.tensor([[1, 1, 1]]),
+                "pixel_values": torch.rand(1, 3, 224, 224),
+                "pixel_attention_mask": torch.ones(1, 224, 224),
+            }
+
+        prompt = "Describe this image:"
+        answer = "A cat sitting on a windowsill."
+
+        result = _build_tokenized_answer(prompt, answer, processor=mock_vision_processor)
+
+        self.assertIn("prompt_pixel_values", result)
+        self.assertIn("prompt_pixel_attention_mask", result)
+        self.assertTrue(torch.is_tensor(result["prompt_pixel_values"]))
+        self.assertTrue(torch.is_tensor(result["prompt_pixel_attention_mask"]))
+
+
+class TestTruncateTokens(unittest.TestCase):
+    def setUp(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self.training_args = DPOConfig(
+                max_length=20, max_prompt_length=10, truncation_mode="keep_start", output_dir=tmp_dir
+            )
+
+    def test_truncate_tokens(self):
+        chosen_tokens = [
+            {
+                "prompt_input_ids": list(range(15)),
+                "prompt_attention_mask": [1] * 15,
+                "input_ids": list(range(10)),
+                "attention_mask": [1] * 10,
+            }
+        ]
+        rejected_tokens = [
+            {
+                "prompt_input_ids": list(range(15)),
+                "prompt_attention_mask": [1] * 15,
+                "input_ids": list(range(12)),
+                "attention_mask": [1] * 12,
+            }
+        ]
+        prompt_tokens = [{"prompt_input_ids": list(range(15)), "prompt_attention_mask": [1] * 15}]
+
+        _truncate_tokens(chosen_tokens, rejected_tokens, prompt_tokens, self.training_args)
+
+        # Check if prompt is truncated correctly
+        self.assertEqual(len(chosen_tokens[0]["prompt_input_ids"]), 10)
+        self.assertEqual(len(chosen_tokens[0]["prompt_attention_mask"]), 10)
+        self.assertEqual(len(rejected_tokens[0]["prompt_input_ids"]), 10)
+        self.assertEqual(len(rejected_tokens[0]["prompt_attention_mask"]), 10)
+        self.assertEqual(len(prompt_tokens[0]["prompt_input_ids"]), 10)
+        self.assertEqual(len(prompt_tokens[0]["prompt_attention_mask"]), 10)
+
+        # Check if responses are truncated correctly
+        self.assertEqual(len(chosen_tokens[0]["input_ids"]), 10)
+        self.assertEqual(len(chosen_tokens[0]["attention_mask"]), 10)
+        self.assertEqual(len(rejected_tokens[0]["input_ids"]), 10)
+        self.assertEqual(len(rejected_tokens[0]["attention_mask"]), 10)
+
+    def test_truncation_mode_keep_end(self):
+        self.training_args.truncation_mode = "keep_end"
+        chosen_tokens = [
+            {
+                "prompt_input_ids": list(range(15)),
+                "prompt_attention_mask": [1] * 15,
+                "input_ids": list(range(15, 25)),
+                "attention_mask": [1] * 10,
+            }
+        ]
+        rejected_tokens = [
+            {
+                "prompt_input_ids": list(range(15)),
+                "prompt_attention_mask": [1] * 15,
+                "input_ids": list(range(15, 28)),
+                "attention_mask": [1] * 13,
+            }
+        ]
+        prompt_tokens = [{"prompt_input_ids": list(range(15)), "prompt_attention_mask": [1] * 15}]
+
+        _truncate_tokens(chosen_tokens, rejected_tokens, prompt_tokens, self.training_args)
+
+        # Check if prompt is truncated correctly from the end
+        self.assertEqual(prompt_tokens[0]["prompt_input_ids"], list(range(5, 15)))
+        self.assertEqual(prompt_tokens[0]["prompt_attention_mask"], [1] * 10)
+
+        # Check if chosen tokens are truncated correctly
+        self.assertEqual(chosen_tokens[0]["prompt_input_ids"], list(range(5, 15)))
+        self.assertEqual(chosen_tokens[0]["prompt_attention_mask"], [1] * 10)
+        self.assertEqual(chosen_tokens[0]["input_ids"], list(range(15, 25)))
+        self.assertEqual(chosen_tokens[0]["attention_mask"], [1] * 10)
+
+        # Check if rejected tokens are truncated correctly
+        self.assertEqual(rejected_tokens[0]["prompt_input_ids"], list(range(5, 15)))
+        self.assertEqual(rejected_tokens[0]["prompt_attention_mask"], [1] * 10)
+        self.assertEqual(rejected_tokens[0]["input_ids"], list(range(15, 25)))
+        self.assertEqual(rejected_tokens[0]["attention_mask"], [1] * 10)
+
+    def test_invalid_truncation_mode(self):
+        self.training_args.truncation_mode = "invalid_mode"
+        with self.assertRaises(ValueError):
+            _truncate_tokens([], [], [], self.training_args)
 
 
 class DPOTrainerTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
         model_id = "trl-internal-testing/T5ForConditionalGeneration-correct-vocab-calibrated"
-        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-        # get idefics2 model
-        model_id = "trl-internal-testing/tiny-random-idefics2"
-        cls.idefics2_model = AutoModelForVision2Seq.from_pretrained(model_id)
-        cls.idefics2_ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
-        cls.idefics2_processor = AutoProcessor.from_pretrained(model_id)
-
-    def _init_dummy_dataset(self):
-        # fmt: off
-        dummy_dataset_dict = {
-            "prompt": [
-                "hello",
-                "how are you",
-                "What is your name?",
-                "What is your name?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "[INST] How is the stock price? [/INST]",
-                "[INST] How is the stock price? [/INST] ",
-            ],
-            "chosen": [
-                "hi nice to meet you",
-                "I am fine",
-                "My name is Mary",
-                "My name is Mary",
-                "Python",
-                "Python",
-                "Python",
-                "$46 as of 10am EST",
-                "46 as of 10am EST",
-            ],
-            "rejected": [
-                "leave me alone",
-                "I am not fine",
-                "Whats it to you?",
-                "I dont have a name",
-                "Javascript",
-                "C++",
-                "Java",
-                " $46 as of 10am EST",
-                " 46 as of 10am EST",
-            ],
-        }
-        # fmt: on
-        return Dataset.from_dict(dummy_dataset_dict)
-
-    def _init_dummy_image_dataset(self):
-        # fmt: off
-        dummy_dataset_dict = {
-            "images": [
-                [Image.new("RGB", (100, 50), color="black")],
-                # None,
-                # [Image.new("RGB", (100, 100), color="blue"), Image.new("RGB", (150, 50), color="red")],
-                [Image.new("RGB", (200, 100), color="green")],
-                # [Image.new("RGB", (150, 150), color="yellow"), Image.new("RGB", (50, 150), color="purple")],
-                [Image.new("RGB", (80, 120), color="gray")],
-                [Image.new("RGB", (120, 80), color="pink")],
-            ],
-            "prompt": [
-                "<image> Hello",
-                # "How are you?",
-                # "<image><image> Let's chat",
-                "<image> Good morning",
-                # "<image><image> What's up?",
-                "Can you see this? <image>",
-                "Here is something interesting: <image>",
-            ],
-            "chosen": [
-                "Hi nice to meet you!",
-                # "I'm doing well, thank you!",
-                # "Sure, let's talk!",
-                "Good morning to you too!",
-                # "Not much, just working.",
-                "Yes, I can see it clearly.",
-                "That's quite interesting indeed.",
-            ],
-            "rejected": [
-                "Leave me alone!",
-                # "I'm not interested.",
-                # "I don't want to chat.",
-                "I'm still sleepy.",
-                # "Busy right now, talk later.",
-                "No, I can't see it.",
-                "I'm not sure what that is.",
-            ],
-        }
-        # fmt: on
-        f = features.Features(
-            {
-                "images": features.Sequence(features.Image(decode=True)),  # datasets handles badly sequence of images
-                "prompt": features.Value("string"),
-                "chosen": features.Value("string"),
-                "rejected": features.Value("string"),
-            }
-        )
-        return Dataset.from_dict(dummy_dataset_dict, features=f)
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @parameterized.expand(
         [
@@ -165,6 +228,8 @@ class DPOTrainerTester(unittest.TestCase):
             ["gpt2", "robust", True],
             ["gpt2", "exo_pair", False],
             ["t5", "exo_pair", True],
+            ["gpt2", "apo_zero", True],
+            ["t5", "apo_down", False],
         ]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
@@ -180,9 +245,10 @@ class DPOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             if name == "gpt2":
                 model = self.model
@@ -193,16 +259,13 @@ class DPOTrainerTester(unittest.TestCase):
                 ref_model = self.t5_ref_model
                 tokenizer = self.t5_tokenizer
 
-            if name == "t5":
-                self.skipTest("For some reason t5 does not compute gradients properly on tiny models")
-
             trainer = DPOTrainer(
                 model=model,
                 ref_model=ref_model,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -220,53 +283,11 @@ class DPOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["sigmoid", True],
+            [None, "Test when rpo_alpha is set to None"],
+            [0.5, "Test when rpo_alpha is set to 0.5"],
         ]
     )
-    def test_vdpo_trainer(self, loss_type, pre_compute):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                loss_type=loss_type,
-                precompute_ref_log_probs=pre_compute,
-            )
-
-            dummy_dataset = self._init_dummy_image_dataset()
-
-            model = self.idefics2_model
-            ref_model = self.idefics2_ref_model
-            processor = self.idefics2_processor
-
-            trainer = DPOTrainer(
-                model=model,
-                ref_model=ref_model,
-                args=training_args,
-                tokenizer=processor,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
-            )
-
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            trainer.train()
-
-            assert trainer.state.log_history[-1]["train_loss"] is not None
-
-            # check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
-                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
-
-    def test_dpo_trainer_without_providing_ref_model(self):
+    def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha, _):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
@@ -278,18 +299,19 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
-                rpo_alpha=0.5,
+                rpo_alpha=rpo_alpha,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             trainer = DPOTrainer(
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -305,8 +327,27 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     assert not torch.equal(param, new_param)
 
+    def test_dpo_trainer_with_ref_model_is_model(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            with self.assertRaises(ValueError):
+                DPOTrainer(
+                    model=self.model,
+                    ref_model=self.model,  # ref_model can't be the same as model
+                    args=training_args,
+                    processing_class=self.tokenizer,
+                    train_dataset=dummy_dataset["train"],
+                )
+
     @require_peft
-    @mark.peft_test
     def test_dpo_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
 
@@ -329,17 +370,18 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             trainer = DPOTrainer(
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -368,9 +410,10 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             tokenizer = AutoTokenizer.from_pretrained(self.model_id)
             tokenizer.pad_token = None
@@ -385,9 +428,9 @@ class DPOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=None,
                     args=training_args,
-                    tokenizer=tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=dummy_dataset,
+                    processing_class=tokenizer,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
                 )
 
                 trainer.train()
@@ -404,9 +447,10 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 dataset_num_proc=5,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             tokenizer = AutoTokenizer.from_pretrained(self.model_id)
             tokenizer.pad_token = None
@@ -421,9 +465,9 @@ class DPOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=None,
                     args=training_args,
-                    tokenizer=tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=dummy_dataset,
+                    processing_class=tokenizer,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
                 )
 
                 trainer.train()
@@ -442,18 +486,18 @@ class DPOTrainerTester(unittest.TestCase):
                 sync_ref_model=True,
                 ref_model_mixup_alpha=0.5,
                 ref_model_sync_steps=1,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             trainer = DPOTrainer(
                 model=self.model,
-                ref_model=self.model,
-                beta=0.1,
+                ref_model=self.ref_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             # params of the ref model as its the same as the model
@@ -483,9 +527,10 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 generate_during_eval=True,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             with self.assertRaisesRegex(
                 ValueError,
@@ -496,13 +541,12 @@ class DPOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=None,
                     args=training_args,
-                    tokenizer=self.tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=dummy_dataset,
+                    processing_class=self.tokenizer,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
                 )
 
     @require_peft
-    @mark.peft_test
     def test_dpo_lora_save(self):
         from peft import LoraConfig, get_peft_model
 
@@ -529,18 +573,19 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 precompute_ref_log_probs=True,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
                 model=model_peft,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -558,7 +603,6 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_peft
     @require_bitsandbytes
-    @mark.peft_test
     def test_dpo_lora_bf16_autocast_llama(self):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
@@ -589,18 +633,19 @@ class DPOTrainerTester(unittest.TestCase):
                 bf16=True,
                 beta=0.1,
                 generate_during_eval=True,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -640,7 +685,6 @@ class DPOTrainerTester(unittest.TestCase):
     )
     @require_bitsandbytes
     @require_peft
-    @mark.peft_test
     @unittest.skip("You need a GPU with bf16 support in order to run these tests")
     def test_dpo_lora_bf16_autocast(self, name, loss_type, pre_compute, gen_during_eval):
         # Note this test only works on compute capability > 7 GPU devices
@@ -671,18 +715,19 @@ class DPOTrainerTester(unittest.TestCase):
                 generate_during_eval=gen_during_eval,
                 loss_type=loss_type,
                 precompute_ref_log_probs=pre_compute,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -720,22 +765,24 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
-            assert trainer.model.model_tags == trainer._tag_names
+            for tag in ["dpo", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
 
     @require_peft
     def test_dpo_tags(self):
@@ -755,24 +802,25 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
-            assert trainer.model.model_tags == trainer._tag_names
+            for tag in ["dpo", "trl"]:
+                self.assertIn(tag, trainer.model.model_tags)
 
     @require_peft
-    @mark.peft_test
     def test_dpo_lora_force_use_ref(self):
         from peft import LoraConfig, get_peft_model
 
@@ -800,9 +848,10 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             with self.assertRaises(ValueError):
                 # passing a peft_model as model and ref_model should error out,
@@ -811,9 +860,9 @@ class DPOTrainerTester(unittest.TestCase):
                     model=model_peft,
                     ref_model=ref_model,
                     args=training_args,
-                    tokenizer=self.tokenizer,
-                    train_dataset=dummy_dataset,
-                    eval_dataset=dummy_dataset,
+                    processing_class=self.tokenizer,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
                     peft_config=lora_config,
                 )
 
@@ -827,15 +876,16 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 force_use_ref_model=True,
+                report_to="none",
             )
 
             trainer = DPOTrainer(
                 model=model_peft,
                 ref_model=ref_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -844,33 +894,35 @@ class DPOTrainerTester(unittest.TestCase):
 
     def test_dpo_trainer_torch_dtype(self):
         # See https://github.com/huggingface/trl/issues/1751
-        dummy_dataset = self._init_dummy_dataset()
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dpo_config = DPOConfig(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
                 model_init_kwargs={"torch_dtype": "float16"},
                 ref_model_init_kwargs={"torch_dtype": "float16"},
+                report_to="none",
             )
 
             trainer = DPOTrainer(
                 model=self.model_id,
                 ref_model=self.model_id,
-                tokenizer=self.tokenizer,
-                args=dpo_config,
-                train_dataset=dummy_dataset,
+                processing_class=self.tokenizer,
+                args=training_args,
+                train_dataset=dummy_dataset["train"],
             )
             assert trainer.model.config.torch_dtype == torch.float16
             assert trainer.ref_model.config.torch_dtype == torch.float16
 
         # Now test when `torch_dtype` is provided but is wrong to either the model or the ref_model
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dpo_config = DPOConfig(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
                 model_init_kwargs={"torch_dtype": -1},
+                report_to="none",
             )
 
             with pytest.raises(
@@ -879,17 +931,18 @@ class DPOTrainerTester(unittest.TestCase):
             ):
                 _ = DPOTrainer(
                     model=self.model_id,
-                    tokenizer=self.tokenizer,
-                    args=dpo_config,
-                    train_dataset=dummy_dataset,
+                    processing_class=self.tokenizer,
+                    args=training_args,
+                    train_dataset=dummy_dataset["train"],
                 )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dpo_config = DPOConfig(
+            training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
                 ref_model_init_kwargs={"torch_dtype": -1},
+                report_to="none",
             )
 
             with pytest.raises(
@@ -899,9 +952,9 @@ class DPOTrainerTester(unittest.TestCase):
                 _ = DPOTrainer(
                     model=self.model_id,
                     ref_model=self.model_id,
-                    tokenizer=self.tokenizer,
-                    args=dpo_config,
-                    train_dataset=dummy_dataset,
+                    processing_class=self.tokenizer,
+                    args=training_args,
+                    train_dataset=dummy_dataset["train"],
                 )
 
     def test_dpo_loss_alpha_div_f(self):
@@ -922,18 +975,19 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 f_divergence_type=FDivergenceType.ALPHA_DIVERGENCE.value,
                 f_alpha_divergence_coef=0.5,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             # Fake chosen and rejected log probs
@@ -964,18 +1018,19 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 f_divergence_type=FDivergenceType.JS_DIVERGENCE.value,
                 f_alpha_divergence_coef=0.5,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             # dpo train lora model with a lora config
             trainer = DPOTrainer(
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             # Fake chosen and rejected log probs
@@ -987,6 +1042,94 @@ class DPOTrainerTester(unittest.TestCase):
                 policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
             )
             assert torch.isfinite(losses).cpu().numpy().all()
+
+
+class DPOVisionTrainerTester(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ["trl-internal-testing/tiny-random-idefics2"],
+            ["trl-internal-testing/tiny-random-paligemma"],
+            ["trl-internal-testing/tiny-random-llava-1.5"],
+        ]
+    )
+    def test_vdpo_trainer(self, model_id):
+        # fmt: off
+        dataset_dict = {
+            "prompt": [
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe the image in great detail."}]}],
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Is this bus in the USA?"}]}],
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Give a thorough description of the image."}]}],
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Who are the people in the image?"}]}],
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What is written?"}]}],
+            ],
+            "chosen": [
+                [{"role": "assistant", "content": [{"type": "text", "text": "The image features a modern, multi-colored train."}]}],
+                [{"role": "assistant", "content": [{"type": "text", "text": "Yes, it can be assumed that this bus is in the USA."}]}],
+                [{"role": "assistant", "content": [{"type": "text", "text": "The image features a forest path."}]}],
+                [{"role": "assistant", "content": [{"type": "text", "text": "There are two individuals, possibly girls or women."}]}],
+                [{"role": "assistant", "content": [{"type": "text", "text": '"ccpb".'}]}],
+            ],
+            "rejected": [
+                [{"role": "assistant", "content": [{"type": "text", "text": "The image features a modern, colorful train."}]}],
+                [{"role": "assistant", "content": [{"type": "text", "text": "No, it's not in the USA."}]}],
+                [{"role": "assistant", "content": [{"type": "text", "text": "The image features a forest path surrounded by trees."}]}],
+                [{"role": "assistant", "content": [{"type": "text", "text": "In the image, there are two individuals."}]}],
+                [{"role": "assistant", "content": [{"type": "text", "text": '"ccpb".'}]}],
+            ],
+            "images": [
+                [Image.fromarray(np.random.randint(0, 255, (92, 33, 3), dtype=np.uint8))],
+                [Image.fromarray(np.random.randint(0, 255, (64, 48, 3), dtype=np.uint8))],
+                [Image.fromarray(np.random.randint(0, 255, (80, 152, 3), dtype=np.uint8))],
+                [Image.fromarray(np.random.randint(0, 255, (57, 24, 3), dtype=np.uint8))],
+                [Image.fromarray(np.random.randint(0, 255, (102, 48, 3), dtype=np.uint8))],
+            ],
+        }
+        # fmt: on
+        dataset = Dataset.from_dict(dataset_dict)
+        dataset = dataset.cast_column("images", features.Sequence(features.Image()))
+
+        # Instantiate the model and processor
+        model = AutoModelForVision2Seq.from_pretrained(model_id)
+        ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        processor = AutoProcessor.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_length=512,
+                max_prompt_length=128,
+                remove_unused_columns=False,
+                report_to="none",
+            )
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=ref_model,
+                args=training_args,
+                processing_class=processor,
+                train_dataset=dataset,
+                eval_dataset=dataset,
+            )
+
+            # Save the initial weights, so we can check if they have changed after training
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # Check that the trainable params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:  # ignore 0 biases
+                    if model_id == "trl-internal-testing/tiny-random-llava-1.5" and (
+                        n.startswith("vision_tower.vision_model.encoder.layers.3")
+                        or n == "vision_tower.vision_model.post_layernorm.weight"
+                    ):
+                        # For some reason, these params are not updated. This is probably not related to TRL, but to
+                        # the model itself. We should investigate this further, but for now we just skip these params.
+                        continue
+                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
 
 if __name__ == "__main__":

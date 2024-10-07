@@ -15,80 +15,38 @@ import tempfile
 import unittest
 
 import torch
-from datasets import Dataset
+from datasets import load_dataset
 from parameterized import parameterized
-from pytest import mark
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers.testing_utils import require_peft
 
 from trl import CPOConfig, CPOTrainer
 
-from .testing_utils import require_peft
-
 
 class CPOTrainerTester(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        cls.model = AutoModelForCausalLM.from_pretrained(cls.model_id)
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
-        cls.tokenizer.pad_token = cls.tokenizer.eos_token
+    def setUp(self):
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
-        cls.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-    def _init_dummy_dataset(self):
-        # fmt: off
-        dummy_dataset_dict = {
-            "prompt": [
-                "hello",
-                "how are you",
-                "What is your name?",
-                "What is your name?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "[INST] How is the stock price? [/INST]",
-                "[INST] How is the stock price? [/INST] ",
-            ],
-            "chosen": [
-                "hi nice to meet you",
-                "I am fine",
-                "My name is Mary",
-                "My name is Mary",
-                "Python",
-                "Python",
-                "Python",
-                "$46 as of 10am EST",
-                "46 as of 10am EST",
-            ],
-            "rejected": [
-                "leave me alone",
-                "I am not fine",
-                "Whats it to you?",
-                "I dont have a name",
-                "Javascript",
-                "C++",
-                "Java",
-                " $46 as of 10am EST",
-                " 46 as of 10am EST",
-            ],
-        }
-        # fmt: on
-        return Dataset.from_dict(dummy_dataset_dict)
+        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @parameterized.expand(
         [
-            ["gpt2", "sigmoid"],
-            ["t5", "hinge"],
-            ["gpt2", "ipo"],
-            ["t5", "ipo"],
-            ["gpt2", "simpo"],
-            ["t5", "simpo"],
+            ["gpt2", "sigmoid", "standard_preference"],
+            ["t5", "hinge", "standard_implicit_prompt_preference"],
+            ["gpt2", "ipo", "conversational_preference"],
+            ["t5", "ipo", "conversational_implicit_prompt_preference"],
+            ["gpt2", "simpo", "standard_preference"],
+            ["t5", "simpo", "standard_implicit_prompt_preference"],
+            ["gpt2", "hinge", "conversational_preference"],
         ]
     )
-    def test_cpo_trainer(self, name, loss_type):
+    def test_cpo_trainer(self, name, loss_type, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = CPOConfig(
                 output_dir=tmp_dir,
@@ -101,9 +59,10 @@ class CPOTrainerTester(unittest.TestCase):
                 beta=0.1,
                 loss_type=loss_type,
                 cpo_alpha=1.0,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             if name == "gpt2":
                 model = self.model
@@ -116,9 +75,9 @@ class CPOTrainerTester(unittest.TestCase):
             trainer = CPOTrainer(
                 model=model,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -135,8 +94,15 @@ class CPOTrainerTester(unittest.TestCase):
                     assert not torch.equal(param, new_param)
 
     @require_peft
-    @mark.peft_test
-    def test_cpo_trainer_with_lora(self):
+    @parameterized.expand(
+        [
+            ("standard_preference",),
+            ("standard_implicit_prompt_preference",),
+            ("conversational_preference",),
+            ("conversational_implicit_prompt_preference",),
+        ]
+    )
+    def test_cpo_trainer_with_lora(self, config_name):
         from peft import LoraConfig
 
         lora_config = LoraConfig(
@@ -158,16 +124,17 @@ class CPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 beta=0.1,
                 cpo_alpha=1.0,
+                report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             trainer = CPOTrainer(
                 model=self.model,
                 args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 

@@ -1,8 +1,23 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import gc
 import math
 import os
+import textwrap
 import time
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -15,16 +30,20 @@ from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
+    BaseImageProcessor,
     DataCollatorWithPadding,
+    FeatureExtractionMixin,
     GenerationConfig,
-    PreTrainedTokenizer,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainerCallback,
     TrainerControl,
+    is_wandb_available,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
-from transformers.trainer_callback import CallbackHandler, PrinterCallback
+from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 
 from ..core import masked_mean, masked_whiten
 from ..models.utils import unwrap_model_for_generation
@@ -41,6 +60,11 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .ppov2_config import PPOv2Config
+from .utils import generate_model_card
+
+
+if is_wandb_available():
+    import wandb
 
 
 INVALID_LOGPROB = 1.0
@@ -64,10 +88,14 @@ class PolicyAndValueWrapper(nn.Module):
 
 
 class PPOv2Trainer(Trainer):
+    _tag_names = ["trl", "ppo"]
+
     def __init__(
         self,
         config: PPOv2Config,
-        tokenizer: PreTrainedTokenizer,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ],
         policy: nn.Module,
         ref_policy: nn.Module,
         reward_model: nn.Module,
@@ -79,9 +107,15 @@ class PPOv2Trainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[List[TrainerCallback]] = None,
     ) -> None:
+        if ref_policy is policy:
+            raise ValueError(
+                "`policy` and `ref_policy` cannot be the same object. If you want `ref_policy` to be the "
+                "same as `policy`, you must mass a copy of it, or `None` if you use peft."
+            )
+
         self.args = config
         args = config
-        self.tokenizer = tokenizer
+        self.processing_class = processing_class
         self.policy = policy
 
         self.policy.generation_config.eos_token_id = (
@@ -140,8 +174,9 @@ class PPOv2Trainer(Trainer):
         for module in [policy, ref_policy, value_model, reward_model]:
             disable_dropout_in_model(module)
         if args.stop_token and args.stop_token == "eos":
-            args.stop_token_id = tokenizer.eos_token_id
+            args.stop_token_id = processing_class.eos_token_id
         self.model = PolicyAndValueWrapper(policy, value_model)
+        self.model.config = policy.config  # needed for pushing to hub
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
@@ -149,17 +184,20 @@ class PPOv2Trainer(Trainer):
         #########
         ### trainer specifics
         #########
-        self.state = OnlineTrainerState(
-            is_local_process_zero=self.is_local_process_zero(),
-            is_world_process_zero=self.is_world_process_zero(),
-        )
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
-            self.callbacks, self.model, self.tokenizer, self.optimizer, self.lr_scheduler
+            self.callbacks, self.model, self.processing_class, self.optimizer, self.lr_scheduler
         )
         self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
         self.control = TrainerControl()
+        self.state = OnlineTrainerState(
+            is_local_process_zero=self.is_local_process_zero(),
+            is_world_process_zero=self.is_world_process_zero(),
+            stateful_callbacks=[
+                cb for cb in self.callback_handler.callbacks + [self.control] if isinstance(cb, ExportableState)
+            ],
+        )
         self.current_flos = 0
         self.hp_search_backend = None
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
@@ -170,7 +208,10 @@ class PPOv2Trainer(Trainer):
             self.init_hf_repo()
         if self.args.should_save:
             os.makedirs(self.args.output_dir, exist_ok=True)
-        self.backup_model = None
+
+        # Add tags for models that have been loaded with the correct transformers version
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
 
         #########
         ### setup dataloader
@@ -179,7 +220,7 @@ class PPOv2Trainer(Trainer):
             self.train_dataset,
             batch_size=self.local_dataloader_batch_size,
             shuffle=True,
-            collate_fn=DataCollatorWithPadding(tokenizer),
+            collate_fn=DataCollatorWithPadding(self.processing_class),
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
@@ -191,7 +232,7 @@ class PPOv2Trainer(Trainer):
         self.eval_dataloader = DataLoader(
             self.eval_dataset,
             batch_size=args.per_device_eval_batch_size,
-            collate_fn=DataCollatorWithPadding(self.tokenizer),
+            collate_fn=DataCollatorWithPadding(self.processing_class),
             drop_last=True,
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
@@ -213,30 +254,20 @@ class PPOv2Trainer(Trainer):
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
 
-    def push_to_hub(self, **kwargs):
-        """Modified from `Trainer.save_model` to only save the policy and not the value network."""
-        self.backup_model = self.model
-        self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
-        super().push_to_hub(**kwargs)
-        self.model = self.backup_model
-
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        """Modified from `Trainer.save_model` to only save the policy and not the value network."""
-        if not _internal_call:  # `push_to_hub` already swaps out the self.model with policy
-            self.backup_model = self.model
-            self.model = self.accelerator.unwrap_model(self.model).policy  # save only the policy
-        if output_dir is None:
-            output_dir = self.args.output_dir
-        state_dict = self.accelerator.get_state_dict(self.backup_model)
-        policy_state_dict = state_dict
-        if self.accelerator.is_main_process:
-            policy_state_dict = OrderedDict(
-                {k[len("policy.") :]: v for k, v in state_dict.items() if k.startswith("policy.")}
-            )
-        if self.args.should_save:
-            self._save(output_dir, state_dict=policy_state_dict)
-        if not _internal_call:
-            self.model = self.backup_model
+        backup_model = self.model
+        self.model = self.model.policy  # save only the policy
+
+        if self.is_deepspeed_enabled:
+            backup_deepspeed = self.deepspeed
+            self.deepspeed = self.model
+
+        super().save_model(output_dir, _internal_call)
+
+        self.model = backup_model
+
+        if self.is_deepspeed_enabled:
+            self.deepspeed = backup_deepspeed
 
     def train(self):
         args = self.args
@@ -245,7 +276,7 @@ class PPOv2Trainer(Trainer):
         model = self.model
         ref_policy = self.ref_policy
         reward_model = self.reward_model
-        tokenizer = self.tokenizer
+        processing_class = self.processing_class
         dataloader = self.dataloader
         device = accelerator.device
 
@@ -256,7 +287,6 @@ class PPOv2Trainer(Trainer):
         iter_dataloader = iter(repeat_generator())
         generation_config = GenerationConfig(
             max_new_tokens=args.response_length,
-            min_new_tokens=args.response_length,
             temperature=(args.temperature + 1e-7),
             top_k=0.0,
             top_p=1.0,
@@ -298,9 +328,13 @@ class PPOv2Trainer(Trainer):
                 self.state.save_steps = args.save_steps
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
+        # backward compatibility
+        if self.is_deepspeed_enabled:
+            self.deepspeed = self.model
+            self.model_wrapped = self.model
+
         for update in range(1, args.num_total_batches + 1):
             self.state.episode += 1 * args.batch_size
-            self.lr_scheduler.step()
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
@@ -317,7 +351,7 @@ class PPOv2Trainer(Trainer):
                         unwrapped_model.policy,
                         queries,
                         args.local_rollout_forward_batch_size,
-                        tokenizer.pad_token_id,
+                        processing_class.pad_token_id,
                         generation_config,
                     )
 
@@ -331,7 +365,7 @@ class PPOv2Trainer(Trainer):
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
-                    ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
+                    ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
                     ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
@@ -343,19 +377,19 @@ class PPOv2Trainer(Trainer):
                     postprocessed_response = response
                     if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
                         postprocessed_response = truncate_response(
-                            args.stop_token_id, tokenizer.pad_token_id, response
+                            args.stop_token_id, processing_class.pad_token_id, response
                         )
 
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                    sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+                    sequence_length = first_true_indices(postprocessed_response == processing_class.pad_token_id) - 1
                     unwrapped_value_model = accelerator.unwrap_model(model).value_model
                     full_value, _, _ = get_reward(
-                        unwrapped_value_model, query_response, tokenizer.pad_token_id, context_length
+                        unwrapped_value_model, query_response, processing_class.pad_token_id, context_length
                     )
                     value = full_value[:, context_length - 1 : -1].squeeze(-1)
                     _, score, _ = get_reward(
-                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                        reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
                     )
 
                     responses.append(response)
@@ -376,12 +410,11 @@ class PPOv2Trainer(Trainer):
                 torch.cuda.empty_cache()
                 gc.collect()
 
-                # Response Processing 3. filter response. Ensure that the sample contains stop_token_id
-                # responses not passing that filter will receive a low (fixed) score
-                # only query humans on responses that pass that filter
-                contain_eos_token = torch.any(postprocessed_responses == tokenizer.eos_token_id, dim=-1)
-                if args.non_eos_penalty:
-                    scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
+                # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
+                # Completions not passing that filter will receive a lower score.
+                contain_eos_token = torch.any(postprocessed_responses == self.processing_class.eos_token_id, dim=-1)
+                if self.args.missing_eos_penalty is not None:
+                    scores[~contain_eos_token] -= self.args.missing_eos_penalty
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
@@ -440,7 +473,7 @@ class PPOv2Trainer(Trainer):
                             mb_return = returns[micro_batch_inds]
                             mb_values = values[micro_batch_inds]
 
-                            output, vpred_temp = forward(model, mb_query_responses, tokenizer.pad_token_id)
+                            output, vpred_temp = forward(model, mb_query_responses, processing_class.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
                             logits /= args.temperature + 1e-7
                             new_all_logprobs = F.log_softmax(logits, dim=-1)
@@ -480,14 +513,14 @@ class PPOv2Trainer(Trainer):
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
                                 approxkl = 0.5 * (logprobs_diff**2).mean()
                                 approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
-                                pg_clipfrac_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = pg_clipfrac
+                                pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    pg_clipfrac
+                                )
                                 pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
                                 vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = vf_loss
-                                vf_clipfrac_stats[
-                                    ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx
-                                ] = vf_clipfrac
+                                vf_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    vf_clipfrac
+                                )
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
                         gradient_accumulation_idx += 1
@@ -523,13 +556,14 @@ class PPOv2Trainer(Trainer):
                 metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
                 metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
                 metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
-                metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
+                metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
                 self.state.global_step += 1
                 self.log(metrics)
 
+            self.lr_scheduler.step()
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
@@ -570,7 +604,7 @@ class PPOv2Trainer(Trainer):
 
     def generate_completions(self, sampling: bool = False):
         args = self.args
-        tokenizer = self.tokenizer
+        processing_class = self.processing_class
         generation_config = GenerationConfig(
             max_new_tokens=self.args.response_length,
             temperature=(0.01 + 1e-7),
@@ -589,31 +623,91 @@ class PPOv2Trainer(Trainer):
                         unwrapped_model.policy,
                         query,
                         query.shape[0],
-                        tokenizer.pad_token_id,
+                        processing_class.pad_token_id,
                         generation_config,
                     )
                     response = query_response[:, context_length:]
                     postprocessed_response = response
                     if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
                         postprocessed_response = truncate_response(
-                            args.stop_token_id, tokenizer.pad_token_id, response
+                            args.stop_token_id, processing_class.pad_token_id, response
                         )
-                    table["query"].extend(gather_object(tokenizer.batch_decode(query, skip_special_tokens=True)))
-                    table["model response"].extend(gather_object(tokenizer.batch_decode(postprocessed_response)))
+                    table["query"].extend(
+                        gather_object(processing_class.batch_decode(query, skip_special_tokens=True))
+                    )
+                    table["model response"].extend(
+                        gather_object(processing_class.batch_decode(postprocessed_response))
+                    )
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     _, score, _ = get_reward(
-                        self.reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                        self.reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
                     )
                     table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
                 if sampling:
                     break
         df = pd.DataFrame(table)
-        if self.accelerator.process_index == 0:
-            print_rich_table(df.iloc[0 : 0 + 5])
-        if "wandb" in args.report_to:
-            import wandb
 
-            if wandb.run is not None:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+        if self.accelerator.is_main_process:
+            print_rich_table(df.iloc[0 : 0 + 5])
+            if "wandb" in args.report_to:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
+
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
+        citation = textwrap.dedent("""\
+        @article{mziegler2019fine-tuning,
+            title        = {{Fine-Tuning Language Models from Human Preferences}},
+            author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
+            year         = 2019,
+            eprint       = {arXiv:1909.08593}
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="PPO",
+            trainer_citation=citation,
+            paper_title="Fine-Tuning Language Models from Human Preferences",
+            paper_id="1909.08593",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

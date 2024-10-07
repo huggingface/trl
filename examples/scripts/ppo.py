@@ -15,19 +15,19 @@
 python examples/scripts/ppo.py \
     --log_with=wandb
 """
+
 from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-from accelerate import Accelerator
+from accelerate import Accelerator, PartialState
 from datasets import load_dataset
 from peft import LoraConfig
 from tqdm import tqdm
-from transformers import AutoTokenizer, HfArgumentParser, pipeline
+from transformers import AutoTokenizer, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available, pipeline
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
 from trl.core import LengthSampler
-from trl.import_utils import is_npu_available, is_xpu_available
 
 
 tqdm.pandas()
@@ -45,19 +45,24 @@ class ScriptArguments:
 
 
 parser = HfArgumentParser((ScriptArguments, PPOConfig))
-args, ppo_config = parser.parse_args_into_dataclasses()
+script_args, ppo_config = parser.parse_args_into_dataclasses()
 
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
 sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
 
-trl_model_class = AutoModelForCausalLMWithValueHead if not args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
+trl_model_class = (
+    AutoModelForCausalLMWithValueHead if not script_args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
+)
+
+tokenizer = AutoTokenizer.from_pretrained(ppo_config.model_name)
+tokenizer.pad_token = tokenizer.eos_token
 
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text_length=8):
+def build_dataset(query_dataset, dataset_num_proc, input_min_text_length=2, input_max_text_length=8):
     """
     Build dataset for training. This builds the dataset from `load_dataset`, one should
     customize this function to train the model on its own dataset.
@@ -70,12 +75,10 @@ def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text
         dataloader (`torch.utils.data.DataLoader`):
             The dataloader for the dataset.
     """
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    tokenizer.pad_token = tokenizer.eos_token
     # load imdb with datasets
-    ds = load_dataset(query_dataset, split="train")
-    ds = ds.rename_columns({"text": "review"})
-    ds = ds.filter(lambda x: len(x["review"]) > 200, batched=False)
+    dataset = load_dataset(query_dataset, split="train")
+    dataset = dataset.rename_columns({"text": "review"})
+    dataset = dataset.filter(lambda x: len(x["review"]) > 200, num_proc=dataset_num_proc)
 
     input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
@@ -84,13 +87,16 @@ def build_dataset(config, query_dataset, input_min_text_length=2, input_max_text
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
-    ds = ds.map(tokenize, batched=False)
-    ds.set_format(type="torch")
-    return ds
+    dataset = dataset.map(tokenize, num_proc=dataset_num_proc)
+    dataset.set_format(type="torch")
+    return dataset
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(ppo_config, ppo_config.query_dataset)
+# Compute that only on the main process for faster data processing.
+# see: https://github.com/huggingface/trl/pull/1255
+with PartialState().local_main_process_first():
+    dataset = build_dataset(ppo_config.query_dataset, ppo_config.dataset_num_proc)
 
 
 def collator(data):
@@ -101,14 +107,14 @@ def collator(data):
 set_seed(ppo_config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer.
-if not args.use_peft:
-    ref_model = trl_model_class.from_pretrained(ppo_config.model_name, trust_remote_code=args.trust_remote_code)
+if not script_args.use_peft:
+    ref_model = trl_model_class.from_pretrained(ppo_config.model_name, trust_remote_code=script_args.trust_remote_code)
     device_map = None
     peft_config = None
 else:
     peft_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
+        r=script_args.lora_r,
+        lora_alpha=script_args.lora_alpha,
         bias="none",
         task_type="CAUSAL_LM",
     )
@@ -118,7 +124,7 @@ else:
 
 model = trl_model_class.from_pretrained(
     ppo_config.model_name,
-    trust_remote_code=args.trust_remote_code,
+    trust_remote_code=script_args.trust_remote_code,
     device_map=device_map,
     peft_config=peft_config,
 )
@@ -137,9 +143,9 @@ ppo_trainer = PPOTrainer(ppo_config, model, ref_model, tokenizer, dataset=datase
 # to the same device as the PPOTrainer.
 device = ppo_trainer.accelerator.device
 if ppo_trainer.accelerator.num_processes == 1:
-    if is_xpu_available():
+    if is_torch_xpu_available():
         device = "xpu:0"
-    elif is_npu_available():
+    elif is_torch_npu_available():
         device = "npu:0"
     else:
         device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
@@ -170,7 +176,7 @@ generation_kwargs = {
     "max_new_tokens": 32,
 }
 
-for _epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
+for batch in tqdm(ppo_trainer.dataloader):
     query_tensors = batch["input_ids"]
 
     # Get response from gpt2

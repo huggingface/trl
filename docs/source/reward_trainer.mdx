@@ -1,23 +1,17 @@
 # Reward Modeling
 
+[![](https://img.shields.io/badge/All_models-Reward_Trainer-blue)](https://huggingface.co/models?other=reward-trainer,trl)
+
 TRL supports custom reward modeling for anyone to perform reward modeling on their dataset and model.
 
 Check out a complete flexible example at [`examples/scripts/reward_modeling.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_modeling.py).
 
 ## Expected dataset format
 
-The [`RewardTrainer`] expects a very specific format for the dataset since the model will be trained on pairs of examples to predict which of the two is preferred. We provide an example from the [`Anthropic/hh-rlhf`](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset below:
+The [`RewardTrainer`] requires a [*implicit prompt* preference dataset](dataset_formats#preference). It means that the dataset should only contain the columns `chosen` and `rejected` (and not `prompt`).
+The [`RewardTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
-<div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/rlhf-antropic-example.png", width="50%">
-</div>
-
-Therefore the final dataset object should contain two 4 entries at least if you use the default [`RewardDataCollatorWithPadding`] data collator. The entries should be named:
-
--   `input_ids_chosen`
--   `attention_mask_chosen`
--   `input_ids_rejected`
--   `attention_mask_rejected`
+You can also use a pretokenized dataset, in which case the dataset should contain the following columns: `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`.
 
 ## Using the `RewardTrainer`
 
@@ -47,7 +41,7 @@ peft_config = LoraConfig(
 trainer = RewardTrainer(
     model=model,
     args=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=dataset,
     peft_config=peft_config,
 )
@@ -68,10 +62,29 @@ def add_margin(row):
 dataset = dataset.map(add_margin)
 ```
 
-## RewardConfig
+### Centering rewards
 
-[[autodoc]] RewardConfig
+In many scenarios, it's preferable to ensure that a reward model's output is mean zero. This is often done by first calculating the model's average score and then subtracting it.
+
+[[Eisenstein et al., 2023]](https://huggingface.co/papers/2312.09244) proposed an auxiliary loss function designed to directly learn a centered reward model. This auxiliary loss minimizes the squared sum of the rewards, encouraging the model to naturally produce mean-zero outputs:
+
+$$\Big( R(p, r_1) + R(p, r_2) \Big)^2 $$
+
+This auxiliary loss is combined with the main loss function, weighted by the parameter `center_rewards_coefficient` in the `[RewardConfig]`. By default, this feature is deactivated (`center_rewards_coefficient = None`).
+
+```python
+training_args = RewardConfig(
+    center_rewards_coefficient=0.01,
+    ...
+)
+```
+
+For reference results, please refer PR [#1932](https://github.com/huggingface/trl/pull/1932).
 
 ## RewardTrainer
 
 [[autodoc]] RewardTrainer
+
+## RewardConfig
+
+[[autodoc]] RewardConfig

@@ -3,3 +3,4 @@ include LICENSE
 include CONTRIBUTING.md
 include README.md
 recursive-exclude * __pycache__
+include trl/templates/*.md

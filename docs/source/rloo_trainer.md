@@ -1,14 +1,16 @@
 # RLOO Trainer
 
+[![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
+
 TRL supports training LLMs with REINFORCE Leave-One-Out (RLOO). The idea is that instead of using a value function, RLOO generates K completions for each prompt. For each completion, RLOO uses the mean scores from the other K-1 completions as a baseline to calculate the advantage. RLOO also models the entire completion as a single action, where as PPO models each token as an action. Note that REINFORCE / A2C is a special case of PPO, when the number of PPO epochs is 1 and the number of mini-batches is 1, which is how we implement RLOO in TRL.
 
 References:
-- [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://arxiv.org/abs/2402.14740)
-- [A2C is a special case of PPO](https://arxiv.org/pdf/2205.09123)
+- [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740)
+- [A2C is a special case of PPO](https://huggingface.co/papers/2205.09123)
 - [Fine-Tuning Language Models from Human Preferences](https://github.com/openai/lm-human-preferences)
 - [Learning to Summarize from Human Feedback](https://github.com/openai/summarize-from-feedback)
 - [The N Implementation Details of RLHF with PPO](https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo)
-- [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031)
+- [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031)
 
 ## Get started
 
@@ -23,7 +25,7 @@ python examples/scripts/rloo/rloo.py \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-14m \
     --reward_model_path EleutherAI/pythia-14m \
-    --non_eos_penalty \
+    --missing_eos_penalty 1.0
 ```
 
 
@@ -57,14 +59,14 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 * Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try undertand why this is happening and try to fix it.
 * Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
 * Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
-* Usage TIP: We recommend to use the "EOS trick" via `--non_eos_penalty --stop_token eos`, which replaces the score of completions that do not end with an EOS token with a static scalar penalty `--penalty_reward_value`. This can help the model learn to generate more coherent completions.
+* Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which subtracts a static scalar penalty from the score of completions that do not end with an EOS token. This can help the model learn to generate more coherent completions.
 
 
 ## What is my model doing exactly?
 
 To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/u2sqci34), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif?download=true)
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif)
 
 
 In the logs the sampled generations look like 
@@ -162,12 +164,12 @@ In the logs the sampled generations look like
 │ worth it.                       │                                 │          │
 │                                 │                                 │          │
 │ TL;DR:                          │                                 │          │
-├─────────────────────────────────┼─────────────────────────────────┼──────────┤
+└─────────────────────────────────┴─────────────────────────────────┴──────────┘
 ```
 
 ## Implementation details
 
-The bulk of RLOOTrainer is based on the PPO implementation, which is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031).
+The bulk of RLOOTrainer is based on the PPO implementation, which is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 
 Below is a vectorized advantage calculation for RLOO:
@@ -176,14 +178,12 @@ Below is a vectorized advantage calculation for RLOO:
 def test_rloo_reward():
     local_batch_size = 3
     rloo_k = 4
-    # fmt: off
     rlhf_reward = torch.tensor([
         1, 2, 3, # first rlhf reward for three prompts
         2, 3, 4, # second rlhf reward for three prompts
         5, 6, 7, # third rlhf reward for three prompts
         8, 9, 10, # fourth rlhf reward for three prompts
     ]).float() # here we have 3 prompts which have 4 completions each
-    # fmt: on
 
     baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
     advantages = torch.zeros_like(rlhf_reward)
@@ -192,13 +192,12 @@ def test_rloo_reward():
         for j in range(0, len(advantages), local_batch_size):
             if i != j:
                 other_response_rlhf_rewards.append(rlhf_reward[j : j + local_batch_size])
-        advantages[i : i + local_batch_size] = rlhf_reward[i : i + local_batch_size] - torch.stack(
-            other_response_rlhf_rewards
-        ).mean(0)
-    assert (1 - (2 + 5 + 8) / 3 - advantages[0].item()) < 1e-6
-    assert (6 - (3 + 2 + 9) / 3 - advantages[7].item()) < 1e-6
+        advantages[i : i + local_batch_size] = rlhf_reward[i : i + local_batch_size] - torch.stack(other_response_rlhf_rewards).mean(0)
+    
+    assert (1 - (2 + 5 + 8) / 3 - advantages[0].item()) < 1e-6  # First rlhf reward for the first prompt
+    assert (6 - (3 + 2 + 9) / 3 - advantages[7].item()) < 1e-6  # Third rlhf reward for the second prompt
 
-    # vectorized impl
+    # Vectorized implementation
     rlhf_reward = rlhf_reward.reshape(rloo_k, local_batch_size)
     baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
     vec_advantages = rlhf_reward - baseline
@@ -207,11 +206,9 @@ def test_rloo_reward():
 
 ## Benchmark experiments
 
-To validate the RLOO implementation works, we ran experiments on the 1B and 6.9B models. Here are the commands we used to run the experiments. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://arxiv.org/pdf/2403.17031).
-
+To validate the RLOO implementation works, we ran experiment on the 1B model. Here are the command we used to run the experiment. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 ```
-# 1B RLOO experiment
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/rloo/rloo_tldr.py \
     --output_dir models/minimal/rloo_tldr \
@@ -225,61 +222,33 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
-    --non_eos_penalty \
-    --stop_token eos \
-    --kl_coef 0.03
-
-# 6.9B RLOO experiment
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/rloo/rloo_tldr.py \
-    --output_dir models/minimal/rloo_tldr_6.9b \
-    --num_ppo_epochs 2 \
-    --num_mini_batches 2 \
-    --learning_rate 3e-6 \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 256 \
-    --total_episodes 1000000 \
-    --model_name_or_path EleutherAI/pythia-6.9b-deduped \
-    --sft_model_path cleanrl/EleutherAI_pythia-6.9b-deduped__sft__tldr \
-    --reward_model_path cleanrl/EleutherAI_pythia-6.9b-deduped__reward__tldr \
-    --local_rollout_forward_batch_size 2 \
-    --non_eos_penalty \
+    --missing_eos_penalty 1.0 \
     --stop_token eos \
     --kl_coef 0.03
 ```
 
-1B experiment can be found here:
+Checkpoints and experiment tracking are available at:
 
 - [🤗 Model checkpoint](https://huggingface.co/vwxyzjn/rloo_tldr)
 - [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/u2sqci34)
 
 
-To evaluate, we use vLLM to load the checkpoints and GPT3.5 as a judge model to evaluate the generated TL;DR against the reference TL;DR.
+To evaluate, we use [vLLM](https://github.com/vllm-project/vllm) to load the checkpoints and GPT-4o mini as a judge model to evaluate the generated TL;DR against the reference TL;DR.
+For more information on how to use judges, see [Judges](judges).
+
 ```bash
-python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --output_path examples/scripts/minimal/evals/sft_tldr.csv \
-    --n 1000
-# preferred
-# response1    656
-# response0    344
-# Name: count, dtype: int64
-python -i examples/scripts/evals/generate_tldr.py \
-    --model_name_or_path vwxyzjn/rloo_tldr \
-    --output_path examples/scripts/minimal/evals/rloo_tldr.csv \
-    --n 1000
-# preferred
-# response0    532
-# response1    468
-# Name: count, dtype: int64
+$ python examples/scripts/evals/judge_tldr.py --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr --judge_model gpt-4o-mini --num_examples 1000
+Model win rate: 33.00%
+$ python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/rloo_tldr --judge_model gpt-4o-mini --num_examples 1000
+Model win rate: 51.20%
 ```
 
-The RLOO checkpoint gets a 53.2% preferred rate vs the 34.4% preference rate of the SFT checkpoint. This is a good sign that the RLOO training is working as intended.
+The RLOO checkpoint gets a 51.2% preferred rate vs the 33.0% preference rate of the SFT checkpoint. This is a good sign that the RLOO training is working as intended.
 
 
 Metrics:
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/pr-1540/rloo.png?download=true)
+![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/pr-1540/rloo.png)
 
 
 ```bash
@@ -298,4 +267,10 @@ python -m openrlbenchmark.rlops_multi_metrics \
 ```
 
 
-6.9B experiment is still TBD (experiments got preempted due to resource constraints).
+## RLOOTrainer
+
+[[autodoc]] RLOOTrainer
+
+## RLOOConfig
+
+[[autodoc]] RLOOConfig

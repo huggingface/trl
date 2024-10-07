@@ -16,20 +16,18 @@ import tempfile
 import unittest
 
 import torch
-from pytest import mark
 from transformers import AutoModelForCausalLM
+from transformers.testing_utils import require_bitsandbytes, require_peft
+from transformers.utils import is_peft_available
 
-from trl import AutoModelForCausalLMWithValueHead, is_peft_available
+from trl import AutoModelForCausalLMWithValueHead
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
-from .testing_utils import require_bitsandbytes, require_peft
-
 
 @require_peft
-@mark.peft_test
 class PeftModelTester(unittest.TestCase):
     def setUp(self):
         self.causal_lm_model_id = "trl-internal-testing/tiny-random-GPTNeoXForCausalLM"
@@ -140,7 +138,7 @@ class PeftModelTester(unittest.TestCase):
             assert os.path.exists(f"{tmp_dir}/adapter_config.json"), f"{tmp_dir}/adapter_config.json does not exist"
             # check also for `pytorch_model.bin` and make sure it only contains `v_head` weights
             assert os.path.exists(f"{tmp_dir}/pytorch_model.bin"), f"{tmp_dir}/pytorch_model.bin does not exist"
-            maybe_v_head = torch.load(f"{tmp_dir}/pytorch_model.bin")
+            maybe_v_head = torch.load(f"{tmp_dir}/pytorch_model.bin", weights_only=True)
             # check that only keys that starts with `v_head` are in the dict
             assert all(
                 k.startswith("v_head") for k in maybe_v_head.keys()
