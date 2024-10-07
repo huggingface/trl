@@ -96,7 +96,6 @@ _import_structure = {
         "XPOConfig",
         "XPOTrainer",
     ],
-    "inference": ["VASInference"],
     "commands": [],
     "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
     "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
@@ -198,7 +197,6 @@ if TYPE_CHECKING:
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
-    from .inference import VASInference
     from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser
 
     try:
