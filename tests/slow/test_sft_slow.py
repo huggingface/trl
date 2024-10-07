@@ -45,7 +45,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
     def setUp(self):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
         self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
-        self.dataset_text_field = "text"
         self.max_seq_length = 128
         self.peft_config = LoraConfig(
             lora_alpha=16,
@@ -74,7 +73,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
             )
 
@@ -101,7 +99,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
             )
 
@@ -136,7 +133,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 max_steps=10,
                 fp16=True,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
             )
 
@@ -173,7 +169,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 max_steps=10,
                 fp16=True,  # this is sufficient to enable amp
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
             )
 
@@ -206,7 +201,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
@@ -243,7 +237,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
@@ -287,7 +280,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
@@ -325,7 +317,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
@@ -410,7 +401,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=2,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 use_liger=True,
             )

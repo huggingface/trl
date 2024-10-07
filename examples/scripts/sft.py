@@ -15,7 +15,6 @@
 # regular:
 python examples/scripts/sft.py \
     --model_name_or_path="facebook/opt-350m" \
-    --dataset_text_field="text" \
     --report_to="wandb" \
     --learning_rate=1.41e-5 \
     --per_device_train_batch_size=64 \
@@ -30,7 +29,6 @@ python examples/scripts/sft.py \
 # peft:
 python examples/scripts/sft.py \
     --model_name_or_path="facebook/opt-350m" \
-    --dataset_text_field="text" \
     --report_to="wandb" \
     --learning_rate=1.41e-5 \
     --per_device_train_batch_size=64 \
@@ -106,4 +104,4 @@ if __name__ == "__main__":
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
-        trainer.push_to_hub()
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

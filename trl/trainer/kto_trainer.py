@@ -13,12 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from functools import wraps
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
@@ -37,10 +38,10 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
     is_wandb_available,
 )
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
@@ -49,9 +50,9 @@ from .kto_config import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
+    generate_model_card,
     pad_to_length,
     peft_module_casting_to_bf16,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
@@ -72,7 +73,11 @@ RUNNING_NAME = "running.pt"
 
 
 def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
-    """Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions."""
+    """
+    Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions.
+    For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched
+    outputs y used to estimate the rewards in that batch, just paired with different x.
+    """
     batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
     batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
     return batch
@@ -513,10 +518,10 @@ class KTOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
-        # disable dropout in the model and reference model
-        disable_dropout_in_model(model)
-        if self.ref_model is not None:
-            disable_dropout_in_model(self.ref_model)
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         self.loss_type = args.loss_type
         self.max_length = max_length
@@ -600,14 +605,9 @@ class KTOTrainer(Trainer):
 
             # Get KL datasets if needed
             if self.calculate_KL:
-                total_batch_size = (
-                    max(torch.cuda.device_count(), 1)
-                    * args.per_device_train_batch_size
-                    * args.gradient_accumulation_steps
-                )
-                if total_batch_size <= 1:
+                if args.per_device_train_batch_size <= 1:
                     raise ValueError(
-                        "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
+                        "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
                     )
 
                 # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
@@ -615,7 +615,7 @@ class KTOTrainer(Trainer):
                 train_kl_dataset = train_dataset.map(
                     _get_kl_dataset,
                     batched=True,
-                    batch_size=total_batch_size,
+                    batch_size=args.per_device_train_batch_size,
                     num_proc=args.dataset_num_proc,
                     desc="Extracting KL train dataset",
                 )
@@ -637,7 +637,7 @@ class KTOTrainer(Trainer):
                     eval_kl_dataset = eval_dataset.map(
                         _get_kl_dataset,
                         batched=True,
-                        batch_size=total_batch_size,
+                        batch_size=args.per_device_train_batch_size,
                         num_proc=args.dataset_num_proc,
                         desc="Extracting eval KL dataset",
                     )
@@ -1427,17 +1427,50 @@ class KTOTrainer(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(
+    def create_model_card(
         self,
-        commit_message: Optional[str] = "End of training",
-        blocking: bool = True,
-        **kwargs,
-    ) -> str:
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "kto" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        citation = textwrap.dedent("""\
+        @article{ethayarajh2024kto,
+            title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
+            author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
+            year         = 2024,
+            eprint       = {arXiv:2402.01306},
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="KTO",
+            trainer_citation=citation,
+            paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",
+            paper_id="2402.01306",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

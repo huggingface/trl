@@ -54,7 +54,6 @@ if __name__ == "__main__":
     parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
-    training_args.dataset_text_field = ""  # need a dummy field
     training_args.remove_unused_columns = False
     training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
@@ -129,6 +128,6 @@ if __name__ == "__main__":
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
-        trainer.push_to_hub()
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)
         if trainer.accelerator.is_main_process:
             processor.push_to_hub(training_args.hub_model_id)

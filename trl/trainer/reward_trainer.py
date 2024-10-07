@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import os
 import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
-from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -24,7 +24,14 @@ import torch.nn as nn
 from accelerate import PartialState
 from accelerate.utils import gather_object
 from datasets import Dataset
-from transformers import DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer, TrainingArguments
+from transformers import (
+    DataCollator,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    Trainer,
+    TrainingArguments,
+    is_wandb_available,
+)
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
@@ -36,13 +43,16 @@ from .utils import (
     RewardDataCollatorWithPadding,
     compute_accuracy,
     decode_and_strip_padding,
+    generate_model_card,
     print_rich_table,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+
+if is_wandb_available():
+    import wandb
 
 
 def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase") -> Dict[str, List[Any]]:
@@ -345,17 +355,39 @@ class RewardTrainer(Trainer):
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(
+    def create_model_card(
         self,
-        commit_message: Optional[str] = "End of training",
-        blocking: bool = True,
-        **kwargs,
-    ) -> str:
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "reward-trainer" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
         """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="Reward",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
