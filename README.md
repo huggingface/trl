@@ -51,7 +51,7 @@ pip install trl
 
 ### From source
 
-If you want to use the latest features before an official release you can install them from the source:
+If you want to use the latest features before an official release, you can install TRL from source:
 
 ```bash
 pip install git+https://github.com/huggingface/trl.git
