@@ -41,7 +41,7 @@ from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .cgpo_config import CGPOConfig
 from .utils import (
-    DataCollatorForChatMLTestingCGPO,
+    DataCollatorForChatML,
     batch_generation,
     disable_dropout_in_model,
     first_true_indices,
@@ -188,7 +188,7 @@ class CGPOTrainer(Trainer):
         if self.reward_model is not None:
             self.reward_model.eval()
 
-        data_collator = DataCollatorForChatMLTestingCGPO(tokenizer, max_length=args.max_length)
+        data_collator = DataCollatorForChatML(tokenizer, max_length=args.max_length)
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
@@ -281,7 +281,7 @@ class CGPOTrainer(Trainer):
         with torch.no_grad():
             _, baseline_rewards, _ = get_reward(
                 self.reward_model,
-                inputs["prompt_baseline_ids"],
+                inputs["input_ids"],
                 self.tokenizer.pad_token_id,
                 context_length,
             )
@@ -332,8 +332,8 @@ class CGPOTrainer(Trainer):
 
         bs = inputs["bs"]
         context_length = inputs["context_length"]
-        prompt_baseline_ids = inputs["prompt_baseline_ids"]
-        prompt_baseline_mask = inputs["prompt_baseline_mask"]
+        prompt_baseline_ids = inputs["input_ids"]
+        prompt_baseline_mask = inputs["attention_mask"]
         prompt_completion_ids = inputs["prompt_completion_ids"]
         prompt_completion_mask = inputs["prompt_completion_ids"]
 
@@ -341,17 +341,17 @@ class CGPOTrainer(Trainer):
         with torch.no_grad():
             _, baseline_rewards, _ = get_reward(
                 self.reward_model,
-                inputs["prompt_baseline_ids"],
+                inputs["input_ids"],
                 self.tokenizer.pad_token_id,
                 inputs["context_length"],
             )
 
         if self.args.missing_eos_penalty is not None:
-            baseline_ids = inputs["prompt_baseline_ids"][:, context_length:]
+            baseline_ids = inputs["input_ids"][:, context_length:]
             contain_eos_token = torch.any(baseline_ids == self.tokenizer.eos_token_id, dim=-1)
             baseline_rewards[~contain_eos_token] -= self.args.missing_eos_penalty
 
-        baseline_judgements = self.moj.judge(inputs["prompt"], inputs["completion"])
+        baseline_judgements = self.moj.judge(inputs["prompts_text"], inputs["completions_text"])
         baseline_judgements = torch.tensor(baseline_judgements, device=self.model.device, dtype=torch.bool)
 
         # reshaping for filtering
@@ -438,13 +438,14 @@ class CGPOTrainer(Trainer):
         rewards = inputs["rewards"].view(bs, self.k)
         judgements = inputs["judgements"].view(bs, self.k).bool()
 
-        prompt_completion_ids = inputs["prompt_completion_ids"].view(bs, self.k, -1)
-        prompt_completion_mask = inputs["prompt_completion_mask"].view(bs, self.k, -1)
+        prompt_completion_ids = inputs["input_ids"].view(bs, self.k, -1)
+        prompt_completion_mask = inputs["attention_mask"].view(bs, self.k, -1)
 
         positive_masked_rewards = judgements * rewards
         negative_masked_rewards = 1 - (~judgements * rewards)
 
         # get chosen and rejected completions
+        # handle case when no chosen or no rejected ids (TO DO)
         chosen_idx = torch.argmax(positive_masked_rewards, dim=1)
         rejected_idx = torch.argmax(negative_masked_rewards, dim=1)
         chosen_prompt_completion_ids = prompt_completion_ids[torch.arange(bs), chosen_idx]
@@ -480,10 +481,12 @@ class CGPOTrainer(Trainer):
         return loss
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
-        bs, context_length = inputs["prompt_ids"].shape
+        bs, context_length = inputs["prompts"].shape
+        inputs["prompts_text"] = self.tokenizer.batch_decode(inputs["prompts"])
+        inputs["completions_text"] = self.tokenizer.batch_decode(inputs["input_ids"][:, context_length:])
 
         # step 4 of algorithm 1 of the CGPO paper: https://huggingface.co/papers/2409.20370
-        prompt_ids = inputs["prompt_ids"].repeat_interleave(repeats=self.k, dim=0)
+        prompt_ids = inputs["prompts"].repeat_interleave(repeats=self.k, dim=0)
         with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
             query_responses_ids, _ = batch_generation(
                 unwrapped_model,
@@ -498,7 +501,7 @@ class CGPOTrainer(Trainer):
         query_responses = self.tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
         # step 5 of algorithm 1 of the CGPO paper: https://huggingface.co/papers/2409.20370
         with torch.no_grad():
-            prompt_repeated = [item for item in inputs["prompt"] for _ in range(self.k)]
+            prompt_repeated = [item for item in inputs["prompts_text"] for _ in range(self.k)]
             judgements = self.moj.judge(prompt_repeated, query_responses)
 
         completion_ids, completion_mask = truncate_right(
