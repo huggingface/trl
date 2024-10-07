@@ -107,7 +107,7 @@ class IterativeTrainerTester(unittest.TestCase):
                 learning_rate=1e-3,
                 report_to="none",
             )
-            iterative_trainer = IterativeSFTTrainer(model=model, args=training_args, tokenizer=tokenizer)
+            iterative_trainer = IterativeSFTTrainer(model=model, args=training_args, processing_class=tokenizer)
             iterative_trainer.optimizer.zero_grad = partial(iterative_trainer.optimizer.zero_grad, set_to_none=False)
 
             iterative_trainer.step(**inputs)

@@ -108,7 +108,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -142,7 +142,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=self.peft_config,
@@ -178,7 +178,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -213,7 +213,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -249,7 +249,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=self.peft_config,
@@ -292,7 +292,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -331,7 +331,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=self.peft_config,
@@ -375,7 +375,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=train_dataset,
                 peft_config=self.peft_config,
             )
