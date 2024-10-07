@@ -41,7 +41,7 @@ peft_config = LoraConfig(
 trainer = RewardTrainer(
     model=model,
     args=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=dataset,
     peft_config=peft_config,
 )

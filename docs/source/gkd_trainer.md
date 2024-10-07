@@ -74,7 +74,7 @@ trainer = GKDTrainer(
     model=model,
     teacher_model=teacher_model,
     args=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
 )

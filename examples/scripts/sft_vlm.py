@@ -119,7 +119,7 @@ if __name__ == "__main__":
         data_collator=collate_fn,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
-        tokenizer=processor.tokenizer,
+        processing_class=processor.tokenizer,
         peft_config=get_peft_config(model_config),
     )
 

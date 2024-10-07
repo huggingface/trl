@@ -66,7 +66,7 @@ orpo_trainer = ORPOTrainer(
     model,
     args=training_args,
     train_dataset=train_dataset,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
 )
 ```
 After this one can then call:
