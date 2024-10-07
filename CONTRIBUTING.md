@@ -20,7 +20,7 @@ There are several ways you can contribute to TRL:
 * Fix outstanding issues with the existing code.
 * Submit issues related to bugs or desired new features.
 * Implement trainers for new post-training algorithms.
-* Contribute to the examples or to the documentation.
+* Contribute to the examples or the documentation.
 
 If you don't know where to start, there is a special [Good First
 Issue](https://github.com/huggingface/trl/contribute) listing. It will give you a list of
@@ -74,19 +74,19 @@ If there is a new feature you'd like to see in TRL, please open an issue and des
    Whatever it is, we'd love to hear about it!
 
 2. Describe your requested feature in as much detail as possible. The more you can tell us about it, the better we'll be able to help you.
-3. Provide a *code snippet* that demonstrates the features usage.
+3. Provide a *code snippet* that demonstrates the feature's usage.
 4. If the feature is related to a paper, please include a link.
 
 If your issue is well written we're already 80% of the way there by the time you create it.
 
 ## Do you want to implement a new trainer?
 
-New post-training methods are published on a frequent basis and those which satisfy the following criteria are good candidates to be integrated in TRL:
+New post-training methods are published frequently and those that satisfy the following criteria are good candidates to be integrated into TRL:
 
-* **Simplicity:** does the new method achieve similar performance as prior methods, but with less complexity? A good example is Direct Preference Optimization (DPO) [[Rafailov et al, 2023]](https://huggingface.co/papers/2305.18290), which provided a simpler and compelling alternative to RLHF methods.
-* **Efficiency:** does the new method provide a significant improvement in training efficiency? A good example is Odds Ratio Preference Optimization (ORPO) [[Hong et al, 2023]](https://huggingface.co/papers/2403.07691), which utilises a similar objective as DPO, but requires half the GPU VRAM.
+* **Simplicity:** Does the new method achieve similar performance as prior methods, but with less complexity? A good example is Direct Preference Optimization (DPO) [[Rafailov et al, 2023]](https://huggingface.co/papers/2305.18290), which provided a simpler and compelling alternative to RLHF methods.
+* **Efficiency:** Does the new method provide a significant improvement in training efficiency? A good example is Odds Ratio Preference Optimization (ORPO) [[Hong et al, 2023]](https://huggingface.co/papers/2403.07691), which utilizes a similar objective as DPO but requires half the GPU VRAM.
 
-Methods which only provide incremental improvements at the expense of added complexity or compute costs are unlikely to be included in TRL.
+Methods that only provide incremental improvements at the expense of added complexity or compute costs are unlikely to be included in TRL.
 
 If you want to implement a trainer for a new post-training method, first open an issue and provide the following information:
 
@@ -102,7 +102,7 @@ Based on the community and maintainer feedback, the next step will be to impleme
 
 ## Do you want to add documentation?
 
-We're always looking for improvements to the documentation that make it more clear and accurate. Please let us know how the documentation can be improved, such as typos, dead links and any missing, unclear or inaccurate content.. We'll be happy to make the changes or help you make a contribution if you're interested!
+We're always looking for improvements to the documentation that make it more clear and accurate. Please let us know how the documentation can be improved, such as typos, dead links, and any missing, unclear, or inaccurate content... We'll be happy to make the changes or help you contribute if you're interested!
 
 ## Submitting a pull request (PR)
 
@@ -133,7 +133,7 @@ Follow these steps to start contributing:
 
 3. Create a new branch to hold your development changes, and do this for every new PR you work on.
 
-   Start by synchronizing your `main` branch with the `upstream/main` branch (ore details in the [GitHub Docs](https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/syncing-a-fork)):
+   Start by synchronizing your `main` branch with the `upstream/main` branch (more details in the [GitHub Docs](https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/syncing-a-fork)):
 
    ```bash
    $ git checkout main
@@ -204,7 +204,7 @@ Follow these steps to start contributing:
    Please write [good commit messages](https://chris.beams.io/posts/git-commit/).
 
    It is a good idea to sync your copy of the code with the original
-   repository regularly. This way you can quickly account for changes:
+   Repository regularly. This way you can quickly account for changes:
 
    ```bash
    $ git fetch upstream
@@ -221,10 +221,7 @@ Follow these steps to start contributing:
    webpage of your fork on GitHub. Click on 'Pull request' to send your changes
    to the project maintainers for review.
 
-7. It's ok if maintainers ask you for changes. It happens to core contributors
-   too! So everyone can see the changes in the Pull request, work in your local
-   branch and push the changes to your fork. They will automatically appear in
-   the pull request.
+7. It's ok if maintainers ask you for changes. It happens to core contributors too! To ensure everyone can review your changes in the pull request, work on your local branch and push the updates to your fork. They will automatically appear in the pull request.
 
 
 ### Checklist
@@ -245,14 +242,14 @@ Follow these steps to start contributing:
 An extensive test suite is included to test the library behavior and several examples. Library tests can be found in
 the [tests folder](https://github.com/huggingface/trl/tree/main/tests).
 
-We use `pytest` in order to run the tests. From the root of the
-repository, here's how to run tests with `pytest` for the library:
+We use `pytest` to run the tests. From the root of the
+repository here's how to run tests with `pytest` for the library:
 
 ```bash
 $ python -m pytest -sv ./tests
 ```
 
-In fact, that's how `make test` is implemented (sans the `pip install` line)!
+That's how `make test` is implemented (sans the `pip install` line)!
 
-You can specify a smaller set of tests in order to test only the feature
+You can specify a smaller set of tests to test only the feature
 you're working on.
