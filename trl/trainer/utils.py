@@ -273,10 +273,20 @@ class DataCollatorForChatML:
         # Tokenize prompts and completions
         # We assume the inputs are already formatted with ChatML, so extra BOS/EOS tokens should not be added.
         tokenized_prompts = self.tokenizer(
-            prompts, truncation=True, max_length=self.max_length, padding=False, return_tensors=None, add_special_tokens=False
+            prompts,
+            truncation=True,
+            max_length=self.max_length,
+            padding=False,
+            return_tensors=None,
+            add_special_tokens=False,
         )
         tokenized_completions = self.tokenizer(
-            completions, truncation=True, max_length=self.max_length, padding=False, return_tensors=None, add_special_tokens=False
+            completions,
+            truncation=True,
+            max_length=self.max_length,
+            padding=False,
+            return_tensors=None,
+            add_special_tokens=False,
         )
 
         # Combine prompts and completions
