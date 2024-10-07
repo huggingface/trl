@@ -133,7 +133,7 @@ training_args = RewardConfig(output_dir="Qwen2.5-0.5B-Reward", per_device_train_
 trainer = RewardTrainer(
     args=training_args,
     model=model,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=dataset,
 )
 trainer.train()
@@ -166,7 +166,7 @@ dataset = dataset.map(lambda x: tokenizer(x["prompt"]), remove_columns="prompt")
 training_args = RLOOConfig(output_dir="Qwen2.5-0.5B-RL")
 trainer = RLOOTrainer(
     config=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     policy=policy,
     ref_policy=ref_policy,
     reward_model=reward_model,
@@ -181,24 +181,15 @@ trainer.train()
 `DPOTrainer` implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train Llama 3 and many other models. Here is a basic example on how to use the `DPOTrainer`:
 
 ```python
-from trl import DPOConfig, DPOTrainer, maybe_extract_prompt, maybe_apply_chat_template
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import DPOConfig, DPOTrainer
 
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-
-dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
-dataset = dataset.map(maybe_extract_prompt)
-dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
-
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
-trainer = DPOTrainer(
-    args=training_args,
-    model=model,
-    tokenizer=tokenizer,
-    train_dataset=dataset,
-)
+trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, processing_class=tokenizer)
 trainer.train()
 ```
 

@@ -1,5 +1,7 @@
 # Nash-MD Trainer
 
+[![](https://img.shields.io/badge/All_models-Nash--MD-blue)](https://huggingface.co/models?other=nash-md,trl)
+
 ## Overview
 
 Nash-MD was proposed in the paper [Nash Learning from Human Feedback](https://huggingface.co/papers/2312.00886) by Rémi Munos, [Michal Valko](https://huggingface.co/misovalko), Daniele Calandriello, Mohammad Gheshlaghi Azar, Mark Rowland, Daniel Guo, Yunhao Tang, Matthieu Geist, Thomas Mésnard, and Andrea Michi. 
@@ -39,7 +41,7 @@ trainer = NashMDTrainer(
     model=model,
     reward_model=reward_model,
     args=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=train_dataset,
 )
 trainer.train()

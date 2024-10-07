@@ -19,11 +19,14 @@ import torch
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
+    BaseImageProcessor,
     DataCollator,
     DataCollatorForLanguageModeling,
     DataCollatorForSeq2Seq,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainingArguments,
     is_wandb_available,
@@ -53,9 +56,10 @@ class IterativeSFTTrainer(Trainer):
             Check the documentation of `PreTrainedModel` for more details.
         args (`transformers.TrainingArguments`):
             The arguments to use for training.
-        tokenizer (`PreTrainedTokenizerBase`):
-            Tokenizer to be used for encoding the data. Check the documentation of `transformers.PreTrainedTokenizer` and
-            `transformers.PreTrainedTokenizerFast` for more details.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
         data_collator (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*):
@@ -80,7 +84,9 @@ class IterativeSFTTrainer(Trainer):
         self,
         model: Optional[PreTrainedModel] = None,
         args: Optional[TrainingArguments] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
             None,
             None,
@@ -94,9 +100,9 @@ class IterativeSFTTrainer(Trainer):
         optimize_device_cache: Optional[bool] = False,
     ):
         # Step 0: check positional arguments validity
-        if not isinstance(tokenizer, (PreTrainedTokenizerBase)):
+        if not isinstance(processing_class, (PreTrainedTokenizerBase)):
             raise ValueError(
-                f"tokenizer must be a PreTrainedTokenizerBase like a PreTrainedTokenizer or a PreTrainedTokenizerFast, got {type(tokenizer)}"
+                f"processing_class must be a PreTrainedTokenizerBase like a PreTrainedTokenizer or a PreTrainedTokenizerFast, got {type(processing_class)}"
             )
         if not isinstance(model, PreTrainedModel):
             raise ValueError(f"model must be a PreTrainedModel, got {type(model)}")
@@ -113,7 +119,7 @@ class IterativeSFTTrainer(Trainer):
         self.is_encoder_decoder = getattr(model.config, "is_encoder_decoder", False)
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
-        self.tokenizer = tokenizer
+        self.processing_class = processing_class
 
         if data_collator is None:
             if self.is_encoder_decoder:
@@ -121,10 +127,12 @@ class IterativeSFTTrainer(Trainer):
                     "No data collator is provided. Using 'DataCollatorForSeq2Seq' with"
                     "'labels_pad_token_id' set to '-100' and 'pad_to_multiple_of' set to 8."
                 )
-                self.data_collator = DataCollatorForSeq2Seq(tokenizer, label_pad_token_id=-100, pad_to_multiple_of=8)
+                self.data_collator = DataCollatorForSeq2Seq(
+                    processing_class, label_pad_token_id=-100, pad_to_multiple_of=8
+                )
             else:
                 warnings.warn("No data collator is provided. Using 'DataCollatorForLanguageModeling'")
-                self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
+                self.data_collator = DataCollatorForLanguageModeling(self.processing_class, mlm=False)
         else:
             self.data_collator = data_collator
 
@@ -137,7 +145,7 @@ class IterativeSFTTrainer(Trainer):
             args=args,
             data_collator=self.data_collator,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             compute_metrics=compute_metrics,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
@@ -154,7 +162,7 @@ class IterativeSFTTrainer(Trainer):
             self.model, self.optimizer, self.lr_scheduler
         )
 
-        self.tokenizer.truncation_side = "left" if self.truncation_mode == "keep_end" else "right"
+        self.processing_class.truncation_side = "left" if self.truncation_mode == "keep_end" else "right"
 
         if not hasattr(self, "accelerator"):
             raise AttributeError(
@@ -177,7 +185,7 @@ class IterativeSFTTrainer(Trainer):
 
             input_data.pop("decoder_input_ids", None)  # This is directly computed inside the model
 
-            input_data["labels"][input_data["labels"] == self.tokenizer.pad_token_id] = -100
+            input_data["labels"][input_data["labels"] == self.processing_class.pad_token_id] = -100
 
         else:
             input_data = self.data_collator(
@@ -298,14 +306,14 @@ class IterativeSFTTrainer(Trainer):
         )
 
         if texts is not None:
-            model_inputs = self.tokenizer(
+            model_inputs = self.processing_class(
                 texts, max_length=self.max_length, truncation=True, padding=True, return_tensors="pt"
             )
 
             input_ids, attention_mask = model_inputs["input_ids"], model_inputs["attention_mask"]
 
         if texts_labels is not None:
-            labels = self.tokenizer(
+            labels = self.processing_class(
                 texts, max_length=self.max_length, truncation=True, padding=True, return_tensors="pt"
             )["input_ids"]
 

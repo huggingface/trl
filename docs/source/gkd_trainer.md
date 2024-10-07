@@ -1,5 +1,7 @@
 # Generalized Knowledge Distillation Trainer
 
+[![](https://img.shields.io/badge/All_models-GKD-blue)](https://huggingface.co/models?other=gkd,trl)
+
 ## Overview
 
 Generalized Knowledge Distillation (GKD) was proposed in [On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes](https://huggingface.co/papers/2306.13649) by Rishabh Agarwal, Nino Vieillard, Yongchao Zhou, Piotr Stanczyk, Sabela Ramos, Matthieu Geist, and Olivier Bachem. 
@@ -72,7 +74,7 @@ trainer = GKDTrainer(
     model=model,
     teacher_model=teacher_model,
     args=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
 )
