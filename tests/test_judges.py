@@ -15,20 +15,29 @@
 import unittest
 
 from trl import (
+    FactualityConstraintJudge,
     HfPairwiseJudge,
     MixtureOfConstraintJudges,
     PairRMJudge,
     RandomConstraintJudge,
     RandomPairwiseJudge,
     RandomRankJudge,
+    SafetyConstraintJudge,
 )
 
 
 class TestJudges(unittest.TestCase):
-    def _get_prompts_and_completions(self):
+    def _get_prompts_and_pairwise_completions(self):
         prompts = ["The capital of France is", "The biggest planet in the solar system is"]
         completions = [["Paris", "Marseille"], ["Saturn", "Jupiter"]]
         return prompts, completions
+
+    def _get_prompts_completion_and_gold_answer(self):
+        prompts = ["What's the capital of France?", "What's the color of the sky?"]
+        completions = ["Marseille", "blue"]
+        gold_answers = ["Paris", "The color of the sky is blue."]
+
+        return prompts, completions, gold_answers
 
     def test_mixture_of_constraint_judge(self):
         moj = MixtureOfConstraintJudges(judges=[RandomConstraintJudge(), RandomConstraintJudge()])
@@ -58,14 +67,14 @@ class TestJudges(unittest.TestCase):
 
     def test_random_pairwise_judge(self):
         judge = RandomPairwiseJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
 
     def test_random_rank_judge(self):
         judge = RandomRankJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, list) for rank in ranks))
@@ -74,11 +83,29 @@ class TestJudges(unittest.TestCase):
     @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
     def test_hugging_face_judge(self):
         judge = HfPairwiseJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
         self.assertEqual(ranks, [0, 1])
+
+    @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
+    def test_factuality_judge(self):
+        judge = FactualityConstraintJudge()
+        prompts, completions, gold_answers = self._get_prompts_completion_and_gold_answer()
+        judgements = judge.judge(prompts=prompts, completions=completions, gold_answers=gold_answers)
+        self.assertEqual(len(judgements), 2)
+        self.assertTrue(all(isinstance(judgement, int) for judgement in judgements))
+        self.assertEqual(judgements, [0, 1])
+
+    @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
+    def test_safety_judge(self):
+        judge = SafetyConstraintJudge(safety_guidelines="S7: Intellectual Property")
+        prompts, completions, _ = self._get_prompts_completion_and_gold_answer()
+        judgements = judge.judge(prompts=prompts, completions=completions)
+        self.assertEqual(len(judgements), 2)
+        self.assertTrue(all(isinstance(judgement, int) for judgement in judgements))
+        self.assertIn(judgements, [1, 1])
 
     def test_pair_rm_judge(self):
         judge = PairRMJudge()

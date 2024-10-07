@@ -105,6 +105,7 @@ if TYPE_CHECKING:
         BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,
+        FactualityConstraintJudge,
         HfPairwiseJudge,
         MixtureOfConstraintJudges,
         OpenAIPairwiseJudge,
@@ -112,6 +113,7 @@ if TYPE_CHECKING:
         RandomConstraintJudge,
         RandomPairwiseJudge,
         RandomRankJudge,
+        SafetyConstraintJudge,
     )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
