@@ -343,6 +343,13 @@ class GKDTrainer(SFTTrainer):
         else:
             base_model = None
 
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
         citation = textwrap.dedent("""\
         @inproceedings{agarwal2024on-policy,
             title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},

@@ -1727,6 +1727,13 @@ class DPOTrainer(Trainer):
         else:
             base_model = None
 
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
         citation = textwrap.dedent("""\
         @inproceedings{rafailov2023direct,
             title        = {{Direct Preference Optimization: Your Language Model is Secretly a Reward Model}},

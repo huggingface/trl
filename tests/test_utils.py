@@ -158,7 +158,7 @@ class TestGenerateModelCard(unittest.TestCase):
             model_name="my_model",
             hub_model_id="username/my_hub_model",
             dataset_name=None,
-            tags=None,
+            tags=[],
             wandb_url=None,
             trainer_name="My Trainer",
             trainer_citation=None,
