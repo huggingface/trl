@@ -187,7 +187,7 @@ trainer = SFTTrainer(
     peft_config=peft_config,
     max_seq_length=None,
     formatting_func=prepare_sample_text,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     args=training_args,
 )
 trainer.train()

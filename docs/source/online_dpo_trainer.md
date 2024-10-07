@@ -1,6 +1,6 @@
 # Online DPO Trainer
 
-[![](https://img.shields.io/badge/All_models-Online_DPO-blue)](https://huggingface.co/models?other=online-dpo)
+[![](https://img.shields.io/badge/All_models-Online_DPO-blue)](https://huggingface.co/models?other=online-dpo,trl)
 
 ## Overview 
 
@@ -40,7 +40,7 @@ train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
 training_args = OnlineDPOConfig(output_dir="online-dpo-qwen2", logging_steps=10)
 trainer = OnlineDPOTrainer(
-    model=model, reward_model=reward_model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset
+    model=model, reward_model=reward_model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
 trainer.train()
 ```
