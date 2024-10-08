@@ -55,7 +55,7 @@ def main(text_file_name, slack_channel_name=None):
             "type": "section",
             "text": {
                 "type": "plain_text",
-                "text": "🔴 Something is wrong with the workflow please check ASAP!"
+                "text": "❌ Something is wrong with the workflow please check ASAP!"
                 "Something went wrong there is no text file being produced. Please check ASAP.",
                 "emoji": True,
             },
@@ -82,7 +82,7 @@ def main(text_file_name, slack_channel_name=None):
 
         for test_name, failed in final_results.items():
             failed_table = tabulate(
-                [[test_name, "🟢" if not failed else "🔴"]],
+                [[test_name, "✅" if not failed else "❌"]],
                 headers=["Test Name", "Status"],
                 showindex="always",
                 tablefmt="grid",
