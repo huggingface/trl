@@ -277,7 +277,7 @@ class DataCollatorForChatML:
             max_length=self.max_length,
             padding=False,
             return_tensors=None,
-            # We assume the inputs are already formatted with ChatML, so extra BOS/EOS tokens should not be added
+            # We assume the inputs are already wrapped with BOS&EOS tokens in tokenizer.apply_chat_template, so extra BOS/EOS tokens should not be added
             add_special_tokens=False,
         )
         tokenized_completions = self.tokenizer(
@@ -286,7 +286,7 @@ class DataCollatorForChatML:
             max_length=self.max_length,
             padding=False,
             return_tensors=None,
-            # We assume the inputs are already formatted with ChatML, so extra BOS/EOS tokens should not be added
+            # We assume the inputs are already wrapped with BOS&EOS tokens in tokenizer.apply_chat_template, so extra BOS/EOS tokens should not be added
             add_special_tokens=False,
         )
 
