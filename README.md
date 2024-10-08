@@ -1,11 +1,11 @@
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl_banner_dark.png">
+<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl_banner_dark.png" alt="TRL Banner">
 </div>
 
 # TRL - Transformer Reinforcement Learning
 
 <h3 align="center">
-    <p>Full stack library to post-train large language models.</p>
+    <p>A comprehensive library to post-train large language models (LLMs).</p>
 </h3>
 
 <p align="center">
@@ -20,34 +20,32 @@
     </a>
 </p>
 
+## Overview
 
-## What is it?
-
-TRL is a library that post-trains LLMs and diffusion models using methods such as Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). 
-
-The library is built on top of [🤗 Transformers](https://github.com/huggingface/transformers) and is compatible with any model architecture available there.
-
+TRL is a cutting-edge library designed for post-training large language models (LLMs) and diffusion models using advanced techniques like Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and ensures seamless scalability across various hardware setups.
 
 ## Highlights
 
-- **`Efficient and scalable`**: 
-    - [🤗 Accelerate](https://github.com/huggingface/accelerate) is the backbone of TRL that models training to scale from a single GPU to a large-scale multi-node cluster with methods such as DDP and DeepSpeed.
-    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to train even the largest models on modest hardware with quantization and methods such as LoRA or QLoRA.
-    - [Unsloth](https://github.com/unslothai/unsloth) is also integrated and allows to significantly speed up training with dedicated kernels.
-- **`CLI`**: With the [CLI](https://huggingface.co/docs/trl/clis) you can fine-tune and chat with LLMs without writing any code using a single command and a flexible config system.
-- **`Trainers`**: The trainer classes are an abstraction to apply many fine-tuning methods with ease such as the [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer), [`PPOTrainer`](https://huggingface.co/docs/trl/ppov2_trainer), and [`ORPOTrainer`](https://huggingface.co/docs/trl/orpo_trainer).
-- **`AutoModels`**: The [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) & [`AutoModelForSeq2SeqLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForSeq2SeqLMWithValueHead) classes add an additional value head to the model which allows to train them with RL algorithms such as PPO.
-- **`Examples`**: Fine-tune Llama for chat applications or apply full RLHF using adapters etc, following the [examples](https://github.com/huggingface/trl/tree/main/examples).
+- **Efficient and scalable**: 
+    - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like DDP and DeepSpeed.
+    - Full integration with [`PEFT`](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
+    - Integrates [Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
+
+- **Command Line Interface (CLI)**: A simple interface lets you fine-tune and interact with models without needing to write code.
+
+- **Custom Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), and more.
+
+- **AutoModels**: Use pre-defined model classes like [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) to simplify reinforcement learning (RL) with LLMs.
 
 ## Installation
 
-### Python package
+### Python Package
 
-Install the library with `pip`:
+Install the library using `pip`:
 
 ```bash
 pip install trl
-```
+
 
 ### From source
 
