@@ -810,6 +810,7 @@ class DPOTrainer(Trainer):
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.use_weighting = args.use_weighting
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
             warnings.warn(
@@ -1346,7 +1347,8 @@ class DPOTrainer(Trainer):
         labels: torch.LongTensor,
         label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
-    ) -> Tuple[torch.FloatTensor, torch.LongTensor]:
+        use_weighting: bool = False,
+    ) -> Tuple[torch.FloatTensor, torch.LongTensor, Optional[torch.FloatTensor]]:
         """Compute the log probabilities of the given labels under the given logits.
 
         Args:
@@ -1354,9 +1356,13 @@ class DPOTrainer(Trainer):
             labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
             label_pad_token_id: The label pad token id.
             is_encoder_decoder: Whether the model is an encoder-decoder model.
+            use_weighting: Whether to apply weighting as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
 
-        Returns:
-            A Tuple of two tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits in the first tensor and the number of non-masked tokens in the second tensor.
+        Returns
+            A Tuple of three tensors of shape ((batch_size,), (batch_size,), Optional[(batch_size,)]) containing:
+            - The sum of log probabilities of the given labels under the given logits.
+            - The number of non-masked tokens.
+            - The wpo weighting (if use_weighting is True, otherwise None).
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError(
@@ -1373,7 +1379,17 @@ class DPOTrainer(Trainer):
 
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
-        return (per_token_logps * loss_mask).sum(-1), loss_mask.sum(-1)
+        all_logps = (per_token_logps * loss_mask).sum(-1)
+
+        all_weights = None
+        if use_weighting:
+            # eqn (2) of the WPO paper: https://huggingface.co/papers/2406.11827
+            probs = F.softmax(logits, dim=-1)
+            weights_adjustment_factor = torch.log((probs**2).sum(-1))
+            per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
+            all_weights = ((per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)).detach()
+
+        return all_logps, loss_mask.sum(-1), all_weights
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
@@ -1419,12 +1435,13 @@ class DPOTrainer(Trainer):
             seq_len = concatenated_batch["concatenated_labels"].shape[1]
             all_logits = all_logits[:, -seq_len:]
 
-        all_logps, size_completion = self.get_batch_logps(
+        all_logps, size_completion, all_weights = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
             # average_log_prob=self.loss_type == "ipo",
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
+            use_weighting=self.use_weighting,
         )
 
         def cross_entropy_loss(logits, labels):
@@ -1447,6 +1464,12 @@ class DPOTrainer(Trainer):
         if self.loss_type == "ipo":
             all_logps = all_logps / size_completion
 
+        policy_weights = None
+        if self.use_weighting:
+            chosen_weights = all_weights[:len_chosen]
+            rejected_weights = all_weights[len_chosen:]
+            policy_weights = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
+
         chosen_logps = all_logps[:len_chosen]
         rejected_logps = all_logps[len_chosen:]
 
@@ -1454,9 +1477,17 @@ class DPOTrainer(Trainer):
         rejected_logits = all_logits[len_chosen:]
 
         if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, outputs.aux_loss)
+            return (
+                chosen_logps,
+                rejected_logps,
+                chosen_logits,
+                rejected_logits,
+                nll_loss,
+                policy_weights,
+                outputs.aux_loss,
+            )
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, policy_weights)
 
     def get_batch_loss_metrics(
         self,
@@ -1474,9 +1505,10 @@ class DPOTrainer(Trainer):
             policy_chosen_logits,
             policy_rejected_logits,
             policy_nll_loss,
-        ) = forward_output[:5]
+            policy_weights,
+        ) = forward_output[:6]
         if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
+            aux_loss = forward_output[6]
 
         # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
         if (
@@ -1509,6 +1541,9 @@ class DPOTrainer(Trainer):
         if self.args.rpo_alpha is not None:
             # RPO loss from V3 of the paper:
             losses = losses + policy_nll_loss * self.args.rpo_alpha
+
+        if self.use_weighting:
+            losses = losses * policy_weights
 
         prefix = "eval_" if train_eval == "eval" else ""
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
@@ -1740,15 +1775,17 @@ class DPOTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.append("unsloth")
 
-        citation = textwrap.dedent("""\
-        @inproceedings{rafailov2023direct,
-            title        = {{Direct Preference Optimization: Your Language Model is Secretly a Reward Model}},
-            author       = {Rafael Rafailov and Archit Sharma and Eric Mitchell and Christopher D. Manning and Stefano Ermon and Chelsea Finn},
-            year         = 2023,
-            booktitle    = {Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023},
-            url          = {http://papers.nips.cc/paper_files/paper/2023/hash/a85b405ed65c6477a4fe8302b5e06ce7-Abstract-Conference.html},
-            editor       = {Alice Oh and Tristan Naumann and Amir Globerson and Kate Saenko and Moritz Hardt and Sergey Levine},
-        }""")
+        citation = textwrap.dedent(
+            """\
+            @inproceedings{rafailov2023direct,
+                title        = {{Direct Preference Optimization: Your Language Model is Secretly a Reward Model}},
+                author       = {Rafael Rafailov and Archit Sharma and Eric Mitchell and Christopher D. Manning and Stefano Ermon and Chelsea Finn},
+                year         = 2023,
+                booktitle    = {Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023},
+                url          = {http://papers.nips.cc/paper_files/paper/2023/hash/a85b405ed65c6477a4fe8302b5e06ce7-Abstract-Conference.html},
+                editor       = {Alice Oh and Tristan Naumann and Amir Globerson and Kate Saenko and Moritz Hardt and Sergey Levine},
+            }"""
+        )
 
         model_card = generate_model_card(
             base_model=base_model,
