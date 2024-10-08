@@ -25,7 +25,7 @@
 
 ## What is it?
 
-TRL is a library that post-trains LLMs and diffusion models using methods such as Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). 
+TRL is a library that post-trains LLMs and diffusion models using methods such as Supervised fine tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). 
 
 The library is built on top of [🤗 Transformers](https://github.com/huggingface/transformers) and is compatible with any model architecture available there.
 
@@ -34,7 +34,7 @@ The library is built on top of [🤗 Transformers](https://github.com/huggingfac
 
 - **`Efficient and scalable`**: 
     - [🤗 Accelerate](https://github.com/huggingface/accelerate) is the backbone of TRL that models training to scale from a single GPU to a large-scale multi-node cluster with methods such as DDP and DeepSpeed.
-    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to train even the largest models on modest hardware with quantization and methods such as LoRA or QLoRA.
+    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to training of even the largest models on modest hardware with quantization and methods such as LoRA or QLoRA.
     - [Unsloth](https://github.com/unslothai/unsloth) is also integrated and allows to significantly speed up training with dedicated kernels.
       
 - **`CLI`**: With the [CLI](https://huggingface.co/docs/trl/clis) you can fine-tune and chat with LLMs without writing any code using a single command and a flexible config system.
@@ -56,7 +56,7 @@ pip install trl
 
 ### From source
 
-If you want to use the latest features before an official release, you can install TRL from source:
+If you want to use the latest features before an official release, you can install TRL from the source:
 
 ```bash
 pip install git+https://github.com/huggingface/trl.git
