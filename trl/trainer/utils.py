@@ -254,51 +254,86 @@ class DataCollatorForChatML:
             self.max_length = min(self.tokenizer.model_max_length, 1024)
 
     def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        prompts = []
+        completions = []
+
+        for example in examples:
+            messages = example[self.messages_key]
+            formatted_chat = self.tokenizer.apply_chat_template(messages, tokenize=False)
+
+            # Split the formatted chat into prompt and completion
+            assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
+            last_assistant_message = assistant_messages[-1]["content"]
+            prompt = formatted_chat.rsplit(last_assistant_message, 1)[0]
+            completion = last_assistant_message + formatted_chat.rsplit(last_assistant_message, 1)[1]
+
+            prompts.append(prompt)
+            completions.append(completion)
+
         # Tokenize prompts and completions
-        tokenized = self.tokenizer(
-            [self.tokenizer.apply_chat_template(example[self.messages_key], tokenize=False) for example in examples],
+        tokenized_prompts = self.tokenizer(
+            prompts,
             truncation=True,
             max_length=self.max_length,
-            padding=True,
-            return_tensors="pt",
+            padding=False,
+            return_tensors=None,
+            # We assume the inputs are already wrapped with BOS&EOS tokens in tokenizer.apply_chat_template, so extra BOS/EOS tokens should not be added
+            add_special_tokens=False,
+        )
+        tokenized_completions = self.tokenizer(
+            completions,
+            truncation=True,
+            max_length=self.max_length,
+            padding=False,
+            return_tensors=None,
+            # We assume the inputs are already wrapped with BOS&EOS tokens in tokenizer.apply_chat_template, so extra BOS/EOS tokens should not be added
             add_special_tokens=False,
         )
 
-        input_ids = tokenized["input_ids"]
-        attention_mask = tokenized["attention_mask"]
+        # Combine prompts and completions
+        input_ids = []
+        attention_mask = []
+        labels = []
 
-        # Create labels for one-token ahead task, masking the prompt
-        labels = input_ids.clone()
-        for i, example in enumerate(examples):
-            assistant_messages = [msg for msg in example[self.messages_key] if msg["role"] == "assistant"]
-            last_assistant_message = assistant_messages[-1]["content"]
-            response_token_ids = self.tokenizer.encode(last_assistant_message, add_special_tokens=False)
+        for prompt, completion in zip(tokenized_prompts["input_ids"], tokenized_completions["input_ids"]):
+            combined_input_ids = prompt + completion
+            combined_attention_mask = [1] * len(combined_input_ids)
 
-            # Find the last occurrence of the response tokens
-            for j in range(len(input_ids[i]) - len(response_token_ids), -1, -1):
-                if torch.equal(input_ids[i][j : j + len(response_token_ids)], torch.tensor(response_token_ids)):
-                    response_start = j
-                    break
-            else:
-                # If the response is not found, use the entire sequence
-                response_start = 0
+            # Create labels for one-token ahead task, masking the prompt
+            combined_labels = [self.ignore_index] * len(prompt) + completion[:-1]
+            combined_labels.append(self.tokenizer.eos_token_id)  # Add EOS token as final target
 
-            labels[i, :response_start] = self.ignore_index
+            input_ids.append(combined_input_ids)
+            attention_mask.append(combined_attention_mask)
+            labels.append(combined_labels)
 
-        # Create prompts (everything up to the last assistant's message)
-        prompts = input_ids.clone()
-        prompts_attention_mask = attention_mask.clone()
-        for i in range(len(examples)):
-            response_start = (labels[i] != self.ignore_index).nonzero(as_tuple=True)[0][0]
-            prompts[i, response_start:] = self.tokenizer.pad_token_id
-            prompts_attention_mask[i, response_start:] = 0
+        # first convert to list of tensors
+        input_ids = [torch.tensor(ids) for ids in input_ids]
+        attention_mask = [torch.tensor(mask) for mask in attention_mask]
+        labels = [torch.tensor(label) for label in labels]
+
+        # pad the input_ids, attention_mask and labels to the same length across the batch
+        input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
+        attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
+        labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
+
+        # pad the tokenized_prompts on the left to the same length convert to tensor first
+        prompts_input_ids = [torch.tensor(ids) for ids in tokenized_prompts["input_ids"]]
+        prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
+
+        # prompt attention mask
+        prompt_attention_mask = pad(
+            [torch.tensor([1] * len(ids)) for ids in tokenized_prompts["input_ids"]],
+            padding_side="left",
+            padding_value=0,
+        )
 
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
-            "prompts": prompts,
-            "prompt_attention_mask": prompts_attention_mask,
+            "prompts": prompts_input_ids,
+            "prompt_attention_mask": prompt_attention_mask,
         }
 
 
