@@ -122,7 +122,7 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["test"],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 

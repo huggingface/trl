@@ -548,10 +548,12 @@ class ConstantLengthDataset(IterableDataset):
         dataset (`dataset.Dataset`):
             Dataset with text files.
         dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
-            Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
+            Name of the field in the dataset that contains the text. Only one of `dataset_text_field` and
+            `formatting_func` should be provided.
         formatting_func (`Callable`, *optional*):
             Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-            pattern such as `"### Question: {question} ### Answer: {answer}"`
+            pattern such as `"### Question: {question} ### Answer: {answer}"`. Only one of `dataset_text_field` and
+            `formatting_func` should be provided.
         infinite (`bool`, *optional*, defaults to `False`):
             If True the iterator is reset after dataset reaches end else stops.
         seq_length (`int`, *optional*, defaults to `1024`):
@@ -602,10 +604,19 @@ class ConstantLengthDataset(IterableDataset):
         self.shuffle = shuffle
         self.append_concat_token = append_concat_token
         self.add_special_tokens = add_special_tokens
-        if formatting_func is None:
-            self.formatting_func = lambda x: x[dataset_text_field]
-        else:
+
+        if dataset_text_field is not None and formatting_func is not None:
+            warnings.warn(
+                "Only one of `dataset_text_field` and `formatting_func` should be provided. "
+                "Ignoring `dataset_text_field` and using `formatting_func`."
+            )
+
+        if formatting_func is not None:
             self.formatting_func = formatting_func
+        elif dataset_text_field is not None:
+            self.formatting_func = lambda x: x[dataset_text_field]
+        else:  # neither is provided
+            raise ValueError("Either `dataset_text_field` or `formatting_func` should be provided.")
 
         if formatting_func is not None:
             if formatting_func.__code__.co_argcount > 1:
@@ -1387,7 +1398,7 @@ def generate_model_card(
     model_name: str,
     hub_model_id: str,
     dataset_name: Optional[str],
-    tags: Union[str, List[str], None],
+    tags: List[str],
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
@@ -1406,7 +1417,7 @@ def generate_model_card(
             Hub model ID as `username/model_id`.
         dataset_name (`str` or `None`):
             Dataset name.
-        tags (`str`, `List[str]`, or `None`):
+        tags (`List[str]`):
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
@@ -1423,10 +1434,6 @@ def generate_model_card(
         `ModelCard`:
             A ModelCard object.
     """
-    if tags is None:
-        tags = []
-    elif isinstance(tags, str):
-        tags = [tags]
     card_data = ModelCardData(
         base_model=base_model,
         datasets=dataset_name,
