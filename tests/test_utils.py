@@ -232,7 +232,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
         self.assertFalse(response_in_prompt, "The assistant's response should not be present in prompt_only.")
 
         # Verify that EOS token is at the end of input_ids
-        self.assertEqual(input_ids[-1], self.expected_eos, "The last token of input_ids should be EOS token.")
+        self.assertEqual(input_ids[-1], self.eos_token_id, "The last token of input_ids should be EOS token.")
 
         # Verify that the labels preserved the target string (last_assistant_response)
         last_assistant_response = self.examples[0][self.messages_key][-1]["content"]
@@ -250,4 +250,4 @@ class TestDataCollatorForChatML(unittest.TestCase):
         )
 
         # Verify that EOS token is at the end of labels
-        self.assertEqual(labels[-1], self.expected_eos, "The last token of labels should be EOS token.")
+        self.assertEqual(labels[-1], self.eos_token_id, "The last token of labels should be EOS token.")
