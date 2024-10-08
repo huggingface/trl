@@ -189,7 +189,6 @@ class TestDataCollatorForChatML(unittest.TestCase):
         self.bos_token_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
         self.eos_token_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else 2
         # Token ID for "true", the last assistant's response in the example:
-        self.assistant_output_token_id = 1565
         self.ignore_index = -100
         self.max_length = 1024
         self.messages_key = "messages"
@@ -212,20 +211,27 @@ class TestDataCollatorForChatML(unittest.TestCase):
         # Decode input_ids and labels for verification
         input_ids = data["input_ids"][0].tolist()
         labels = data["labels"][0].tolist()
+        prompt_only = data["prompts"][0].tolist()
 
         # Expected tokens
         expected_bos = self.bos_token_id
         expected_eos = self.eos_token_id
-        expected_assistant_token = self.assistant_output_token_id
 
-        # Verify that input_ids start with a BOS token and there are no extra ones
-        self.assertEqual(input_ids[0], expected_bos, "The first token of input_ids should be BOS token.")
-        self.assertNotEqual(
-            input_ids[1], expected_bos, "The second token of input_ids should not be BOS token (extra BOS)."
-        )
+        # Verify that input_ids start with optional padding tokens  and a single BOS token and there are no extra ones
+        first_non_pad = next(token for token in input_ids if token != self.tokenizer.pad_token_id)
+        self.assertEqual(first_non_pad, expected_bos, "The first non-padding token of input_ids should be BOS token.")
+        bos_indices = [i for i, token in enumerate(input_ids) if token == expected_bos]
+        self.assertEqual(len(bos_indices), 1, "There should be exactly one BOS token in input_ids.")
 
-        # Verify that the assistant's response token is present in input_ids
-        self.assertIn(expected_assistant_token, input_ids, "Assistant's response token should be in input_ids.")
+        # Verify that the assistant's response token is present in input_ids and not in the prompt_only
+        last_assistant_response = self.examples[0][self.messages_key][-1]["content"]
+        last_assistant_response_tokens = self.tokenizer.encode(last_assistant_response, add_special_tokens=False)
+        response_in_input_ids = all(token in input_ids for token in last_assistant_response_tokens)
+        self.assertTrue(response_in_input_ids, "The assistant's response should be present in input_ids.")
+
+        # Check if the last assistant's response tokens are not in prompt_only
+        response_in_prompt = all(token in prompt_only for token in last_assistant_response_tokens)
+        self.assertFalse(response_in_prompt, "The assistant's response should not be present in prompt_only.")
 
         # Verify that EOS token is at the end of input_ids
         self.assertEqual(input_ids[-1], expected_eos, "The last token of input_ids should be EOS token.")
