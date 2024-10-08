@@ -1483,6 +1483,13 @@ class BCOTrainer(Trainer):
         else:
             base_model = None
 
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
         citation = textwrap.dedent("""\
         @article{jung2024binary,
             title        = {{Binary Classifier Optimization for Large Language Model Alignment}},

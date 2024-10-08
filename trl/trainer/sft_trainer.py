@@ -15,7 +15,6 @@ import dataclasses
 import inspect
 import os
 import warnings
-from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import datasets
@@ -52,7 +51,6 @@ from .utils import (
     DataCollatorForCompletionOnlyLM,
     generate_model_card,
     peft_module_casting_to_bf16,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
@@ -435,21 +433,6 @@ class SFTTrainer(Trainer):
             elif self.args.max_steps == -1 and args.packing:
                 self.train_dataset.infinite = False
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(
-        self,
-        commit_message: Optional[str] = "End of training",
-        blocking: bool = True,
-        **kwargs,
-    ) -> str:
-        """
-        Overwrite the `push_to_hub` method in order to force-add the tag "sft" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        Unlike the parent class, we don't use the `token` argument to mitigate security risks.
-        """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
-
     def _prepare_dataset(
         self,
         dataset,
@@ -638,6 +621,13 @@ class SFTTrainer(Trainer):
             base_model = self.model.config._name_or_path
         else:
             base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
 
         model_card = generate_model_card(
             base_model=base_model,
