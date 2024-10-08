@@ -15,6 +15,7 @@
 import unittest
 
 import torch
+from datasets import load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
@@ -181,9 +182,8 @@ class TestDataCollatorForChatML(unittest.TestCase):
     def setUp(self):
         # Initialize the tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("codellama/CodeLlama-7b-Instruct-hf")
-        self.tokenizer.pad_token = (
-            self.tokenizer.bos_token if self.tokenizer.pad_token is None else self.tokenizer.pad_token
-        )
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # Define token IDs
         self.bos_token_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
@@ -195,27 +195,14 @@ class TestDataCollatorForChatML(unittest.TestCase):
         self.messages_key = "messages"
 
         # Example input
-        self.examples = [
-            {
-                self.messages_key: [
-                    {
-                        "role": "user",
-                        "content": (
-                            "Does the following code contain any security vulnerabilities? Return true or false.\n"
-                            "char buffer[10];\nchar input[50];\nstrcpy(buffer, input);\n"
-                        ),
-                    },
-                    {"role": "assistant", "content": "true"},
-                ]
-            }
-        ]
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        self.examples = dataset.to_list()
 
         # Initialize the data collator
         self.collator = DataCollatorForChatML(
             tokenizer=self.tokenizer,
             max_length=self.max_length,
             ignore_index=self.ignore_index,
-            messages_key=self.messages_key,
         )
 
     def test_data_collator_for_chatml(self):
