@@ -213,13 +213,11 @@ class TestDataCollatorForChatML(unittest.TestCase):
         labels = data["labels"][0].tolist()
         prompt_only = data["prompts"][0].tolist()
 
-        # Expected tokens
-        expected_bos = self.bos_token_id
-        expected_eos = self.eos_token_id
-
         # Verify that input_ids start with optional padding tokens  and a single BOS token and there are no extra ones
         first_non_pad = next(token for token in input_ids if token != self.tokenizer.pad_token_id)
-        self.assertEqual(first_non_pad, self.bos_token_id, "The first non-padding token of input_ids should be BOS token.")
+        self.assertEqual(
+            first_non_pad, self.bos_token_id, "The first non-padding token of input_ids should be BOS token."
+        )
         bos_indices = [i for i, token in enumerate(input_ids) if token == self.bos_token_id]
         self.assertEqual(len(bos_indices), 1, "There should be exactly one BOS token in input_ids.")
 
@@ -234,7 +232,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
         self.assertFalse(response_in_prompt, "The assistant's response should not be present in prompt_only.")
 
         # Verify that EOS token is at the end of input_ids
-        self.assertEqual(input_ids[-1], expected_eos, "The last token of input_ids should be EOS token.")
+        self.assertEqual(input_ids[-1], self.expected_eos, "The last token of input_ids should be EOS token.")
 
         # Verify that the labels preserved the target string (last_assistant_response)
         last_assistant_response = self.examples[0][self.messages_key][-1]["content"]
@@ -252,4 +250,4 @@ class TestDataCollatorForChatML(unittest.TestCase):
         )
 
         # Verify that EOS token is at the end of labels
-        self.assertEqual(labels[-1], expected_eos, "The last token of labels should be EOS token.")
+        self.assertEqual(labels[-1], self.expected_eos, "The last token of labels should be EOS token.")
