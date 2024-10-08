@@ -188,7 +188,8 @@ class TestDataCollatorForChatML(unittest.TestCase):
         # Define token IDs
         self.bos_token_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
         self.eos_token_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else 2
-        self.assistant_output_token_id = 1565  # Token ID for "true", which is the last assistant's response in the example
+        # Token ID for "true", the last assistant's response in the example:
+        self.assistant_output_token_id = 1565
         self.ignore_index = -100
         self.max_length = 1024
         self.messages_key = "messages"
