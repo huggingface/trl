@@ -75,7 +75,7 @@ class CPOTrainerTester(unittest.TestCase):
             trainer = CPOTrainer(
                 model=model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -132,7 +132,7 @@ class CPOTrainerTester(unittest.TestCase):
             trainer = CPOTrainer(
                 model=self.model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,

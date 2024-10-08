@@ -33,9 +33,12 @@ from datasets import Dataset, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainerCallback,
     TrainingArguments,
@@ -181,8 +184,10 @@ class KTOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         data_collator (`transformers.DataCollator`, *optional*, defaults to `None`):
             The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
@@ -216,7 +221,9 @@ class KTOTrainer(Trainer):
         args: KTOConfig = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         data_collator: Optional[DataCollator] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -383,9 +390,9 @@ class KTOTrainer(Trainer):
         else:
             self.ref_model = create_reference_model(model)
 
-        if tokenizer is None:
+        if processing_class is None:
             raise ValueError(
-                "max_length or a tokenizer must be specified when using the default DPODataCollatorWithPadding"
+                "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
             )
         if args.max_length is None:
             warnings.warn(
@@ -413,7 +420,7 @@ class KTOTrainer(Trainer):
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=processing_class.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
@@ -440,11 +447,12 @@ class KTOTrainer(Trainer):
         self.max_length = args.max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else tokenizer.pad_token_id
         self.max_prompt_length = args.max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = args.max_completion_length
         self.tokenizer = tokenizer
+        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
+        self.processing_class = processing_class
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Not all losses require a KL calculation
@@ -478,7 +486,15 @@ class KTOTrainer(Trainer):
                 "args": args,
                 "processor": self.processor if self.is_vision_model else None,
                 "model": model if self.is_encoder_decoder else None,
-            }
+              
+            # Tokenize and prepare the training datasets
+            train_dataset = train_dataset.map(
+                _tokenize,
+                batched=True,
+                fn_kwargs={"tokenizer": self.processing_class},
+                num_proc=args.dataset_num_proc,
+                desc="Tokenizing train dataset",
+            )
 
             # Tokenize and prepare the training datasets
             tokenized_train_dataset = train_dataset.map(
@@ -585,7 +601,7 @@ class KTOTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -1165,7 +1181,7 @@ class KTOTrainer(Trainer):
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
+                pad_token_id=self.processing_class.pad_token_id,
             )
 
             # if reference_output in batch use that otherwise use the reference model
@@ -1179,7 +1195,7 @@ class KTOTrainer(Trainer):
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
                             do_sample=True,
-                            pad_token_id=self.tokenizer.pad_token_id,
+                            pad_token_id=self.processing_class.pad_token_id,
                         )
                 else:
                     reference_output = self.ref_model.generate(
@@ -1187,14 +1203,14 @@ class KTOTrainer(Trainer):
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
-                        pad_token_id=self.tokenizer.pad_token_id,
+                        pad_token_id=self.processing_class.pad_token_id,
                     )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
-        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+        policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
+        policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
-        reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+        reference_output = pad_to_length(reference_output, self.max_length, self.processing_class.pad_token_id)
+        reference_output_decoded = self.processing_class.batch_decode(reference_output, skip_special_tokens=True)
 
         return policy_output_decoded, reference_output_decoded
 
@@ -1352,6 +1368,13 @@ class KTOTrainer(Trainer):
             base_model = self.model.config._name_or_path
         else:
             base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
 
         citation = textwrap.dedent("""\
         @article{ethayarajh2024kto,
