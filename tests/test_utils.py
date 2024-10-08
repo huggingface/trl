@@ -188,7 +188,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
         # Define token IDs
         self.bos_token_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
         self.eos_token_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else 2
-        self.assistant_output_token_id = 1565  # Token ID for "true"
+        self.assistant_output_token_id = 1565  # Token ID for "true", which is the last assistant's response in the example
         self.ignore_index = -100
         self.max_length = 1024
         self.messages_key = "messages"
@@ -231,27 +231,27 @@ class TestDataCollatorForChatML(unittest.TestCase):
         expected_assistant_token = self.assistant_output_token_id
 
         # Verify that input_ids start with a BOS token and there are no extra ones
-        self.assertEqual(input_ids[0], expected_bos, "The first token should be BOS token.")
-        self.assertNotEqual(input_ids[1], expected_bos, "The second token should not be BOS token (extra BOS).")
+        self.assertEqual(input_ids[0], expected_bos, "The first token of input_ids should be BOS token.")
+        self.assertNotEqual(input_ids[1], expected_bos, "The second token of input_ids should not be BOS token (extra BOS).")
 
-        # Verify that the assistant's response token is present
+        # Verify that the assistant's response token is present in input_ids
         self.assertIn(expected_assistant_token, input_ids, "Assistant's response token should be in input_ids.")
 
-        # Verify that there is a EOS token at the end of input_ids
-        self.assertIn(expected_eos, input_ids, "EOS token should be present in input_ids.")
+        # Verify that EOS token is at the end of input_ids
+        self.assertEqual(input_ids[-1], expected_eos, "The last token of input_ids should be EOS token.")
 
-        # Verify that the data["labels"] preserved the target string
-        assistant_response = self.examples[0][self.messages_key][-1]["content"]
-        assistant_response_tokens = self.tokenizer.encode(assistant_response, add_special_tokens=False)
+        # Verify that the labels preserved the target string (last_assistant_response)
+        last_assistant_response = self.examples[0][self.messages_key][-1]["content"]
+        last_assistant_response_tokens = self.tokenizer.encode(last_assistant_response, add_special_tokens=False)
 
-        # Find the start of the assistant's response in the labels
+        # Find the start and end of the last assistant's response in the labels
         response_start = next(i for i, label in enumerate(labels) if label != self.ignore_index)
         response_end = next(i for i in range(len(labels) - 1, -1, -1) if labels[i] != self.ignore_index)
 
         actual_response = labels[response_start : response_end - 1]
         self.assertEqual(
-            actual_response, assistant_response_tokens, "The labels should preserve the assistant's response tokens."
+            actual_response, last_assistant_response_tokens, "The labels should preserve the last assistant's response tokens."
         )
 
-        # Verify that there is an EOS token in labels
-        self.assertEqual(labels[-1], expected_eos, "The last label should be the EOS token.")
+        # Verify that EOS token is at the end of labels
+        self.assertEqual(labels[-1], expected_eos, "The last token of labels should be EOS token.")
