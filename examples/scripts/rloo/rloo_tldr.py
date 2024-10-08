@@ -125,7 +125,7 @@ if __name__ == "__main__":
     ################
     trainer = RLOOTrainer(
         config=training_args,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         policy=policy,
         ref_policy=ref_policy,
         reward_model=reward_model,

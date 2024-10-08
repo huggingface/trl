@@ -25,7 +25,7 @@
 
 ## What is it?
 
-TRL is a library to post-train LLMs and diffusion models with methods such as Supervised Fine-tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). 
+TRL is a library that post-trains LLMs and diffusion models using methods such as Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). 
 
 The library is built on top of [🤗 Transformers](https://github.com/huggingface/transformers) and is compatible with any model architecture available there.
 
@@ -34,7 +34,7 @@ The library is built on top of [🤗 Transformers](https://github.com/huggingfac
 
 - **`Efficient and scalable`**: 
     - [🤗 Accelerate](https://github.com/huggingface/accelerate) is the backbone of TRL that models training to scale from a single GPU to a large-scale multi-node cluster with methods such as DDP and DeepSpeed.
-    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to train of even the largest models on modest hardware with quantization and methods such as LoRA or QLoRA.
+    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to train even the largest models on modest hardware with quantization and methods such as LoRA or QLoRA.
     - [Unsloth](https://github.com/unslothai/unsloth) is also integrated and allows to significantly speed up training with dedicated kernels.
       
 - **`CLI`**: With the [CLI](https://huggingface.co/docs/trl/clis) you can fine-tune and chat with LLMs without writing any code using a single command and a flexible config system.
@@ -56,7 +56,7 @@ pip install trl
 
 ### From source
 
-If you want to use the latest features before an official release you can install them from source:
+If you want to use the latest features before an official release, you can install TRL from source:
 
 ```bash
 pip install git+https://github.com/huggingface/trl.git
@@ -138,7 +138,7 @@ training_args = RewardConfig(output_dir="Qwen2.5-0.5B-Reward", per_device_train_
 trainer = RewardTrainer(
     args=training_args,
     model=model,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=dataset,
 )
 trainer.train()
@@ -171,7 +171,7 @@ dataset = dataset.map(lambda x: tokenizer(x["prompt"]), remove_columns="prompt")
 training_args = RLOOConfig(output_dir="Qwen2.5-0.5B-RL")
 trainer = RLOOTrainer(
     config=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     policy=policy,
     ref_policy=ref_policy,
     reward_model=reward_model,
@@ -192,9 +192,9 @@ from trl import DPOConfig, DPOTrainer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
-trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, tokenizer=tokenizer)
+trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, processing_class=tokenizer)
 trainer.train()
 ```
 
@@ -223,4 +223,4 @@ make dev
 
 ## License
 
-This repository's source code is available under the [MIT License](LICENSE).
+This repository's source code is available under the [Apache-2.0 License](LICENSE).

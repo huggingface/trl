@@ -1,6 +1,6 @@
 # XPO Trainer
 
-[![](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo)
+[![](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo,trl)
 
 ## Overview
 
@@ -41,7 +41,7 @@ trainer = XPOTrainer(
     model=model,
     reward_model=reward_model,
     args=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=train_dataset,
 )
 trainer.train()

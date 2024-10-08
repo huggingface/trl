@@ -85,7 +85,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=ref_model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"] if eval_dataset else None,
             )
@@ -119,7 +119,7 @@ class BCOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=self.model,  # ref_model can't be the same as model
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                 )
 
@@ -142,7 +142,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=self.ref_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -204,7 +204,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -249,7 +249,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 embedding_func=embedding_func,
@@ -299,7 +299,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -345,7 +345,7 @@ class BCOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=None,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
@@ -385,7 +385,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=model_peft,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
