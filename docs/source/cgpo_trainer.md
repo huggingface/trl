@@ -2,8 +2,7 @@
 
 ## Overview
 
-Constrained Generative Policy Optimization (CGPO) was proposed in [The Perfect Blend: Redefining RLHF with
-Mixture of Judges](https://huggingface.co/papers/2306.13649) by Tengyu Xu, Eryk Helenowski, Karthik Abinav Sankararaman, Di Jin, Kaiyan Peng, Eric Han, Shaoliang Nie, Chen Zhu, Hejia Zhang, Wenxuan Zhou, Zhouhao Zeng, Yun He,Karishma Mandyam, Arya Talabzadeh, Madian Khabsa, Gabriel Cohen, Yuandong Tian, Hao Ma, Sinong Wang and Han Fang. 
+Constrained Generative Policy Optimization (CGPO) was proposed in [The Perfect Blend: Redefining RLHF with Mixture of Judges](https://huggingface.co/papers/2306.13649) by Tengyu Xu, Eryk Helenowski, Karthik Abinav Sankararaman, Di Jin, Kaiyan Peng, Eric Han, Shaoliang Nie, Chen Zhu, Hejia Zhang, Wenxuan Zhou, Zhouhao Zeng, Yun He,Karishma Mandyam, Arya Talabzadeh, Madian Khabsa, Gabriel Cohen, Yuandong Tian, Hao Ma, Sinong Wang and Han Fang. 
 
 The abstract from the paper is the following:
 
@@ -16,7 +15,7 @@ CGPO is designed to address the challenges of reward hacking and the complexitie
 2. Task-specific optimization strategies (independent MoJs, optimizers and reward models).
 3. Three new constrained RLHF optimizers: Calibrated-Regularized Policy Gradient (CRPG), Constrained Online Direct Preference Optimization (CODPO), and Calibrated-Regularized Reward Ranking Finetuning (CRRAFT)
 
-This post-training method was contributed by [Gaetan Lopez](https://github.com/gaetanlop).
+This post-training method was contributed by [Gaetan Lopez](https://github.com/gaetanlop) + Add the names of the future PR reviewers (kashif, lewton, qgallouedec?)
 
 > [!WARNING]
 > The `CGPOTrainer` currently only supports the single task with single objective setting. CGPO in multi-tasks with multi-objectives will be added in a future release.
@@ -28,7 +27,7 @@ The `CGPOTrainer` is a wrapper around the transformers [`Trainer`] class that ta
 * `k`: defines the number of generations per prompt.
 * `kl_threshold`: sets the maximum allowable KL divergence between the model and the reference model for each generated completion.
 
-For tasks requiring precise judges and extensive exploration, such as instruction following, math, and coding, use higher values for `k` and a more lenient KL threshold. Conversely, for tasks with less precise judges and where exploration is less critical, such as "general chat",  use lower values of `k` and a stricter KL threshold.
+Based on the paper findings: For tasks requiring precise judges and extensive exploration, such as instruction following, math, and coding, use higher values for `k` and a more lenient KL threshold. Conversely, for tasks with less precise judges and where exploration is less critical, such as "general chat",  use lower values of `k` and a stricter KL threshold.
 
 The basic API is as follows:
 
@@ -75,7 +74,7 @@ training_args = CGPOConfig(
     per_device_train_batch_size=2,
     k=4,
     rlhf_optimizer="crpg",
-    kl_threshold=10.,
+    kl_threshold=5.,
     )
 trainer = CGPOTrainer(
     model=model,
