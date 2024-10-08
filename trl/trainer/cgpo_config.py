@@ -36,10 +36,10 @@ class CGPOConfig(TrainingArguments):
             Pre-definied maximum KL-divergence threshold.
         beta (`float`, *optional*, defaults to `0.1`):
             Only used when rlhf_optimizer is set to `codpo`.
-            Parameter controlling the deviation from the reference model. Higher β means less deviation from the reference model.
+            Parameter controlling the deviation from the reference model. Higher beta means less deviation from the reference model.
         lamb (`float`, *optional*, defaults to `5.0`):
             Only used when rlhf_optimizer is set to `codpo`.
-            Parameter controlling the importance of the regularization term added to the vanilla DPO loss.
+            Parameter controlling the importance of the regularization term added to the DPO loss.
         local_generation_batch_size (`int`, *optional*, defaults to `None`):
              The size of the local mini-batch used during the generation phase.
         max_new_tokens (`int`, *optional*, defaults to `64`):
