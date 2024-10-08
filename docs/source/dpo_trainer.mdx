@@ -161,6 +161,10 @@ The [TR-DPO](https://huggingface.co/papers/2404.09656) paper suggests syncing th
 
 The [RPO](https://huggingface.co/papers/2404.19733) paper implements an iterative preference tuning algorithm using a loss related to the RPO loss in this [paper](https://huggingface.co/papers/2405.16436) that essentially consists of a weighted SFT loss on the chosen preferences together with the DPO loss. To use this loss, set the `rpo_alpha` in the [`DPOConfig`] to an appropriate value. The paper suggests setting this weight to `1.0`.
 
+### WPO loss
+
+The [WPO](https://huggingface.co/papers/2406.11827) paper adapts off-policy data to resemble on-policy data more closely by reweighting preference pairs according to their probability under the current policy. To use this method, set the `use_weighting` flag to `True` in the [`DPOConfig`].
+
 ### For Mixture of Experts Models: Enabling the auxiliary loss
 
 MOEs are the most efficient if the load is about equally distributed between experts.  
