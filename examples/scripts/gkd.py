@@ -122,7 +122,7 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_config),
     )
     completions_callback = LogCompletionsCallback(trainer, trainer.generation_config, num_prompts=8)
