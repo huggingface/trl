@@ -373,10 +373,10 @@ class KTOTrainer(Trainer):
             self.is_vision_model = False
 
         if self.is_vision_model:
-            self.processor = tokenizer
-            self.tokenizer = tokenizer.tokenizer  # tokenizer is actually a processor at this point
+            self.processor = processing_class
+            self.processing_class = self.processor.tokenizer  # tokenizer is actually a processor at this point
         else:
-            self.tokenizer = tokenizer
+            self.processing_class = processing_class
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
@@ -450,7 +450,6 @@ class KTOTrainer(Trainer):
         self.max_prompt_length = args.max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = args.max_completion_length
-        self.tokenizer = tokenizer
         self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.processing_class = processing_class
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
@@ -482,10 +481,11 @@ class KTOTrainer(Trainer):
 
             fn_kwargs = {
                 "prefix": "",
-                "tokenizer": self.tokenizer,
+                "tokenizer": self.processing_class,
                 "args": args,
                 "processor": self.processor if self.is_vision_model else None,
                 "model": model if self.is_encoder_decoder else None,
+            }
 
             # Tokenize and prepare the training datasets
             tokenized_train_dataset = train_dataset.map(
