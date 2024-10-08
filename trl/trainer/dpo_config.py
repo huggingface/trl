@@ -65,7 +65,8 @@ class DPOConfig(TrainingArguments):
                 - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
-
+        use_weighting (`bool`, *optional*, defaults to `False`):
+            Whether or not to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`Optional[int]`, *optional*, defaults to `None`):
@@ -150,6 +151,7 @@ class DPOConfig(TrainingArguments):
         "apo_zero",
         "apo_down",
     ] = "sigmoid"
+    use_weighting: bool = False
     label_pad_token_id: int = -100
     padding_value: Optional[int] = None
     truncation_mode: str = "keep_end"
