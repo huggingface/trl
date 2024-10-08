@@ -68,7 +68,7 @@ class CGPOTrainerTester(unittest.TestCase):
                 reward_model=self.reward_model,
                 mixture_of_judges=self.moj,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -114,7 +114,7 @@ class CGPOTrainerTester(unittest.TestCase):
                 reward_model=self.reward_model,
                 mixture_of_judges=moj,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -159,7 +159,7 @@ class CGPOTrainerTester(unittest.TestCase):
                 reward_model=self.reward_model,
                 mixture_of_judges=moj,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -206,7 +206,7 @@ class CGPOTrainerTester(unittest.TestCase):
                     reward_model=self.reward_model,
                     mixture_of_judges=None,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
@@ -241,7 +241,7 @@ class CGPOTrainerTester(unittest.TestCase):
                     reward_model=None,
                     mixture_of_judges=self.moj,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
@@ -319,7 +319,7 @@ class CGPOTrainerTester(unittest.TestCase):
                 reward_model=self.reward_model,
                 mixture_of_judges=self.moj,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -362,7 +362,7 @@ class CGPOTrainerTester(unittest.TestCase):
                 reward_model=self.reward_model,
                 mixture_of_judges=self.moj,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -407,7 +407,7 @@ class CGPOTrainerTester(unittest.TestCase):
                     reward_model=self.reward_model,
                     mixture_of_judges=self.moj,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
@@ -448,7 +448,7 @@ class CGPOTrainerTester(unittest.TestCase):
                 reward_model=self.reward_model,
                 mixture_of_judges=self.moj,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -501,7 +501,7 @@ class CGPOTrainerTester(unittest.TestCase):
                     reward_model=self.reward_model,
                     mixture_of_judges=self.moj,
                     args=training_args,
-                    tokenizer=tokenizer,
+                    processing_class=tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
@@ -535,7 +535,7 @@ class CGPOTrainerTester(unittest.TestCase):
                 reward_model=self.reward_model,
                 mixture_of_judges=self.moj,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )

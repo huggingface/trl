@@ -81,7 +81,7 @@ trainer = CGPOTrainer(
     reward_model=teacher_model,
     mixture_of_judges=mixture_of_judges,
     args=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
 )

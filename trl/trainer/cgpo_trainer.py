@@ -26,8 +26,11 @@ import torch.utils.data
 from datasets import Dataset
 from torch.utils.data import IterableDataset
 from transformers import (
+    BaseImageProcessor,
+    FeatureExtractionMixin,
     GenerationConfig,
-    PreTrainedTokenizerBase,
+    PreTrainedprocessing_classBase,
+    ProcessorMixin,
     Trainer,
     TrainerCallback,
     is_apex_available,
@@ -99,8 +102,10 @@ class CGPOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedprocessing_classBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         peft_config (`Dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
@@ -125,7 +130,9 @@ class CGPOTrainer(Trainer):
         args: Optional[CGPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset], "datasets.Dataset"]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedprocessing_classBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -153,9 +160,9 @@ class CGPOTrainer(Trainer):
         if args is None:
             raise ValueError("`args` must be provided.")
 
-        # Check that the tokenizer is provided
-        if tokenizer is None:
-            raise ValueError("`tokenizer` must be provided.")
+        # Check that the processing_class is provided
+        if processing_class is None:
+            raise ValueError("`processing_class` must be provided.")
 
         # Convert to PEFT model if peft_config is provided
         if peft_config is not None:
@@ -195,7 +202,7 @@ class CGPOTrainer(Trainer):
         if self.reward_model is not None:
             self.reward_model.eval()
 
-        data_collator = DataCollatorForChatML(tokenizer, max_length=args.max_length)
+        data_collator = DataCollatorForChatML(processing_class, max_length=args.max_length)
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
@@ -203,7 +210,7 @@ class CGPOTrainer(Trainer):
             top_k=0,
             do_sample=True,
             use_cache=False if args.gradient_checkpointing else True,
-            pad_token_id=tokenizer.pad_token_id,
+            pad_token_id=processing_class.pad_token_id,
         )
 
         # Set custom EOS tokens if they are specified by the model's generation
@@ -231,7 +238,7 @@ class CGPOTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
@@ -291,7 +298,7 @@ class CGPOTrainer(Trainer):
             _, baseline_rewards, _ = get_reward(
                 self.reward_model,
                 inputs["input_ids"],
-                self.tokenizer.pad_token_id,
+                self.processing_class.pad_token_id,
                 context_length,
             )
 
@@ -351,13 +358,13 @@ class CGPOTrainer(Trainer):
             _, baseline_rewards, _ = get_reward(
                 self.reward_model,
                 inputs["input_ids"],
-                self.tokenizer.pad_token_id,
+                self.processing_class.pad_token_id,
                 inputs["context_length"],
             )
 
         if self.args.missing_eos_penalty is not None:
             baseline_ids = inputs["input_ids"][:, context_length:]
-            contain_eos_token = torch.any(baseline_ids == self.tokenizer.eos_token_id, dim=-1)
+            contain_eos_token = torch.any(baseline_ids == self.processing_class.eos_token_id, dim=-1)
             baseline_rewards[~contain_eos_token] -= self.args.missing_eos_penalty
 
         baseline_judgements = self.moj.judge(inputs["prompts_text"], inputs["completions_text"])
@@ -383,10 +390,12 @@ class CGPOTrainer(Trainer):
             # we need to pad the samples as both baseline and completions will be used in the same batch
             max_length = max(prompt_completion_ids.shape[-1], prompt_baseline_ids.shape[-1])
             prompt_completion_ids = pad_to_length(
-                prompt_completion_ids, max_length, pad_value=self.tokenizer.pad_token_id
+                prompt_completion_ids, max_length, pad_value=self.processing_class.pad_token_id
             )
             prompt_completion_mask = pad_to_length(prompt_completion_mask, max_length, pad_value=0)
-            prompt_baseline_ids = pad_to_length(prompt_baseline_ids, max_length, pad_value=self.tokenizer.pad_token_id)
+            prompt_baseline_ids = pad_to_length(
+                prompt_baseline_ids, max_length, pad_value=self.processing_class.pad_token_id
+            )
             prompt_baseline_mask = pad_to_length(prompt_baseline_mask, max_length, pad_value=0)
 
         # get best rewards and completions
@@ -492,8 +501,8 @@ class CGPOTrainer(Trainer):
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         bs, context_length = inputs["prompts"].shape
-        inputs["prompts_text"] = self.tokenizer.batch_decode(inputs["prompts"])
-        inputs["completions_text"] = self.tokenizer.batch_decode(inputs["input_ids"][:, context_length:])
+        inputs["prompts_text"] = self.processing_class.batch_decode(inputs["prompts"])
+        inputs["completions_text"] = self.processing_class.batch_decode(inputs["input_ids"][:, context_length:])
 
         # step 4 of algorithm 1 of the CGPO paper: https://huggingface.co/papers/2409.20370
         prompt_ids = inputs["prompts"].repeat_interleave(repeats=self.k, dim=0)
@@ -502,24 +511,24 @@ class CGPOTrainer(Trainer):
                 unwrapped_model,
                 prompt_ids,
                 self.local_generation_batch_size,
-                self.tokenizer.pad_token_id,
+                self.processing_class.pad_token_id,
                 self.generation_config,
             )
 
         completion_ids = query_responses_ids[:, context_length:]
 
-        query_responses = self.tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
+        query_responses = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         # step 5 of algorithm 1 of the CGPO paper: https://huggingface.co/papers/2409.20370
         with torch.no_grad():
             prompt_repeated = [item for item in inputs["prompts_text"] for _ in range(self.k)]
             judgements = self.moj.judge(prompt_repeated, query_responses)
 
         completion_ids, completion_mask = truncate_right(
-            completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+            completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
 
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
-        prompt_completion_mask = torch.cat((prompt_ids != self.tokenizer.pad_token_id, completion_mask), dim=1)
+        prompt_completion_mask = torch.cat((prompt_ids != self.processing_class.pad_token_id, completion_mask), dim=1)
 
         rewards = []
         for i in range(0, prompt_completion_ids.shape[0], bs):
@@ -529,7 +538,7 @@ class CGPOTrainer(Trainer):
                 _, mini_batch_rewards, _ = get_reward(
                     self.reward_model,
                     mini_batch_prompt_completion_ids,
-                    self.tokenizer.pad_token_id,
+                    self.processing_class.pad_token_id,
                     context_length,
                 )
 
@@ -538,7 +547,7 @@ class CGPOTrainer(Trainer):
         rewards = torch.cat(rewards, dim=0)
         # Completions that do not contain an eos token id are penalized.
         if self.args.missing_eos_penalty is not None:
-            contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
+            contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
             rewards[~contain_eos_token] -= self.args.missing_eos_penalty
 
         inputs["rewards"] = rewards
