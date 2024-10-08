@@ -20,7 +20,13 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl.trainer.model_config import ModelConfig
-from trl.trainer.utils import decode_and_strip_padding, generate_model_card, get_peft_config, pad
+from trl.trainer.utils import (
+    DataCollatorForChatML,
+    decode_and_strip_padding,
+    generate_model_card,
+    get_peft_config,
+    pad,
+)
 
 
 if is_peft_available():
@@ -169,3 +175,83 @@ class TestGenerateModelCard(unittest.TestCase):
         assert "my_model" in card_text
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "My Trainer" in card_text
+
+
+class TestDataCollatorForChatML(unittest.TestCase):
+    def setUp(self):
+        # Initialize the tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained("codellama/CodeLlama-7b-Instruct-hf")
+        self.tokenizer.pad_token = (
+            self.tokenizer.bos_token if self.tokenizer.pad_token is None else self.tokenizer.pad_token
+        )
+
+        # Define token IDs
+        self.bos_token_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
+        self.eos_token_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else 2
+        self.assistant_output_token_id = 1565  # Token ID for "true"
+        self.ignore_index = -100
+        self.max_length = 1024
+        self.messages_key = "messages"
+
+        # Example input
+        self.examples = [
+            {
+                self.messages_key: [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Does the following code contain any security vulnerabilities? Return true or false.\n"
+                            "char buffer[10];\nchar input[50];\nstrcpy(buffer, input);\n"
+                        ),
+                    },
+                    {"role": "assistant", "content": "true"},
+                ]
+            }
+        ]
+
+        # Initialize the data collator
+        self.collator = DataCollatorForChatML(
+            tokenizer=self.tokenizer,
+            max_length=self.max_length,
+            ignore_index=self.ignore_index,
+            messages_key=self.messages_key,
+        )
+
+    def test_data_collator_for_chatml(self):
+        # Process the data
+        data = self.collator(self.examples)
+
+        # Decode input_ids and labels for verification
+        input_ids = data["input_ids"][0].tolist()
+        labels = data["labels"][0].tolist()
+
+        # Expected tokens
+        expected_bos = self.bos_token_id
+        expected_eos = self.eos_token_id
+        expected_assistant_token = self.assistant_output_token_id
+
+        # Verify that input_ids start with a BOS token and there are no extra ones
+        self.assertEqual(input_ids[0], expected_bos, "The first token should be BOS token.")
+        self.assertNotEqual(input_ids[1], expected_bos, "The second token should not be BOS token (extra BOS).")
+
+        # Verify that the assistant's response token is present
+        self.assertIn(expected_assistant_token, input_ids, "Assistant's response token should be in input_ids.")
+
+        # Verify that there is a EOS token at the end of input_ids
+        self.assertIn(expected_eos, input_ids, "EOS token should be present in input_ids.")
+
+        # Verify that the data["labels"] preserved the target string
+        assistant_response = self.examples[0][self.messages_key][-1]["content"]
+        assistant_response_tokens = self.tokenizer.encode(assistant_response, add_special_tokens=False)
+
+        # Find the start of the assistant's response in the labels
+        response_start = next(i for i, label in enumerate(labels) if label != self.ignore_index)
+        response_end = next(i for i in range(len(labels) - 1, -1, -1) if labels[i] != self.ignore_index)
+
+        actual_response = labels[response_start : response_end - 1]
+        self.assertEqual(
+            actual_response, assistant_response_tokens, "The labels should preserve the assistant's response tokens."
+        )
+
+        # Verify that there is an EOS token in labels
+        self.assertEqual(labels[-1], expected_eos, "The last label should be the EOS token.")
