@@ -16,7 +16,7 @@
 import os
 import random
 import textwrap
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import datasets
 import torch
@@ -44,7 +44,6 @@ from .utils import (
     DataCollatorForChatML,
     batch_generation,
     disable_dropout_in_model,
-    first_true_indices,
     generate_model_card,
     get_reward,
     pad_to_length,
@@ -68,8 +67,16 @@ logger = logging.get_logger(__name__)
 class MixtureOfConstraintJudges:
     "Placeholder waiting for https://github.com/huggingface/trl/pull/2159 to be merged"
 
+    def __init__(self, method: Literal["all_violated", "all_satisfied", "all_random"] = "all_random"):
+        self.method = method
+
     def judge(self, prompts, completions=None, shuffle_order=None):
-        return [random.choice([0, 1]) for _ in range(len(prompts))]
+        if self.method == "all_violated":
+            return [0 for _ in range(len(prompts))]
+        elif self.method == "all_satisfied":
+            return [1 for _ in range(len(prompts))]
+        else:
+            return [random.choice([0, 1]) for _ in range(len(prompts))]
 
 
 class CGPOTrainer(Trainer):
@@ -214,6 +221,8 @@ class CGPOTrainer(Trainer):
         self.local_generation_batch_size = (
             args.local_generation_batch_size if args.local_generation_batch_size else args.per_device_train_batch_size
         )
+        # to avoid divisions by 0
+        self.epsilon = 1e-9
         self._tag_names.append(args.rlhf_optimizer)
 
         super().__init__(
@@ -417,11 +426,7 @@ class CGPOTrainer(Trainer):
         losses = -logprobs * filtered_calibrated_rewards
 
         # simulate skipping samples instead of using .mean()
-        loss = (
-            losses.sum() / filtered_calibrated_rewards.sum()
-            if filtered_calibrated_rewards.sum() != 0
-            else losses.sum()
-        )
+        loss = losses.sum() / (filtered_calibrated_rewards.sum() + self.epsilon)
 
         if self.use_apex:
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
@@ -434,24 +439,29 @@ class CGPOTrainer(Trainer):
     def codpo_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         bs = inputs["bs"]
         context_length = inputs["context_length"]
+        judgements = inputs["judgements"].view(bs, self.k).bool()
+        no_positive_completion_mask = judgements.sum(dim=1) != 0
 
         rewards = inputs["rewards"].view(bs, self.k)
-        judgements = inputs["judgements"].view(bs, self.k).bool()
-
-        prompt_completion_ids = inputs["input_ids"].view(bs, self.k, -1)
-        prompt_completion_mask = inputs["attention_mask"].view(bs, self.k, -1)
+        prompt_completion_ids = inputs["prompt_completion_ids"].view(bs, self.k, -1)
+        prompt_completion_mask = inputs["prompt_completion_mask"].view(bs, self.k, -1)
 
         positive_masked_rewards = judgements * rewards
         negative_masked_rewards = 1 - (~judgements * rewards)
 
         # get chosen and rejected completions
-        # handle case when no chosen or no rejected ids (TO DO)
         chosen_idx = torch.argmax(positive_masked_rewards, dim=1)
-        rejected_idx = torch.argmax(negative_masked_rewards, dim=1)
-        chosen_prompt_completion_ids = prompt_completion_ids[torch.arange(bs), chosen_idx]
-        chosen_prompt_completion_mask = prompt_completion_mask[torch.arange(bs), chosen_idx]
-        rejected_prompt_completion_ids = prompt_completion_ids[torch.arange(bs), rejected_idx]
-        rejected_prompt_completion_mask = prompt_completion_mask[torch.arange(bs), rejected_idx]
+        # handle cases where all generations satisfy constraints
+        rejected_idx = torch.where(
+            judgements.sum(dim=1) == self.k,
+            torch.argmin(rewards, dim=1),
+            torch.argmax(negative_masked_rewards, dim=1),
+        )
+        batch_indices = torch.arange(bs)
+        chosen_prompt_completion_ids = prompt_completion_ids[batch_indices, chosen_idx]
+        chosen_prompt_completion_mask = prompt_completion_mask[batch_indices, chosen_idx]
+        rejected_prompt_completion_ids = prompt_completion_ids[batch_indices, rejected_idx]
+        rejected_prompt_completion_mask = prompt_completion_mask[batch_indices, rejected_idx]
 
         # get the batch log probabilities
         chosen_logprobs, chosen_ref_logprobs = self._get_batch_logprobs(
@@ -465,12 +475,12 @@ class CGPOTrainer(Trainer):
         ref_logratios = chosen_ref_logprobs - rejected_ref_logprobs
 
         logits = pi_logratios - ref_logratios
-        completion_only_mask = chosen_prompt_completion_mask[:, context_length:].bool()
-        chosen_length = first_true_indices(~completion_only_mask)
+        chosen_length = chosen_prompt_completion_mask[:, context_length:].sum(-1)
         # eqn (14) in the paper
         losses = -(F.logsigmoid(self.beta * logits) + self.lamb / chosen_length * chosen_logprobs)
 
-        loss = losses.mean()
+        # handle cases where no generations satisfy all constraints
+        loss = (losses * no_positive_completion_mask).sum() / (no_positive_completion_mask.sum() + self.epsilon)
 
         if self.use_apex:
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
@@ -507,6 +517,7 @@ class CGPOTrainer(Trainer):
         completion_ids, completion_mask = truncate_right(
             completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
         )
+
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_ids != self.tokenizer.pad_token_id, completion_mask), dim=1)
 
