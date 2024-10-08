@@ -232,7 +232,9 @@ class TestDataCollatorForChatML(unittest.TestCase):
 
         # Verify that input_ids start with a BOS token and there are no extra ones
         self.assertEqual(input_ids[0], expected_bos, "The first token of input_ids should be BOS token.")
-        self.assertNotEqual(input_ids[1], expected_bos, "The second token of input_ids should not be BOS token (extra BOS).")
+        self.assertNotEqual(
+            input_ids[1], expected_bos, "The second token of input_ids should not be BOS token (extra BOS)."
+        )
 
         # Verify that the assistant's response token is present in input_ids
         self.assertIn(expected_assistant_token, input_ids, "Assistant's response token should be in input_ids.")
