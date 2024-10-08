@@ -176,6 +176,99 @@ class CGPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
+    def test_cgpo_trainer_no_moj(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = CGPOConfig(
+                output_dir=tmp_dir,
+                rlhf_optimizer="crraft",
+                k=4,
+                kl_threshold=5.0,
+                temperature=0.9,
+                max_new_tokens=4,
+                per_device_train_batch_size=4,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                expected_regex="`mixture_of_judges` must be provided.",
+            ):
+                CGPOTrainer(
+                    model=self.model,
+                    ref_model=self.ref_model,
+                    reward_model=self.reward_model,
+                    mixture_of_judges=None,
+                    args=training_args,
+                    tokenizer=self.tokenizer,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
+                )
+
+    def test_cgpo_trainer_no_reward_model(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = CGPOConfig(
+                output_dir=tmp_dir,
+                rlhf_optimizer="crraft",
+                k=4,
+                kl_threshold=5.0,
+                temperature=0.9,
+                max_new_tokens=4,
+                per_device_train_batch_size=4,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                expected_regex="`reward_model` must be provided.",
+            ):
+                CGPOTrainer(
+                    model=self.model,
+                    ref_model=self.ref_model,
+                    reward_model=None,
+                    mixture_of_judges=self.moj,
+                    args=training_args,
+                    tokenizer=self.tokenizer,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
+                )
+
+    def test_cgpo_trainer_wrong_rlhf_optimizer(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            wrong_rlhf_optimizer = "crraftss"
+            with self.assertRaisesRegex(
+                ValueError,
+                expected_regex=f"Invalid value for rlhf_optimizer: {wrong_rlhf_optimizer}. Must be one of 'crraft', 'codpo', or 'crpg'.",
+            ):
+                CGPOConfig(
+                    output_dir=tmp_dir,
+                    rlhf_optimizer=wrong_rlhf_optimizer,
+                    k=4,
+                    kl_threshold=5.0,
+                    temperature=0.9,
+                    max_new_tokens=4,
+                    per_device_train_batch_size=4,
+                    max_steps=3,
+                    remove_unused_columns=False,
+                    gradient_accumulation_steps=1,
+                    learning_rate=9e-1,
+                    eval_strategy="steps",
+                    report_to="none",
+                )
+
     @parameterized.expand(["crraft", "crpg", "codpo"])
     def test_cgpo_trainer_with_missing_eos_penalty(self, rlhf_optimizer):
         with tempfile.TemporaryDirectory() as tmp_dir:

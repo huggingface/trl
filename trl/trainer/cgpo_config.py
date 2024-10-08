@@ -67,3 +67,11 @@ class CGPOConfig(TrainingArguments):
     temperature: float = 0.9
     missing_eos_penalty: Optional[float] = None
     disable_dropout: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.rlhf_optimizer not in {"crraft", "codpo", "crpg"}:
+            raise ValueError(
+                f"Invalid value for rlhf_optimizer: {self.rlhf_optimizer}. Must be one of 'crraft', 'codpo', or 'crpg'."
+            )
