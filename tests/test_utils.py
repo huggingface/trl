@@ -219,7 +219,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
 
         # Verify that input_ids start with optional padding tokens  and a single BOS token and there are no extra ones
         first_non_pad = next(token for token in input_ids if token != self.tokenizer.pad_token_id)
-        self.assertEqual(first_non_pad, expected_bos, "The first non-padding token of input_ids should be BOS token.")
+        self.assertEqual(first_non_pad, self.bos_token_id, "The first non-padding token of input_ids should be BOS token.")
         bos_indices = [i for i, token in enumerate(input_ids) if token == expected_bos]
         self.assertEqual(len(bos_indices), 1, "There should be exactly one BOS token in input_ids.")
 
