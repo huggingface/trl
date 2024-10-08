@@ -250,7 +250,9 @@ class TestDataCollatorForChatML(unittest.TestCase):
 
         actual_response = labels[response_start : response_end - 1]
         self.assertEqual(
-            actual_response, last_assistant_response_tokens, "The labels should preserve the last assistant's response tokens."
+            actual_response,
+            last_assistant_response_tokens,
+            "The labels should preserve the last assistant's response tokens.",
         )
 
         # Verify that EOS token is at the end of labels
