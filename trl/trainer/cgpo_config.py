@@ -75,3 +75,6 @@ class CGPOConfig(TrainingArguments):
             raise ValueError(
                 f"Invalid value for rlhf_optimizer: {self.rlhf_optimizer}. Must be one of 'crraft', 'codpo', or 'crpg'."
             )
+
+        if self.kl_threshold is None:
+            raise ValueError("Training without setting the KL divergence threshold is not supported.")

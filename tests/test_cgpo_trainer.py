@@ -269,6 +269,28 @@ class CGPOTrainerTester(unittest.TestCase):
                     report_to="none",
                 )
 
+    def test_cgpo_trainer_no_kl_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaisesRegex(
+                ValueError,
+                expected_regex="Training without setting the KL divergence threshold is not supported.",
+            ):
+                CGPOConfig(
+                    output_dir=tmp_dir,
+                    rlhf_optimizer="crraft",
+                    k=4,
+                    kl_threshold=None,
+                    temperature=0.9,
+                    max_new_tokens=4,
+                    per_device_train_batch_size=4,
+                    max_steps=3,
+                    remove_unused_columns=False,
+                    gradient_accumulation_steps=1,
+                    learning_rate=9e-1,
+                    eval_strategy="steps",
+                    report_to="none",
+                )
+
     @parameterized.expand(["crraft", "crpg", "codpo"])
     def test_cgpo_trainer_with_missing_eos_penalty(self, rlhf_optimizer):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -436,7 +458,7 @@ class CGPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
