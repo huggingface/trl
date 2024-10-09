@@ -16,6 +16,7 @@
 import os
 import random
 import textwrap
+import warnings
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import datasets
@@ -27,9 +28,10 @@ from datasets import Dataset
 from torch.utils.data import IterableDataset
 from transformers import (
     BaseImageProcessor,
+    DataCollator,
     FeatureExtractionMixin,
     GenerationConfig,
-    PreTrainedprocessing_classBase,
+    PreTrainedTokenizerBase,
     ProcessorMixin,
     Trainer,
     TrainerCallback,
@@ -49,7 +51,6 @@ from .utils import (
     disable_dropout_in_model,
     generate_model_card,
     get_reward,
-    pad_to_length,
     prepare_deepspeed,
     truncate_right,
 )
@@ -64,9 +65,11 @@ if is_apex_available():
 if is_wandb_available():
     import wandb
 
+
 logger = logging.get_logger(__name__)
 
 
+# should be removed when the mixture of judges PR is merged
 class MixtureOfConstraintJudges:
     "Placeholder waiting for https://github.com/huggingface/trl/pull/2159 to be merged"
 
@@ -98,6 +101,8 @@ class CGPOTrainer(Trainer):
             The mixtures of judges to check if completions satisfy a set of contraints.
         args (`CGPOConfig`):
             The CGPO config arguments to use for training.
+        data_collator (`transformers.DataCollator`):
+            Ignored and replaced by an instance of `DataCollatorForChatML`.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -128,10 +133,11 @@ class CGPOTrainer(Trainer):
         reward_model: Union[PreTrainedModel, nn.Module, None] = None,
         mixture_of_judges: Optional[MixtureOfConstraintJudges] = None,
         args: Optional[CGPOConfig] = None,
+        data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset], "datasets.Dataset"]] = None,
         processing_class: Optional[
-            Union[PreTrainedprocessing_classBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
@@ -201,6 +207,13 @@ class CGPOTrainer(Trainer):
         # Set the reward model in eval mode
         if self.reward_model is not None:
             self.reward_model.eval()
+
+        if data_collator is not None:
+            warnings.warn(
+                "`CGPOTrainer` only supports training with a custom `DataCollatorForChatML. "
+                "The data collator is replaced by a custom `DataCollatorForChatML`. "
+                "The specified data collator will not be used."
+            )
 
         data_collator = DataCollatorForChatML(processing_class, max_length=args.max_length)
 
@@ -305,14 +318,13 @@ class CGPOTrainer(Trainer):
         inputs["baseline_rewards"] = baseline_rewards.repeat_interleave(repeats=self.k, dim=0)
 
         total_loss = torch.tensor(0.0, device=self.model.device)
-        for i in range(self.k):
-            # simulate gradient accumulation to avoid computing OOM with a batch of size bs* self.k
-            mini_batch_rewards = inputs["rewards"][i * bs : (i + 1) * bs]
-            mini_batch_judgements = inputs["judgements"][i * bs : (i + 1) * bs]
-            mini_batch_prompt_completion_ids = inputs["prompt_completion_ids"][i * bs : (i + 1) * bs]
-            mini_batch_prompt_completion_mask = inputs["prompt_completion_mask"][i * bs : (i + 1) * bs]
-            mini_batch_baseline_rewards = inputs["baseline_rewards"][i * bs : (i + 1) * bs]
-
+        for i in range(bs):
+            # Compute loss on a mini-batch of size `bs`, instead of the full batch (`bs` * self.k) to avoid OOM. Similar idea to gradient accumulation.
+            mini_batch_rewards = inputs["rewards"][i * self.k : (i + 1) * self.k]
+            mini_batch_judgements = inputs["judgements"][i * self.k : (i + 1) * self.k]
+            mini_batch_prompt_completion_ids = inputs["prompt_completion_ids"][i * self.k : (i + 1) * self.k]
+            mini_batch_prompt_completion_mask = inputs["prompt_completion_mask"][i * self.k : (i + 1) * self.k]
+            mini_batch_baseline_rewards = inputs["baseline_rewards"][i * self.k : (i + 1) * self.k]
             mini_batch_calibrated_rewards = torch.sigmoid(mini_batch_rewards - mini_batch_baseline_rewards)
 
             # compute kl_divergence
@@ -331,6 +343,7 @@ class CGPOTrainer(Trainer):
 
             losses = -logprobs * (calibrated_regularized_rewards - calibrated_regularized_rewards.mean())
 
+            # We divide by `self.k` to average the total loss across the k iterations.
             loss = losses.mean() / self.k
 
             if self.use_apex:
@@ -343,120 +356,18 @@ class CGPOTrainer(Trainer):
 
         return total_loss
 
-    def crraft_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
-        """Implementation of the Calibrated Regularized Reward Ranking Finetuning (CRRAFT) policy opttimizer."""
-
-        bs = inputs["bs"]
-        context_length = inputs["context_length"]
-        prompt_baseline_ids = inputs["input_ids"]
-        prompt_baseline_mask = inputs["attention_mask"]
-        prompt_completion_ids = inputs["prompt_completion_ids"]
-        prompt_completion_mask = inputs["prompt_completion_ids"]
-
-        # get baseline rewards & judgements
-        with torch.no_grad():
-            _, baseline_rewards, _ = get_reward(
-                self.reward_model,
-                inputs["input_ids"],
-                self.processing_class.pad_token_id,
-                inputs["context_length"],
-            )
-
-        if self.args.missing_eos_penalty is not None:
-            baseline_ids = inputs["input_ids"][:, context_length:]
-            contain_eos_token = torch.any(baseline_ids == self.processing_class.eos_token_id, dim=-1)
-            baseline_rewards[~contain_eos_token] -= self.args.missing_eos_penalty
-
-        baseline_judgements = self.moj.judge(inputs["prompts_text"], inputs["completions_text"])
-        baseline_judgements = torch.tensor(baseline_judgements, device=self.model.device, dtype=torch.bool)
-
-        # reshaping for filtering
-        rewards = inputs["rewards"].view(bs, self.k)
-        judgements = inputs["judgements"].view(bs, self.k).bool()
-        prompt_completion_ids = prompt_completion_ids.view(bs, self.k, -1)
-        prompt_completion_mask = prompt_completion_mask.view(bs, self.k, -1)
-
-        # get constrained calibrated reward without kl
-        calibrated_rewards = torch.sigmoid(rewards - baseline_rewards.unsqueeze(-1))
-        masked_calibrated_rewards = judgements * calibrated_rewards
-        # the baseline calibrated reward is always equal to 0.5 ie sigmoid(baseline_rewards - baselines_rewards)
-        baseline_calibrated_rewards = 0.5
-
-        best_idx = torch.argmax(masked_calibrated_rewards, dim=1)
-        no_positive_completion = masked_calibrated_rewards.sum(dim=1) == 0
-        use_baseline_mask = (no_positive_completion & baseline_judgements).unsqueeze(-1)
-
-        if use_baseline_mask.sum() != 0:
-            # we need to pad the samples as both baseline and completions will be used in the same batch
-            max_length = max(prompt_completion_ids.shape[-1], prompt_baseline_ids.shape[-1])
-            prompt_completion_ids = pad_to_length(
-                prompt_completion_ids, max_length, pad_value=self.processing_class.pad_token_id
-            )
-            prompt_completion_mask = pad_to_length(prompt_completion_mask, max_length, pad_value=0)
-            prompt_baseline_ids = pad_to_length(
-                prompt_baseline_ids, max_length, pad_value=self.processing_class.pad_token_id
-            )
-            prompt_baseline_mask = pad_to_length(prompt_baseline_mask, max_length, pad_value=0)
-
-        # get best rewards and completions
-        best_idx_reshaped = (
-            best_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, 1, prompt_completion_ids.size(-1))
-        )  # bs, 1, seq_len
-        best_prompt_completion_ids = prompt_completion_ids.gather(1, best_idx_reshaped).squeeze(1)
-        best_prompt_completion_mask = prompt_completion_mask.gather(1, best_idx_reshaped).squeeze(1)
-        best_masked_calibrated_rewards = masked_calibrated_rewards.gather(1, best_idx.unsqueeze(-1)).squeeze(-1)
-
-        if use_baseline_mask.sum() != 0:
-            # if no generations satisfy all constraints and baseline satisfy constraints, use baseline
-            best_prompt_completion_ids = torch.where(
-                use_baseline_mask, prompt_baseline_ids, best_prompt_completion_ids
-            )
-
-            best_prompt_completion_mask = torch.where(
-                use_baseline_mask, prompt_baseline_mask, best_prompt_completion_mask
-            )
-
-            best_masked_calibrated_rewards = torch.where(
-                use_baseline_mask.squeeze(1), baseline_calibrated_rewards, best_masked_calibrated_rewards
-            )
-
-        # filter all generations whoes KL-divergence is larger than a pre-defined threshold
-        logprobs, ref_logprobs = self._get_batch_logprobs(
-            best_prompt_completion_ids, best_prompt_completion_mask, context_length
-        )
-
-        with torch.no_grad():
-            kl_div = logprobs - ref_logprobs
-
-        masked_kl_div = kl_div < self.kl_threshold
-        filtered_calibrated_rewards = masked_kl_div * best_masked_calibrated_rewards
-
-        # compute loss as done in eqn (18) of the CGPO paper: https://huggingface.co/papers/2409.20370
-        losses = -logprobs * filtered_calibrated_rewards
-
-        # simulate skipping samples instead of using .mean()
-        loss = losses.sum() / (filtered_calibrated_rewards.sum() + self.epsilon)
-
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss)
-
-        return loss
-
     def codpo_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         bs = inputs["bs"]
         context_length = inputs["context_length"]
-        judgements = inputs["judgements"].view(bs, self.k).bool()
-        no_positive_completion_mask = judgements.sum(dim=1) != 0
 
+        # reshaping per prompt
+        judgements = inputs["judgements"].view(bs, self.k).bool()
         rewards = inputs["rewards"].view(bs, self.k)
         prompt_completion_ids = inputs["prompt_completion_ids"].view(bs, self.k, -1)
         prompt_completion_mask = inputs["prompt_completion_mask"].view(bs, self.k, -1)
 
         positive_masked_rewards = judgements * rewards
-        negative_masked_rewards = 1 - (~judgements * rewards)
+        negative_masked_rewards = ~judgements * rewards
 
         # get chosen and rejected completions
         chosen_idx = torch.argmax(positive_masked_rewards, dim=1)
@@ -464,7 +375,7 @@ class CGPOTrainer(Trainer):
         rejected_idx = torch.where(
             judgements.sum(dim=1) == self.k,
             torch.argmin(rewards, dim=1),
-            torch.argmax(negative_masked_rewards, dim=1),
+            torch.argmin(negative_masked_rewards, dim=1),
         )
         batch_indices = torch.arange(bs)
         chosen_prompt_completion_ids = prompt_completion_ids[batch_indices, chosen_idx]
@@ -482,14 +393,100 @@ class CGPOTrainer(Trainer):
 
         pi_logratios = chosen_logprobs - rejected_logprobs
         ref_logratios = chosen_ref_logprobs - rejected_ref_logprobs
-
         logits = pi_logratios - ref_logratios
         chosen_length = chosen_prompt_completion_mask[:, context_length:].sum(-1)
         # eqn (14) in the paper
         losses = -(F.logsigmoid(self.beta * logits) + self.lamb / chosen_length * chosen_logprobs)
 
-        # handle cases where no generations satisfy all constraints
-        loss = (losses * no_positive_completion_mask).sum() / (no_positive_completion_mask.sum() + self.epsilon)
+        # Skip samples where no generations satisfy all constraints
+        positive_completion_mask = judgements.sum(dim=1) != 0
+        loss = (losses * positive_completion_mask).sum() / (positive_completion_mask.sum() + self.epsilon)
+
+        if self.use_apex:
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            self.accelerator.backward(loss)
+
+        return loss
+
+    def crraft_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+        bs = inputs["bs"]
+        context_length = inputs["context_length"]
+        prompt_baseline_ids = inputs["input_ids"]
+        prompt_baseline_mask = inputs["attention_mask"]
+        rewards = inputs["rewards"]
+        judgements = inputs["judgements"]
+        prompt_completion_ids = inputs["prompt_completion_ids"]
+        prompt_completion_mask = inputs["prompt_completion_mask"]
+
+        # get baseline rewards & judgements & kl_div to hcheck if the baseline is eligable
+        with torch.no_grad():
+            _, baseline_rewards, _ = get_reward(
+                self.reward_model,
+                prompt_baseline_ids,
+                self.processing_class.pad_token_id,
+                inputs["context_length"],
+            )
+
+        if self.args.missing_eos_penalty is not None:
+            baseline_ids = inputs["input_ids"][:, context_length:]
+            contain_eos_token = torch.any(baseline_ids == self.generation_config.eos_token_id, dim=-1)
+            baseline_rewards[~contain_eos_token] -= self.args.missing_eos_penalty
+
+        baseline_judgements = self.moj.judge(inputs["prompts_text"], inputs["completions_text"])
+        baseline_judgements = torch.tensor(baseline_judgements, device=self.model.device, dtype=torch.bool)
+
+        max_logprobs = []
+        max_rewards = []
+        for i in range(bs):
+            # Compute logits on a mini-batch of size `bs`, instead of the full batch (`bs` * self.k) to avoid OOM.
+            mini_batch_prompt_completion_ids = prompt_completion_ids[i * self.k : (i + 1) * self.k]
+            mini_batch_prompt_completion_mask = prompt_completion_mask[i * self.k : (i + 1) * self.k]
+            mini_batch_rewards = rewards[i * self.k : (i + 1) * self.k]
+            mini_batch_judgements = judgements[i * self.k : (i + 1) * self.k]
+
+            mini_batch_logprobs, mini_batch_ref_logprobs = self._get_batch_logprobs(
+                mini_batch_prompt_completion_ids, mini_batch_prompt_completion_mask, context_length
+            )
+
+            with torch.no_grad():
+                kl_div = mini_batch_logprobs - mini_batch_ref_logprobs
+
+            masked_kl_div = kl_div < self.kl_threshold
+            contrainted_calibrated_rewards = (
+                masked_kl_div * mini_batch_judgements * torch.sigmoid(mini_batch_rewards - baseline_rewards[i])
+            )
+
+            best_idx = torch.argmax(contrainted_calibrated_rewards, dim=0).item()
+            max_logprobs.append(mini_batch_logprobs[best_idx])
+            max_rewards.append(contrainted_calibrated_rewards[best_idx])
+
+        max_logprobs = torch.stack(max_logprobs, dim=0)
+        max_rewards = torch.stack(max_rewards, dim=0)
+
+        no_positive_completion_mask = (max_rewards == 0) & (baseline_judgements != 0)
+        if no_positive_completion_mask.sum() != 0:
+            # only compute the baseline logprobs if we need to (ie some prompts do not have any positive samples)
+            # the baseline calibrated reward is always equal to 0.5 ie sigmoid(baseline_rewards - baselines_rewards)
+            baseline_calibrated_rewards = 0.5
+            baseline_logprobs, baseline_ref_logprobs = self._get_batch_logprobs(
+                prompt_baseline_ids, prompt_baseline_mask, context_length
+            )
+
+            with torch.no_grad():
+                baseline_kl_div = baseline_logprobs - baseline_ref_logprobs
+
+            baseline_masked_kl_div = baseline_kl_div < self.kl_threshold
+            replace_by_baseline_mask = no_positive_completion_mask & baseline_masked_kl_div
+
+            max_logprobs = torch.where(replace_by_baseline_mask, baseline_logprobs, max_logprobs)
+            max_rewards = torch.where(replace_by_baseline_mask, baseline_calibrated_rewards, max_rewards)
+
+        # compute loss as done in eqn (18) of the CGPO paper: https://huggingface.co/papers/2409.20370
+        losses = -max_logprobs * max_rewards
+        # simulate skipping samples instead of using .mean()
+        loss = losses.sum() / ((rewards != 0).sum() + self.epsilon)
 
         if self.use_apex:
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
@@ -524,7 +521,7 @@ class CGPOTrainer(Trainer):
             judgements = self.moj.judge(prompt_repeated, query_responses)
 
         completion_ids, completion_mask = truncate_right(
-            completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
+            completion_ids, self.generation_config.eos_token_id, self.processing_class.pad_token_id
         )
 
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
@@ -532,7 +529,7 @@ class CGPOTrainer(Trainer):
 
         rewards = []
         for i in range(0, prompt_completion_ids.shape[0], bs):
-            # operate on a mini batch of size batch_size instead of size batch_size * self.k
+            # Compute rewards on a mini-batch of size `bs`, instead of the full batch (`bs` * self.k)
             mini_batch_prompt_completion_ids = prompt_completion_ids[i : i + bs]
             with torch.no_grad():
                 _, mini_batch_rewards, _ = get_reward(
@@ -547,7 +544,7 @@ class CGPOTrainer(Trainer):
         rewards = torch.cat(rewards, dim=0)
         # Completions that do not contain an eos token id are penalized.
         if self.args.missing_eos_penalty is not None:
-            contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
+            contain_eos_token = torch.any(completion_ids == self.generation_config.eos_token_id, dim=-1)
             rewards[~contain_eos_token] -= self.args.missing_eos_penalty
 
         inputs["rewards"] = rewards
