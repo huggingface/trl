@@ -188,8 +188,8 @@ class GKDTrainer(SFTTrainer):
         mixture_log_probs = torch.logsumexp(
             torch.stack(
                 [
-                    student_log_probs + torch.log(torch.tensor(beta)),
-                    teacher_log_probs + torch.log(torch.tensor(1 - beta)),
+                    student_log_probs + torch.log(torch.tensor(beta, dtype=student_log_probs.dtype)),
+                    teacher_log_probs + torch.log(torch.tensor(1 - beta, dtype=teacher_log_probs.dtype)),
                 ]
             ),
             dim=0,
