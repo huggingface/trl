@@ -179,12 +179,16 @@ class GKDTrainer(SFTTrainer):
         student_logits = student_logits / temperature
         teacher_logits = teacher_logits / temperature
 
+        # Compute the interpolated probabilities
+        student_probs = F.softmax(student_logits, dim=-1)
+        teacher_probs = F.softmax(teacher_logits, dim=-1)
+        interpolated_probs = beta * student_probs + (1 - beta) * teacher_probs
+        # Compute the interpolated log probabilities
+        interpolated_log_probs = interpolated_probs.log()
+
         # Compute log probabilities for student and probabilities for teacher
         student_log_probs = F.log_softmax(student_logits, dim=-1)
         teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
-
-        # Compute the interpolated log probabilities
-        interpolated_log_probs = beta * student_log_probs + (1 - beta) * teacher_log_probs
 
         # Compute KL divergences using F.kl_div
         # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
