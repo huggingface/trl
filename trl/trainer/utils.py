@@ -311,8 +311,7 @@ class DataCollatorForChatML:
             combined_input_ids = combined_tokenized["input_ids"]
             combined_attention_mask = [1] * len(combined_input_ids)
             # Create labels for one-token ahead task, masking the prompt
-            combined_labels = [self.ignore_index] * len(prompt) + completion[:-1]
-            # combined_labels.append(self.tokenizer.eos_token_id)  # Add EOS token as final target
+            combined_labels = [self.ignore_index] * len(prompt) + completion
 
             input_ids.append(combined_input_ids)
             attention_mask.append(combined_attention_mask)
