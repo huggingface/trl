@@ -244,6 +244,7 @@ class DataCollatorForChatML:
     tokenizer: PreTrainedTokenizerBase
     ignore_index: int = -100
     max_length: int = None
+    prompt_key: str = "prompt"
     messages_key: str = "messages"
 
     def __post_init__(self):
@@ -254,89 +255,69 @@ class DataCollatorForChatML:
             self.max_length = min(self.tokenizer.model_max_length, 1024)
 
     def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        prompts = []
-        completions = []
-        combined = []
+        input_ids = []
+        attention_mask = []
+        prompts_input_ids = []
+        prompt_attention_mask = []
+        labels = []
 
         for example in examples:
-            messages = example[self.messages_key]
-            formatted_chat = self.tokenizer.apply_chat_template(messages, tokenize=False)
+            formatted_prompt = example.get(self.prompt_key, None)
+            if formatted_prompt is None:
+                prompt = example[self.messages_key][:-1]
+                formatted_prompt = self.tokenizer.apply_chat_template(
+                    prompt, tokenize=False, add_generation_prompt=True
+                )
 
-            tokenized_combined = self.tokenizer(
-                formatted_chat,
-                truncation=False,
+            if "input_ids" not in example:
+                message = example[self.messages_key]
+                formatted_message = self.tokenizer.apply_chat_template(
+                    message, tokenize=False, add_generation_prompt=True
+                )
+                tokenized_message = self.tokenizer(
+                    formatted_message,
+                    truncation=True,
+                    max_length=self.max_length,
+                    padding=False,
+                    return_tensors=None,
+                    add_special_tokens=False,
+                )
+                input_ids.append(tokenized_message["input_ids"])
+                attention_mask.append(tokenized_message["attention_mask"])
+            else:
+                input_ids.append(example["input_ids"])
+                attention_mask.append(example["attention_mask"])
+
+            tokenized_prompt = self.tokenizer(
+                formatted_prompt,
+                truncation=True,
+                max_length=len(input_ids[-1]),
                 padding=False,
                 return_tensors=None,
                 add_special_tokens=False,
             )
-            combined.append(tokenized_combined)
 
-            # Split the formatted chat into prompt and completion
-            assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
-            last_assistant_message = assistant_messages[-1]["content"]
-            prompt = formatted_chat.rsplit(last_assistant_message, 1)[0]
-            completion = last_assistant_message + formatted_chat.rsplit(last_assistant_message, 1)[1]
+            prompts_input_ids.append(tokenized_prompt["input_ids"])
+            prompt_attention_mask.append(tokenized_prompt["attention_mask"])
 
-            prompts.append(prompt)
-            completions.append(completion)
+            # Create the labels that will have all but the completion tokens of the example["input_ids"] set to ignore_index
+            label = [self.ignore_index] * len(input_ids[-1])
+            completion_start_idx = len(tokenized_prompt["input_ids"])
+            label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
+            labels.append(label)
 
-        # Tokenize prompts and completions
-        tokenized_prompts = self.tokenizer(
-            prompts,
-            truncation=True,
-            max_length=self.max_length,
-            padding=False,
-            return_tensors=None,
-            # We assume the inputs are already wrapped with BOS&EOS tokens in tokenizer.apply_chat_template, so extra BOS/EOS tokens should not be added
-            add_special_tokens=False,
-        )
-        tokenized_completions = self.tokenizer(
-            completions,
-            truncation=True,
-            max_length=self.max_length,
-            padding=False,
-            return_tensors=None,
-            # We assume the inputs are already wrapped with BOS&EOS tokens in tokenizer.apply_chat_template, so extra BOS/EOS tokens should not be added
-            add_special_tokens=False,
-        )
-
-        # Combine prompts and completions
-        input_ids = []
-        attention_mask = []
-        labels = []
-
-        for prompt, completion, combined_tokenized in zip(
-            tokenized_prompts["input_ids"], tokenized_completions["input_ids"], combined
-        ):
-            combined_input_ids = combined_tokenized["input_ids"]
-            combined_attention_mask = [1] * len(combined_input_ids)
-            # Create labels for one-token ahead task, masking the prompt
-            combined_labels = [self.ignore_index] * len(prompt) + completion
-
-            input_ids.append(combined_input_ids)
-            attention_mask.append(combined_attention_mask)
-            labels.append(combined_labels)
-
-        # first convert to list of tensors
-        input_ids = [torch.tensor(ids) for ids in input_ids]
-        attention_mask = [torch.tensor(mask) for mask in attention_mask]
-        labels = [torch.tensor(label) for label in labels]
-
-        # pad the input_ids, attention_mask and labels to the same length across the batch
+        # convert to list of tensors and pad
+        input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
+        attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
+        labels = [torch.tensor(label, dtype=torch.long) for label in labels]
         input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
         attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
         labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
 
-        # pad the tokenized_prompts on the left to the same length convert to tensor first
-        prompts_input_ids = [torch.tensor(ids) for ids in tokenized_prompts["input_ids"]]
+        prompts_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in prompts_input_ids]
+        prompt_attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in prompt_attention_mask]
         prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
-
-        # prompt attention mask
-        prompt_attention_mask = pad(
-            [torch.tensor([1] * len(ids)) for ids in tokenized_prompts["input_ids"]],
-            padding_side="left",
-            padding_value=0,
-        )
+        prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
 
         return {
             "input_ids": input_ids,
