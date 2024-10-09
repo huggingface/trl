@@ -243,7 +243,7 @@ class CGPOTrainer(Trainer):
         )
 
         self.local_policy_optimization_batch_size = (
-            self.local_policy_optimization_batch_size if self.local_policy_optimization_batch_size else self.k
+            self.local_policy_optimization_batch_size if args.local_policy_optimization_batch_size else self.k
         )
 
         # to avoid divisions by 0
@@ -449,15 +449,19 @@ class CGPOTrainer(Trainer):
         for i in range(bs):
             all_logprobs = []
             all_rewards = []
-            batch_prompt_completion_ids = prompt_completion_ids[i * self.k : (i + 1) * self.k]
-            batch_prompt_completion_mask = prompt_completion_mask[i * self.k : (i + 1) * self.k]
-            batch_rewards = rewards[i * self.k : (i + 1) * self.k]
-            batch_judgements = judgements[i * self.k : (i + 1) * self.k]
+            batch_start_idx = i * self.k
+            batch_end_idx = (i + 1) * self.k
+            batch_prompt_completion_ids = prompt_completion_ids[batch_start_idx:batch_end_idx]
+            batch_prompt_completion_mask = prompt_completion_mask[batch_start_idx:batch_end_idx]
+            batch_rewards = rewards[batch_start_idx:batch_end_idx]
+            batch_judgements = judgements[batch_start_idx:batch_end_idx]
             for j in range(self.k // self.local_policy_optimization_batch_size):
-                mini_batch_prompt_completion_ids = batch_prompt_completion_ids[j * self.k : (j + 1) * self.k]
-                mini_batch_prompt_completion_mask = batch_prompt_completion_mask[j * self.k : (j + 1) * self.k]
-                mini_batch_rewards = batch_rewards[j * self.k : (j + 1) * self.k]
-                mini_batch_judgements = batch_judgements[j * self.k : (j + 1) * self.k]
+                mini_start_idx = j * self.local_policy_optimization_batch_size
+                mini_end_idx = (j + 1) * self.local_policy_optimization_batch_size
+                mini_batch_prompt_completion_ids = batch_prompt_completion_ids[mini_start_idx:mini_end_idx]
+                mini_batch_prompt_completion_mask = batch_prompt_completion_mask[mini_start_idx:mini_end_idx]
+                mini_batch_rewards = batch_rewards[mini_start_idx:mini_end_idx]
+                mini_batch_judgements = batch_judgements[mini_start_idx:mini_end_idx]
 
                 mini_batch_logprobs, mini_batch_ref_logprobs = self._get_batch_logprobs(
                     mini_batch_prompt_completion_ids, mini_batch_prompt_completion_mask, context_length
@@ -474,8 +478,8 @@ class CGPOTrainer(Trainer):
                 all_logprobs.append(mini_batch_logprobs)
                 all_rewards.append(contrainted_calibrated_rewards)
 
-            all_logprobs = torch.cat(all_logprobs)
-            all_rewards = torch.cat(all_rewards)
+            all_logprobs = torch.cat(all_logprobs) if len(all_logprobs) > 1 else all_logprobs[0]
+            all_rewards = torch.cat(all_rewards) if len(all_logprobs) > 1 else all_rewards[0]
 
             best_idx = torch.argmax(all_rewards, dim=0).item()
             max_logprobs.append(all_logprobs[best_idx])
