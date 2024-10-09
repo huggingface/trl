@@ -256,10 +256,21 @@ class DataCollatorForChatML:
     def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         prompts = []
         completions = []
+        combined = []
 
         for example in examples:
             messages = example[self.messages_key]
             formatted_chat = self.tokenizer.apply_chat_template(messages, tokenize=False)
+
+            tokenized_combined = self.tokenizer(
+                formatted_chat,
+                truncation=True,
+                max_length=self.max_length,
+                padding=False,
+                return_tensors=None,
+                add_special_tokens=False,
+            )
+            combined.append(tokenized_combined)
 
             # Split the formatted chat into prompt and completion
             assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
@@ -295,10 +306,11 @@ class DataCollatorForChatML:
         attention_mask = []
         labels = []
 
-        for prompt, completion in zip(tokenized_prompts["input_ids"], tokenized_completions["input_ids"]):
-            combined_input_ids = prompt + completion
+        for prompt, completion, combined_tokenized in zip(
+            tokenized_prompts["input_ids"], tokenized_completions["input_ids"], combined
+        ):
+            combined_input_ids = combined_tokenized["input_ids"]
             combined_attention_mask = [1] * len(combined_input_ids)
-
             # Create labels for one-token ahead task, masking the prompt
             combined_labels = [self.ignore_index] * len(prompt) + completion[:-1]
             combined_labels.append(self.tokenizer.eos_token_id)  # Add EOS token as final target
