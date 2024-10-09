@@ -241,6 +241,11 @@ class CGPOTrainer(Trainer):
         self.local_generation_batch_size = (
             args.local_generation_batch_size if args.local_generation_batch_size else args.per_device_train_batch_size
         )
+
+        self.local_policy_optimization_batch_size = (
+            self.local_policy_optimization_batch_size if self.local_policy_optimization_batch_size else self.k
+        )
+
         # to avoid divisions by 0
         self.epsilon = 1e-9
         self._tag_names.append(args.rlhf_optimizer)
@@ -306,6 +311,10 @@ class CGPOTrainer(Trainer):
     def crpg_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         bs = inputs["bs"]
         context_length = inputs["context_length"]
+        prompt_completion_ids = inputs["prompt_completion_ids"]
+        prompt_completion_mask = inputs["prompt_completion_mask"]
+        judgements = inputs["judgements"]
+        rewards = inputs["rewards"]
 
         with torch.no_grad():
             _, baseline_rewards, _ = get_reward(
@@ -315,16 +324,16 @@ class CGPOTrainer(Trainer):
                 context_length,
             )
 
-        inputs["baseline_rewards"] = baseline_rewards.repeat_interleave(repeats=self.k, dim=0)
+        baseline_rewards = baseline_rewards.repeat_interleave(repeats=self.k, dim=0)
 
         total_loss = torch.tensor(0.0, device=self.model.device)
         for i in range(bs):
-            # Compute loss on a mini-batch of size `bs`, instead of the full batch (`bs` * self.k) to avoid OOM. Similar idea to gradient accumulation.
-            mini_batch_rewards = inputs["rewards"][i * self.k : (i + 1) * self.k]
-            mini_batch_judgements = inputs["judgements"][i * self.k : (i + 1) * self.k]
-            mini_batch_prompt_completion_ids = inputs["prompt_completion_ids"][i * self.k : (i + 1) * self.k]
-            mini_batch_prompt_completion_mask = inputs["prompt_completion_mask"][i * self.k : (i + 1) * self.k]
-            mini_batch_baseline_rewards = inputs["baseline_rewards"][i * self.k : (i + 1) * self.k]
+            # Compute loss on a mini-batch of size `self.k`, instead of the full batch (`bs` * self.k) to avoid OOM. Similar idea to gradient accumulation.
+            mini_batch_rewards = rewards[i * self.k : (i + 1) * self.k]
+            mini_batch_judgements = judgements[i * self.k : (i + 1) * self.k]
+            mini_batch_prompt_completion_ids = prompt_completion_ids[i * self.k : (i + 1) * self.k]
+            mini_batch_prompt_completion_mask = prompt_completion_mask[i * self.k : (i + 1) * self.k]
+            mini_batch_baseline_rewards = baseline_rewards[i * self.k : (i + 1) * self.k]
             mini_batch_calibrated_rewards = torch.sigmoid(mini_batch_rewards - mini_batch_baseline_rewards)
 
             # compute kl_divergence
@@ -342,9 +351,7 @@ class CGPOTrainer(Trainer):
             )
 
             losses = -logprobs * (calibrated_regularized_rewards - calibrated_regularized_rewards.mean())
-
-            # We divide by `self.k` to average the total loss across the k iterations.
-            loss = losses.mean() / self.k
+            loss = losses.mean() / bs
 
             if self.use_apex:
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
@@ -420,7 +427,7 @@ class CGPOTrainer(Trainer):
         prompt_completion_ids = inputs["prompt_completion_ids"]
         prompt_completion_mask = inputs["prompt_completion_mask"]
 
-        # get baseline rewards & judgements & kl_div to hcheck if the baseline is eligable
+        # get baseline rewards & judgements
         with torch.no_grad():
             _, baseline_rewards, _ = get_reward(
                 self.reward_model,
@@ -440,27 +447,39 @@ class CGPOTrainer(Trainer):
         max_logprobs = []
         max_rewards = []
         for i in range(bs):
-            # Compute logits on a mini-batch of size `bs`, instead of the full batch (`bs` * self.k) to avoid OOM.
-            mini_batch_prompt_completion_ids = prompt_completion_ids[i * self.k : (i + 1) * self.k]
-            mini_batch_prompt_completion_mask = prompt_completion_mask[i * self.k : (i + 1) * self.k]
-            mini_batch_rewards = rewards[i * self.k : (i + 1) * self.k]
-            mini_batch_judgements = judgements[i * self.k : (i + 1) * self.k]
+            all_logprobs = []
+            all_rewards = []
+            batch_prompt_completion_ids = prompt_completion_ids[i * self.k : (i + 1) * self.k]
+            batch_prompt_completion_mask = prompt_completion_mask[i * self.k : (i + 1) * self.k]
+            batch_rewards = rewards[i * self.k : (i + 1) * self.k]
+            batch_judgements = judgements[i * self.k : (i + 1) * self.k]
+            for j in range(self.k // self.local_policy_optimization_batch_size):
+                mini_batch_prompt_completion_ids = batch_prompt_completion_ids[j * self.k : (j + 1) * self.k]
+                mini_batch_prompt_completion_mask = batch_prompt_completion_mask[j * self.k : (j + 1) * self.k]
+                mini_batch_rewards = batch_rewards[j * self.k : (j + 1) * self.k]
+                mini_batch_judgements = batch_judgements[j * self.k : (j + 1) * self.k]
 
-            mini_batch_logprobs, mini_batch_ref_logprobs = self._get_batch_logprobs(
-                mini_batch_prompt_completion_ids, mini_batch_prompt_completion_mask, context_length
-            )
+                mini_batch_logprobs, mini_batch_ref_logprobs = self._get_batch_logprobs(
+                    mini_batch_prompt_completion_ids, mini_batch_prompt_completion_mask, context_length
+                )
 
-            with torch.no_grad():
-                kl_div = mini_batch_logprobs - mini_batch_ref_logprobs
+                with torch.no_grad():
+                    kl_div = mini_batch_logprobs - mini_batch_ref_logprobs
 
-            masked_kl_div = kl_div < self.kl_threshold
-            contrainted_calibrated_rewards = (
-                masked_kl_div * mini_batch_judgements * torch.sigmoid(mini_batch_rewards - baseline_rewards[i])
-            )
+                masked_kl_div = kl_div < self.kl_threshold
+                contrainted_calibrated_rewards = (
+                    masked_kl_div * mini_batch_judgements * torch.sigmoid(mini_batch_rewards - baseline_rewards[i])
+                )
 
-            best_idx = torch.argmax(contrainted_calibrated_rewards, dim=0).item()
-            max_logprobs.append(mini_batch_logprobs[best_idx])
-            max_rewards.append(contrainted_calibrated_rewards[best_idx])
+                all_logprobs.append(mini_batch_logprobs)
+                all_rewards.append(contrainted_calibrated_rewards)
+
+            all_logprobs = torch.cat(all_logprobs)
+            all_rewards = torch.cat(all_rewards)
+
+            best_idx = torch.argmax(all_rewards, dim=0).item()
+            max_logprobs.append(all_logprobs[best_idx])
+            max_rewards.append(all_rewards[best_idx])
 
         max_logprobs = torch.stack(max_logprobs, dim=0)
         max_rewards = torch.stack(max_rewards, dim=0)
