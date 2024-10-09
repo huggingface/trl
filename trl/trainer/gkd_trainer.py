@@ -185,13 +185,9 @@ class GKDTrainer(SFTTrainer):
 
         # Compute the log of the mixture distribution
         # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
+        beta = torch.tensor(beta, dtype=student_log_probs.dtype)
         mixture_log_probs = torch.logsumexp(
-            torch.stack(
-                [
-                    student_log_probs + torch.log(torch.tensor(beta, dtype=student_log_probs.dtype)),
-                    teacher_log_probs + torch.log(torch.tensor(1 - beta, dtype=teacher_log_probs.dtype)),
-                ]
-            ),
+            torch.stack([student_log_probs + torch.log(beta), teacher_log_probs + torch.log(1 - beta)]),
             dim=0,
         )
 
