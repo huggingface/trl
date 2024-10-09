@@ -182,9 +182,9 @@ class GKDTrainer(SFTTrainer):
         # Compute the interpolated probabilities
         student_probs = F.softmax(student_logits, dim=-1)
         teacher_probs = F.softmax(teacher_logits, dim=-1)
-        interpolated_probs = beta * student_probs + (1 - beta) * teacher_probs
-        # Compute the interpolated log probabilities
-        interpolated_log_probs = interpolated_probs.log()
+        mixture_probs = beta * student_probs + (1 - beta) * teacher_probs
+        # Compute the log of the mixture distribution
+        mixture_log_prob = mixture_probs.log()
 
         # Compute log probabilities for student and probabilities for teacher
         student_log_probs = F.log_softmax(student_logits, dim=-1)
@@ -192,8 +192,8 @@ class GKDTrainer(SFTTrainer):
 
         # Compute KL divergences using F.kl_div
         # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
-        kl_teacher = F.kl_div(interpolated_log_probs, teacher_log_probs, reduction="none", log_target=True)
-        kl_student = F.kl_div(interpolated_log_probs, student_log_probs, reduction="none", log_target=True)
+        kl_teacher = F.kl_div(mixture_log_prob, teacher_log_probs, reduction="none", log_target=True)
+        kl_student = F.kl_div(mixture_log_prob, student_log_probs, reduction="none", log_target=True)
 
         # Compute the Generalized Jensen-Shannon Divergence
         jsd = beta * kl_teacher + (1 - beta) * kl_student
