@@ -58,6 +58,8 @@ _import_structure = {
     "ppov2_trainer": ["PPOv2Trainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer", "compute_accuracy"],
+    "stepwise_reward_config": ["StepwiseRewardConfig"],
+    "stepwise_reward_trainer": ["StepwiseRewardTrainer"],
     "rloo_config": ["RLOOConfig"],
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
@@ -122,6 +124,8 @@ if TYPE_CHECKING:
     from .ppov2_trainer import PPOv2Trainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
+    from .stepwise_reward_config import StepwiseRewardConfig
+    from .stepwise_reward_trainer import StepwiseRewardTrainer
     from .rloo_config import RLOOConfig
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
