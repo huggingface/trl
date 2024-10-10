@@ -14,7 +14,7 @@
 
 # flake8: noqa
 
-__version__ = "0.11.2"
+__version__ = "0.11.3"
 
 from typing import TYPE_CHECKING
 from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
