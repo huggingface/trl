@@ -35,13 +35,18 @@ _import_structure = {
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
         "BaseJudge",
+        "BaseConstraintJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
+        "FactualityConstraintJudge",
         "HfPairwiseJudge",
+        "MixtureOfConstraintJudges",
         "OpenAIPairwiseJudge",
         "PairRMJudge",
+        "RandomConstraintJudge",
         "RandomPairwiseJudge",
         "RandomRankJudge",
+        "SafetyConstraintJudge",
     ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
@@ -98,14 +103,19 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .judges import (
+        BaseConstraintJudge,
         BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,
+        FactualityConstraintJudge,
         HfPairwiseJudge,
+        MixtureOfConstraintJudges,
         OpenAIPairwiseJudge,
         PairRMJudge,
+        RandomConstraintJudge,
         RandomPairwiseJudge,
         RandomRankJudge,
+        SafetyConstraintJudge,
     )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
