@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import argparse
+import logging
 import os
 from datetime import date
 
@@ -26,17 +27,23 @@ parser.add_argument("--text_file_name", required=True)
 
 
 def main(text_file_name, slack_channel_name=None):
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
     message = ""
 
     if os.path.isfile(text_file_name):
         final_results = {}
 
-        file = open(text_file_name)
-        lines = file.readlines()
-        for line in lines:
-            result, config_name = line.split(",")
-            config_name = config_name.split("/")[-1].split(".yaml")[0]
-            final_results[config_name] = int(result)
+        try:
+            with open(text_file_name) as file:
+                for line in file:
+                    result, config_name = line.strip().split(",")
+                    config_name = config_name.split("/")[-1].split(".yaml")[0]
+                    final_results[config_name] = int(result)
+        except Exception as e:
+            logger.error(f"Error reading file {text_file_name}: {str(e)}")
+            final_results = {}
 
         no_error_payload = {
             "type": "section",
@@ -95,7 +102,11 @@ def main(text_file_name, slack_channel_name=None):
         payload.append(no_error_payload)
 
     if os.environ.get("TEST_TYPE", "") != "":
-        from slack_sdk import WebClient
+        try:
+            from slack_sdk import WebClient
+        except ImportError:
+            logger.error("slack_sdk is not installed. Please install it to use Slack integration.")
+            return
 
         if len(message) > MAX_LEN_MESSAGE:
             print(f"Truncating long message from {len(message)} to {MAX_LEN_MESSAGE}")
@@ -131,10 +142,16 @@ def main(text_file_name, slack_channel_name=None):
 
         print(payload)
 
-        client = WebClient(token=os.environ.get("SLACK_API_TOKEN"))
-        client.chat_postMessage(channel=f"#{slack_channel_name}", text=message, blocks=payload)
+        try:
+            client = WebClient(token=os.environ.get("SLACK_API_TOKEN"))
+            response = client.chat_postMessage(channel=f"#{slack_channel_name}", text=message, blocks=payload)
+            if response["ok"]:
+                logger.info("Message sent successfully to Slack.")
+            else:
+                logger.error(f"Failed to send message to Slack: {response['error']}")
+        except Exception as e:
+            logger.error(f"Error sending message to Slack: {str(e)}")
 
-
-if __name__ == "__main__":
-    args = parser.parse_args()
-    main(args.text_file_name, args.slack_channel_name)
+    if __name__ == "__main__":
+        args = parser.parse_args()
+        main(args.text_file_name, args.slack_channel_name)
