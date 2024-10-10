@@ -27,7 +27,7 @@ import torch
 import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
+from accelerate import PartialState, Accelerator
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
@@ -49,15 +49,6 @@ from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
 from ..models import PreTrainedModelWrapper, create_reference_model
-from .dpo_trainer import (
-    _add_special_tokens,
-    _adjust_prompt_length,
-    _append_prompt_tokens_to_batch,
-    _build_sequence_tokens,
-    _process_answer,
-    _process_prompt,
-    _truncate_tokens,
-)
 from .kto_config import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,
@@ -65,6 +56,13 @@ from .utils import (
     generate_model_card,
     pad_to_length,
     peft_module_casting_to_bf16,
+    _add_special_tokens,
+    _adjust_prompt_length,
+    _append_prompt_tokens_to_batch,
+    _build_sequence_tokens,
+    _process_answer,
+    _process_prompt,
+    _truncate_tokens,
 )
 
 
@@ -83,23 +81,13 @@ if TYPE_CHECKING:
 RUNNING_NAME = "running.pt"
 
 
-def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
-    """
-    Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions.
-    For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched
-    outputs y used to estimate the rewards in that batch, just paired with different x.
-    """
-    batch["completion"] = [batch["completion"][-1]] + batch["completion"][:-1]
-    return batch
-
-
 def _tokenize_kto(
     features: Dict[str, List],
     tokenizer: PreTrainedTokenizerBase,
     args: "KTOConfig",
     processor: Optional[Callable] = None,
     model: Optional[PreTrainedModel] = None,
-    prefix: str = "",
+    calculate_KL: bool=True,
 ) -> Dict[str, List]:
     """
     Tokenizes and processes a batch of input features for KTO using adapted DPO tokenization functions.
@@ -111,18 +99,31 @@ def _tokenize_kto(
         output = features["completion"]
         images = features.get("images", [None] * len(features["prompt"]))
 
+        # regular output
         prompt_tokens = _process_prompt(prompt, processor, tokenizer, images)
         output_tokens = _process_answer(prompt, output, processor, tokenizer, images)
-
+        
         prompt_len_input_ids = _adjust_prompt_length(prompt_tokens, output_tokens, output_tokens)
         prompt_tokens, output_tokens, _ = _add_special_tokens(
             tokenizer, prompt_len_input_ids, prompt_tokens, output_tokens, output_tokens
         )
         _truncate_tokens(output_tokens, output_tokens, prompt_tokens, args)
-
         _build_sequence_tokens(batch, output_tokens, args, "completion")
-
         _append_prompt_tokens_to_batch(batch, prompt_tokens)
+
+        # KL output
+        if calculate_KL:
+            # pair x_i with y_{i + 1} to get the mismatched pairs for calculating the KL term
+            KL_output = features["completion"][1:] + features["completion"][:1]
+            KL_prompt_tokens = _process_prompt(prompt, processor, tokenizer, images)
+            KL_output_tokens = _process_answer(prompt, KL_output, processor, tokenizer, images)
+
+            KL_prompt_len_input_ids = _adjust_prompt_length(KL_prompt_tokens, KL_output_tokens, KL_output_tokens)
+            KL_prompt_tokens, KL_output_tokens, _ = _add_special_tokens(
+                tokenizer, KL_prompt_len_input_ids, KL_prompt_tokens, KL_output_tokens, KL_output_tokens
+            )
+            _truncate_tokens(KL_output_tokens, KL_output_tokens, KL_prompt_tokens, args)
+            _build_sequence_tokens(batch, KL_output_tokens, args, "KL_completion")
 
         batch.update(
             {
@@ -131,13 +132,9 @@ def _tokenize_kto(
                 "label": features["label"],  # True for desired output, False for undesired
             }
         )
-
-        if prefix != "":
-            for k in list(batch.keys()):
-                batch[f"{prefix}{k}"] = batch.pop(k)
     else:
         _tokenize_encoder_decoder_kto(
-            batch, tokenizer, features["prompt"], features["completion"], features["label"], args, model, prefix
+            batch, tokenizer, features["prompt"], features["completion"], features["label"], args, model,
         )
 
     return dict(batch)
@@ -486,87 +483,40 @@ class KTOTrainer(Trainer):
                 eval_dataset = eval_dataset.shuffle(seed=args.data_seed)
 
             fn_kwargs = {
-                "prefix": "",
                 "tokenizer": self.processing_class,
                 "args": args,
                 "processor": self.processor if self.is_vision_model else None,
                 "model": model if self.is_encoder_decoder else None,
+                "calculate_KL": self.calculate_KL,
             }
 
+            global_bsz = (args.per_device_train_batch_size * Accelerator().num_processes)
+            if global_bsz <= 1:
+                raise ValueError(
+                    "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
+                )
+
             # Tokenize and prepare the training datasets
-            tokenized_train_dataset = train_dataset.map(
+            train_dataset = train_dataset.map(
                 _tokenize_kto,
                 fn_kwargs=fn_kwargs,
                 batched=True,
+                batch_size=global_bsz,
                 num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
             )
 
             # Tokenize and prepare the eval datasets
             if eval_dataset is not None:
-                tokenized_eval_dataset = eval_dataset.map(
+                eval_dataset = eval_dataset.map(
                     _tokenize_kto,
                     fn_kwargs=fn_kwargs,
                     batched=True,
+                    batch_size=global_bsz,
                     num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
                 )
-
-            # Get KL datasets if needed
-            if self.calculate_KL:
-                if args.per_device_train_batch_size <= 1:
-                    raise ValueError(
-                        "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
-                    )
-
-                # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
-                # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_2), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-                train_kl_dataset = train_dataset.map(
-                    _get_kl_dataset,
-                    batched=True,
-                    batch_size=args.per_device_train_batch_size,
-                    num_proc=args.dataset_num_proc,
-                    desc="Extracting KL train dataset",
-                )
-
-                fn_kwargs["prefix"] = "KL_"
-                tokenized_train_kl_dataset = train_kl_dataset.map(
-                    _tokenize_kto,
-                    fn_kwargs=fn_kwargs,
-                    batched=True,
-                    num_proc=args.dataset_num_proc,
-                    remove_columns=[c for c in train_kl_dataset.column_names if "completion_" not in c],
-                    desc="Processing tokenized train KL dataset",
-                )
-
-                # merge the datasets
-                train_dataset = concatenate_datasets([tokenized_train_dataset, tokenized_train_kl_dataset], axis=1)
-
-                if eval_dataset is not None:
-                    # Get KL dataset
-                    eval_kl_dataset = eval_dataset.map(
-                        _get_kl_dataset,
-                        batched=True,
-                        batch_size=args.per_device_train_batch_size,
-                        num_proc=args.dataset_num_proc,
-                        desc="Extracting eval KL dataset",
-                    )
-
-                    tokenized_eval_kl_dataset = eval_kl_dataset.map(
-                        _tokenize_kto,
-                        fn_kwargs=fn_kwargs,
-                        batched=True,
-                        num_proc=args.dataset_num_proc,
-                        remove_columns=[c for c in eval_kl_dataset.column_names if "completion_" not in c],
-                        desc="Processing tokenized eval KL dataset",
-                    )
-
-                    # merge the datasets
-                    eval_dataset = concatenate_datasets([tokenized_eval_dataset, tokenized_eval_kl_dataset], axis=1)
-            else:
-                train_dataset = tokenized_train_dataset
-                eval_dataset = tokenized_eval_dataset if eval_dataset is not None else None
-
+                
             # calculate dataset desirability balance
             num_desirable = max(sum(train_dataset["label"]), 1)
             num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1)  # "label" is binary

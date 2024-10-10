@@ -21,7 +21,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 from transformers.testing_utils import require_peft
 
 from trl import KTOConfig, KTOTrainer
-from trl.trainer.kto_trainer import _get_kl_dataset, _tokenize_kto
+from trl.trainer.kto_trainer import _tokenize_kto
 
 from .testing_utils import require_no_wandb
 
@@ -142,7 +142,6 @@ class KTOTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
             fn_kwargs = {
-                "prefix": "",
                 "tokenizer": self.tokenizer,
                 "model": None,
                 "args": training_args,
@@ -171,33 +170,14 @@ class KTOTrainerTester(unittest.TestCase):
 
             # Test corruption of (prompt, completion) pairs for KL dataset
             for batch_size in [2, 3]:
-                train_kl_dataset = train_dataset.map(
-                    _get_kl_dataset,
-                    batched=True,
-                    batch_size=batch_size,
-                )
-                tokenized_kl_dataset = train_kl_dataset.map(
-                    _tokenize_kto,
-                    fn_kwargs=fn_kwargs,
-                    batched=True,
-                )
-
                 # Verify that the "answer_input_ids" have been modified, meaning the new "answer_input_ids" differ
                 # from the original ones. However, when the length of the dataset modulo batch_size equals 1,
                 # the last batch remains unaltered. This is a rare scenario that does not impact the training
                 # process, so we exclude it from testing by iterating only up to len - 1.
-                for i in range(len(tokenized_kl_dataset["completion_input_ids"]) - 1):
-                    self.assertListEqual(
-                        tokenized_train_dataset["prompt_input_ids"][i],
-                        tokenized_kl_dataset["prompt_input_ids"][i],
-                    )
-                    self.assertListEqual(
-                        tokenized_train_dataset["prompt_attention_mask"][i],
-                        tokenized_kl_dataset["prompt_attention_mask"][i],
-                    )
+                for i in range(len(tokenized_train_dataset["completion_input_ids"]) - 1):
                     self.assertNotEqual(
                         tokenized_train_dataset["completion_input_ids"][i],
-                        tokenized_kl_dataset["completion_input_ids"][i],
+                        tokenized_train_dataset["KL_completion_input_ids"][i],
                     )
 
     def test_kto_trainer_without_providing_ref_model(self):
