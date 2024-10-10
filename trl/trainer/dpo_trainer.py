@@ -1162,10 +1162,7 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: Dict[str, Union[List, torch.LongTensor]],
-        is_vision_model: bool = False,
-        label_pad_token_id: int = -100,
-        padding_value: int = 0,
+        batch: Dict[str, Union[List, torch.LongTensor]], padding_value: int = 0
     ) -> Dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
 
@@ -1178,35 +1175,37 @@ class DPOTrainer(Trainer):
         Returns:
             A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
         """
-        concatenated_batch = {}
+        output = {}
 
-        concatenated_batch["prompt_input_ids"] = batch["prompt_input_ids"].repeat(2, 1)
-        concatenated_batch["prompt_attention_mask"] = batch["prompt_attention_mask"].repeat(2, 1)
+        # For the prompt, the input_ids are the same for both the chosen and rejected responses
+        output["prompt_input_ids"] = torch.cat([batch["prompt_input_ids"], batch["prompt_input_ids"]], dim=0)
+        output["prompt_attention_mask"] = torch.cat(
+            [batch["prompt_attention_mask"], batch["prompt_attention_mask"]], dim=0
+        )
+        if "prompt_pixel_values" in batch:
+            output["pixel_values"] = torch.cat([batch["prompt_pixel_values"], batch["prompt_pixel_values"]], dim=0)
 
+        if "prompt_pixel_attention_mask" in batch:
+            output["pixel_attention_mask"] = torch.cat(
+                [batch["prompt_pixel_attention_mask"], batch["prompt_pixel_attention_mask"]], dim=0
+            )
+
+        # Concatenate the chosen and rejected completions
         max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
-
-        concatenated_batch["completion_input_ids"] = torch.cat(
+        output["completion_input_ids"] = torch.cat(
             (
                 pad_to_length(batch["chosen_input_ids"], max_completion_length, pad_value=padding_value),
                 pad_to_length(batch["rejected_input_ids"], max_completion_length, pad_value=padding_value),
             ),
         )
-        concatenated_batch["completion_attention_mask"] = torch.cat(
+        output["completion_attention_mask"] = torch.cat(
             (
                 pad_to_length(batch["chosen_attention_mask"], max_completion_length, pad_value=0),
                 pad_to_length(batch["rejected_attention_mask"], max_completion_length, pad_value=0),
             ),
         )
 
-        if is_vision_model:
-            concatenated_batch["pixel_values"] = torch.cat(
-                [batch["prompt_pixel_values"], batch["prompt_pixel_values"]], dim=0
-            )
-            if "prompt_pixel_attention_mask" in batch:
-                concatenated_batch["pixel_attention_mask"] = torch.cat(
-                    [batch["prompt_pixel_attention_mask"], batch["prompt_pixel_attention_mask"]], dim=0
-                )
-        return concatenated_batch
+        return output
 
     def dpo_loss(
         self,
@@ -1389,56 +1388,6 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    @staticmethod
-    def get_batch_logps(
-        logits: torch.FloatTensor,
-        labels: torch.LongTensor,
-        label_pad_token_id: int = -100,
-        is_encoder_decoder: bool = False,
-        use_weighting: bool = False,
-    ) -> Tuple[torch.FloatTensor, torch.LongTensor, Optional[torch.FloatTensor]]:
-        """Compute the log probabilities of the given labels under the given logits.
-
-        Args:
-            logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
-            labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            label_pad_token_id: The label pad token id.
-            is_encoder_decoder: Whether the model is an encoder-decoder model.
-            use_weighting: Whether to apply weighting as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
-
-        Returns
-            A Tuple of three tensors of shape ((batch_size,), (batch_size,), Optional[(batch_size,)]) containing:
-            - The sum of log probabilities of the given labels under the given logits.
-            - The number of non-masked tokens.
-            - The wpo weighting (if use_weighting is True, otherwise None).
-        """
-        if logits.shape[:-1] != labels.shape:
-            raise ValueError(
-                f"Logits (batch and sequence length dim) {logits.shape[:-1]} and labels must have the same shape {labels.shape}."
-            )
-
-        if not is_encoder_decoder:
-            labels = labels[:, 1:].clone()
-            logits = logits[:, :-1, :]
-        loss_mask = labels != label_pad_token_id
-
-        # dummy token; we'll ignore the losses on these tokens later
-        labels[labels == label_pad_token_id] = 0
-
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-
-        all_logps = (per_token_logps * loss_mask).sum(-1)
-
-        all_weights = None
-        if use_weighting:
-            # eqn (2) of the WPO paper: https://huggingface.co/papers/2406.11827
-            probs = F.softmax(logits, dim=-1)
-            weights_adjustment_factor = torch.log((probs**2).sum(-1))
-            per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
-            all_weights = ((per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)).detach()
-
-        return all_logps, loss_mask.sum(-1), all_weights
-
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
@@ -1446,6 +1395,8 @@ class DPOTrainer(Trainer):
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
+        num_examples = batch["prompt_input_ids"].shape[0]
+
         concatenated_batch = self.concatenated_inputs(
             batch,
             is_vision_model=self.is_vision_model,
@@ -1456,6 +1407,11 @@ class DPOTrainer(Trainer):
         model_kwargs = {}
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
+
+        # if self.is_vision_model:
+        #     model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
+        #     if "pixel_attention_mask" in concatenated_batch:
+        #         model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
 
         if self.is_encoder_decoder:
             labels = concatenated_batch["completion_input_ids"]
@@ -1481,84 +1437,64 @@ class DPOTrainer(Trainer):
                 **model_kwargs,
             )
             # Caution here, we have the prompt in the logits, but we don't want the loss to be computed on it
-        len_chosen = batch["chosen_labels"].shape[0]
+        #
 
-        model_kwargs = {}
+        logits = outputs.logits
 
-        if self.is_encoder_decoder:
-            model_kwargs["labels"] = concatenated_batch["concatenated_labels"]
-
-        if self.is_vision_model:
-            model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
-            if "pixel_attention_mask" in concatenated_batch:
-                model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
-
-        outputs = model(
-            concatenated_batch["concatenated_input_ids"],
-            attention_mask=concatenated_batch["concatenated_attention_mask"],
-            use_cache=False,
-            **model_kwargs,
-        )
-        all_logits = outputs.logits
-
-        if all_logits.shape[:2] != concatenated_batch["concatenated_labels"].shape[:2]:
+        if logits.shape[:2] != labels.shape[:2]:
             # for llava, the model returns logits for the entire sequence, including the image tokens (placed before the text tokens)
-            seq_len = concatenated_batch["concatenated_labels"].shape[1]
-            all_logits = all_logits[:, -seq_len:]
+            seq_len = labels.shape[1]
+            logits = logits[:, -seq_len:]
 
-        all_logps, size_completion, all_weights = self.get_batch_logps(
-            all_logits,
-            concatenated_batch["concatenated_labels"],
-            # average_log_prob=self.loss_type == "ipo",
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-            use_weighting=self.use_weighting,
-        )
+        if not self.is_encoder_decoder:
+            labels = labels[:, 1:].clone()
+            logits = logits[:, :-1, :]
 
-        def cross_entropy_loss(logits, labels):
-            if not self.is_encoder_decoder:
-                # Shift so that tokens < n predict n
-                logits = logits[..., :-1, :].contiguous()
-                labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = nn.CrossEntropyLoss(ignore_index=self.label_pad_token_id)
-            logits = logits.view(-1, logits.shape[-1])
-            labels = labels.view(-1)
-            # Enable model parallelism
-            labels = labels.to(logits.device)
-            loss = loss_fct(logits, labels)
-            return loss
+        loss_mask = labels != self.label_pad_token_id
 
-        labels = concatenated_batch["concatenated_labels"].clone()
-        nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+        # Compute the log probabilities of the labels
+        labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
+        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps[~loss_mask] = 0
+        all_logps = per_token_logps.sum(-1)
 
-        if self.loss_type == "ipo":
-            all_logps = all_logps / size_completion
+        output = {}
 
-        policy_weights = None
         if self.use_weighting:
-            chosen_weights = all_weights[:len_chosen]
-            rejected_weights = all_weights[len_chosen:]
-            policy_weights = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
+            with torch.no_grad():
+                # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
+                logprobs = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
+                weights_adjustment_factor = torch.logsumexp(
+                    2 * logprobs, dim=-1
+                )  # same as summing probs**2 in log space
+                per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
+                all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
+                chosen_weights = all_weights[:num_examples]
+                rejected_weights = all_weights[num_examples:]
+                output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
 
-        chosen_logps = all_logps[:len_chosen]
-        rejected_logps = all_logps[len_chosen:]
+        if self.args.rpo_alpha is not None:
+            # Only use the chosen logits for the RPO loss
+            chosen_logits = logits[:num_examples]
+            chosen_labels = labels[:num_examples]
 
-        chosen_logits = all_logits[:len_chosen]
-        rejected_logits = all_logits[len_chosen:]
-
-        if self.aux_loss_enabled:
-            return (
-                chosen_logps,
-                rejected_logps,
-                chosen_logits,
-                rejected_logits,
-                nll_loss,
-                policy_weights,
-                outputs.aux_loss,
+            # Compute the log probabilities of the labels
+            output["nll_loss"] = F.cross_entropy(
+                torch.flatten(chosen_logits, end_dim=1), torch.flatten(chosen_labels, end_dim=1), ignore_index=0
             )
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, policy_weights)
+        if self.loss_type == "ipo":
+            all_logps = all_logps / loss_mask.sum(-1)
+
+        output["chosen_logps"] = all_logps[:num_examples]
+        output["rejected_logps"] = all_logps[num_examples:]
+        output["chosen_logits"] = logits[:num_examples]
+        output["rejected_logits"] = logits[num_examples:]
+
+        if self.aux_loss_enabled:
+            output["aux_loss"] = outputs.aux_loss
+
+        return output
 
     def get_batch_loss_metrics(
         self,
@@ -1570,16 +1506,6 @@ class DPOTrainer(Trainer):
         metrics = {}
 
         forward_output = self.concatenated_forward(model, batch)
-        (
-            policy_chosen_logps,
-            policy_rejected_logps,
-            policy_chosen_logits,
-            policy_rejected_logits,
-            policy_nll_loss,
-            policy_weights,
-        ) = forward_output[:6]
-        if self.aux_loss_enabled:
-            aux_loss = forward_output[6]
 
         # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
         if (
@@ -1602,8 +1528,8 @@ class DPOTrainer(Trainer):
                     )[:2]
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-            policy_chosen_logps,
-            policy_rejected_logps,
+            forward_output["chosen_logps"],
+            forward_output["rejected_logps"],
             reference_chosen_logps,
             reference_rejected_logps,
         )
