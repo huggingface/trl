@@ -17,8 +17,10 @@ import importlib
 import inspect
 import logging
 import os
+import glob
 import subprocess
 import sys
+from pathlib import Path
 from argparse import Namespace
 from dataclasses import dataclass, field
 
@@ -305,3 +307,16 @@ def get_git_commit_hash(package_name):
             return None
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+def populate_supported_commands():
+    # Path to the script examples directory
+    trl_dir = Path(__file__).resolve().parent.parent.parent
+    scripts_path = os.path.join(trl_dir, 'examples', 'scripts', '*.py')
+    # find all the scripts in the examples directory
+    trainer_files = glob.glob(scripts_path)
+    
+    # Extract command names without the .py extension
+    commands = [os.path.basename(f).replace('.py', '') for f in trainer_files]
+    
+    return commands
