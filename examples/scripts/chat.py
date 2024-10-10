@@ -32,6 +32,10 @@ from trl import TrlParser, init_zero_verbose
 from trl.commands.cli_utils import ChatArguments
 from trl.trainer.utils import get_quantization_config
 
+from accelerate import Accelerator
+
+accelerator = Accelerator()
+device=accelerator.device
 
 init_zero_verbose()
 
@@ -222,7 +226,7 @@ def load_model_and_tokenizer(args):
         revision=args.model_revision,
         attn_implementation=args.attn_implementation,
         torch_dtype=torch_dtype,
-        device_map="auto",
+        device_map=device,
         quantization_config=quantization_config,
     )
     model = AutoModelForCausalLM.from_pretrained(
@@ -230,7 +234,7 @@ def load_model_and_tokenizer(args):
     )
 
     if getattr(model, "hf_device_map", None) is None:
-        model = model.to(args.device)
+        model = model.to(device)
 
     return model, tokenizer
 
