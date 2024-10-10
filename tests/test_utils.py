@@ -218,8 +218,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
         self.assertEqual(
             first_non_pad, self.bos_token_id, "The first non-padding token of input_ids should be BOS token."
         )
-        bos_indices = [i for i, token in enumerate(input_ids) if token == self.bos_token_id]
-        self.assertEqual(len(bos_indices), 1, "There should be exactly one BOS token in input_ids.")
+        self.assertEqual(input_ids.count(self.bos_token_id), 1, "There should be exactly one BOS token in input_ids.")
 
         # Verify that the assistant's response token is present in input_ids and not in the prompt_only
         last_assistant_response = self.examples[0][self.messages_key][-1]["content"]
