@@ -21,6 +21,7 @@ from typing import List, Optional, Union
 import numpy as np
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
+from scipy.special import softmax
 from transformers.utils import is_openai_available
 
 from ..import_utils import is_llmblender_available
@@ -166,22 +167,36 @@ class PairRMJudge(BasePairwiseJudge):
         self.blender = llm_blender.Blender()
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
 
-    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[int]:
+    def judge(
+        self,
+        prompts: List[str],
+        completions: List[List[str]],
+        shuffle_order: bool = True,
+        return_scores: bool = False,
+        temperature: float = 1.0,
+    ) -> List[Union[int, float]]:
+        if len(completions[0]) != 2:
+            raise ValueError("PairRM judge requires exactly 2 completions per prompt.")
+
         # Shuffle the order of the completions to avoid positional bias
         if shuffle_order:
             flip_mask = np.random.choice([True, False], size=len(prompts))
             completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
 
         # Rank the completions
-        ranks = self.blender.rank(prompts, completions)
-        ranks -= 1  # PairRM is 1-indexed, so we subtract 1 to make it 0-indexed
+        ranks = self.blender.rank(prompts, completions, return_scores=return_scores, disable_tqdm=True)
+        if return_scores is not True:
+            ranks -= 1  # PairRM rank is 1-indexed, so we subtract 1 to make it 0-indexed
+        else:
+            # scale the logits by temperature
+            ranks /= temperature
 
-        # Flip back the ranks to the original order if needed
+        # Flip back the ranks or scores to the original order if needed
         if shuffle_order:
             ranks[flip_mask] = ranks[flip_mask][:, ::-1]
 
-        # Return the ranks
-        return ranks[:, 0].tolist()
+        # Return the ranks or score probability
+        return softmax(ranks, axis=-1)[:, 0].tolist() if return_scores else ranks[:, 0].tolist()
 
 
 class HfPairwiseJudge(BasePairwiseJudge):
@@ -303,3 +318,8 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
 
         # Return the ranks
         return ranks
+
+
+# Nash-Mixture-of-judges: ?
+# only pair wise? or arb <- pairwise for now
+#
