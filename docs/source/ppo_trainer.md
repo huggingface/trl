@@ -1,4 +1,4 @@
-# PPOv2 Trainer
+# PPO Trainer
 
 [![](https://img.shields.io/badge/All_models-PPO-blue)](https://huggingface.co/models?other=ppo,trl)
 
@@ -167,7 +167,7 @@ In the logs the sampled generations look like
 
 ## Implementation details
 
-This PPOv2 implementation is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
+This PPO implementation is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 ## Benchmark experiments
 
@@ -222,14 +222,14 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --pc.ncols 4 \
     --pc.ncols-legend 1 \
     --pc.xlabel "Episode" \
-    --output-filename benchmark/trl/pr-1540/ppov2 \
+    --output-filename benchmark/trl/pr-1540/ppo \
     --scan-history
 ```
 
-## PPOv2Trainer
+## PPOTrainer
 
-[[autodoc]] PPOv2Trainer
+[[autodoc]] PPOTrainer
 
-## PPOv2Config
+## PPOConfig
 
-[[autodoc]] PPOv2Config
+[[autodoc]] PPOConfig
