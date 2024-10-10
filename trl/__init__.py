@@ -64,6 +64,8 @@ _import_structure = {
         "FDivergenceType",
         "GKDConfig",
         "GKDTrainer",
+        "GRPOConfig",
+        "GRPOTrainer",
         "HfPairwiseJudge",
         "IterativeSFTTrainer",
         "KTOConfig",
