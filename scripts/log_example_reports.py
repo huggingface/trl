@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import argparse
+import logging
 import os
 from datetime import date
-import logging
 
 from tabulate import tabulate
 
@@ -36,7 +36,7 @@ def main(text_file_name, slack_channel_name=None):
         final_results = {}
 
         try:
-            with open(text_file_name, 'r') as file:
+            with open(text_file_name) as file:
                 for line in file:
                     result, config_name = line.strip().split(",")
                     config_name = config_name.split("/")[-1].split(".yaml")[0]
