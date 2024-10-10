@@ -1399,8 +1399,6 @@ class DPOTrainer(Trainer):
 
         concatenated_batch = self.concatenated_inputs(
             batch,
-            is_vision_model=self.is_vision_model,
-            label_pad_token_id=self.label_pad_token_id,
             padding_value=self.padding_value,
         )
 
