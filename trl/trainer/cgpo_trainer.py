@@ -242,9 +242,15 @@ class CGPOTrainer(Trainer):
             args.local_generation_batch_size if args.local_generation_batch_size else args.per_device_train_batch_size
         )
 
-        self.local_policy_optimization_batch_size = (
-            self.local_policy_optimization_batch_size if args.local_policy_optimization_batch_size else self.k
-        )
+        if self.local_crpg_batch_size:
+            if (args.per_device_train_batch_size * self.k) % self.local_crpg_batch_size != 0:
+                raise ValueError(
+                    "`args.per_device_train_batch_size` * `self.k` should be divisible by `local_crpg_batch_size`."
+                )
+            else:
+                self.local_crpg_batch_size = args.local_crpg_batch_size
+        else:
+            self.local_crpg_batch_size = args.per_device_train_batch_size
 
         # to avoid divisions by 0
         self.epsilon = 1e-9
@@ -284,37 +290,34 @@ class CGPOTrainer(Trainer):
         }
 
     def _get_batch_logprobs(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        context_length: int,
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, context_length: int, use_ref_model: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        logits = self.model(input_ids, attention_mask=attention_mask).logits
+        if not use_ref_model:
+            logits = self.model(input_ids, attention_mask=attention_mask).logits
 
-        with torch.no_grad():
+        else:
             if self.ref_model is not None:
-                ref_logits = self.ref_model(input_ids, attention_mask=attention_mask).logits
+                logits = self.ref_model(input_ids, attention_mask=attention_mask).logits
             else:
                 with self.model.disable_adapter():
-                    ref_logits = self.model(input_ids, attention_mask=attention_mask).logits
+                    logits = self.model(input_ids, attention_mask=attention_mask).logits
 
         all_logprobs = F.log_softmax(logits, dim=-1)
-        all_ref_logprobs = F.log_softmax(ref_logits, dim=-1)
         logprobs = torch.take_along_dim(all_logprobs, input_ids.unsqueeze(-1), dim=-1).squeeze(-1)
-        ref_logprobs = torch.take_along_dim(all_ref_logprobs, input_ids.unsqueeze(-1), dim=-1).squeeze(-1)
-
         logprobs = torch.masked_fill(logprobs, ~attention_mask.bool(), 0.0)
-        ref_logprobs = torch.masked_fill(ref_logprobs, ~attention_mask.bool(), 0.0)
 
-        return logprobs[:, context_length - 1 : -1].sum(1), ref_logprobs[:, context_length - 1 : -1].sum(1)
+        return logprobs[:, context_length - 1 : -1].sum(1)
 
     def crpg_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
-        bs = inputs["bs"]
+        bs = inputs["bs"] * self.k
+        mini_bs = self.local_crpg_batch_size
+        accumulation = bs / mini_bs
         context_length = inputs["context_length"]
         prompt_completion_ids = inputs["prompt_completion_ids"]
         prompt_completion_mask = inputs["prompt_completion_mask"]
         judgements = inputs["judgements"]
         rewards = inputs["rewards"]
+        completion_logprobs = inputs["completion_logprobs"]
 
         with torch.no_grad():
             _, baseline_rewards, _ = get_reward(
@@ -326,32 +329,41 @@ class CGPOTrainer(Trainer):
 
         baseline_rewards = baseline_rewards.repeat_interleave(repeats=self.k, dim=0)
 
+        # compute the reference logprobs
+        ref_logprobss = []
+        with torch.no_grad():
+            for i in range(0, prompt_completion_ids, mini_bs):
+                mini_batch_ids = prompt_completion_ids[i : i + mini_bs]
+                mini_batch_mask = prompt_completion_mask[i : i + mini_bs]
+                mini_batch_ref_logprobs = self._get_batch_logprobs(
+                    mini_batch_ids, mini_batch_mask, context_length, True
+                )
+                ref_logprobss.append(mini_batch_ref_logprobs)
+
+        ref_logprobs = torch.cat(ref_logprobss)
+
+        # kl_div regularizer
+        kl_div = completion_logprobs - ref_logprobs
+        kl_div_regularizer = torch.clamp(1 - kl_div / self.kl_threshold, min=0)
+
+        # compute the constrained calibrated regularize rewards
+        regularized_rewards = judgements * torch.sigmoid(rewards - baseline_rewards) * kl_div_regularizer
+        mean_regularized_rewards = regularized_rewards.mean()
+
         total_loss = torch.tensor(0.0, device=self.model.device)
-        for i in range(bs):
-            # Compute loss on a mini-batch of size `self.k`, instead of the full batch (`bs` * self.k) to avoid OOM. Similar idea to gradient accumulation.
-            mini_batch_rewards = rewards[i * self.k : (i + 1) * self.k]
-            mini_batch_judgements = judgements[i * self.k : (i + 1) * self.k]
-            mini_batch_prompt_completion_ids = prompt_completion_ids[i * self.k : (i + 1) * self.k]
-            mini_batch_prompt_completion_mask = prompt_completion_mask[i * self.k : (i + 1) * self.k]
-            mini_batch_baseline_rewards = baseline_rewards[i * self.k : (i + 1) * self.k]
-            mini_batch_calibrated_rewards = torch.sigmoid(mini_batch_rewards - mini_batch_baseline_rewards)
+        for i in range(0, bs, mini_bs):
+            # Compute loss on a mini-batch of size `mini_bs`, instead of the full batch (`bs` * self.k) to avoid OOM.
+            mini_batch_prompt_completion_ids = prompt_completion_ids[i : i + mini_bs]
+            mini_batch_prompt_completion_mask = prompt_completion_mask[i : i + mini_bs]
+            mini_batch_regularized_rewards = regularized_rewards[i : i + mini_bs]
 
             # compute kl_divergence
-            logprobs, ref_logprobs = self._get_batch_logprobs(
+            logprobs = self._get_batch_logprobs(
                 mini_batch_prompt_completion_ids, mini_batch_prompt_completion_mask, context_length
             )
 
-            with torch.no_grad():
-                # kl_div is used as a regularization term here
-                kl_div = logprobs - ref_logprobs
-            kl_div_regularization = torch.clamp(1 - kl_div / self.kl_threshold, min=0)
-
-            calibrated_regularized_rewards = (
-                mini_batch_judgements * mini_batch_calibrated_rewards * kl_div_regularization
-            )
-
-            losses = -logprobs * (calibrated_regularized_rewards - calibrated_regularized_rewards.mean())
-            loss = losses.mean() / bs
+            losses = -logprobs * (mini_batch_regularized_rewards - mean_regularized_rewards)
+            loss = losses.mean() / accumulation
 
             if self.use_apex:
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
@@ -391,12 +403,21 @@ class CGPOTrainer(Trainer):
         rejected_prompt_completion_mask = prompt_completion_mask[batch_indices, rejected_idx]
 
         # get the batch log probabilities
-        chosen_logprobs, chosen_ref_logprobs = self._get_batch_logprobs(
-            chosen_prompt_completion_ids, chosen_prompt_completion_mask, context_length
+        chosen_logprobs = (
+            self._get_batch_logprobs(chosen_prompt_completion_ids, chosen_prompt_completion_mask, context_length),
         )
-        rejected_logprobs, rejected_ref_logprobs = self._get_batch_logprobs(
+        rejected_logprobs = self._get_batch_logprobs(
             rejected_prompt_completion_ids, rejected_prompt_completion_mask, context_length
         )
+        with torch.no_grad():
+            chosen_ref_logprobs = (
+                self._get_batch_logprobs(
+                    chosen_prompt_completion_ids, chosen_prompt_completion_mask, context_length, True
+                ),
+            )
+            rejected_ref_logprobs = self._get_batch_logprobs(
+                rejected_prompt_completion_ids, rejected_prompt_completion_mask, context_length, True
+            )
 
         pi_logratios = chosen_logprobs - rejected_logprobs
         ref_logratios = chosen_ref_logprobs - rejected_ref_logprobs
@@ -419,13 +440,15 @@ class CGPOTrainer(Trainer):
 
     def crraft_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         bs = inputs["bs"]
+        mini_bs = self.local_generation_batch_size
         context_length = inputs["context_length"]
         prompt_baseline_ids = inputs["input_ids"]
         prompt_baseline_mask = inputs["attention_mask"]
-        rewards = inputs["rewards"]
-        judgements = inputs["judgements"]
-        prompt_completion_ids = inputs["prompt_completion_ids"]
-        prompt_completion_mask = inputs["prompt_completion_mask"]
+        rewards = inputs["rewards"].view(bs, self.k)
+        judgements = inputs["judgements"].view(bs, self.k)
+        prompt_completion_ids = inputs["prompt_completion_ids"].view(bs, self.k, -1)
+        prompt_completion_mask = inputs["prompt_completion_mask"].view(bs, self.k, -1)
+        completion_logprobs = inputs["completion_logprobs"]
 
         # get baseline rewards & judgements
         with torch.no_grad():
@@ -436,6 +459,20 @@ class CGPOTrainer(Trainer):
                 inputs["context_length"],
             )
 
+        ref_logprobss = []
+        with torch.no_grad():
+            for i in range(0, prompt_completion_ids, mini_bs):
+                mini_batch_ids = prompt_completion_ids[i : i + mini_bs]
+                mini_batch_mask = prompt_completion_mask[i : i + mini_bs]
+                mini_batch_ref_logprobs = self._get_batch_logprobs(
+                    mini_batch_ids, mini_batch_mask, context_length, True
+                )
+                ref_logprobss.append(mini_batch_ref_logprobs)
+
+        ref_logprobs = torch.cat(ref_logprobss)
+        kl_div = completion_logprobs - ref_logprobs
+        kl_div_regularizer = kl_div < self.kl_threshold
+
         if self.args.missing_eos_penalty is not None:
             baseline_ids = inputs["input_ids"][:, context_length:]
             contain_eos_token = torch.any(baseline_ids == self.generation_config.eos_token_id, dim=-1)
@@ -444,67 +481,37 @@ class CGPOTrainer(Trainer):
         baseline_judgements = self.moj.judge(inputs["prompts_text"], inputs["completions_text"])
         baseline_judgements = torch.tensor(baseline_judgements, device=self.model.device, dtype=torch.bool)
 
-        max_logprobs = []
-        max_rewards = []
-        for i in range(bs):
-            all_logprobs = []
-            all_rewards = []
-            batch_start_idx = i * self.k
-            batch_end_idx = (i + 1) * self.k
-            batch_prompt_completion_ids = prompt_completion_ids[batch_start_idx:batch_end_idx]
-            batch_prompt_completion_mask = prompt_completion_mask[batch_start_idx:batch_end_idx]
-            batch_rewards = rewards[batch_start_idx:batch_end_idx]
-            batch_judgements = judgements[batch_start_idx:batch_end_idx]
-            for j in range(self.k // self.local_policy_optimization_batch_size):
-                mini_start_idx = j * self.local_policy_optimization_batch_size
-                mini_end_idx = (j + 1) * self.local_policy_optimization_batch_size
-                mini_batch_prompt_completion_ids = batch_prompt_completion_ids[mini_start_idx:mini_end_idx]
-                mini_batch_prompt_completion_mask = batch_prompt_completion_mask[mini_start_idx:mini_end_idx]
-                mini_batch_rewards = batch_rewards[mini_start_idx:mini_end_idx]
-                mini_batch_judgements = batch_judgements[mini_start_idx:mini_end_idx]
+        contrainted_calibrated_rewards = (
+            kl_div_regularizer.view(bs, self.k) * judgements * torch.sigmoid(rewards - baseline_rewards.unsqueeze(-1))
+        )
 
-                mini_batch_logprobs, mini_batch_ref_logprobs = self._get_batch_logprobs(
-                    mini_batch_prompt_completion_ids, mini_batch_prompt_completion_mask, context_length
-                )
+        best_indices = torch.argmax(contrainted_calibrated_rewards, dim=-1)
+        best_prompt_completion_ids = prompt_completion_ids[torch.arange(bs), best_indices]
+        best_prompt_completion_mask = prompt_completion_mask[torch.arange(bs), best_indices]
+        best_rewards = contrainted_calibrated_rewards[torch.arange(bs), best_indices]
 
-                with torch.no_grad():
-                    kl_div = mini_batch_logprobs - mini_batch_ref_logprobs
+        best_completion_logprobs = self._get_batch_logprobs(
+            best_prompt_completion_ids, best_prompt_completion_mask, context_length
+        )
 
-                masked_kl_div = kl_div < self.kl_threshold
-                contrainted_calibrated_rewards = (
-                    masked_kl_div * mini_batch_judgements * torch.sigmoid(mini_batch_rewards - baseline_rewards[i])
-                )
-
-                all_logprobs.append(mini_batch_logprobs)
-                all_rewards.append(contrainted_calibrated_rewards)
-
-            all_logprobs = torch.cat(all_logprobs) if len(all_logprobs) > 1 else all_logprobs[0]
-            all_rewards = torch.cat(all_rewards) if len(all_logprobs) > 1 else all_rewards[0]
-
-            best_idx = torch.argmax(all_rewards, dim=0).item()
-            max_logprobs.append(all_logprobs[best_idx])
-            max_rewards.append(all_rewards[best_idx])
-
-        max_logprobs = torch.stack(max_logprobs, dim=0)
-        max_rewards = torch.stack(max_rewards, dim=0)
-
-        no_positive_completion_mask = (max_rewards == 0) & (baseline_judgements != 0)
+        no_positive_completion_mask = best_rewards == 0
         if no_positive_completion_mask.sum() != 0:
             # only compute the baseline logprobs if we need to (ie some prompts do not have any positive samples)
             # the baseline calibrated reward is always equal to 0.5 ie sigmoid(baseline_rewards - baselines_rewards)
             baseline_calibrated_rewards = 0.5
-            baseline_logprobs, baseline_ref_logprobs = self._get_batch_logprobs(
-                prompt_baseline_ids, prompt_baseline_mask, context_length
-            )
+            baseline_logprobs = self._get_batch_logprobs(prompt_baseline_ids, prompt_baseline_mask, context_length)
 
             with torch.no_grad():
+                baseline_ref_logprobs = self._get_batch_logprobs(
+                    prompt_baseline_ids, prompt_baseline_mask, context_length, True
+                )
                 baseline_kl_div = baseline_logprobs - baseline_ref_logprobs
 
             baseline_masked_kl_div = baseline_kl_div < self.kl_threshold
             replace_by_baseline_mask = no_positive_completion_mask & baseline_masked_kl_div
 
-            max_logprobs = torch.where(replace_by_baseline_mask, baseline_logprobs, max_logprobs)
-            max_rewards = torch.where(replace_by_baseline_mask, baseline_calibrated_rewards, max_rewards)
+            max_logprobs = torch.where(replace_by_baseline_mask, baseline_logprobs, best_completion_logprobs)
+            max_rewards = torch.where(replace_by_baseline_mask, baseline_calibrated_rewards, best_rewards)
 
         # compute loss as done in eqn (18) of the CGPO paper: https://huggingface.co/papers/2409.20370
         losses = -max_logprobs * max_rewards
@@ -527,7 +534,7 @@ class CGPOTrainer(Trainer):
         # step 4 of algorithm 1 of the CGPO paper: https://huggingface.co/papers/2409.20370
         prompt_ids = inputs["prompts"].repeat_interleave(repeats=self.k, dim=0)
         with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-            query_responses_ids, _ = batch_generation(
+            completion_ids, completion_logits = batch_generation(
                 unwrapped_model,
                 prompt_ids,
                 self.local_generation_batch_size,
@@ -535,7 +542,10 @@ class CGPOTrainer(Trainer):
                 self.generation_config,
             )
 
-        completion_ids = query_responses_ids[:, context_length:]
+        completion_logprobs = F.log_softmax(completion_logits, dim=-1)
+        completion_logprobs = (
+            torch.take_along_dim(completion_logprobs, completion_ids.unsqueeze(-1), dim=-1).squeeze(-1).sum(-1)
+        )
 
         query_responses = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         # step 5 of algorithm 1 of the CGPO paper: https://huggingface.co/papers/2409.20370
@@ -576,6 +586,7 @@ class CGPOTrainer(Trainer):
         inputs["context_length"] = context_length
         inputs["prompt_completion_ids"] = prompt_completion_ids
         inputs["prompt_completion_mask"] = prompt_completion_mask
+        inputs["completion_logprobs"] = completion_logprobs
 
         if self.rlhf_optimizer == "crraft":
             loss = self.crraft_optimization(inputs)
