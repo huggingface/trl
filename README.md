@@ -9,15 +9,9 @@
 </h3>
 
 <p align="center">
-    <a href="https://github.com/huggingface/trl/blob/main/LICENSE">
-        <img alt="License" src="https://img.shields.io/github/license/huggingface/trl.svg?color=blue">
-    </a>
-    <a href="https://huggingface.co/docs/trl/index">
-        <img alt="Documentation" src="https://img.shields.io/website/http/huggingface.co/docs/trl/index.svg?down_color=red&down_message=offline&up_message=online">
-    </a>
-    <a href="https://github.com/huggingface/trl/releases">
-        <img alt="GitHub release" src="https://img.shields.io/github/release/huggingface/trl.svg">
-    </a>
+    <a href="https://github.com/huggingface/trl/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/huggingface/trl.svg?color=blue"></a>
+    <a href="https://huggingface.co/docs/trl/index"><img alt="Documentation" src="https://img.shields.io/website/http/huggingface.co/docs/trl/index.svg?down_color=red&down_message=offline&up_color=blue&up_message=online"></a>
+    <a href="https://github.com/huggingface/trl/releases"><img alt="GitHub release" src="https://img.shields.io/github/release/huggingface/trl.svg"></a>
 </p>
 
 ## Overview
