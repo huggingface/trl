@@ -80,7 +80,6 @@ class GKDTrainer(SFTTrainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
-        seq_kd: bool = False
     ):
         # add remove_unused_columns=False to the the dataclass args
         args.remove_unused_columns = False
@@ -137,7 +136,7 @@ class GKDTrainer(SFTTrainer):
         self.lmbda = args.lmbda
         self.beta = args.beta
         self.temperature = args.temperature
-        self.seq_kd = seq_kd
+        self.seq_kd = args.seq_kd
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
