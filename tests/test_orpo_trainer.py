@@ -35,8 +35,15 @@ class ORPOTrainerTester(unittest.TestCase):
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    @parameterized.expand([["gpt2"], ["t5"]])
-    def test_orpo_trainer(self, name):
+    @parameterized.expand(
+        [
+            ("gpt2", "standard_preference"),
+            ("t5", "standard_implicit_prompt_preference"),
+            ("gpt2", "conversational_preference"),
+            ("t5", "conversational_implicit_prompt_preference"),
+        ]
+    )
+    def test_orpo_trainer(self, name, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = ORPOConfig(
                 output_dir=tmp_dir,
@@ -50,7 +57,7 @@ class ORPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             if name == "gpt2":
                 model = self.model
@@ -82,7 +89,15 @@ class ORPOTrainerTester(unittest.TestCase):
                     assert not torch.equal(param, new_param)
 
     @require_peft
-    def test_orpo_trainer_with_lora(self):
+    @parameterized.expand(
+        [
+            ("standard_preference",),
+            ("standard_implicit_prompt_preference",),
+            ("conversational_preference",),
+            ("conversational_implicit_prompt_preference",),
+        ]
+    )
+    def test_orpo_trainer_with_lora(self, config_name):
         from peft import LoraConfig
 
         lora_config = LoraConfig(
@@ -106,7 +121,7 @@ class ORPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             trainer = ORPOTrainer(
                 model=self.model,
