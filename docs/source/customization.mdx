@@ -138,7 +138,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import DPOConfig, DPOTrainer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-ref_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct", load_in_8bit=True)
+quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+ref_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct", quantization_config= quantization_config)
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
