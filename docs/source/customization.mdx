@@ -48,7 +48,7 @@ Consult the 🤗 Accelerate [documentation](https://huggingface.co/docs/accelera
 
 ## Use different optimizers and schedulers
 
-By default, the `DPOTrainer` creates a `torch.optim.Adam` optimizer. You can create and define a different optimizer and pass it to `DPOTrainer`:
+By default, the `DPOTrainer` creates a `torch.optim.AdamW` optimizer. You can create and define a different optimizer and pass it to `DPOTrainer` as follows:
 
 ```python
 from datasets import load_dataset
