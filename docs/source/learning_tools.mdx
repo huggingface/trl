@@ -90,6 +90,7 @@ WANDB_TAGS="calculator_final" python benchmark/benchmark.py \
 
 We can then use [`openrlbenchmark`](https://github.com/openrlbenchmark/openrlbenchmark) which generates the following plot.
 ```
+# pip install openrlbenchmark==0.2.1a5
 python -m openrlbenchmark.rlops_multi_metrics \
     --filters '?we=openrlbenchmark&wpn=trl&xaxis=_step&ceik=trl_ppo_trainer_config.value.tracker_project_name&cen=trl_ppo_trainer_config.value.log_with&metrics=env/reward_mean&metrics=objective/kl' \
         'wandb?tag=calculator_final&cl=calculator_mask' \

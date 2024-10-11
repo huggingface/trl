@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,16 +13,12 @@
 # limitations under the License.
 
 
-from trl.commands.cli_utils import init_zero_verbose
-
-init_zero_verbose()
-
 import copy
 import json
 import os
-import sys
 import pwd
 import re
+import sys
 import time
 from threading import Thread
 
@@ -33,9 +28,12 @@ from rich.live import Live
 from rich.markdown import Markdown
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
-from trl.commands.cli_utils import ChatArguments, TrlParser, init_zero_verbose
+from trl import TrlParser, init_zero_verbose
+from trl.commands.cli_utils import ChatArguments
 from trl.trainer.utils import get_quantization_config
 
+
+init_zero_verbose()
 
 HELP_STRING = """\
 
@@ -275,7 +273,7 @@ def chat_cli():
         user = args.user
 
     model, tokenizer = load_model_and_tokenizer(args)
-    generation_streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=True)
+    generation_streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=True, skip_prompt=True)
 
     pad_token_id, eos_token_ids = parse_eos_tokens(tokenizer, args.eos_tokens, args.eos_token_ids)
 
@@ -337,10 +335,13 @@ def chat_cli():
 
             chat.append({"role": "user", "content": user_input})
 
+            inputs = tokenizer.apply_chat_template(chat, return_tensors="pt", add_generation_prompt=True).to(
+                model.device
+            )
+            attention_mask = torch.ones_like(inputs)
             generation_kwargs = dict(
-                inputs=tokenizer.apply_chat_template(chat, return_tensors="pt", add_generation_prompt=True).to(
-                    model.device
-                ),
+                inputs=inputs,
+                attention_mask=attention_mask,
                 streamer=generation_streamer,
                 max_new_tokens=current_args.max_new_tokens,
                 do_sample=current_args.do_sample,

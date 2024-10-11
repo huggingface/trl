@@ -17,6 +17,12 @@ authors:
     family-names: Thrush
   - given-names: Nathan
     family-names: Lambert
+  - given-names: Shengyi
+    family-names: Huang
+  - given-names: Kashif
+    family-names: Rasul
+  - given-names: Quentin
+    family-names: Gallouédec
 repository-code: 'https://github.com/huggingface/trl'
 abstract: "With trl you can train transformer language models with Proximal Policy Optimization (PPO). The library is built on top of the transformers library by \U0001F917 Hugging Face. Therefore, pre-trained language models can be directly loaded via transformers. At this point, most decoder and encoder-decoder architectures are supported."
 keywords:
@@ -25,4 +31,4 @@ keywords:
   - pytorch
   - transformers
 license: Apache-2.0
-version: 0.2.1
+version: 0.11.1

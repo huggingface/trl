@@ -54,24 +54,24 @@ python examples/scripts/cpo.py \
 
 from dataclasses import dataclass, field
 
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 from trl import CPOConfig, CPOTrainer, ModelConfig, get_peft_config
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 @dataclass
 class ScriptArguments:
-    dataset: str = field(
-        default="trl-internal-testing/hh-rlhf-helpful-base-trl-style",
+    dataset_name: str = field(
+        default="trl-lib/ultrafeedback_binarized",
         metadata={"help": "The name of the dataset to use."},
     )
 
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, CPOConfig, ModelConfig))
-    args, cpo_args, model_config = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
 
     ################
     # Model & Tokenizer
@@ -88,38 +88,26 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    ds = load_dataset(args.dataset)
-    if cpo_args.debug:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
+    dataset = load_dataset(script_args.dataset_name)
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
-
-    def process(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
-        return row
-
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
-    with PartialState().local_main_process_first():
-        ds = ds.map(process, num_proc=cpo_args.dataset_num_proc)
-
-    train_dataset = ds["train"]
-    eval_dataset = ds["test"]
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     ################
     # Training
     ################
     trainer = CPOTrainer(
         model,
-        args=cpo_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["test"],
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_config),
     )
 
     # train and save the model
     trainer.train()
-    trainer.save_model(cpo_args.output_dir)
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

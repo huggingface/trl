@@ -15,11 +15,11 @@
 import inspect
 import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from functools import wraps
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
@@ -34,31 +34,36 @@ from datasets import Dataset
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainingArguments,
+    is_sklearn_available,
+    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
+from transformers.utils import is_peft_available
 
-from ..import_utils import is_peft_available, is_sklearn_available, is_wandb_available
+from ..data_utils import maybe_apply_chat_template
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .bco_config import BCOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     RunningMoments,
     disable_dropout_in_model,
+    generate_model_card,
     pad_to_length,
     peft_module_casting_to_bf16,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-
 
 if is_wandb_available():
     import wandb
@@ -148,11 +153,11 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
 
     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
     in case the prompt + completion responses is/are too long. First
-        we truncate the prompt; if we're still too long, we truncate the completion.
+    we truncate the prompt; if we're still too long, we truncate the completion.
 
     We also create the labels for the completion responses, which are of length equal to
-        the sum of the length of the prompt and the completion response, with
-        label_pad_token_id  for the prompt tokens.
+    the sum of the length of the prompt and the completion response, with
+    label_pad_token_id  for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -265,7 +270,7 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
 
 class BCOTrainer(Trainer):
     r"""
-    Initialize BCOTrainer from [BCO](https://arxiv.org/abs/2404.04656) paper.
+    Initialize BCOTrainer from [BCO](https://huggingface.co/papers/2404.04656) paper.
 
     Args:
         model (`transformers.PreTrainedModel`):
@@ -279,8 +284,10 @@ class BCOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         data_collator (`transformers.DataCollator`, *optional*, defaults to `None`):
             The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
@@ -314,7 +321,9 @@ class BCOTrainer(Trainer):
         args: BCOConfig = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         data_collator: Optional[DataCollator] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -327,8 +336,19 @@ class BCOTrainer(Trainer):
         embedding_func: Optional[Callable] = None,
         embedding_tokenizer: Optional[PreTrainedTokenizerBase] = None,
     ):
-        if type(args) == TrainingArguments:
-            raise ValueError("Please use `BCOConfig` instead TrainingArguments.")
+        if not is_sklearn_available():
+            raise ImportError(
+                "BCOTrainer requires the scikit-learn library. Please install it with `pip install scikit-learn`."
+            )
+
+        if type(args) is TrainingArguments:
+            raise ValueError("Please use `BCOConfig` instead `TrainingArguments`.")
+
+        if not isinstance(model, str) and ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+            )
 
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
@@ -463,9 +483,9 @@ class BCOTrainer(Trainer):
         else:
             self.ref_model = create_reference_model(model)
 
-        if tokenizer is None:
+        if processing_class is None:
             raise ValueError(
-                "max_length or a tokenizer must be specified when using the default DPODataCollatorWithPadding"
+                "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
             )
         if args.max_length is None:
             warnings.warn(
@@ -500,7 +520,7 @@ class BCOTrainer(Trainer):
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=processing_class.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
@@ -526,11 +546,10 @@ class BCOTrainer(Trainer):
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else tokenizer.pad_token_id
+        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
-        self.tokenizer = tokenizer
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
@@ -544,12 +563,28 @@ class BCOTrainer(Trainer):
         # BCO parameter
         self.beta = args.beta
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
+            warnings.warn(
+                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
+                " meaning the auxiliary loss will not be used."
+            )
 
         # Underlying Distribution Matching argument
         self.embedding_func = embedding_func
         self.embedding_tokenizer = embedding_tokenizer
 
         with PartialState().local_main_process_first():
+            # Apply the chat template if needed
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
+            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(
+                    maybe_apply_chat_template,
+                    fn_kwargs={"tokenizer": processing_class},
+                    num_proc=args.dataset_num_proc,
+                )
             # Shuffle the datasets
             train_dataset = train_dataset.shuffle(seed=args.data_seed)
             if eval_dataset is not None:
@@ -558,7 +593,7 @@ class BCOTrainer(Trainer):
             train_dataset = train_dataset.map(
                 _tokenize,
                 batched=True,
-                fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
+                fn_kwargs={"tokenizer": processing_class, "embedding_tokenizer": self.embedding_tokenizer},
                 num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
             )
@@ -567,7 +602,7 @@ class BCOTrainer(Trainer):
             fn_kwargs = {
                 "prefix": "",
                 "is_encoder_decoder": self.is_encoder_decoder,
-                "tokenizer": self.tokenizer,
+                "tokenizer": processing_class,
                 "max_length": self.max_length,
                 "truncation_mode": self.truncation_mode,
                 "label_pad_token_id": self.label_pad_token_id,
@@ -585,7 +620,7 @@ class BCOTrainer(Trainer):
                 # Tokenize
                 eval_dataset = eval_dataset.map(
                     _tokenize,
-                    fn_kwargs={"tokenizer": self.tokenizer, "embedding_tokenizer": self.embedding_tokenizer},
+                    fn_kwargs={"tokenizer": processing_class, "embedding_tokenizer": self.embedding_tokenizer},
                     batched=True,
                     num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
@@ -595,7 +630,7 @@ class BCOTrainer(Trainer):
                 fn_kwargs = {
                     "prefix": "",
                     "is_encoder_decoder": self.is_encoder_decoder,
-                    "tokenizer": self.tokenizer,
+                    "tokenizer": processing_class,
                     "max_length": self.max_length,
                     "truncation_mode": self.truncation_mode,
                     "label_pad_token_id": self.label_pad_token_id,
@@ -625,7 +660,7 @@ class BCOTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -713,11 +748,11 @@ class BCOTrainer(Trainer):
 
     def _vectorize_prompt(self, input_ids: torch.LongTensor, attention_mask: torch.LongTensor) -> torch.FloatTensor:
         """
-        Replaces tokenizer.pad_token_id to embedding_tokenizer.pad_token_id
+        Replaces processing_class.pad_token_id to embedding_tokenizer.pad_token_id
         and applies self.embedding_func
         """
         input_ids = torch.where(
-            input_ids == self.tokenizer.pad_token_id,
+            input_ids == self.processing_class.pad_token_id,
             self.embedding_tokenizer.pad_token_id,
             input_ids,
         )
@@ -1205,16 +1240,18 @@ class BCOTrainer(Trainer):
         if all_num_chosen > 0:
             metrics["rewards/chosen_sum"] = self.accelerator.gather(chosen_rewards.nansum()).nansum().item()
             metrics["logps/chosen_sum"] = self.accelerator.gather(policy_chosen_logps.nansum()).nansum().item()
+            metrics["logits/chosen_sum"] = self.accelerator.gather(policy_chosen_logits.nansum()).nansum().item()
             metrics["count/chosen"] = all_num_chosen
 
         if all_num_rejected > 0:
             metrics["rewards/rejected_sum"] = self.accelerator.gather(rejected_rewards.nansum()).nansum().item()
             metrics["logps/rejected_sum"] = self.accelerator.gather(policy_rejected_logps.nansum()).nansum().item()
+            metrics["logits/rejected_sum"] = self.accelerator.gather(policy_rejected_logits.nansum()).nansum().item()
             metrics["count/rejected"] = all_num_rejected
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
-            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
+            loss += self.aux_loss_coef * aux_loss
 
         return loss, metrics
 
@@ -1265,7 +1302,7 @@ class BCOTrainer(Trainer):
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
+                pad_token_id=self.processing_class.pad_token_id,
             )
 
             # if reference_output in batch use that otherwise use the reference model
@@ -1279,7 +1316,7 @@ class BCOTrainer(Trainer):
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
                             do_sample=True,
-                            pad_token_id=self.tokenizer.pad_token_id,
+                            pad_token_id=self.processing_class.pad_token_id,
                         )
                 else:
                     reference_output = self.ref_model.generate(
@@ -1287,14 +1324,14 @@ class BCOTrainer(Trainer):
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
-                        pad_token_id=self.tokenizer.pad_token_id,
+                        pad_token_id=self.processing_class.pad_token_id,
                     )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
-        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+        policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
+        policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
-        reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+        reference_output = pad_to_length(reference_output, self.max_length, self.processing_class.pad_token_id)
+        reference_output_decoded = self.processing_class.batch_decode(reference_output, skip_special_tokens=True)
 
         return policy_output_decoded, reference_output_decoded
 
@@ -1410,14 +1447,14 @@ class BCOTrainer(Trainer):
         for split in ["chosen", "rejected"]:
             if f"count/{split}" in self._stored_metrics[train_eval]:
                 count_sum = torch.Tensor(self._stored_metrics[train_eval][f"count/{split}"]).sum().item()
-                logs[f"{prefix}rewards/{split}"] = (
-                    torch.Tensor(self._stored_metrics[train_eval][f"rewards/{split}_sum"]).sum().item() / count_sum
-                )
-                logs[f"{prefix}logps/{split}"] = (
-                    torch.Tensor(self._stored_metrics[train_eval][f"logps/{split}_sum"]).sum().item() / count_sum
-                )
-                for key in [f"count/{split}", f"rewards/{split}_sum", f"logps/{split}_sum"]:
-                    del self._stored_metrics[train_eval][key]
+                for metric in ["rewards", "logps", "logits"]:
+                    logs[f"{prefix}{metric}/{split}"] = (
+                        torch.Tensor(self._stored_metrics[train_eval][f"{metric}/{split}_sum"]).sum().item()
+                        / count_sum
+                    )
+                    # delete obsolete metric
+                    del self._stored_metrics[train_eval][f"{metric}/{split}_sum"]
+                del self._stored_metrics[train_eval][f"count/{split}"]
         # calculate reward margin
         if f"{prefix}rewards/chosen" in logs and f"{prefix}rewards/rejected" in logs:
             logs[f"{prefix}rewards/margins"] = logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
@@ -1427,12 +1464,57 @@ class BCOTrainer(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "bco" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        Creates a draft of a model card using the information available to the `Trainer`.
 
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or None, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
+        citation = textwrap.dedent("""\
+        @article{jung2024binary,
+            title        = {{Binary Classifier Optimization for Large Language Model Alignment}},
+            author       = {Seungjae Jung and Gunsoo Han and Daniel Wontae Nam and Kyoung{-}Woon On},
+            year         = 2024,
+            eprint       = {arXiv:2404.04656}
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="BCO",
+            trainer_citation=citation,
+            paper_title="Binary Classifier Optimization for Large Language Model Alignment",
+            paper_id="2404.04656",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

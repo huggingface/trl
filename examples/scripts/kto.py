@@ -20,7 +20,7 @@ python examples/scripts/kto.py \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
-    --learning_rate 1e-5 \
+    --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -36,7 +36,7 @@ python examples/scripts/kto.py \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --learning_rate 1e-4 \
+    --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -59,7 +59,7 @@ from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
+from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_unpair_preference_dataset, setup_chat_format
 
 
 # Define and parse arguments.
@@ -74,7 +74,7 @@ class ScriptArguments:
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, KTOConfig, ModelConfig))
-    script_args, kto_args, model_args = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
@@ -97,29 +97,39 @@ if __name__ == "__main__":
     # Load the dataset
     dataset = load_dataset(script_args.dataset_name)
 
+    # If needed, reformat a DPO-formatted dataset (prompt, chosen, rejected) to a KTO-format (prompt, completion, label)
+    dataset = maybe_unpair_preference_dataset(dataset, num_proc=training_args.dataset_num_proc)
+
     # Apply chat template
     def format_dataset(example):
-        example["prompt"] = tokenizer.apply_chat_template(example["prompt"], tokenize=False)
-        example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
+        if isinstance(example["completion"], str):
+            example["prompt"] = tokenizer.apply_chat_template(example["prompt"], tokenize=False)
+            example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
+        else:
+            example["prompt"] = tokenizer.apply_chat_template(example["completion"][:-1], tokenize=False)
+            example["completion"] = tokenizer.apply_chat_template([example["completion"][-1]], tokenize=False)
         return example
 
     # Compute that only on the main process for faster data processing.
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
-        formatted_dataset = dataset.map(format_dataset, num_proc=kto_args.dataset_num_proc)
+        dataset = dataset.map(format_dataset, num_proc=training_args.dataset_num_proc)
 
     # Initialize the KTO trainer
-    kto_trainer = KTOTrainer(
+    trainer = KTOTrainer(
         model,
         ref_model,
-        args=kto_args,
-        train_dataset=formatted_dataset["train"],
-        eval_dataset=formatted_dataset["test"],
-        tokenizer=tokenizer,
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["test"],
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
     # Train and push the model to the Hub
-    kto_trainer.train()
-    kto_trainer.save_model(kto_args.output_dir)
-    kto_trainer.push_to_hub()
+    trainer.train()
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

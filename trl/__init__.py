@@ -1,84 +1,101 @@
-# flake8: noqa
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-__version__ = "0.9.6.dev0"
+__version__ = "0.12.0.dev0"
 
 from typing import TYPE_CHECKING
-from .import_utils import _LazyModule, is_diffusers_available, OptionalDependencyNotAvailable
+
+from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
+
 
 _import_structure = {
-    "core": [
-        "set_seed",
+    "commands.cli_utils": ["DPOScriptArguments", "SFTScriptArguments", "TrlParser", "init_zero_verbose"],
+    "core": ["set_seed"],
+    "data_utils": [
+        "apply_chat_template",
+        "extract_prompt",
+        "is_conversational",
+        "maybe_apply_chat_template",
+        "maybe_extract_prompt",
+        "maybe_unpair_preference_dataset",
+        "unpair_preference_dataset",
     ],
-    "environment": [
-        "TextEnvironment",
-        "TextHistory",
-    ],
-    "extras": [
-        "BestOfNSampler",
-    ],
+    "environment": ["TextEnvironment", "TextHistory"],
+    "extras": ["BestOfNSampler"],
     "import_utils": [
-        "is_bitsandbytes_available",
+        "is_deepspeed_available",
         "is_diffusers_available",
-        "is_npu_available",
-        "is_peft_available",
-        "is_pil_available",
-        "is_wandb_available",
-        "is_xpu_available",
+        "is_liger_kernel_available",
         "is_llmblender_available",
-        "is_openai_available",
     ],
     "models": [
+        "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
         "PreTrainedModelWrapper",
         "create_reference_model",
         "setup_chat_format",
-        "SUPPORTED_ARCHITECTURES",
     ],
     "trainer": [
+        "AlignPropConfig",
+        "AlignPropTrainer",
+        "BaseJudge",
+        "BasePairwiseJudge",
+        "BaseRankJudge",
+        "BCOConfig",
+        "BCOTrainer",
+        "CPOConfig",
+        "CPOTrainer",
         "DataCollatorForCompletionOnlyLM",
         "DPOConfig",
         "DPOTrainer",
-        "CPOConfig",
-        "CPOTrainer",
-        "AlignPropConfig",
-        "AlignPropTrainer",
+        "FDivergenceConstants",
+        "FDivergenceType",
+        "GKDConfig",
+        "GKDTrainer",
+        "HfPairwiseJudge",
         "IterativeSFTTrainer",
         "KTOConfig",
         "KTOTrainer",
-        "BCOConfig",
-        "BCOTrainer",
+        "LogCompletionsCallback",
         "ModelConfig",
+        "NashMDConfig",
+        "NashMDTrainer",
         "OnlineDPOConfig",
         "OnlineDPOTrainer",
+        "OpenAIPairwiseJudge",
         "ORPOConfig",
         "ORPOTrainer",
+        "PairRMJudge",
         "PPOConfig",
         "PPOTrainer",
+        "PPOv2Config",
+        "PPOv2Trainer",
+        "RandomPairwiseJudge",
+        "RandomRankJudge",
         "RewardConfig",
         "RewardTrainer",
+        "RLOOConfig",
+        "RLOOTrainer",
         "SFTConfig",
         "SFTTrainer",
-        "FDivergenceConstants",
-        "FDivergenceType",
         "WinRateCallback",
-        "BaseJudge",
-        "BaseRankJudge",
-        "BasePairwiseJudge",
-        "RandomRankJudge",
-        "RandomPairwiseJudge",
-        "HfPairwiseJudge",
-        "OpenAIPairwiseJudge",
+        "XPOConfig",
+        "XPOTrainer",
     ],
-    "commands": [],
-    "commands.cli_utils": ["init_zero_verbose", "SFTScriptArguments", "DPOScriptArguments", "TrlParser"],
     "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
-    "multitask_prompt_tuning": [
-        "MultitaskPromptEmbedding",
-        "MultitaskPromptTuningConfig",
-        "MultitaskPromptTuningInit",
-    ],
 }
 
 try:
@@ -98,66 +115,82 @@ else:
     _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
+    from .commands.cli_utils import DPOScriptArguments, SFTScriptArguments, TrlParser, init_zero_verbose
     from .core import set_seed
+    from .data_utils import (
+        apply_chat_template,
+        extract_prompt,
+        is_conversational,
+        maybe_apply_chat_template,
+        maybe_extract_prompt,
+        maybe_unpair_preference_dataset,
+        unpair_preference_dataset,
+    )
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
     from .import_utils import (
-        is_bitsandbytes_available,
+        is_deepspeed_available,
         is_diffusers_available,
-        is_npu_available,
-        is_peft_available,
-        is_pil_available,
-        is_wandb_available,
-        is_xpu_available,
+        is_liger_kernel_available,
         is_llmblender_available,
-        is_openai_available,
     )
     from .models import (
+        SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
         PreTrainedModelWrapper,
         create_reference_model,
         setup_chat_format,
-        SUPPORTED_ARCHITECTURES,
     )
     from .trainer import (
+        AlignPropConfig,
+        AlignPropTrainer,
+        BaseJudge,
+        BasePairwiseJudge,
+        BaseRankJudge,
+        BCOConfig,
+        BCOTrainer,
+        CPOConfig,
+        CPOTrainer,
         DataCollatorForCompletionOnlyLM,
         DPOConfig,
         DPOTrainer,
-        CPOConfig,
-        CPOTrainer,
-        AlignPropConfig,
-        AlignPropTrainer,
+        FDivergenceConstants,
+        FDivergenceType,
+        GKDConfig,
+        GKDTrainer,
+        HfPairwiseJudge,
         IterativeSFTTrainer,
         KTOConfig,
         KTOTrainer,
-        BCOConfig,
-        BCOTrainer,
+        LogCompletionsCallback,
         ModelConfig,
+        NashMDConfig,
+        NashMDTrainer,
         OnlineDPOConfig,
         OnlineDPOTrainer,
+        OpenAIPairwiseJudge,
         ORPOConfig,
         ORPOTrainer,
+        PairRMJudge,
         PPOConfig,
         PPOTrainer,
+        PPOv2Config,
+        PPOv2Trainer,
+        RandomPairwiseJudge,
+        RandomRankJudge,
         RewardConfig,
         RewardTrainer,
+        RLOOConfig,
+        RLOOTrainer,
         SFTConfig,
         SFTTrainer,
-        FDivergenceConstants,
-        FDivergenceType,
         WinRateCallback,
-        BaseJudge,
-        BaseRankJudge,
-        BasePairwiseJudge,
-        RandomRankJudge,
-        RandomPairwiseJudge,
-        HfPairwiseJudge,
-        OpenAIPairwiseJudge,
+        XPOConfig,
+        XPOTrainer,
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
-    from .commands.cli_utils import init_zero_verbose, SFTScriptArguments, DPOScriptArguments, TrlParser
 
     try:
         if not is_diffusers_available():

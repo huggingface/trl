@@ -16,8 +16,9 @@ import unittest
 
 import torch
 from parameterized import parameterized
+from transformers.utils import is_peft_available
 
-from trl import is_diffusers_available, is_peft_available
+from trl import is_diffusers_available
 
 from .testing_utils import require_diffusers
 
@@ -41,7 +42,7 @@ class AlignPropTrainerTester(unittest.TestCase):
     """
 
     def setUp(self):
-        alignprop_config = AlignPropConfig(
+        training_args = AlignPropConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,
             train_batch_size=2,
@@ -57,11 +58,9 @@ class AlignPropTrainerTester(unittest.TestCase):
         pipeline_without_lora = DefaultDDPOStableDiffusionPipeline(
             pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=False
         )
-        self.trainer_with_lora = AlignPropTrainer(
-            alignprop_config, scorer_function, prompt_function, pipeline_with_lora
-        )
+        self.trainer_with_lora = AlignPropTrainer(training_args, scorer_function, prompt_function, pipeline_with_lora)
         self.trainer_without_lora = AlignPropTrainer(
-            alignprop_config, scorer_function, prompt_function, pipeline_without_lora
+            training_args, scorer_function, prompt_function, pipeline_without_lora
         )
 
     def tearDown(self) -> None:

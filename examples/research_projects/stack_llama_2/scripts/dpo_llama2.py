@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # 0. imports
 import os
 from dataclasses import dataclass, field
@@ -65,7 +79,6 @@ class ScriptArguments:
     )
 
     # instrumentation
-    sanity_check: Optional[bool] = field(default=False, metadata={"help": "only train on 1000 samples"})
     report_to: Optional[str] = field(
         default="wandb",
         metadata={
@@ -89,7 +102,6 @@ class ScriptArguments:
 
 def get_stack_exchange_paired(
     data_dir: str = "data/rl",
-    sanity_check: bool = False,
     cache_dir: Optional[str] = None,
     num_proc=24,
 ) -> Dataset:
@@ -113,9 +125,6 @@ def get_stack_exchange_paired(
         verification_mode="no_checks",
     )
     original_columns = dataset.column_names
-
-    if sanity_check:
-        dataset = dataset.select(range(min(len(dataset), 1000)))
 
     def return_prompt_and_responses(samples) -> Dict[str, str]:
         return {
@@ -164,7 +173,7 @@ if __name__ == "__main__":
     tokenizer.pad_token = tokenizer.eos_token
 
     # 2. Load the Stack-exchange paired dataset
-    train_dataset = get_stack_exchange_paired(data_dir="data/rl", sanity_check=script_args.sanity_check)
+    train_dataset = get_stack_exchange_paired(data_dir="data/rl")
     train_dataset = train_dataset.filter(
         lambda x: len(x["prompt"]) + len(x["chosen"]) <= script_args.max_length
         and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length,
@@ -172,7 +181,7 @@ if __name__ == "__main__":
     )
 
     # 3. Load evaluation dataset
-    eval_dataset = get_stack_exchange_paired(data_dir="data/evaluation", sanity_check=True)
+    eval_dataset = get_stack_exchange_paired(data_dir="data/evaluation")
     eval_dataset = eval_dataset.filter(
         lambda x: len(x["prompt"]) + len(x["chosen"]) <= script_args.max_length
         and len(x["prompt"]) + len(x["rejected"]) <= script_args.max_length,
@@ -228,7 +237,7 @@ if __name__ == "__main__":
         beta=script_args.beta,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         peft_config=peft_config,
         max_prompt_length=script_args.max_prompt_length,
         max_length=script_args.max_length,

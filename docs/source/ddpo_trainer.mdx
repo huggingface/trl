@@ -1,4 +1,7 @@
 # Denoising Diffusion Policy Optimization
+
+[![](https://img.shields.io/badge/All_models-DDPO-blue)](https://huggingface.co/models?other=ddpo,trl)
+
 ## The why
 
 | Before | After DDPO finetuning |
@@ -117,3 +120,12 @@ for prompt, image in zip(prompts,results.images):
 
 This work is heavily influenced by the repo [here](https://github.com/kvablack/ddpo-pytorch) and the associated paper [Training Diffusion Models
 with Reinforcement Learning by Kevin Black, Michael Janner, Yilan Du, Ilya Kostrikov, Sergey Levine](https://huggingface.co/papers/2305.13301).
+
+## DDPOTrainer
+
+[[autodoc]] DDPOTrainer
+
+## DDPOConfig
+
+[[autodoc]] DDPOConfig
+
