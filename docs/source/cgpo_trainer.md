@@ -74,7 +74,7 @@ training_args = CGPOConfig(
     per_device_train_batch_size=2,
     k=4,
     rlhf_optimizer="crpg",
-    kl_threshold=5.,
+    kl_threshold=0.5,
     )
 trainer = CGPOTrainer(
     model=model,

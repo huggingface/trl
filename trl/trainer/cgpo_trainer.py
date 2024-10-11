@@ -249,7 +249,7 @@ class CGPOTrainer(Trainer):
             or self.local_genscore_mini_batch_size > (args.per_device_train_batch_size * self.k)
         ):
             raise ValueError(
-                "`local_genscore_mini_batch_size` should be higher than `per_device_train_batch_size` and smaller than `per_device_train_batch_size*k`."
+                "`local_genscore_mini_batch_size` should be higher than `per_device_train_batch_size` and smaller than `per_device_train_batch_size * k`."
             )
 
         # to avoid divisions by 0

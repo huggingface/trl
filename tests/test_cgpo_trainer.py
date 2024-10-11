@@ -292,6 +292,52 @@ class CGPOTrainerTester(unittest.TestCase):
                 )
 
     @parameterized.expand(["crraft", "crpg", "codpo"])
+    def test_cgpo_trainer_with_mini_batch(self, rlhf_optimizer):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = CGPOConfig(
+                output_dir=tmp_dir,
+                rlhf_optimizer=rlhf_optimizer,
+                k=4,
+                local_genscore_mini_batch_size=8,
+                kl_threshold=5.0,
+                temperature=0.9,
+                max_new_tokens=4,
+                per_device_train_batch_size=4,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+
+            trainer = CGPOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                reward_model=self.reward_model,
+                mixture_of_judges=self.moj,
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+
+    @parameterized.expand(["crraft", "crpg", "codpo"])
     def test_cgpo_trainer_with_missing_eos_penalty(self, rlhf_optimizer):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = CGPOConfig(
