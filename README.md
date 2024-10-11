@@ -46,7 +46,6 @@ Install the library using `pip`:
 ```bash
 pip install trl
 
-
 ### From source
 
 If you want to use the latest features before an official release, you can install TRL from source:
