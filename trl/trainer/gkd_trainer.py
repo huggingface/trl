@@ -80,6 +80,7 @@ class GKDTrainer(SFTTrainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
+        seq_kd: bool = False
     ):
         # add remove_unused_columns=False to the the dataclass args
         args.remove_unused_columns = False
@@ -136,6 +137,7 @@ class GKDTrainer(SFTTrainer):
         self.lmbda = args.lmbda
         self.beta = args.beta
         self.temperature = args.temperature
+        self.seq_kd = seq_kd
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
@@ -280,6 +282,14 @@ class GKDTrainer(SFTTrainer):
         With probability `self.lmbda`, it generates new responses using the student model,
         which are then used for training instead of the original inputs.
         """
+        if self.seq_kd:
+            with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
+                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
+                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                )
+            inputs["input_ids"] = new_input_ids
+            inputs["attention_mask"] = new_attention_mask
+            inputs["labels"] = new_labels
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
