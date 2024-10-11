@@ -9,7 +9,7 @@ Depending on how good your base model is, you may or may not need to do SFT befo
 This is different from standard RLHF and DPO, which always require SFT.
 You can also train with imbalanced data (more chosen than rejected examples, or vice-versa), but you will need to adjust hyperparameters accordingly (see below).
 
-## Expected dataset format
+## Expected dataset type
 
 The KTO trainer expects a very specific format for the dataset as it does not require pairwise preferences. Since the model will be trained to directly optimize examples that consist of a prompt, model completion, and a label to indicate whether the completion is "good" or "bad", we expect a dataset with the following columns:
 

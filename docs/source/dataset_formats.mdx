@@ -1,10 +1,11 @@
-# Dataset formats
+# Dataset formats and types
 
-This guide provides an overview of the dataset formats supported by each trainer in TRL. Since conversational datasets are very common, we also provide a guide on how to use them, and how to convert them into a standard dataset format for TRL trainers.
+This guide provides an overview of the dataset formats and types supported by each trainer in TRL.
 
 ## Overview of the dataset formats and types
 
-The *format* of a dataset refers to how the data is structured, typically categorized as either *standard* or *conversational*. The *type* is associated with the specific task the dataset is designed for, such as *prompt-only* or *preference*. Each type is characterized by its columns, which vary according to the task, as shown in the table.
+- The *format* of a dataset refers to how the data is structured, typically categorized as either *standard* or *conversational*.
+- The *type* is associated with the specific task the dataset is designed for, such as *prompt-only* or *preference*. Each type is characterized by its columns, which vary according to the task, as shown in the table.
 
 <table>
   <tr>
@@ -78,8 +79,9 @@ The *format* of a dataset refers to how the data is structured, typically catego
   </tr>
 </table>
 
+### Formats
 
-### Standard dataset format
+#### Standard
 
 The standard dataset format typically consists of plain text strings. The columns in the dataset vary depending on the task. This is the format expected by TRL trainers. Below are examples of standard dataset formats for different tasks:
 
@@ -90,7 +92,7 @@ example = {"text": "The sky is blue."}
 example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
 ```
 
-### Conversational dataset format
+#### Conversational
 
 Conversational datasets are used for tasks involving dialogues or chat interactions between users and assistants. Unlike standard dataset formats, these contain sequences of messages where each message has a `role` (e.g., `"user"` or `"assistant"`) and `content` (the message text).
 
@@ -119,7 +121,9 @@ example = {
 
 Conversational datasets are useful for training chat models, but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
-### Language modeling
+### Types
+
+#### Language modeling
 
 A language modeling dataset consists of a column `"text"` (or `"messages"` for conversational datasets) containing a full sequence of text.
 
@@ -127,7 +131,7 @@ A language modeling dataset consists of a column `"text"` (or `"messages"` for c
 language_modeling_example = {"text": "The sky is blue."}
 ```
 
-### Prompt-only
+#### Prompt-only
 
 In a prompt-only dataset, only the initial prompt (the question or partial sentence) is provided under the key `"prompt"`. The training typically involves generating the completion based on this prompt, where the model learns to continue or complete the given input.
 
@@ -137,7 +141,7 @@ prompt_only_example = {"prompt": "The sky is"}
 
 <Tip>
 
-While both the prompt-only and language modeling formats are similar, they differ in how the input is handled. In the prompt-only format, the prompt represents a partial input that expects the model to complete or continue, while in the language modeling format, the input is treated as a complete sentence or sequence. These two formats are processed differently by TRL. Below is an example showing the difference in the output of the `apply_chat_template` function for each format:
+While both the prompt-only and language modeling types are similar, they differ in how the input is handled. In the prompt-only type, the prompt represents a partial input that expects the model to complete or continue, while in the language modeling type, the input is treated as a complete sentence or sequence. These two types are processed differently by TRL. Below is an example showing the difference in the output of the `apply_chat_template` function for each type:
 
 ```python
 from transformers import AutoTokenizer
@@ -145,12 +149,12 @@ from trl import apply_chat_template
 
 tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
 
-# Example for prompt-only format
+# Example for prompt-only type
 prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
 apply_chat_template(prompt_only_example, tokenizer)
 # Output: {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n'}
 
-# Example for language modeling format
+# Example for language modeling type
 lm_example = {"messages": [{"role": "user", "content": "What color is the sky?"}]}
 apply_chat_template(lm_example, tokenizer)
 # Output: {'text': '<|user|>\nWhat color is the sky?<|end|>\n<|endoftext|>'}
@@ -161,7 +165,7 @@ apply_chat_template(lm_example, tokenizer)
 
 </Tip>
 
-### Prompt-completion
+#### Prompt-completion
 
 A prompt-completion dataset includes a `"prompt"` and a `"completion"`.
 
@@ -169,7 +173,7 @@ A prompt-completion dataset includes a `"prompt"` and a `"completion"`.
 prompt_completion_example = {"prompt": "The sky is", "completion": " blue."}
 ```
 
-### Preference
+#### Preference
 
 A preference dataset is used for tasks where the model is trained to choose between two or more possible completions to the same prompt. This dataset includes a `"prompt"`, a `"chosen"` completion, and a `"rejected"` completion. The model is trained to select the `"chosen"` response over the `"rejected"` response.
 Some dataset may not include the `"prompt"` column, in which case the prompt is implicit and directly included in the `"chosen"` and `"rejected"` completions. We recommend using explicit prompts whenever possible.
@@ -183,7 +187,7 @@ preference_example = {"chosen": "The sky is blue.", "rejected": "The sky is gree
 
 Some preference datasets can be found with [the tag `dpo` on Hugging Face Hub](https://huggingface.co/datasets?other=dpo). You can also explore the [librarian-bots' DPO Collections](https://huggingface.co/collections/librarian-bots/direct-preference-optimization-datasets-66964b12835f46289b6ef2fc) to identify preference datasets.
 
-### Unpaired preference
+#### Unpaired preference
 
 An unpaired preference dataset is similar to a preference dataset but instead of having `"chosen"` and `"rejected"` completions for the same prompt, it includes a single `"completion"` and a `"label"` indicating whether the completion is preferred or not.
 
@@ -191,11 +195,11 @@ An unpaired preference dataset is similar to a preference dataset but instead of
 unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "label": True}
 ```
 
-## Which dataset format to use?
+## Which dataset type to use?
 
-Choosing the right dataset format depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset formats supported by each TRL trainer.
+Choosing the right dataset type depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset types supported by each TRL trainer.
 
-| Trainer                 | Expected dataset format                                 |
+| Trainer                 | Expected dataset type                                   |
 | ----------------------- | ------------------------------------------------------- |
 | [`BCOTrainer`]          | [Unpaired preference](#unpaired-preference)             |
 | [`CPOTrainer`]          | [Preference (explicit prompt recommended)](#preference) |
@@ -220,7 +224,7 @@ For more information on how to work with conversational datasets, refer to the [
 
 ## Working with conversational datasets in TRL
 
-Conversational datasets are increasingly common, especially for training chat models. However, TRL trainers (except [`SFTTrainer`]) don't support conversational datasets in their raw format. These datasets must first be converted into a standard format. 
+Conversational datasets are increasingly common, especially for training chat models. However, TRL trainers (except [`SFTTrainer`]) don't support conversational datasets in their raw format. These datasets must first be converted into a standard format.
 Fortunately, TRL offers tools to easily handle this conversion, which are detailed below.
 
 ### Converting a conversational dataset into a standard dataset
@@ -270,7 +274,8 @@ dataset = dataset.map(apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 
 <Tip warning={true}>
 
-We recommend using the [`apply_chat_template`] function rather than directly calling `tokenizer.apply_chat_template`. Handling chat templates nonlanguage modeling datasets can be tricky and may lead to issues, such as inserting a system prompt in the middle of a conversation. For additional examples, see [#1930 (comment)](https://github.com/huggingface/trl/pull/1930#issuecomment-2292908614). The [`apply_chat_template`] is designed to handle these intricacies and ensure the correct application of chat templates for various tasks.
+We recommend using the [`apply_chat_template`] function instead of calling `tokenizer.apply_chat_template` directly. Handling chat templates for non-language modeling datasets can be tricky and may result in errors, such as mistakenly placing a system prompt in the middle conversation.
+For additional examples, see [#1930 (comment)](https://github.com/huggingface/trl/pull/1930#issuecomment-2292908614). The [`apply_chat_template`] is designed to handle these intricacies and ensure the correct application of chat templates for various tasks.
 
 </Tip>
 
@@ -308,7 +313,7 @@ Let’s take the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb
 
 As shown above, the dataset format does not match the expected structure. It’s not in a conversational format, the column names differ, and the results pertain to different models (e.g., Bard, GPT-4) and aspects (e.g., "helpfulness", "honesty").
 
-By using the provided conversion script [`examples/datasets/ultrafeedback.py`](https://github.com/huggingface/trl/tree/main/examples/datasets/ultrafeedback.py), you can transform this dataset into an unpaired preference format, and push it to the Hub:
+By using the provided conversion script [`examples/datasets/ultrafeedback.py`](https://github.com/huggingface/trl/tree/main/examples/datasets/ultrafeedback.py), you can transform this dataset into an unpaired preference type, and push it to the Hub:
 
 ```sh
 python examples/datasets/ultrafeedback.py --push_to_hub --repo_id trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness
@@ -727,10 +732,10 @@ A conversational vision dataset differs from a standard conversational dataset i
 Example:
 
 ```python
-# Textual dataset format:
+# Textual dataset:
 "content": "What color is the sky?"
 
-# Vision dataset format:
+# Vision dataset:
 "content": [
     {"type": "image"}, 
     {"type": "text", "text": "What color is the sky in the image?"}
