@@ -17,6 +17,7 @@ Run the KTO training script with the commands below. In general, the optimal con
 
 # Full training:
 python examples/scripts/kto.py \
+    --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
@@ -33,6 +34,7 @@ python examples/scripts/kto.py \
 
 # QLoRA:
 python examples/scripts/kto.py \
+    --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \

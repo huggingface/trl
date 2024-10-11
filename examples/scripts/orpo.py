@@ -17,6 +17,7 @@ In general, the optimal configuration for ORPO will be similar to that of DPO wi
 
 # regular:
 python examples/scripts/orpo.py \
+    --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
@@ -33,6 +34,7 @@ python examples/scripts/orpo.py \
 
 # peft:
 python examples/scripts/orpo.py \
+    --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
