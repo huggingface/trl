@@ -73,33 +73,6 @@ trainer = DPOTrainer(
 trainer.train()
 ```
 
-### Use 8-bit optimizer
-
-For memory efficient fine-tuning, you can also pass `Adam8bit` optimizer from `bitsandbytes`:
-
-```python
-import bitsandbytes as bnb
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import DPOConfig, DPOTrainer
-
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
-
-optimizer = bnb.optim.Adam8bit(model.parameters(), lr=training_args.learning_rate)
-
-trainer = DPOTrainer(
-    model=model,
-    args=training_args,
-    train_dataset=dataset,
-    tokenizer=tokenizer,
-    optimizers=(optimizer, None),
-)
-trainer.train()
-```
-
 ### Add a learning rate scheduler
 
 You can also play with your training by adding learning rate schedulers.
