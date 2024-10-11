@@ -36,7 +36,7 @@ _import_structure = {
     "judges": [
         "AllTrueJudge",
         "BaseJudge",
-        "BaseConstraintJudge",
+        "BaseBinaryJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
         "HfPairwiseJudge",
