@@ -447,7 +447,7 @@ class DPOTrainer(Trainer):
         if not isinstance(model, str) and ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
-                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+                "same as `model`, you must pass a copy of it, or `None` if you use peft."
             )
 
         if model_init_kwargs is not None:
