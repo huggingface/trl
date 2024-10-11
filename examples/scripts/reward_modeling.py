@@ -54,16 +54,16 @@ from trl import (
     ModelConfig,
     RewardConfig,
     RewardTrainer,
+    ScriptArguments,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
     setup_chat_format,
 )
-from trl.commands.cli_utils import RewardScriptArguments
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((RewardScriptArguments, RewardConfig, ModelConfig))
+    parser = HfArgumentParser((ScriptArguments, RewardConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_into_dataclasses()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
