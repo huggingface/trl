@@ -907,7 +907,7 @@ class DPOTrainer(Trainer):
             self.running = RunningMoments(self.accelerator)
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
-        # This method is only for wrapping a reference model using deepspeed and cannot be used for training.
+        # This method is only for wrapping a reference model using deepspeed and cannot be used for a model that is being trained.
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
 
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
