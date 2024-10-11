@@ -25,7 +25,7 @@
 
 ## What is it?
 
-TRL is a library that post-trains LLMs and diffusion models using methods such as Supervised fine tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). 
+TRL is a library that post-trains LLMs and diffusion models using methods such as Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO).
 
 The library is built on top of [🤗 Transformers](https://github.com/huggingface/transformers) and is compatible with any model architecture available there.
 
