@@ -281,6 +281,47 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
+    def test_dpo_trainer_with_weighting(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                loss_type="sigmoid",
+                precompute_ref_log_probs=False,
+                use_weighting=True,
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            trainer = DPOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+
     @parameterized.expand(
         [
             [None, "Test when rpo_alpha is set to None"],
