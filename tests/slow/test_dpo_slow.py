@@ -36,7 +36,7 @@ if is_peft_available():
 @require_torch_accelerator
 class DPOTrainerSlowTester(unittest.TestCase):
     def setUp(self):
-        self.dataset = load_dataset("trl-internal-testing/mlabonne-chatml-dpo-pairs-copy", split="train[:10%]")
+        self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         self.peft_config = LoraConfig(
             lora_alpha=16,
             lora_dropout=0.1,
@@ -85,9 +85,9 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=self.dataset,
-                eval_dataset=self.dataset,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                processing_class=tokenizer,
             )
 
             # train the model
@@ -142,9 +142,9 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=self.dataset,
-                eval_dataset=self.dataset,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                processing_class=tokenizer,
                 peft_config=self.peft_config,
             )
 
@@ -206,9 +206,9 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=self.dataset,
-                eval_dataset=self.dataset,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                processing_class=tokenizer,
                 peft_config=self.peft_config,
             )
 

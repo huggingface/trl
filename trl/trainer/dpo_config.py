@@ -40,6 +40,9 @@ class DPOConfig(TrainingArguments):
     command line.
 
     Parameters:
+        learning_rate (`float`, *optional*, defaults to `1e-6`):
+            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
+            [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -62,7 +65,8 @@ class DPOConfig(TrainingArguments):
                 - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
-
+        use_weighting (`bool`, *optional*, defaults to `False`):
+            Whether or not to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`Optional[int]`, *optional*, defaults to `None`):
@@ -110,7 +114,7 @@ class DPOConfig(TrainingArguments):
         f_divergence_type (`str`, *optional*, defaults to `FDivergenceType.REVERSE_KL`):
             Type of f-divergence regularization function to compute divergence between policy and reference model.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
-            α coefficient in the α-divergence \\(u^{-\\alpha}\\) regularization function for DPO loss.
+            α coefficient in the α-divergence u^-α regularization function for DPO loss.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             When set to `True`, the reference model is synchronized with the active model every `ref_model_sync_steps`
             steps, using the `ref_model_mixup_alpha` parameter. This synchronization originites from the
@@ -130,6 +134,7 @@ class DPOConfig(TrainingArguments):
             DPO loss. The paper recommends `rpo_alpha=1.0`.
     """
 
+    learning_rate: float = 1e-6
     beta: float = 0.1
     label_smoothing: float = 0.0
     loss_type: Literal[
@@ -146,6 +151,7 @@ class DPOConfig(TrainingArguments):
         "apo_zero",
         "apo_down",
     ] = "sigmoid"
+    use_weighting: bool = False
     label_pad_token_id: int = -100
     padding_value: Optional[int] = None
     truncation_mode: str = "keep_end"

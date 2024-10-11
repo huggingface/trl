@@ -60,7 +60,7 @@ The *format* of a dataset refers to how the data is structured, typically catego
       or, with implicit prompt:
       <pre><code>{"chosen": [{"role": "user", "content": "What color is the sky?"},
               {"role": "assistant", "content": "It is blue."}],
-  "rejected": [{"role": "user", "content": "What color is the sky?"},
+ "rejected": [{"role": "user", "content": "What color is the sky?"},
                 {"role": "assistant", "content": "It is green."}]}</code></pre>
     </td>
   </tr>
@@ -175,10 +175,13 @@ A preference dataset is used for tasks where the model is trained to choose betw
 Some dataset may not include the `"prompt"` column, in which case the prompt is implicit and directly included in the `"chosen"` and `"rejected"` completions. We recommend using explicit prompts whenever possible.
 
 ```python
+# explicit prompt
 preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}  # recommended
-# or,
+# implicit prompt
 preference_example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
 ```
+
+Some preference datasets can be found with [the tag `dpo` on Hugging Face Hub](https://huggingface.co/datasets?other=dpo). You can also explore the [librarian-bots' DPO Collections](https://huggingface.co/collections/librarian-bots/direct-preference-optimization-datasets-66964b12835f46289b6ef2fc) to identify preference datasets.
 
 ### Unpaired preference
 
@@ -192,20 +195,20 @@ unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "
 
 Choosing the right dataset format depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset formats supported by each TRL trainer.
 
-| Trainer                 | Expected dataset format      |
-| ----------------------- | ---------------------------- |
-| [`BCOTrainer`]          | Unpaired preference          |
-| [`CPOTrainer`]          | Preference (explicit prompt) |
-| [`DPOTrainer`]          | Preference (explicit prompt) |
-| [`IterativeSFTTrainer`] | Unpaired preference          |
-| [`KTOTrainer`]          | Unpaired preference          |
-| [`NashMDTrainer`]       | Prompt-only                  |
-| [`OnlineDPOTrainer`]    | Prompt-only                  |
-| [`ORPOTrainer`]         | Preference (explicit prompt) |
-| [`PPOv2Trainer`]        | Tokenized language modeling  |
-| [`RewardTrainer`]       | Preference (implicit prompt) |
-| [`SFTTrainer`]          | Language modeling            |
-| [`XPOTrainer`]          | Prompt-only                  |
+| Trainer                 | Expected dataset format                                 |
+| ----------------------- | ------------------------------------------------------- |
+| [`BCOTrainer`]          | [Unpaired preference](#unpaired-preference)             |
+| [`CPOTrainer`]          | [Preference (explicit prompt recommended)](#preference) |
+| [`DPOTrainer`]          | [Preference (explicit prompt recommended)](#preference) |
+| [`IterativeSFTTrainer`] | [Unpaired preference](#unpaired-preference)             |
+| [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference)             |
+| [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                             |
+| [`OnlineDPOTrainer`]    | [Prompt-only](#prompt-only)                             |
+| [`ORPOTrainer`]         | [Preference (explicit prompt recommended)](#preference) |
+| [`PPOTrainer`]          | Tokenized language modeling                             |
+| [`RewardTrainer`]       | [Preference (implicit prompt recommended)](#preference) |
+| [`SFTTrainer`]          | [Language modeling](#language-modeling)                 |
+| [`XPOTrainer`]          | [Prompt-only](#prompt-only)                             |
 
 <Tip>
 
@@ -710,3 +713,35 @@ dataset = dataset.remove_columns(["completion", "label"])
 >>> dataset[0]
 {'prompt': 'The sky is'}
 ```
+
+## Vision datasets
+
+Some trainers also support fine-tuning vision-language models (VLMs) using image-text pairs. In this scenario, it's recommended to use a conversational format, as each model handles image placeholders in text differently. 
+
+A conversational vision dataset differs from a standard conversational dataset in two key ways:
+
+1. The dataset must contain the key `images` with the image data.
+2. The `"content"` field in messages must be a list of dictionaries, where each dictionary specifies the type of data: `"image"` or `"text"`.
+
+Example:
+
+```python
+# Textual dataset format:
+"content": "What color is the sky?"
+
+# Vision dataset format:
+"content": [
+    {"type": "image"}, 
+    {"type": "text", "text": "What color is the sky in the image?"}
+]
+```
+
+An example of a conversational vision dataset is the [openbmb/RLAIF-V-Dataset](https://huggingface.co/datasets/openbmb/RLAIF-V-Dataset). Below is an embedded view of the dataset's training data, allowing you to explore it directly:
+
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/rlaif-v/embed/viewer/default/train"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
