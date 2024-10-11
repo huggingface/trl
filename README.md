@@ -34,7 +34,7 @@ The library is built on top of [🤗 Transformers](https://github.com/huggingfac
 
 - **`Efficient and scalable`**: 
     - [🤗 Accelerate](https://github.com/huggingface/accelerate) is the backbone of TRL that models training to scale from a single GPU to a large-scale multi-node cluster with methods such as DDP and DeepSpeed.
-    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows to training of even the largest models on modest hardware with quantization and methods such as LoRA or QLoRA.
+    - [`PEFT`](https://github.com/huggingface/peft) is fully integrated and allows users to train even the largest models on modest hardware with quantization and methods such as LoRA or QLoRA.
     - [Unsloth](https://github.com/unslothai/unsloth) is also integrated and allows to significantly speed up training with dedicated kernels.
       
 - **`CLI`**: With the [CLI](https://huggingface.co/docs/trl/clis) you can fine-tune and chat with LLMs without writing any code using a single command and a flexible config system.
