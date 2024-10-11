@@ -12,7 +12,7 @@ The abstract from the paper is the following:
 
 The first step is to train an SFT model, to ensure the data we train on is in-distribution for the DPO algorithm.
 
-Then, fine-tuning a language model via DPO consists of two steps and is easier than [PPO](ppov2_trainer):
+Then, fine-tuning a language model via DPO consists of two steps and is easier than [PPO](ppo_trainer):
 
 1. **Data collection**: Gather a [preference dataset](dataset_formats#preference) with positive and negative selected pairs of generation, given a prompt.
 2. **Optimization**: Maximize the log-likelihood of the DPO loss directly.
@@ -82,6 +82,8 @@ The best programming language based on these factors is subjective and depends o
 ## Expected dataset format
 
 DPO requires a [preference dataset](dataset_formats#preference). The [`DPOTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+
+Although the [`DPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
 
 ### Special considerations for vision-language models
 
