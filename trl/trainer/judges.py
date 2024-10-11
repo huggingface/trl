@@ -361,8 +361,3 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
 
         # Return the ranks
         return ranks
-
-
-# Nash-Mixture-of-judges: ?
-# only pair wise? or arb <- pairwise for now
-#
