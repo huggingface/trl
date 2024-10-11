@@ -84,20 +84,29 @@ def init_zero_verbose():
 @dataclass
 class SFTScriptArguments(ScriptArguments):
     def __post_init__(self):
-        logger.warning("`SFTScriptArguments` is deprecated, please use `ScriptArguments` instead.")
+        logger.warning(
+            "`SFTScriptArguments` is deprecated, please and will be removed in v0.13. Please use "
+            "`ScriptArguments` instead."
+        )
 
 
 @dataclass
 class RewardScriptArguments(ScriptArguments):
     def __post_init__(self):
-        logger.warning("`RewardScriptArguments` is deprecated, please use `ScriptArguments` instead.")
+        logger.warning(
+            "`RewardScriptArguments` is deprecated, please and will be removed in v0.13. Please use "
+            "`ScriptArguments` instead."
+        )
 
 
 # Deprecated
 @dataclass
 class DPOScriptArguments(ScriptArguments):
     def __post_init__(self):
-        logger.warning("`DPOScriptArguments` is deprecated, please use `ScriptArguments` instead.")
+        logger.warning(
+            "`DPOScriptArguments` is deprecated, please and will be removed in v0.13. Please use "
+            "`ScriptArguments` instead."
+        )
 
 
 @dataclass
