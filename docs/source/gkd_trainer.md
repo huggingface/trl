@@ -82,7 +82,7 @@ trainer = GKDTrainer(
 trainer.train()
 ```
 
-### Expected dataset format
+### Expected dataset type
 
 The dataset should be formatted as a list of "messages" where each message is a list of dictionaries with the following keys:
 * `role`: either `system`, `assistant` or `user`
