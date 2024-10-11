@@ -60,7 +60,7 @@ The *format* of a dataset refers to how the data is structured, typically catego
       or, with implicit prompt:
       <pre><code>{"chosen": [{"role": "user", "content": "What color is the sky?"},
               {"role": "assistant", "content": "It is blue."}],
-  "rejected": [{"role": "user", "content": "What color is the sky?"},
+ "rejected": [{"role": "user", "content": "What color is the sky?"},
                 {"role": "assistant", "content": "It is green."}]}</code></pre>
     </td>
   </tr>
@@ -203,7 +203,7 @@ Choosing the right dataset format depends on the task you are working on and the
 | [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference)             |
 | [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                             |
 | [`OnlineDPOTrainer`]    | [Prompt-only](#prompt-only)                             |
-| [`ORPOTrainer`]         | [Preference (explicit prompt)](#preference)             |
+| [`ORPOTrainer`]         | [Preference (explicit prompt recommended)](#preference) |
 | [`PPOv2Trainer`]        | Tokenized language modeling                             |
 | [`RewardTrainer`]       | [Preference (implicit prompt recommended)](#preference) |
 | [`SFTTrainer`]          | [Language modeling](#language-modeling)                 |
