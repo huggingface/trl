@@ -15,14 +15,12 @@
 import unittest
 
 from trl import (
-    FactualityConstraintJudge,
+    AllTrueJudge,
     HfPairwiseJudge,
-    MixtureOfConstraintJudges,
     PairRMJudge,
-    RandomConstraintJudge,
+    RandomBinaryJudge,
     RandomPairwiseJudge,
     RandomRankJudge,
-    SafetyConstraintJudge,
 )
 
 
@@ -40,7 +38,7 @@ class TestJudges(unittest.TestCase):
         return prompts, completions, gold_answers
 
     def test_mixture_of_constraint_judge(self):
-        moj = MixtureOfConstraintJudges(judges=[RandomConstraintJudge(), RandomConstraintJudge()])
+        moj = AllTrueJudge(judges=[RandomBinaryJudge(), RandomBinaryJudge()])
         prompts = [
             "The capital of France is",
             "The capital of France is",
@@ -53,7 +51,7 @@ class TestJudges(unittest.TestCase):
         self.assertTrue(all(judgement in {True, False} for judgement in judgements))
 
     def test_random_constraint_judge(self):
-        judge = RandomConstraintJudge()
+        judge = RandomBinaryJudge()
         prompts = [
             "The capital of France is",
             "The capital of France is",
@@ -88,24 +86,6 @@ class TestJudges(unittest.TestCase):
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
         self.assertEqual(ranks, [0, 1])
-
-    @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
-    def test_factuality_judge(self):
-        judge = FactualityConstraintJudge()
-        prompts, completions, gold_answers = self._get_prompts_completion_and_gold_answer()
-        judgements = judge.judge(prompts=prompts, completions=completions, gold_answers=gold_answers)
-        self.assertEqual(len(judgements), 2)
-        self.assertTrue(all(isinstance(judgement, int) for judgement in judgements))
-        self.assertEqual(judgements, [0, 1])
-
-    @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
-    def test_safety_judge(self):
-        judge = SafetyConstraintJudge(safety_guidelines="S7: Intellectual Property")
-        prompts, completions, _ = self._get_prompts_completion_and_gold_answer()
-        judgements = judge.judge(prompts=prompts, completions=completions)
-        self.assertEqual(len(judgements), 2)
-        self.assertTrue(all(isinstance(judgement, int) for judgement in judgements))
-        self.assertIn(judgements, [1, 1])
 
     def test_pair_rm_judge(self):
         judge = PairRMJudge()
