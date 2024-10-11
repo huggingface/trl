@@ -1,6 +1,6 @@
 # Training customization
 
-TRL is designed with modularity in mind so that users to be able to efficiently customize the training loop for their needs. Below are some examples on how you can apply and test different techniques.
+TRL is designed with modularity in mind so that users to be able to efficiently customize the training loop for their needs. Below are some examples on how you can apply and test different techniques.  Note: Although these examples use the DPOTrainer, the customization applies to most (if not all) trainers.
 
 ## Train on multiple GPUs / nodes
 
@@ -46,171 +46,118 @@ else:
 Consult the 🤗 Accelerate [documentation](https://huggingface.co/docs/accelerate/usage_guides/deepspeed) for more information about the DeepSpeed plugin.
 
 
-## Use different optimizers
+## Use different optimizers and schedulers
 
-By default, the `PPOTrainer` creates a `torch.optim.Adam` optimizer. You can create and define a different optimizer and pass it to `PPOTrainer`:
+By default, the `DPOTrainer` creates a `torch.optim.AdamW` optimizer. You can create and define a different optimizer and pass it to `DPOTrainer` as follows:
+
 ```python
-import torch
-from transformers import GPT2Tokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from torch import optim
+from trl import DPOConfig, DPOTrainer
 
-# 1. load a pretrained model
-model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 
-# 2. define config
-ppo_config = {'batch_size': 1, 'learning_rate':1e-5}
-config = PPOConfig(**ppo_config)
+optimizer = optim.SGD(model.parameters(), lr=training_args.learning_rate)
 
-
-# 2. Create optimizer
-optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate)
-
-
-# 3. initialize trainer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, optimizer=optimizer)
+trainer = DPOTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    tokenizer=tokenizer,
+    optimizers=(optimizer, None),
+)
+trainer.train()
 ```
 
-For memory efficient fine-tuning, you can also pass `Adam8bit` optimizer from `bitsandbytes`:
+### Add a learning rate scheduler
+
+You can also play with your training by adding learning rate schedulers.
 
 ```python
-import torch
-import bitsandbytes as bnb
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from torch import optim
+from trl import DPOConfig, DPOTrainer
 
-from transformers import GPT2Tokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 
-# 1. load a pretrained model
-model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+optimizer = optim.AdamW(model.parameters(), lr=training_args.learning_rate)
+lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
-# 2. define config
-ppo_config = {'batch_size': 1, 'learning_rate':1e-5}
-config = PPOConfig(**ppo_config)
-
-
-# 2. Create optimizer
-optimizer = bnb.optim.Adam8bit(model.parameters(), lr=config.learning_rate)
-
-# 3. initialize trainer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, optimizer=optimizer)
-```
-
-### Use LION optimizer
-
-You can use the new [LION optimizer from Google](https://huggingface.co/papers/2302.06675) as well, first take the source code of the optimizer definition [here](https://github.com/lucidrains/lion-pytorch/blob/main/lion_pytorch/lion_pytorch.py), and copy it so that you can import the optimizer. Make sure to initialize the optimizer by considering the trainable parameters only for a more memory efficient training:
-```python
-optimizer = Lion(filter(lambda p: p.requires_grad, self.model.parameters()), lr=self.config.learning_rate)
-
-...
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, optimizer=optimizer)
-```
-We advise you to use the learning rate that you would use for `Adam` divided by 3 as pointed out [here](https://github.com/lucidrains/lion-pytorch#lion---pytorch). We observed an improvement when using this optimizer compared to classic Adam (check the full logs [here](https://wandb.ai/distill-bloom/trl/runs/lj4bheke?workspace=user-younesbelkada)):
-
-<div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-lion.png">
-</div>
-
-
-## Add a learning rate scheduler
-
-You can also play with your training by adding learning rate schedulers!
-```python
-import torch
-from transformers import GPT2Tokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-
-# 1. load a pretrained model
-model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
-tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-
-# 2. define config
-ppo_config = {'batch_size': 1, 'learning_rate':1e-5}
-config = PPOConfig(**ppo_config)
-
-
-# 2. Create optimizer
-optimizer = torch.optim.SGD(model.parameters(), lr=config.learning_rate)
-lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
-
-# 3. initialize trainer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, optimizer=optimizer, lr_scheduler=lr_scheduler)
+trainer = DPOTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    tokenizer=tokenizer,
+    optimizers=(optimizer, lr_scheduler),
+)
+trainer.train()
 ```
 
 ## Memory efficient fine-tuning by sharing layers
 
 Another tool you can use for more memory efficient fine-tuning is to share layers between the reference model and the model you want to train.
+
 ```python
-import torch
-from transformers import AutoTokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, create_reference_model
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import create_reference_model, DPOConfig, DPOTrainer
 
-# 1. load a pretrained model
-model = AutoModelForCausalLMWithValueHead.from_pretrained('bigscience/bloom-560m')
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
 ref_model = create_reference_model(model, num_shared_layers=6)
-tokenizer = AutoTokenizer.from_pretrained('bigscience/bloom-560m')
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train[:1%]")
+training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 
-# 2. initialize trainer
-ppo_config = {'batch_size': 1}
-config = PPOConfig(**ppo_config)
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer)
+trainer = DPOTrainer(
+    model=model,
+    ref_model=ref_model,
+    args=training_args,
+    train_dataset=dataset,
+    tokenizer=tokenizer,
+)
+trainer.train()
 ```
 
 ## Pass 8-bit reference models 
  
-<div>
+Since `trl` supports all keyword arguments when loading a model from `transformers` using `from_pretrained`, you can also leverage `load_in_8bit` from `transformers` for more memory efficient fine-tuning.
 
-Since `trl` supports all key word arguments when loading a model from `transformers` using `from_pretrained`, you can also leverage `load_in_8bit` from `transformers` for more memory efficient fine-tuning.
-
-Read more about 8-bit model loading in `transformers` [here](https://huggingface.co/docs/transformers/perf_infer_gpu_one#bitsandbytes-integration-for-int8-mixedprecision-matrix-decomposition).
-
-</div>
+Read more about 8-bit model loading in `transformers` [here](https://huggingface.co/docs/transformers/en/peft#load-in-8bit-or-4bit).
 
 ```python
-# 0. imports
-# pip install bitsandbytes
-import torch
-from transformers import AutoTokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import DPOConfig, DPOTrainer
 
-# 1. load a pretrained model
-model = AutoModelForCausalLMWithValueHead.from_pretrained('bigscience/bloom-560m')
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained('bigscience/bloom-560m', device_map="auto", load_in_8bit=True)
-tokenizer = AutoTokenizer.from_pretrained('bigscience/bloom-560m')
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+ref_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct", quantization_config= quantization_config)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
 
-# 2. initialize trainer
-ppo_config = {'batch_size': 1}
-config = PPOConfig(**ppo_config)
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer)
+trainer = DPOTrainer(
+    model=model,
+    ref_model=ref_model,
+    args=training_args,
+    train_dataset=dataset,
+    tokenizer=tokenizer,
+)
+trainer.train()
 ```
 
 ## Use the CUDA cache optimizer
 
-When training large models, you should better handle the CUDA cache by iteratively clearing it. Do do so, simply pass `optimize_cuda_cache=True` to `PPOConfig`:
+When training large models, you should better handle the CUDA cache by iteratively clearing it. To do so, simply pass `optimize_cuda_cache=True` to `DPOConfig`:
 
 ```python
-config = PPOConfig(..., optimize_cuda_cache=True)
-```
-
-
-
-## Use score scaling/normalization/clipping
-As suggested by [Secrets of RLHF in Large Language Models Part I: PPO](https://huggingface.co/papers/2307.04964), we support score (aka reward) scaling/normalization/clipping to improve training stability via `PPOConfig`:
-```python
-from trl import PPOConfig
-
-ppo_config = {
-    use_score_scaling=True,
-    use_score_norm=True,
-    score_clip=0.5,
-}
-config = PPOConfig(**ppo_config)
-```
-
-To run `ppo.py`, you can use the following command:
-```
-python examples/scripts/ppo.py --log_with wandb --use_score_scaling --use_score_norm --score_clip 0.5
+training_args = DPOConfig(..., optimize_cuda_cache=True)
 ```
