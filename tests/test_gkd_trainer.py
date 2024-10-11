@@ -222,6 +222,7 @@ class GKDTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
+                report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 

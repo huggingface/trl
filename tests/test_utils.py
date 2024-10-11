@@ -15,12 +15,19 @@
 import unittest
 
 import torch
+from datasets import load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl.trainer.model_config import ModelConfig
-from trl.trainer.utils import decode_and_strip_padding, generate_model_card, get_peft_config, pad
+from trl.trainer.utils import (
+    DataCollatorForChatML,
+    decode_and_strip_padding,
+    generate_model_card,
+    get_peft_config,
+    pad,
+)
 
 
 if is_peft_available():
@@ -169,3 +176,77 @@ class TestGenerateModelCard(unittest.TestCase):
         assert "my_model" in card_text
         assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
         assert "My Trainer" in card_text
+
+
+class TestDataCollatorForChatML(unittest.TestCase):
+    def setUp(self):
+        # Initialize the tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained("codellama/CodeLlama-7b-Instruct-hf")
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Define token IDs
+        self.bos_token_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
+        self.eos_token_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else 2
+        # Token ID for "true", the last assistant's response in the example:
+        self.ignore_index = -100
+        self.max_length = 1024
+        self.messages_key = "messages"
+
+        # Example input
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        self.examples = dataset.to_list()
+
+        # Initialize the data collator
+        self.collator = DataCollatorForChatML(
+            tokenizer=self.tokenizer,
+            max_length=self.max_length,
+            ignore_index=self.ignore_index,
+        )
+
+    def test_data_collator_for_chatml(self):
+        # Process the data
+        data = self.collator(self.examples)
+
+        # Decode input_ids and labels for verification
+        input_ids = data["input_ids"][0].tolist()
+        labels = data["labels"][0].tolist()
+        prompt_only = data["prompts"][0].tolist()
+
+        # Verify that input_ids start with optional padding tokens  and a single BOS token and there are no extra ones
+        first_non_pad = next(token for token in input_ids if token != self.tokenizer.pad_token_id)
+        self.assertEqual(
+            first_non_pad, self.bos_token_id, "The first non-padding token of input_ids should be BOS token."
+        )
+        self.assertEqual(input_ids.count(self.bos_token_id), 1, "There should be exactly one BOS token in input_ids.")
+
+        # Verify that the assistant's response token is present in input_ids and not in the prompt_only
+        last_assistant_response = self.examples[0][self.messages_key][-1]["content"]
+        last_assistant_response_tokens = self.tokenizer.encode(last_assistant_response, add_special_tokens=False)
+        response_in_input_ids = all(token in input_ids for token in last_assistant_response_tokens)
+        self.assertTrue(response_in_input_ids, "The assistant's response should be present in input_ids.")
+
+        # Check if the last assistant's response tokens are not in prompt_only
+        response_in_prompt = all(token in prompt_only for token in last_assistant_response_tokens)
+        self.assertFalse(response_in_prompt, "The assistant's response should not be present in prompt_only.")
+
+        # Verify that EOS token is at the end of input_ids
+        self.assertEqual(input_ids[-1], self.eos_token_id, "The last token of input_ids should be EOS token.")
+
+        # Verify that the labels preserved the target string (last_assistant_response)
+        last_assistant_response = self.examples[0][self.messages_key][-1]["content"]
+        last_assistant_response_tokens = self.tokenizer.encode(last_assistant_response, add_special_tokens=False)
+
+        # Find the start and end of the last assistant's response in the labels
+        response_start = next(i for i, label in enumerate(labels) if label != self.ignore_index)
+        response_end = next(i for i in range(len(labels) - 1, -1, -1) if labels[i] != self.ignore_index)
+
+        actual_response = labels[response_start : response_end - 1]
+        self.assertEqual(
+            actual_response,
+            last_assistant_response_tokens,
+            "The labels should preserve the last assistant's response tokens.",
+        )
+
+        # Verify that EOS token is at the end of labels
+        self.assertEqual(labels[-1], self.eos_token_id, "The last token of labels should be EOS token.")
