@@ -136,7 +136,7 @@ class BasePairwiseJudge(BaseJudge):
 
 class BaseBinaryJudge(BaseJudge):
     """
-    Base class for constraint judges.
+    Base class for binary judges.
     """
 
     @abstractmethod
@@ -146,7 +146,7 @@ class BaseBinaryJudge(BaseJudge):
         """
         Judge the completion for a given prompt. Used to assess if a completion satisfies a constraint.
 
-        This base class should be used to implement constraint-based evaluation as done in section 4.1.4 of the CGPO paper (https://arxiv.org/pdf/2409.20370).
+        This base class should be used to implement binary evaluations as done in section 4.1.4 of the CGPO paper (https://arxiv.org/pdf/2409.20370).
         It is relevant for assessing whether or not a prompt completion pair satisfies a specific contraint.
 
         Args:
@@ -352,7 +352,7 @@ class AllTrueJudge(BaseBinaryJudge):
     """
     Unify the decision of multiple BaseBinaryJudge.
 
-    This class returns False if it fails on any of the constraint judges (ie a judge returns 0 or -1) and returns True otherwise.
+    This class returns False if it fails on any of the binary judges (ie a judge returns 0 or -1) and returns True otherwise.
 
     It is an implementation of the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370)
 
@@ -366,11 +366,11 @@ class AllTrueJudge(BaseBinaryJudge):
     def judge(
         self, prompts: List[str], completions: List[str], gold_answers: List[str] = None, shuffle_order: bool = True
     ) -> List[bool]:
-        all_constraint_judgments = [
+        all_binary_judgments = [
             judge.judge(prompts, completions, gold_answers, shuffle_order) for judge in self.judges
         ]
 
         return [
-            True if all(constraint_judgment == 1 for constraint_judgment in constraint_judgments) else False
-            for constraint_judgments in zip(*all_constraint_judgments)
+            True if all(all_binary_judgment == 1 for all_binary_judgment in binary_judgments) else False
+            for binary_judgments in zip(*all_binary_judgments)
         ]
