@@ -54,7 +54,6 @@ python examples/scripts/orpo.py \
 
 from dataclasses import dataclass, field
 
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
@@ -92,17 +91,6 @@ if __name__ == "__main__":
     dataset = load_dataset(script_args.dataset_name)
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
-
-    def process(row):
-        row["prompt"] = tokenizer.apply_chat_template(row["chosen"][:-1], tokenize=False)
-        row["chosen"] = tokenizer.apply_chat_template([row["chosen"][-1]], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template([row["rejected"][-1]], tokenize=False)
-        return row
-
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(process, num_proc=training_args.dataset_num_proc)
 
     ################
     # Training
