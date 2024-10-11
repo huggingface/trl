@@ -1,8 +1,10 @@
+# TRL - Transformer Reinforcement Learning
+
 <div style="text-align: center">
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl_banner_dark.png" alt="TRL Banner">
 </div>
 
-# TRL - Transformer Reinforcement Learning
+<hr> <br>
 
 <h3 align="center">
     <p>A comprehensive library to post-train foundation models</p>
@@ -27,7 +29,7 @@ TRL is a cutting-edge library designed for post-training foundation models using
 
 - **Command Line Interface (CLI)**: A simple interface lets you fine-tune and interact with models without needing to write code.
 
-- **Custom Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), and more.
+- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer), [`ORPOTrainer`](https://huggingface.co/docs/trl/orpo_trainer) and more.
 
 - **AutoModels**: Use pre-defined model classes like [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) to simplify reinforcement learning (RL) with LLMs.
 
@@ -87,7 +89,7 @@ For more flexibility and control over training, TRL provides dedicated trainer c
 
 ### `SFTTrainer`
 
-Here is a basic example on how to use the `SFTTrainer`:
+Here is a basic example of how to use the `SFTTrainer`:
 
 ```python
 from trl import SFTConfig, SFTTrainer
@@ -106,7 +108,7 @@ trainer.train()
 
 ### `RewardTrainer`
 
-Here is a basic example on how to use the `RewardTrainer`:
+Here is a basic example of how to use the `RewardTrainer`:
 
 ```python
 from trl import RewardConfig, RewardTrainer
@@ -207,3 +209,7 @@ make dev
   howpublished = {\url{https://github.com/huggingface/trl}}
 }
 ```
+
+## License
+
+This repository's source code is available under the [Apache-2.0 License](LICENSE).
