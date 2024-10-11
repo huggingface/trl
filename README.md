@@ -5,7 +5,7 @@
 # TRL - Transformer Reinforcement Learning
 
 <h3 align="center">
-    <p>A comprehensive library to post-train large language models (LLMs).</p>
+    <p>A comprehensive library to post-train foundation models</p>
 </h3>
 
 <p align="center">
