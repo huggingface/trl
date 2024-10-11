@@ -1136,7 +1136,7 @@ class DPOTrainerTester(unittest.TestCase):
                 "rejected_attention_mask": rejected_attention_mask,
             }
 
-            _, _, chosen_logits, rejected_logits, _ = trainer.concatenated_forward(model, batch)
+            _, _, chosen_logits, rejected_logits, _, _ = trainer.concatenated_forward(model, batch)
 
             assert 4 == chosen_logits.shape[1]
             assert 4 == rejected_logits.shape[1]
