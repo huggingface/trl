@@ -27,18 +27,18 @@ class ScriptArguments:
         Dataset split to use for training.
     dataset_test_split (`str`, *optional*, defaults to `"test"`):
         Dataset split to use for evaluation.
-    ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
-        Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar type,
-        inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     config (`str` or `None`, *optional*, defaults to `None`):
         Path to the optional config file.
     gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
         Whether to apply `use_reentrant` for gradient_checkpointing.
+    ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
+        Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar type,
+        inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
     dataset_name: str
     dataset_train_split: str = "train"
     dataset_test_split: str = "test"
-    ignore_bias_buffers: bool = False
     config: Optional[str] = None
     gradient_checkpointing_use_reentrant: bool = False
+    ignore_bias_buffers: bool = False
