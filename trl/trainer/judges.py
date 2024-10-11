@@ -228,7 +228,7 @@ class PairRMJudge(BasePairwiseJudge):
 
         # Rank the completions
         ranks = self.blender.rank(prompts, completions, return_scores=return_scores, disable_tqdm=True)
-        if return_scores is not True:
+        if not return_scores:
             ranks -= 1  # PairRM rank is 1-indexed, so we subtract 1 to make it 0-indexed
         else:
             # scale the logits by temperature

@@ -62,4 +62,5 @@ class TestJudges(unittest.TestCase):
         prompts, completions = self._get_prompts_and_completions()
         probs = judge.judge(prompts=prompts, completions=completions, return_scores=True)
         self.assertEqual(len(probs), 2)
+        self.assertTrue(all(isinstance(prob, float) for prob in probs))
         self.assertTrue(all(0 <= prob <= 1 for prob in probs))
