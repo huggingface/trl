@@ -27,7 +27,7 @@ def is_conversational(example: Dict[str, Any]) -> bool:
     Args:
         example (`Dict[str, Any]`):
             A single data entry of a dataset. The example can have different keys depending on the
-            dataset format.
+            dataset type.
 
     Returns:
         `bool`: `True` if the data is in a conversational format, `False` otherwise.
@@ -147,7 +147,7 @@ def maybe_apply_chat_template(
     Args:
         example (`Dict[str, List[Dict[str, str]]`):
             Dictionary representing a single data entry of a conversational dataset. Each data entry can have different
-            keys depending on the dataset format. The supported dataset formats are:
+            keys depending on the dataset type. The supported dataset types are:
 
                 - Language modeling dataset: `"messages"`.
                 - Prompt-only dataset: `"prompt"`.
