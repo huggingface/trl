@@ -99,7 +99,6 @@ class RewardScriptArguments(ScriptArguments):
         )
 
 
-# Deprecated
 @dataclass
 class DPOScriptArguments(ScriptArguments):
     def __post_init__(self):
