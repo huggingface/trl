@@ -195,7 +195,7 @@ class CGPOTrainer(Trainer):
         # Usually, the user wants the ref model to be the initial version of the model. When using PEFT, it's easy to
         # get the ref model, as it's just the model with a disabled adapter. When not using PEFT, we need to create
         # the ref model from the model by copying it and disable the gradients and set it in evaluation mode.
-        if ref_model is None:  # No ref model provided, the most common case
+        if self.ref_model is None:  # No ref model provided, the most common case
             if peft_config is None:
                 self.ref_model = create_reference_model(model)  # copy, disable gradients, set eval mode
             else:
@@ -243,6 +243,14 @@ class CGPOTrainer(Trainer):
             if args.local_genscore_mini_batch_size
             else args.per_device_train_batch_size
         )
+
+        if (
+            self.local_genscore_mini_batch_size < args.per_device_train_batch_size
+            or self.local_genscore_mini_batch_size > (args.per_device_train_batch_size * self.k)
+        ):
+            raise ValueError(
+                "`local_genscore_mini_batch_size` should be higher than `per_device_train_batch_size` and smaller than `per_device_train_batch_size*k`."
+            )
 
         # to avoid divisions by 0
         self.epsilon = 1e-9
@@ -429,19 +437,18 @@ class CGPOTrainer(Trainer):
         return loss
 
     def crraft_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
-        bs = inputs["bs"]
-        mini_bs = self.local_genscore_mini_batch_size
-        context_length = inputs["context_length"]
         prompt_baseline_ids = inputs["input_ids"]
         prompt_baseline_mask = inputs["attention_mask"]
 
-        rewards = inputs["rewards"].view(bs, self.k)
-        judgements = inputs["judgements"].view(bs, self.k)
+        rewards = inputs["rewards"]
+        judgements = inputs["judgements"]
         prompt_completion_ids = inputs["prompt_completion_ids"]
         prompt_completion_mask = inputs["prompt_completion_mask"]
         completion_logprobs = inputs["completion_logprobs"]
 
-        full_bs = prompt_completion_ids.shape[0]
+        bs = inputs["bs"]
+        mini_bs = self.local_genscore_mini_batch_size
+        context_length = inputs["context_length"]
 
         # get baseline rewards
         with torch.no_grad():
@@ -453,13 +460,13 @@ class CGPOTrainer(Trainer):
             )
 
         if self.args.missing_eos_penalty is not None:
-            baseline_ids = inputs["input_ids"][:, context_length:]
+            baseline_ids = prompt_baseline_ids[:, context_length:]
             contain_eos_token = torch.any(baseline_ids == self.generation_config.eos_token_id, dim=-1)
             baseline_rewards[~contain_eos_token] -= self.args.missing_eos_penalty
 
         # compute kl div regularizer
         ref_logprobss = []
-        for i in range(0, full_bs, mini_bs):
+        for i in range(0, prompt_completion_ids.shape[0], mini_bs):
             mini_batch_ids = prompt_completion_ids[i : i + mini_bs]
             mini_batch_mask = prompt_completion_mask[i : i + mini_bs]
             with torch.no_grad():
@@ -470,13 +477,15 @@ class CGPOTrainer(Trainer):
 
         ref_logprobs = torch.cat(ref_logprobss)
         kl_div = completion_logprobs - ref_logprobs
-        kl_div_regularizer = kl_div < self.kl_threshold
+        kl_div_regularizer = kl_div <= self.kl_threshold
 
+        baseline_rewards = baseline_rewards.repeat_interleave(repeats=self.k, dim=0)
         # compute the contrainted regularized calibrated rewards
-        regularized_rewards = (
-            kl_div_regularizer.view(bs, self.k) * judgements * torch.sigmoid(rewards - baseline_rewards.unsqueeze(-1))
+        regularized_rewards = (kl_div_regularizer * judgements * torch.sigmoid(rewards - baseline_rewards)).view(
+            bs, self.k
         )
 
+        # get the best completions and rewards per prompt
         best_completion_indices = torch.argmax(regularized_rewards, dim=-1)
         batch_indices = torch.arange(bs)
         best_prompt_completion_ids = prompt_completion_ids.view(bs, self.k, -1)[batch_indices, best_completion_indices]
@@ -490,28 +499,46 @@ class CGPOTrainer(Trainer):
         )
 
         no_positive_completion_mask = best_rewards == 0
-        if no_positive_completion_mask.sum() != 0:
+        if no_positive_completion_mask.any():
             # only compute the baseline logprobs if we need to (ie some prompts do not have any positive samples)
             # the baseline calibrated reward is always equal to 0.5 ie sigmoid(baseline_rewards - baselines_rewards)
             # Check that the baseline satisfy all constraints: judgements and kl
-            baseline_judgements = self.moj.judge(inputs["prompts_text"], inputs["completions_text"])
-            baseline_judgements = torch.tensor(baseline_judgements, device=self.model.device, dtype=torch.bool)
+            baseline_judgements = torch.zeros_like(best_rewards, dtype=torch.bool)
+            prompts_text = [text for i, text in enumerate(inputs["prompts_text"]) if no_positive_completion_mask[i]]
+            baseline_completions_text = [
+                text for i, text in enumerate(inputs["baseline_completions_text"]) if no_positive_completion_mask[i]
+            ]
+            no_positive_judgements = self.moj.judge(prompts_text, baseline_completions_text)
 
-            baseline_calibrated_rewards = 0.5
-            baseline_logprobs = self._get_batch_logprobs(prompt_baseline_ids, prompt_baseline_mask, context_length)
+            baseline_judgements[no_positive_completion_mask] = torch.tensor(
+                no_positive_judgements, device=self.model.device, dtype=torch.bool
+            )
+
+            baseline_logprobs = torch.zeros_like(best_completion_logprobs)
+            baseline_logprobs[no_positive_completion_mask] = self._get_batch_logprobs(
+                prompt_baseline_ids[no_positive_completion_mask],
+                prompt_baseline_mask[no_positive_completion_mask],
+                context_length,
+            )
             with torch.no_grad():
-                baseline_ref_logprobs = self._get_batch_logprobs(
-                    prompt_baseline_ids, prompt_baseline_mask, context_length, use_ref_model=True
+                baseline_ref_logprobs = torch.zeros_like(best_completion_logprobs)
+                baseline_ref_logprobs[no_positive_completion_mask] = self._get_batch_logprobs(
+                    prompt_baseline_ids[no_positive_completion_mask],
+                    prompt_baseline_mask[no_positive_completion_mask],
+                    context_length,
+                    use_ref_model=True,
                 )
+
                 baseline_kl_div = baseline_logprobs - baseline_ref_logprobs
 
-            baseline_kl_div_regularizer = baseline_kl_div < self.kl_threshold
+            baseline_kl_div_regularizer = baseline_kl_div <= self.kl_threshold
             replace_by_baseline_mask = no_positive_completion_mask * baseline_kl_div_regularizer * baseline_judgements
 
             best_completion_logprobs = torch.where(
                 replace_by_baseline_mask, baseline_logprobs, best_completion_logprobs
             )
-            best_rewards = torch.where(replace_by_baseline_mask, baseline_calibrated_rewards, best_rewards)
+            # calibrated reward for the baseline is always 0.5 ie sigmoid(0)
+            best_rewards = torch.where(replace_by_baseline_mask, 0.5, best_rewards)
 
         # compute loss as done in eqn (18) of the CGPO paper: https://huggingface.co/papers/2409.20370
         losses = -best_completion_logprobs * best_rewards
@@ -529,7 +556,9 @@ class CGPOTrainer(Trainer):
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         bs, context_length = inputs["prompts"].shape
         inputs["prompts_text"] = self.processing_class.batch_decode(inputs["prompts"])
-        inputs["completions_text"] = self.processing_class.batch_decode(inputs["input_ids"][:, context_length:])
+        inputs["baseline_completions_text"] = self.processing_class.batch_decode(
+            inputs["input_ids"][:, context_length:]
+        )
 
         # step 4 of algorithm 1 of the CGPO paper: https://huggingface.co/papers/2409.20370
         prompt_ids = inputs["prompts"].repeat_interleave(repeats=self.k, dim=0)
