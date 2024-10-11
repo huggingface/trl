@@ -45,6 +45,7 @@ Install the library using `pip`:
 
 ```bash
 pip install trl
+```
 
 ### From source
 
