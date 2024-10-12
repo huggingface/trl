@@ -276,7 +276,7 @@ class StepwiseRewardTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
-            trainer_name="StepwiseReward",
+            trainer_name="Stepwise Reward",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
