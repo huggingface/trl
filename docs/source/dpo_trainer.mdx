@@ -12,7 +12,7 @@ The abstract from the paper is the following:
 
 The first step is to train an SFT model, to ensure the data we train on is in-distribution for the DPO algorithm.
 
-Then, fine-tuning a language model via DPO consists of two steps and is easier than [PPO](ppov2_trainer):
+Then, fine-tuning a language model via DPO consists of two steps and is easier than [PPO](ppo_trainer):
 
 1. **Data collection**: Gather a [preference dataset](dataset_formats#preference) with positive and negative selected pairs of generation, given a prompt.
 2. **Optimization**: Maximize the log-likelihood of the DPO loss directly.
@@ -79,9 +79,11 @@ The best programming language for specific applications can vary depending on th
 The best programming language based on these factors is subjective and depends on what the programmer intends to accomplish.
 </code></pre>
 
-## Expected dataset format
+## Expected dataset type
 
-DPO requires a [preference dataset](dataset_formats#preference). The [`DPOTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+DPO requires a [preference dataset](dataset_formats#preference). The [`DPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+
+Although the [`DPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
 
 ### Special considerations for vision-language models
 
@@ -160,6 +162,10 @@ The [TR-DPO](https://huggingface.co/papers/2404.09656) paper suggests syncing th
 ### RPO loss
 
 The [RPO](https://huggingface.co/papers/2404.19733) paper implements an iterative preference tuning algorithm using a loss related to the RPO loss in this [paper](https://huggingface.co/papers/2405.16436) that essentially consists of a weighted SFT loss on the chosen preferences together with the DPO loss. To use this loss, set the `rpo_alpha` in the [`DPOConfig`] to an appropriate value. The paper suggests setting this weight to `1.0`.
+
+### WPO loss
+
+The [WPO](https://huggingface.co/papers/2406.11827) paper adapts off-policy data to resemble on-policy data more closely by reweighting preference pairs according to their probability under the current policy. To use this method, set the `use_weighting` flag to `True` in the [`DPOConfig`].
 
 ### For Mixture of Experts Models: Enabling the auxiliary loss
 

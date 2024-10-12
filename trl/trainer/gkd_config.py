@@ -41,6 +41,9 @@ class GKDConfig(SFTConfig):
             from a string.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether or not to disable dropouts in `model`.
+        seq_kd (`bool`, *optional*, defaults to `False`):
+            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT
+            on teacher-generated output).
     """
 
     temperature: float = 0.9
@@ -50,6 +53,7 @@ class GKDConfig(SFTConfig):
     teacher_model_name_or_path: Optional[str] = None
     teacher_model_init_kwargs: Optional[Dict[str, Any]] = None
     disable_dropout: bool = True
+    seq_kd: bool = False
 
     def __post_init__(self):
         super().__post_init__()
