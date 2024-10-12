@@ -21,7 +21,7 @@ from transformers import TrainingArguments
 @dataclass
 class StepwiseRewardConfig(TrainingArguments):
     r"""
-    Configuration class for the [`StepwiseRewardConfig`].
+    Configuration class for the [`StepwiseRewardTrainer`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -29,13 +29,13 @@ class StepwiseRewardConfig(TrainingArguments):
 
     Parameters:
         max_length (`int`, *optional*, defaults to `None`):
-            Maximum length of the sequences (prompt + steps) in the batch.
-        post_step_separator (`str`, *optional*, defaults to `\n`):
+            Maximum length of the sequences (prompt + completion) in the batch. The completion is the concatenation of the steps.
+        post_step_separator (`str`, *optional*, defaults to `"\n"`):
             Separator used to separate each step of the reasoning process.
         dataset_num_proc (`int`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
     """
 
     max_length: Optional[int] = None
-    step_separator: Optional[str] = None
+    step_separator: str = "\n"
     dataset_num_proc: Optional[int] = None

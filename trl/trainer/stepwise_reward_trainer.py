@@ -14,27 +14,21 @@
 import inspect
 import os
 import warnings
-from collections import defaultdict
-from dataclasses import FrozenInstanceError, replace
-from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import pandas as pd
 import torch
 import torch.nn as nn
 from accelerate import PartialState
-from accelerate.utils import gather_object
 from datasets import Dataset
 from transformers import (
     DataCollator,
+    DataCollatorForTokenClassification,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
-    DataCollatorForTokenClassification,
     is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
@@ -42,7 +36,6 @@ from ..data_utils import maybe_apply_chat_template
 from .stepwise_reward_config import StepwiseRewardConfig
 from .utils import (
     compute_accuracy,
-    trl_sanitze_kwargs_for_tagging,
     generate_model_card,
 )
 
@@ -204,7 +197,9 @@ class StepwiseRewardTrainer(Trainer):
                     "max_length": args.max_length,
                     "step_separator": args.step_separator,
                 }
-                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs=chat_template_kwargs)
+                train_dataset = train_dataset.map(
+                    maybe_apply_chat_template, fn_kwargs=chat_template_kwargs, num_proc=args.dataset_num_proc
+                )
                 train_dataset = train_dataset.map(
                     _tokenize,
                     batched=True,
@@ -213,7 +208,9 @@ class StepwiseRewardTrainer(Trainer):
                 )
 
                 if eval_dataset is not None:
-                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs=chat_template_kwargs)
+                    eval_dataset = eval_dataset.map(
+                        maybe_apply_chat_template, fn_kwargs=chat_template_kwargs, num_proc=args.dataset_num_proc
+                    )
                     eval_dataset = eval_dataset.map(
                         _tokenize,
                         batched=True,
@@ -274,5 +271,3 @@ class StepwiseRewardTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
-
-    @wraps(Trainer.push_to_hub)

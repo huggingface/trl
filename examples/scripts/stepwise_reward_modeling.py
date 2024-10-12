@@ -24,7 +24,7 @@ python examples/scripts/stepwise_reward_modeling.py \
     --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 50 \
-    --max_length 2048 
+    --max_length 2048
 
 LoRA:
 python examples/scripts/stepwise_reward_modeling.py \

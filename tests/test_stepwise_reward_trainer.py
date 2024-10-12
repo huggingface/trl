@@ -15,12 +15,12 @@ import tempfile
 import unittest
 
 import torch
-from datasets import Dataset, load_dataset
+from datasets import load_dataset
 from transformers import AutoModelForTokenClassification, AutoTokenizer, EvalPrediction
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import StepwiseRewardTrainer, StepwiseRewardConfig, maybe_apply_chat_template
+from trl import StepwiseRewardConfig, StepwiseRewardTrainer, maybe_apply_chat_template
 from trl.trainer import compute_accuracy
 from trl.trainer.stepwise_reward_trainer import _tokenize
 
