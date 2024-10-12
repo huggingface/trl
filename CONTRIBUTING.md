@@ -181,13 +181,7 @@ Follow these steps to start contributing:
    ```
 
    TRL relies on `ruff` to format its source code
-   consistently. After you make changes, apply automatic style corrections and code verifications
-   that can't be automated in one go with:
-
-   This target is also optimized to only work with files modified by the PR you're working on.
-
-   If you prefer to run the checks one after the other, the following command apply the
-   style corrections:
+   consistently. After you make changes, check for style corrections using ```ruff format``` and code verifications using ```ruff check```
 
    ```bash
    $ make precommit
