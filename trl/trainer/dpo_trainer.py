@@ -90,6 +90,7 @@ class DPOCollator(DataCollatorMixin):
 
     tokenizer: PreTrainedTokenizerBase
     return_tensors: str = "pt"
+    prompt_padding_side: str = "left"
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         # Convert to tensor
@@ -101,8 +102,10 @@ class DPOCollator(DataCollatorMixin):
         rejected_attention_mask = [torch.ones_like(input_ids) for input_ids in rejected_input_ids]
 
         # Pad
-        prompt_input_ids = pad(prompt_input_ids, padding_value=self.tokenizer.pad_token_id, padding_side="left")
-        prompt_attention_mask = pad(prompt_attention_mask, padding_value=0, padding_side="left")
+        prompt_input_ids = pad(
+            prompt_input_ids, padding_value=self.tokenizer.pad_token_id, padding_side=self.prompt_padding_side
+        )
+        prompt_attention_mask = pad(prompt_attention_mask, padding_value=0, padding_side=self.prompt_padding_side)
         chosen_input_ids = pad(chosen_input_ids, padding_value=self.tokenizer.pad_token_id)
         chosen_attention_mask = pad(chosen_attention_mask, padding_value=0)
         rejected_input_ids = pad(rejected_input_ids, padding_value=self.tokenizer.pad_token_id)
@@ -493,7 +496,9 @@ class DPOTrainer(Trainer):
             #     label_pad_token_id=args.label_pad_token_id,
             #     is_encoder_decoder=self.is_encoder_decoder,
             # )
-            data_collator = DPOCollator(processing_class)
+            data_collator = DPOCollator(
+                processing_class, prompt_padding_side="right" if self.is_encoder_decoder else "left"
+            )
 
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
