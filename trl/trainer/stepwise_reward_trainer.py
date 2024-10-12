@@ -13,6 +13,7 @@
 # limitations under the License.
 import inspect
 import os
+import textwrap
 import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -260,6 +261,23 @@ class StepwiseRewardTrainer(Trainer):
         else:
             base_model = None
 
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
+        citation = textwrap.dedent(
+            """\
+        @article{uesato2022solving,
+        title={Solving math word problems with process-and outcome-based feedback},
+        author={Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
+        journal={arXiv preprint arXiv:2211.14275},
+        year={2022}
+        }"""
+        )
+
         model_card = generate_model_card(
             base_model=base_model,
             model_name=model_name,
@@ -268,6 +286,8 @@ class StepwiseRewardTrainer(Trainer):
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             trainer_name="Stepwise Reward",
+            trainer_citation=citation,
+            paper_title="Solving math word problems with process-and outcome-based feedback",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
