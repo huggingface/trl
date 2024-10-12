@@ -47,7 +47,7 @@
     - local: reward_trainer
       title: Reward
     - local: stepwise_reward_trainer
-      title: StepwiseReward
+      title: Stepwise Reward
     - local: rloo_trainer
       title: RLOO
     - local: sft_trainer
