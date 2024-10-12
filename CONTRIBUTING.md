@@ -179,13 +179,23 @@ Follow these steps to start contributing:
    ```bash
    $ make test
    ```
+  
+<br> 
+TRL relies on `ruff` for maintaining consistent code formatting across its source files. Before submitting any PR, you should apply automatic style corrections and run code verification checks.
 
-   TRL relies on `ruff` to format its source code
-   consistently. After you make changes, check for style corrections using ```ruff format``` and code verifications using ```ruff check```
+We provide a `precommit` target in the `Makefile` that simplifies this process by running all required checks and optimizations on only the files modified by your PR.
 
-   ```bash
-   $ make precommit
-   ```
+To apply these checks and corrections in one step, use:
+
+```bash
+$ make precommit
+```
+
+This command runs the following:
+- Executes `pre-commit` hooks to automatically fix style issues with `ruff` and other tools.
+- Runs additional scripts such as adding copyright information.
+
+If you prefer to apply the style corrections separately or review them individually, the `pre-commit` hook will handle the formatting for the files in question.
 
    Once you're happy with your changes, add changed files using `git add` and
    make a commit with `git commit` to record your changes locally:
@@ -198,7 +208,7 @@ Follow these steps to start contributing:
    Please write [good commit messages](https://chris.beams.io/posts/git-commit/).
 
    It is a good idea to sync your copy of the code with the original
-   Repository regularly. This way you can quickly account for changes:
+   repository regularly. This way you can quickly account for changes:
 
    ```bash
    $ git fetch upstream
