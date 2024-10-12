@@ -90,7 +90,6 @@ class DPOCollator(DataCollatorMixin):
 
     tokenizer: PreTrainedTokenizerBase
     return_tensors: str = "pt"
-    prompt_padding_side: str = "left"
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         # Convert to tensor
@@ -102,10 +101,8 @@ class DPOCollator(DataCollatorMixin):
         rejected_attention_mask = [torch.ones_like(input_ids) for input_ids in rejected_input_ids]
 
         # Pad
-        prompt_input_ids = pad(
-            prompt_input_ids, padding_value=self.tokenizer.pad_token_id, padding_side=self.prompt_padding_side
-        )
-        prompt_attention_mask = pad(prompt_attention_mask, padding_value=0, padding_side=self.prompt_padding_side)
+        prompt_input_ids = pad(prompt_input_ids, padding_value=self.tokenizer.pad_token_id, padding_side="left")
+        prompt_attention_mask = pad(prompt_attention_mask, padding_value=0, padding_side="left")
         chosen_input_ids = pad(chosen_input_ids, padding_value=self.tokenizer.pad_token_id)
         chosen_attention_mask = pad(chosen_attention_mask, padding_value=0)
         rejected_input_ids = pad(rejected_input_ids, padding_value=self.tokenizer.pad_token_id)
@@ -496,9 +493,7 @@ class DPOTrainer(Trainer):
             #     label_pad_token_id=args.label_pad_token_id,
             #     is_encoder_decoder=self.is_encoder_decoder,
             # )
-            data_collator = DPOCollator(
-                processing_class, prompt_padding_side="right" if self.is_encoder_decoder else "left"
-            )
+            data_collator = DPOCollator(processing_class)
 
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
@@ -617,15 +612,13 @@ class DPOTrainer(Trainer):
                 "tokenizer": self.processing_class,
                 "max_prompt_length": args.max_prompt_length,
                 "max_completion_length": args.max_completion_length,
-                "max_length": args.max_length,
-                "truncation_mode": args.truncation_mode,
+                "eos_prompt": self.is_encoder_decoder,  # for enc-dec, we also add the eos token to the prompt
             }
             train_dataset = train_dataset.map(
                 self.tokenize_row,
                 fn_kwargs=fn_kwargs,
                 num_proc=self.dataset_num_proc,
                 writer_batch_size=10,
-                load_from_cache_file=False,
                 desc="Tokenizing train dataset",
             )
             if eval_dataset is not None:
@@ -634,7 +627,6 @@ class DPOTrainer(Trainer):
                     fn_kwargs=fn_kwargs,
                     num_proc=self.dataset_num_proc,
                     writer_batch_size=10,
-                    load_from_cache_file=False,
                     desc="Tokenizing eval dataset",
                 )
 
@@ -694,7 +686,7 @@ class DPOTrainer(Trainer):
             self.running = RunningMoments(self.accelerator)
 
     @staticmethod
-    def tokenize_row(features, tokenizer, max_prompt_length, max_completion_length, max_length, truncation_mode):
+    def tokenize_row(features, tokenizer, max_prompt_length, max_completion_length, eos_prompt):
         prompt_input_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
         chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
         rejected_input_ids = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
@@ -703,6 +695,8 @@ class DPOTrainer(Trainer):
         if tokenizer.bos_token is not None:
             prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
         if tokenizer.eos_token is not None:
+            if eos_prompt:  # for encoder-decoder models, we also add the eos token to the prompt
+                prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
             chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
             rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
