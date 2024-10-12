@@ -197,12 +197,6 @@ class StepwiseRewardTrainer(Trainer):
                     "When the dataset isn't pretokenized, you should set `max_length` in the `StepwiseRewardConfig`"
                     " we have set it for you, but you should do it yourself in the future."
                 )
-            if args.step_separator is None:
-                args.step_separator = "\n"
-                warnings.warn(
-                    "When the dataset isn't pretokenized, you should set `step_separator` in the `StepwiseRewardConfig`"
-                    " we have set it for you to '\n', but you should do it yourself in the future."
-                )
             with PartialState().local_main_process_first():
                 chat_template_kwargs = {"tokenizer": tokenizer}
                 tokenize_kwargs = {
