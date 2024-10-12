@@ -222,8 +222,8 @@ class StepwiseRewardTrainer(Trainer):
                     eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs=chat_template_kwargs)
                     eval_dataset = eval_dataset.map(
                         _tokenize,
-                        fn_kwargs=tokenize_kwargs,
                         batched=True,
+                        fn_kwargs=tokenize_kwargs,
                         num_proc=args.dataset_num_proc,
                     )
 
