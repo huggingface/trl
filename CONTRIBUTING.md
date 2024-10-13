@@ -252,7 +252,7 @@ repository here's how to run tests with `pytest` for the library:
 $ python -m pytest -sv ./tests
 ```
 
-That's how `make test` is implemented (sans the `pip install` line)!
+That's how `make test` is implemented (without the `pip install` line)!
 
 You can specify a smaller set of tests to test only the feature
 you're working on.
