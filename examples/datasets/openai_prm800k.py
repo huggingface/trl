@@ -42,5 +42,13 @@ if __name__ == "__main__":
 
     dataset = load_dataset("gaetanlop/openai-prm800k-15k-stage2")
 
+    def reformat_labels(examples):
+        # openai-prm800k labels: -1, 0, or +1 where -1 means incorrect, 0 means that it isn't incorrect but doesn't make any progress, and +1 means correct
+        examples["labels"] = [[label + 1 for label in labels] for labels in examples["labels"]]
+
+        return examples
+
+    dataset = dataset.map(reformat_labels, batched=True)
+
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)

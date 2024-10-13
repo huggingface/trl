@@ -56,9 +56,9 @@ def _tokenize(
 
     post_step_tokens = tokenizer.encode(step_separator, add_special_tokens=False)
 
-    for prompt, steps, labels in zip(batch["prompt"], batch["stepwise_completion"], batch["stepwise_labels"]):
+    for prompt, steps, labels in zip(batch["prompt"], batch["completion"], batch["labels"]):
         if len(steps) != len(labels):
-            raise ValueError("`stepwise_labels` and `stepwise_completion` should have the same length.")
+            raise ValueError("`labels` and `completion` should have the same length.")
         input_ids = []
         token_level_labels = []
 
