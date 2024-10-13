@@ -184,7 +184,7 @@ Follow these steps to start contributing:
 
     We provide a `precommit` target in the `Makefile` that simplifies this process by running all required checks and optimizations on only the files modified by your PR.
 
-To apply these checks and corrections in one step, use:
+    To apply these checks and corrections in one step, use:
 
 ```bash
 $ make precommit
