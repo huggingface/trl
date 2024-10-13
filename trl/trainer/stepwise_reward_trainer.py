@@ -58,15 +58,12 @@ def _tokenize(
 
     for prompt, steps, labels in zip(batch["prompt"], batch["completion"], batch["labels"]):
         if isinstance(steps, str):
-            steps = steps.split(step_separator)
+            steps = steps.strip().split(step_separator)
 
         if len(steps) != len(labels):
             raise ValueError("`labels` and `completion` should have the same length.")
         input_ids = []
         token_level_labels = []
-
-        if getattr(tokenizer, "add_bos_token", False) and tokenizer.bos_token_id is not None:
-            input_ids.append(tokenizer.bos_token_id)
 
         input_ids.extend(tokenizer.encode(prompt, add_special_tokens=False))
         token_level_labels.extend([-100] * len(input_ids))
