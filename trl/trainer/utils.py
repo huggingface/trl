@@ -763,9 +763,9 @@ def compute_accuracy(eval_pred) -> Dict[str, float]:
         predictions = np.argmax(predictions, axis=2)
 
         predictions = np.array(
-            [p for prediction, label in zip(predictions, labels) for (p, l) in zip(prediction, label) if l != -100]
+            [p for prediction, label in zip(predictions, labels) for (p, lbl) in zip(prediction, label) if lbl != -100]
         )
-        labels = np.array([l for label in labels for l in label if l != -100])
+        labels = np.array([lbl for label in labels for lbl in label if lbl != -100])
     else:
         # Here, predictions is rewards_chosen and rewards_rejected.
         # We want to see how much of the time rewards_chosen > rewards_rejected.

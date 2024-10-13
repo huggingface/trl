@@ -80,14 +80,14 @@ This guide provides an overview of the dataset formats and types supported by ea
   <tr>
     <td>Stepwise preference</td>
     <td>
-      <pre><code>{"prompt": "Two apples and one orange cost 1.5 euros. Four apples and one orange cost 2.5 euros. What's the price of an apple?",
- "completion": ["Let a represent the price of an apple.", "Let b represent the price of an orange"],
- "labels": [True, True]}</code></pre>
+      <pre><code>{"prompt": "The sky is",
+ "completion": [", let me think...", "blue"],
+ "labels": [False, True]}</code></pre>
     </td>
     <td>
-      <pre><code>{"prompt": [{"role": "system", "content": "You are a very skilled mathematician."}, {"role": "user", "content": "Two apples and one orange cost 1.5 euros. Four apples and one orange cost 2.5 euros. What's the price of an apple?"}],
- "completion": ["Let a represent the price of an apple.", "Let b represent the price of an orange"],
- "labels": [True, True]}</code></pre>
+      <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
+ "completion": [{"role": "assistant", "content": "Let me think..."}, {"role": "assistant", "content": "It is green."}],
+ "labels": [False, False]}</code></pre>
     </td>
   </tr>
 </table>
@@ -213,7 +213,7 @@ unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "
 A stepwise preference dataset is similar to an unpaired preference dataset but instead of having a single `"completion"` and `"label"`, it includes a `"completion"` column that splits the completion into a list of steps and a `"labels"` column indicating whether each step is correct or not.
 
 ```python
-steps_preference_example = {"prompt": "Two apples and one orange cost 1.5 euros. Four apples and one orange cost 2.5 euros. What's the price of an apple?", "completion": ["Let a represent the price of an apple.", "Let b represent the price of an orange"], "labels": [True, True]}
+steps_preference_example = {"prompt": "The sky is", "completion": [", let me think...", "blue."], "labels": [False, True]}
 ```
 
 ## Which dataset type to use?

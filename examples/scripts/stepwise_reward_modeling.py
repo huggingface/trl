@@ -29,7 +29,7 @@ python examples/scripts/stepwise_reward_modeling.py \
 LoRA:
 python examples/scripts/stepwise_reward_modeling.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --dataset_name trl-lib/zen \
+    --dataset_name trl-lib/openai-prm800k-15k \
     --output_dir Qwen2-0.5B-Reward-LoRA \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
