@@ -60,8 +60,10 @@ from trl import (
     setup_chat_format,
 )
 from trl.commands.cli_utils import RewardScriptArguments
+from accelerate import Accelerator
 
-
+accelerate = Accelerator()
+device=accelerate.device
 if __name__ == "__main__":
     parser = HfArgumentParser((RewardScriptArguments, RewardConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_into_dataclasses()
@@ -72,18 +74,19 @@ if __name__ == "__main__":
     ################
     torch_dtype = (
         model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
+        if model_config.torch_dtype in [device, None]
         else getattr(torch, model_config.torch_dtype)
     )
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        # device_map=get_kbit_device_map() if quantization_config is not None else None,
+        device_map=device,
         quantization_config=quantization_config,
         use_cache=False if training_args.gradient_checkpointing else True,
     )
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True, device_map=device
     )
     model = AutoModelForSequenceClassification.from_pretrained(
         model_config.model_name_or_path, num_labels=1, trust_remote_code=model_config.trust_remote_code, **model_kwargs
