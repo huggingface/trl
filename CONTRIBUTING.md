@@ -179,7 +179,6 @@ Follow these steps to start contributing:
    ```bash
    $ make test
    ```
-<br>
 
 TRL relies on `ruff` for maintaining consistent code formatting across its source files. Before submitting any PR, you should apply automatic style corrections and run code verification checks.
 
