@@ -86,11 +86,12 @@ class DPOCollator(DataCollatorMixin):
     Args:
         tokenizer ([`PreTrainedTokenizer`] or [`PreTrainedTokenizerFast`]):
             The tokenizer used for encoding the data.
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
+            The type of Tensor to return. Only "pt" is currently supported.
     """
 
     tokenizer: PreTrainedTokenizerBase
     return_tensors: str = "pt"
-    prompt_padding_side: Literal["left", "right"] = "left"
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         # Convert to tensor
@@ -102,10 +103,8 @@ class DPOCollator(DataCollatorMixin):
         rejected_attention_mask = [torch.ones_like(input_ids) for input_ids in rejected_input_ids]
 
         # Pad
-        prompt_input_ids = pad(
-            prompt_input_ids, padding_value=self.tokenizer.pad_token_id, padding_side=self.prompt_padding_side
-        )
-        prompt_attention_mask = pad(prompt_attention_mask, padding_value=0, padding_side=self.prompt_padding_side)
+        prompt_input_ids = pad(prompt_input_ids, padding_value=self.tokenizer.pad_token_id, padding_side="left")
+        prompt_attention_mask = pad(prompt_attention_mask, padding_value=0, padding_side="left")
         chosen_input_ids = pad(chosen_input_ids, padding_value=self.tokenizer.pad_token_id)
         chosen_attention_mask = pad(chosen_attention_mask, padding_value=0)
         rejected_input_ids = pad(rejected_input_ids, padding_value=self.tokenizer.pad_token_id)
@@ -491,14 +490,7 @@ class DPOTrainer(Trainer):
             )
             args.label_pad_token_id = label_pad_token_id
         if data_collator is None:
-            # data_collator = DPODataCollatorWithPadding(
-            #     pad_token_id=self.processing_class.pad_token_id,
-            #     label_pad_token_id=args.label_pad_token_id,
-            #     is_encoder_decoder=self.is_encoder_decoder,
-            # )
-            data_collator = DPOCollator(
-                processing_class, prompt_padding_side="right" if self.is_encoder_decoder else "left"
-            )
+            data_collator = DPOCollator(processing_class)
 
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
@@ -963,12 +955,11 @@ class DPOTrainer(Trainer):
             The `chosen_rewards` and `rejected_rewards` tensors contain the rewards for the chosen and rejected
             responses, respectively.
         """
+        device = self.accelerator.device
+
         # Get the log ratios for the chosen and rejected responses
-        chosen_logratios = chosen_logps.to(self.accelerator.device)
-        rejected_logratios = rejected_logps.to(self.accelerator.device)
-        if not self.reference_free:
-            chosen_logratios -= ref_chosen_logps.to(self.accelerator.device)
-            rejected_logratios -= ref_rejected_logps.to(self.accelerator.device)
+        chosen_logratios = chosen_logps.to(device) - (not self.reference_free) * ref_chosen_logps.to(device)
+        rejected_logratios = rejected_logps.to(device) - (not self.reference_free) * ref_rejected_logps.to(device)
 
         if self.f_divergence_type == FDivergenceType.ALPHA_DIVERGENCE.value:
             # The alpha-divergence formula: (1 - u^-alpha) / alpha
@@ -1106,14 +1097,8 @@ class DPOTrainer(Trainer):
                 "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'apo_zero', 'apo_down']"
             )
 
-        chosen_rewards = (
-            self.beta
-            * (chosen_logps.to(self.accelerator.device) - ref_chosen_logps.to(self.accelerator.device)).detach()
-        )
-        rejected_rewards = (
-            self.beta
-            * (rejected_logps.to(self.accelerator.device) - ref_rejected_logps.to(self.accelerator.device)).detach()
-        )
+        chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
+        rejected_rewards = self.beta * (rejected_logps.to(device) - ref_rejected_logps.to(device)).detach()
 
         return losses, chosen_rewards, rejected_rewards
 
