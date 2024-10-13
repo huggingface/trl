@@ -186,15 +186,15 @@ Follow these steps to start contributing:
 
     To apply these checks and corrections in one step, use:
 
-```bash
-$ make precommit
-```
+    ```bash
+    $ make precommit
+    ```
 
-This command runs the following:
-- Executes `pre-commit` hooks to automatically fix style issues with `ruff` and other tools.
-- Runs additional scripts such as adding copyright information.
+    This command runs the following:
+    - Executes `pre-commit` hooks to automatically fix style issues with `ruff` and other tools.
+    - Runs additional scripts such as adding copyright information.
 
-If you prefer to apply the style corrections separately or review them individually, the `pre-commit` hook will handle the formatting for the files in question.
+    If you prefer to apply the style corrections separately or review them individually, the `pre-commit` hook will handle the formatting for the files in question.
 
    Once you're happy with your changes, add changed files using `git add` and
    make a commit with `git commit` to record your changes locally:
