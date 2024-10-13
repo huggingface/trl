@@ -64,7 +64,7 @@ from trl.commands.cli_utils import RewardScriptArguments
 
 if __name__ == "__main__":
     parser = HfArgumentParser((RewardScriptArguments, StepwiseRewardConfig, ModelConfig))
-    args, training_args, model_config = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     ################
@@ -104,7 +104,7 @@ if __name__ == "__main__":
     ##############
     # Load dataset
     ##############
-    dataset = load_dataset(args.dataset_name, data_dir="conversational_stepwise_preference")
+    dataset = load_dataset(script_args.dataset_name)
 
     ##########
     # Training
@@ -113,8 +113,8 @@ if __name__ == "__main__":
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        train_dataset=dataset[args.dataset_train_split],
-        eval_dataset=dataset[args.dataset_test_split],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
         peft_config=get_peft_config(model_config),
     )
     trainer.train()
@@ -130,4 +130,4 @@ if __name__ == "__main__":
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name=args.dataset_name)
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

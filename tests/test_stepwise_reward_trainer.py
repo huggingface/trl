@@ -16,6 +16,7 @@ import unittest
 
 import torch
 from datasets import load_dataset
+from parameterized import parameterized
 from transformers import AutoModelForTokenClassification, AutoTokenizer, EvalPrediction
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
@@ -23,6 +24,7 @@ from transformers.utils import is_peft_available
 from trl import StepwiseRewardConfig, StepwiseRewardTrainer, maybe_apply_chat_template
 from trl.trainer import compute_accuracy
 from trl.trainer.stepwise_reward_trainer import _tokenize
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if is_peft_available():
@@ -31,10 +33,14 @@ if is_peft_available():
 
 class StepwiseRewardTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model = AutoModelForTokenClassification.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
-        self.model = AutoModelForTokenClassification.from_pretrained(self.model_id, num_labels=2)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Ensure the tokenizer has a chat template
+        if not hasattr(self.tokenizer, "chat_template") or self.tokenizer.chat_template is None:
+            self.tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     def test_token_level_accuracy(self):
         dummy_eval_predictions = EvalPrediction(
@@ -44,11 +50,10 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
         accuracy = compute_accuracy(dummy_eval_predictions)
         self.assertEqual(accuracy["accuracy"], 0.5)
 
-    def test_preprocessing_conversational(self):
+    @parameterized.expand(["conversational_stepwise_preference", "standard_stepwise_preference"])
+    def test_preprocessing(self, dataset_type):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset(
-                "trl-internal-testing/zen", "conversational_stepwise_preference", split="train"
-            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", dataset_type, split="train")
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
                 model=self.model,
@@ -60,23 +65,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
             dummy_dataset = dummy_dataset.map(
                 _tokenize,
                 batched=True,
-                fn_kwargs={"tokenizer": self.tokenizer, "max_length": 512, "post_step_separator": "\n"},
-            )
-            self.assertDictEqual(trainer.train_dataset[:], dummy_dataset[:])
-
-    def test_preprocessing_standard(self):
-        # No chat template, so we load a fresh tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_preference", split="train")
-            training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none", max_length=512)
-            trainer = StepwiseRewardTrainer(
-                model=self.model, args=training_args, tokenizer=tokenizer, train_dataset=dummy_dataset
-            )
-            dummy_dataset = self.dummy_dataset.map(
-                _tokenize,
-                batched=True,
-                fn_kwargs={"tokenizer": tokenizer, "max_length": 512, "post_step_separator": "\n"},
+                fn_kwargs={"tokenizer": self.tokenizer, "max_length": 512, "step_separator": "\n"},
             )
             self.assertDictEqual(trainer.train_dataset[:], dummy_dataset[:])
 
