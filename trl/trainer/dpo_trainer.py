@@ -609,7 +609,8 @@ class DPOTrainer(Trainer):
                 "tokenizer": self.processing_class,
                 "max_prompt_length": args.max_prompt_length,
                 "max_completion_length": args.max_completion_length,
-                "eos_prompt": self.is_encoder_decoder,  # for enc-dec, we also add the eos token to the prompt
+                # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
+                "add_special_tokens": self.is_encoder_decoder,
             }
             train_dataset = train_dataset.map(
                 self.tokenize_row,
@@ -683,19 +684,19 @@ class DPOTrainer(Trainer):
             self.running = RunningMoments(self.accelerator)
 
     @staticmethod
-    def tokenize_row(features, tokenizer, max_prompt_length, max_completion_length, eos_prompt):
+    def tokenize_row(features, tokenizer, max_prompt_length, max_completion_length, add_special_tokens):
         prompt_input_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
         chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
         rejected_input_ids = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
 
-        # Add special tokens
-        if tokenizer.bos_token is not None:
-            prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
-        if tokenizer.eos_token is not None:
-            if eos_prompt:  # for encoder-decoder models, we also add the eos token to the prompt
+        # Add special tokens (typically for encoder-decoder models)
+        if add_special_tokens:
+            if tokenizer.bos_token is not None:
+                prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
+            if tokenizer.eos_token is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-            chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-            rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+                chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+                rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
@@ -1126,27 +1127,22 @@ class DPOTrainer(Trainer):
             outputs = model(
                 input_ids=concatenated_batch["prompt_input_ids"],
                 attention_mask=concatenated_batch["prompt_attention_mask"],
-                labels=labels,
-                use_cache=False,
+                labels=labels,  # we need the labels for the logits to be returned
                 **model_kwargs,
             )
         else:
+            # Concatenate the prompt and completion inputs
             input_ids = torch.cat(
                 (concatenated_batch["prompt_input_ids"], concatenated_batch["completion_input_ids"]), dim=1
             )
             attention_mask = torch.cat(
                 (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]), dim=1
             )
-            outputs = model(
-                concatenated_batch["concatenated_input_ids"],
-                attention_mask=concatenated_batch["concatenated_attention_mask"],
-                use_cache=False,
-                **model_kwargs,
-            )
-            # Caution here, we have the prompt in the logits, but we don't want the loss to be computed on it
-        #
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
 
         logits = outputs.logits
+
+        # HERE for decoder-only. Caution here, we have the prompt in the logits, but we don't want the loss to be computed on it
 
         if logits.shape[:2] != labels.shape[:2]:
             # for llava, the model returns logits for the entire sequence, including the image tokens (placed before the text tokens)
