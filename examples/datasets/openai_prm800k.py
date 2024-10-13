@@ -40,7 +40,7 @@ if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
 
-    dataset = load_dataset("gaetanlop/openai-prm800k-15k-stage2")
+    dataset = load_dataset("gaetanlop/openai-prm800k-15k-stage2-conversational")
 
     def reformat_labels(examples):
         # openai-prm800k labels: -1, 0, or +1 where -1 means incorrect, 0 means that it isn't incorrect but doesn't make any progress, and +1 means correct

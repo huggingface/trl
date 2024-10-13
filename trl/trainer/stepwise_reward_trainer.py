@@ -57,6 +57,9 @@ def _tokenize(
     post_step_tokens = tokenizer.encode(step_separator, add_special_tokens=False)
 
     for prompt, steps, labels in zip(batch["prompt"], batch["completion"], batch["labels"]):
+        if isinstance(steps, str):
+            steps = steps.split(step_separator)
+
         if len(steps) != len(labels):
             raise ValueError("`labels` and `completion` should have the same length.")
         input_ids = []
@@ -85,9 +88,7 @@ def _tokenize(
                 # exit if the maximum length is reached to avoid skipping steps in favor or shoter steps.
                 break
 
-        if getattr(tokenizer, "add_eos_token", False) and tokenizer.eos_token_id is not None:
-            input_ids.append(tokenizer.eos_token_id)
-            token_level_labels.append(-100)
+        # no need to add the eos token at the end
 
         new_examples["input_ids"].append(input_ids)
         new_examples["attention_mask"].append([1] * len(input_ids))
