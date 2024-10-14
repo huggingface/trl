@@ -14,7 +14,6 @@
 
 import unittest
 
-
 from trl import (
     AllTrueJudge,
     HfPairwiseJudge,
@@ -22,7 +21,7 @@ from trl import (
     RandomBinaryJudge,
     RandomPairwiseJudge,
     RandomRankJudge,
-    is_llmblender_available
+    is_llmblender_available,
 )
 
 
