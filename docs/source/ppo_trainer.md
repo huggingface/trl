@@ -16,6 +16,8 @@ To just run a PPO script to make sure the trainer can run, you can run the follo
 
 ```bash
 python examples/scripts/ppo/ppo.py \
+    --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \

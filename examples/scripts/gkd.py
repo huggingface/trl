@@ -53,7 +53,7 @@ from trl import (
     GKDTrainer,
     LogCompletionsCallback,
     ModelConfig,
-    SFTScriptArguments,
+    ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
@@ -62,7 +62,7 @@ from trl import (
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SFTScriptArguments, GKDConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, GKDConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
 
     ################
