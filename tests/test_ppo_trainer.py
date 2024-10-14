@@ -19,6 +19,7 @@ def test():
     command = """\
 python examples/scripts/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 4 \
@@ -44,6 +45,7 @@ def test_num_train_epochs():
     command = """\
 python examples/scripts/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 4 \
