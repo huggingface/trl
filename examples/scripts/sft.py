@@ -14,6 +14,7 @@
 """
 # regular:
 python examples/scripts/sft.py \
+    --dataset_name trl-lib/ultrafeedback_binarized \
     --model_name_or_path="facebook/opt-350m" \
     --report_to="wandb" \
     --learning_rate=1.41e-5 \
@@ -28,6 +29,7 @@ python examples/scripts/sft.py \
 
 # peft:
 python examples/scripts/sft.py \
+    --dataset_name trl-lib/ultrafeedback_binarized \
     --model_name_or_path="facebook/opt-350m" \
     --report_to="wandb" \
     --learning_rate=1.41e-5 \
@@ -49,8 +51,8 @@ from transformers import AutoTokenizer
 
 from trl import (
     ModelConfig,
+    ScriptArguments,
     SFTConfig,
-    SFTScriptArguments,
     SFTTrainer,
     TrlParser,
     get_kbit_device_map,
@@ -60,7 +62,7 @@ from trl import (
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
 
     ################
