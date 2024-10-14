@@ -23,13 +23,14 @@ from transformers import (
     HfArgumentParser,
 )
 
-from trl import ModelConfig
-from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
+from trl import ModelConfig, RLOOConfig, RLOOTrainer, ScriptArguments
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 """
 python -i examples/scripts/rloo/rloo.py \
+    --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -42,6 +43,8 @@ python -i examples/scripts/rloo/rloo.py \
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/rloo/rloo.py \
+    --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --output_dir models/minimal/rloo \
     --rloo_k 2 \
     --num_ppo_epochs 1 \
@@ -59,8 +62,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((RLOOConfig, ModelConfig))
-    training_args, model_config = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ScriptArguments, RLOOConfig, ModelConfig))
+    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(training_args.output_dir, ignore_errors=True)
 
@@ -87,7 +90,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset("trl-internal-testing/descriptiveness-sentiment-trl-style", split="descriptiveness")
+    dataset = load_dataset(script_args.dataset_name, split=script_args.dataset_train_split)
     eval_samples = 100
     train_dataset = dataset.select(range(len(dataset) - eval_samples))
     eval_dataset = dataset.select(range(len(dataset) - eval_samples, len(dataset)))
@@ -133,6 +136,6 @@ if __name__ == "__main__":
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name="trl-internal-testing/descriptiveness-sentiment-trl-style")
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
     trainer.generate_completions()
