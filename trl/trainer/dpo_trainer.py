@@ -618,6 +618,7 @@ class DPOTrainer(Trainer):
                 num_proc=self.dataset_num_proc,
                 writer_batch_size=10,
                 desc="Tokenizing train dataset",
+                load_from_cache_file=False,
             )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
@@ -626,6 +627,7 @@ class DPOTrainer(Trainer):
                     num_proc=self.dataset_num_proc,
                     writer_batch_size=10,
                     desc="Tokenizing eval dataset",
+                    load_from_cache_file=False,
                 )
 
         super().__init__(
@@ -695,8 +697,8 @@ class DPOTrainer(Trainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-                chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-                rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
@@ -1140,6 +1142,21 @@ class DPOTrainer(Trainer):
             attention_mask = torch.cat(
                 (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]), dim=1
             )
+
+            def compact_non_zero(tensor, token_id):
+                result = []
+                for row in tensor:
+                    non_zero_elements = row[row != token_id]  # Filter non-zero elements
+                    padded_row = torch.cat([non_zero_elements, token_id*torch.ones(row.size(0) - non_zero_elements.size(0), device=row.device, dtype=torch.int64)])  # Pad with zeros
+                    result.append(padded_row)
+                result = torch.stack(result)
+                any_not_padded_col = torch.sum(~(result == token_id).all(0))
+                result = result[:, :any_not_padded_col]
+                return result
+                        
+            input_ids = compact_non_zero(input_ids, self.processing_class.pad_token_id)
+            attention_mask = compact_non_zero(attention_mask, 0)
+
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
             logits = outputs.logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
