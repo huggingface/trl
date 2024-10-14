@@ -1130,6 +1130,8 @@ class DPOTrainer(Trainer):
                 labels=labels,  # we need the labels for the logits to be returned
                 **model_kwargs,
             )
+            logits = outputs.logits
+            loss_mask = concatenated_batch["completion_attention_mask"]
         else:
             # Concatenate the prompt and completion inputs
             input_ids = torch.cat(
@@ -1139,26 +1141,19 @@ class DPOTrainer(Trainer):
                 (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]), dim=1
             )
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
-
-        logits = outputs.logits
-
-        # HERE for decoder-only. Caution here, we have the prompt in the logits, but we don't want the loss to be computed on it
+            logits = outputs.logits[:, :-1, :]
+            labels = input_ids[:, 1:].clone()
+            loss_mask = attention_mask[:, 1:] * attention_mask[:, :-1]
 
         if logits.shape[:2] != labels.shape[:2]:
             # for llava, the model returns logits for the entire sequence, including the image tokens (placed before the text tokens)
             seq_len = labels.shape[1]
             logits = logits[:, -seq_len:]
 
-        if not self.is_encoder_decoder:
-            labels = labels[:, 1:].clone()
-            logits = logits[:, :-1, :]
-
-        loss_mask = labels != self.label_pad_token_id
-
         # Compute the log probabilities of the labels
-        labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
+        labels[loss_mask == 0] = 0  # dummy token; we'll ignore the losses on these tokens later
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-        per_token_logps[~loss_mask] = 0
+        per_token_logps[loss_mask == 0] = 0
         all_logps = per_token_logps.sum(-1)
 
         output = {}
