@@ -22,10 +22,13 @@ import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset
 from transformers import (
+    BaseImageProcessor,
     DataCollator,
     DataCollatorForTokenClassification,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     is_wandb_available,
 )
@@ -104,7 +107,9 @@ class StepwiseRewardTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -130,8 +135,10 @@ class StepwiseRewardTrainer(Trainer):
                 The dataset to use for training.
             eval_dataset (`datasets.Dataset`):
                 The dataset to use for evaluation.
-            tokenizer (`transformers.PreTrainedTokenizerBase`):
-                The tokenizer to use for training. This argument is required if you want to use the default data collator.
+            processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+                Processing class used to process the data. If provided, will be used to automatically process the inputs
+                for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+                reuse the fine-tuned model.
             model_init (`Callable[[], transformers.PreTrainedModel]`):
                 The model initializer to use for training. If None is specified, the default model initializer will be used.
             compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
@@ -176,11 +183,11 @@ class StepwiseRewardTrainer(Trainer):
             compute_metrics = compute_accuracy
 
         if data_collator is None:
-            if tokenizer is None:
+            if processing_class is None:
                 raise ValueError(
-                    "A tokenizer must be specified when using the default DataCollatorForTokenClassification"
+                    "A processing_class must be specified when using the default DataCollatorForTokenClassification"
                 )
-            data_collator = DataCollatorForTokenClassification(tokenizer, max_length=args.max_length)
+            data_collator = DataCollatorForTokenClassification(processing_class, max_length=args.max_length)
 
         if "input_ids" not in train_dataset.column_names:
             if args.max_length is None:
@@ -190,9 +197,9 @@ class StepwiseRewardTrainer(Trainer):
                     " we have set it for you, but you should do it yourself in the future."
                 )
             with PartialState().local_main_process_first():
-                chat_template_kwargs = {"tokenizer": tokenizer}
+                chat_template_kwargs = {"tokenizer": processing_class}
                 tokenize_kwargs = {
-                    "tokenizer": tokenizer,
+                    "tokenizer": processing_class,
                     "max_length": args.max_length,
                     "step_separator": args.step_separator,
                 }
@@ -223,7 +230,7 @@ class StepwiseRewardTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,

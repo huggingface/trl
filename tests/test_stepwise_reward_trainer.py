@@ -58,7 +58,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
             trainer = StepwiseRewardTrainer(
                 model=self.model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset,
             )
             dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
@@ -74,7 +74,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_preference", split="train")
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
-                model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
             trainer.train()
@@ -98,7 +98,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
             )
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
-                model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
             trainer.train()
@@ -126,7 +126,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
             trainer = StepwiseRewardTrainer(
                 model=self.model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset,
                 peft_config=peft_config,
             )
@@ -162,6 +162,6 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_preference", split="train")
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
-                model=self.model, args=training_args, tokenizer=self.tokenizer, train_dataset=dummy_dataset
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             self.assertEqual(trainer.model.model_tags, trainer._tag_names)
