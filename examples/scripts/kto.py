@@ -17,6 +17,7 @@ Run the KTO training script with the commands below. In general, the optimal con
 
 # Full training:
 python examples/scripts/kto.py \
+    --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
@@ -33,6 +34,7 @@ python examples/scripts/kto.py \
 
 # QLoRA:
 python examples/scripts/kto.py \
+    --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
@@ -53,23 +55,19 @@ python examples/scripts/kto.py \
     --lora_alpha=16
 """
 
-from dataclasses import dataclass
-
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_unpair_preference_dataset, setup_chat_format
-
-
-# Define and parse arguments.
-@dataclass
-class ScriptArguments:
-    """
-    The arguments for the KTO training script.
-    """
-
-    dataset_name: str = "trl-lib/kto-mix-14k"
+from trl import (
+    KTOConfig,
+    KTOTrainer,
+    ModelConfig,
+    ScriptArguments,
+    get_peft_config,
+    maybe_unpair_preference_dataset,
+    setup_chat_format,
+)
 
 
 if __name__ == "__main__":
@@ -120,8 +118,8 @@ if __name__ == "__main__":
         model,
         ref_model,
         args=training_args,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset["test"],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
         processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
