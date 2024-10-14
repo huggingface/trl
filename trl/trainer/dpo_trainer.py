@@ -1143,7 +1143,7 @@ class DPOTrainer(Trainer):
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
             logits = outputs.logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
-            loss_mask = (attention_mask[:, 1:] * attention_mask[:, :-1]).bool()
+            loss_mask = labels!=self.processing_class.pad_token_id # (attention_mask[:, 1:] * attention_mask[:, :-1]).bool()
 
         if logits.shape[:2] != labels.shape[:2]:
             # for llava, the model returns logits for the entire sequence, including the image tokens (placed before the text tokens)
