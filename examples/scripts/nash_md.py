@@ -50,11 +50,11 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
 from trl import (
-    DPOScriptArguments,
     LogCompletionsCallback,
     ModelConfig,
     NashMDConfig,
     NashMDTrainer,
+    ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_quantization_config,
@@ -63,7 +63,7 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":
-    parser = TrlParser((DPOScriptArguments, NashMDConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, NashMDConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
     script_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
