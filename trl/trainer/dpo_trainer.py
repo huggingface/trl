@@ -1131,7 +1131,7 @@ class DPOTrainer(Trainer):
                 **model_kwargs,
             )
             logits = outputs.logits
-            loss_mask = concatenated_batch["completion_attention_mask"]
+            loss_mask = concatenated_batch["completion_attention_mask"].bool()
         else:
             # Concatenate the prompt and completion inputs
             input_ids = torch.cat(
@@ -1143,7 +1143,7 @@ class DPOTrainer(Trainer):
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
             logits = outputs.logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
-            loss_mask = attention_mask[:, 1:] * attention_mask[:, :-1]
+            loss_mask = (attention_mask[:, 1:] * attention_mask[:, :-1]).bool()
 
         if logits.shape[:2] != labels.shape[:2]:
             # for llava, the model returns logits for the entire sequence, including the image tokens (placed before the text tokens)
@@ -1151,9 +1151,9 @@ class DPOTrainer(Trainer):
             logits = logits[:, -seq_len:]
 
         # Compute the log probabilities of the labels
-        labels[loss_mask == 0] = 0  # dummy token; we'll ignore the losses on these tokens later
+        labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-        per_token_logps[loss_mask == 0] = 0
+        per_token_logps[~loss_mask] = 0
         all_logps = per_token_logps.sum(-1)
 
         output = {}
@@ -1161,10 +1161,8 @@ class DPOTrainer(Trainer):
         if self.use_weighting:
             with torch.no_grad():
                 # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
-                logprobs = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
-                weights_adjustment_factor = torch.logsumexp(
-                    2 * logprobs, dim=-1
-                )  # same as summing probs**2 in log space
+                logprobs = F.log_softmax(logits, dim=-1)
+                weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)  # same as sum(probs**2) in log space
                 per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
                 all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
                 chosen_weights = all_weights[:num_examples]
