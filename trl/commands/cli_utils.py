@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 import yaml
 from transformers import HfArgumentParser
 
+from ..utils import ScriptArguments
+
 
 logger = logging.getLogger(__name__)
 
@@ -80,53 +82,30 @@ def init_zero_verbose():
 
 
 @dataclass
-class SFTScriptArguments:
-    dataset_name: str = field(
-        default="timdettmers/openassistant-guanaco",
-        metadata={"help": "the dataset name"},
-    )
-    dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to train on"})
-    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to evaluate on"})
-    config: str = field(default=None, metadata={"help": "Path to the optional config file"})
-    gradient_checkpointing_use_reentrant: bool = field(
-        default=False,
-        metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"},
-    )
+class SFTScriptArguments(ScriptArguments):
+    def __post_init__(self):
+        logger.warning(
+            "`SFTScriptArguments` is deprecated, please and will be removed in v0.13. Please use "
+            "`ScriptArguments` instead."
+        )
 
 
 @dataclass
-class RewardScriptArguments:
-    dataset_name: str = field(
-        default="trl-lib/ultrafeedback_binarized",
-        metadata={"help": "the dataset name"},
-    )
-    dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to train on"})
-    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to evaluate on"})
-    config: str = field(default=None, metadata={"help": "Path to the optional config file"})
-    gradient_checkpointing_use_reentrant: bool = field(
-        default=False,
-        metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"},
-    )
+class RewardScriptArguments(ScriptArguments):
+    def __post_init__(self):
+        logger.warning(
+            "`RewardScriptArguments` is deprecated, please and will be removed in v0.13. Please use "
+            "`ScriptArguments` instead."
+        )
 
 
 @dataclass
-class DPOScriptArguments:
-    dataset_name: str = field(default=None, metadata={"help": "the dataset name"})
-    dataset_train_split: str = field(default="train", metadata={"help": "The dataset split to use for training"})
-    dataset_test_split: str = field(default="test", metadata={"help": "The dataset split to use for evaluation"})
-    ignore_bias_buffers: bool = field(
-        default=False,
-        metadata={
-            "help": "debug argument for distributed training;"
-            "fix for DDP issues with LM bias/mask buffers - invalid scalar type,`inplace operation. See"
-            "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992"
-        },
-    )
-    config: str = field(default=None, metadata={"help": "Path to the optional config file"})
-    gradient_checkpointing_use_reentrant: bool = field(
-        default=False,
-        metadata={"help": "Whether to apply `use_reentrant` for gradient_checkpointing"},
-    )
+class DPOScriptArguments(ScriptArguments):
+    def __post_init__(self):
+        logger.warning(
+            "`DPOScriptArguments` is deprecated, please and will be removed in v0.13. Please use "
+            "`ScriptArguments` instead."
+        )
 
 
 @dataclass

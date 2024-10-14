@@ -18,6 +18,8 @@ To just run a RLOO script to make sure the trainer can run, you can run the foll
 
 ```bash
 python examples/scripts/rloo/rloo.py \
+    --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --output_dir models/minimal/rloo \
     --per_device_train_batch_size 64 \
@@ -210,8 +212,9 @@ To validate the RLOO implementation works, we ran experiment on the 1B model. He
 
 ```
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/rloo/rloo_tldr.py \
     --output_dir models/minimal/rloo_tldr \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_test_split validation \
     --num_ppo_epochs 2 \
     --num_mini_batches 2 \
     --learning_rate 3e-6 \
