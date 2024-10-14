@@ -30,6 +30,7 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 """
 python -i examples/scripts/rloo/rloo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -43,6 +44,7 @@ python -i examples/scripts/rloo/rloo.py \
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/rloo/rloo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --output_dir models/minimal/rloo \
     --rloo_k 2 \
     --num_ppo_epochs 1 \
@@ -88,7 +90,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name, split="descriptiveness")
+    dataset = load_dataset(script_args.dataset_name, split=script_args.dataset_train_split)
     eval_samples = 100
     train_dataset = dataset.select(range(len(dataset) - eval_samples))
     eval_dataset = dataset.select(range(len(dataset) - eval_samples, len(dataset)))
