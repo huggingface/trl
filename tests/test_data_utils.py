@@ -211,59 +211,59 @@ class UnpairPreferenceDatasetTester(unittest.TestCase):
     )
 
     def test_unpair_preference_dataset(self):
-        # Test that a paired-formatted dataset is correctly converted to unpaired format
+        # Test that a paired dataset is correctly converted to unpaired
         unpaired_dataset = unpair_preference_dataset(self.paired_dataset)
         self.assertEqual(
             unpaired_dataset.to_dict(),
             self.unpaired_dataset.to_dict(),
-            "The paired-formatted dataset should be reformatted to unpaired format.",
+            "The paired dataset should be converted to unpaired.",
         )
 
     def test_unpair_preference_dataset_dict(self):
-        # Test that a paired-formatted dataset dict is correctly converted to unpaired format
+        # Test that a paired dataset dict is correctly converted to unpaired
         paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
         unpaired_dataset_dict = unpair_preference_dataset(paired_dataset_dict)
         self.assertEqual(
             unpaired_dataset_dict["abc"].to_dict(),
             self.unpaired_dataset.to_dict(),
-            "The paired-formatted dataset should be reformatted to unpaired format.",
+            "The paired dataset should be converted to unpaired.",
         )
 
     def test_maybe_unpair_preference_dataset(self):
-        # Test that a paired-formatted dataset is correctly reformatted to unpaired format with maybe_unpair_preference_dataset
+        # Test that a paired dataset is correctly converted to unpaired with maybe_unpair_preference_dataset
         unpaired_dataset = maybe_unpair_preference_dataset(self.paired_dataset)
         self.assertEqual(
             unpaired_dataset.to_dict(),
             self.unpaired_dataset.to_dict(),
-            "The paired-formatted dataset should be reformatted to unpaired format.",
+            "The paired dataset should be converted to unpaired.",
         )
 
     def test_maybe_unpair_preference_dataset_dict(self):
-        # Test that a paired-formatted dataset dict is correctly converted to unpaired format with maybe_unpair_preference_dataset
+        # Test that a paired dataset dict is correctly converted to unpaired with maybe_unpair_preference_dataset
         paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
         unpaired_dataset_dict = maybe_unpair_preference_dataset(paired_dataset_dict)
         self.assertEqual(
             unpaired_dataset_dict["abc"].to_dict(),
             self.unpaired_dataset.to_dict(),
-            "The paired-formatted dataset should be reformatted to unpaired format.",
+            "The paired dataset should be converted to unpaired.",
         )
 
     def test_maybe_unpair_preference_dataset_already_paired(self):
-        # Test that a paired-formatted dataset remains unchanged with maybe_unpair_preference_dataset
+        # Test that a paired dataset remains unchanged with maybe_unpair_preference_dataset
         unpaired_dataset = maybe_unpair_preference_dataset(self.unpaired_dataset)
         self.assertEqual(
             unpaired_dataset.to_dict(),
             self.unpaired_dataset.to_dict(),
-            "The unpaired-formatted dataset should remain unchanged.",
+            "The unpaired dataset should remain unchanged.",
         )
 
     def test_maybe_unpair_preference_dataset_dict_already_paired(self):
-        # Test that a paired-formatted dataset dict remains unchanged with maybe_unpair_preference_dataset
+        # Test that a paired dataset dict remains unchanged with maybe_unpair_preference_dataset
         unpaired_dataset_dict = maybe_unpair_preference_dataset(DatasetDict({"abc": self.unpaired_dataset}))
         self.assertEqual(
             unpaired_dataset_dict["abc"].to_dict(),
             self.unpaired_dataset.to_dict(),
-            "The unpaired-formatted dataset should remain unchanged.",
+            "The unpaired dataset should remain unchanged.",
         )
 
 
