@@ -99,6 +99,7 @@ _import_structure = {
     ],
     "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
+    "utils": ["ScriptArguments"],
 }
 
 try:
@@ -197,6 +198,7 @@ if TYPE_CHECKING:
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
+    from .utils import ScriptArguments
 
     try:
         if not is_diffusers_available():
