@@ -23,12 +23,14 @@ from transformers import (
     HfArgumentParser,
 )
 
-from trl import ModelConfig, PPOConfig, PPOTrainer
+from trl import ModelConfig, PPOConfig, PPOTrainer, ScriptArguments
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 """
 python examples/scripts/ppo/ppo_tldr.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style
+    --dataset_test_split validation \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 1 \
@@ -43,6 +45,8 @@ python examples/scripts/ppo/ppo_tldr.py \
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style
+    --dataset_test_split validation \
     --output_dir models/minimal/ppo_tldr \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 16 \
@@ -58,8 +62,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((PPOConfig, ModelConfig))
-    training_args, model_config = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ScriptArguments, PPOConfig, ModelConfig))
+    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(training_args.output_dir, ignore_errors=True)
 
@@ -89,9 +93,9 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
-    train_dataset = dataset["train"]
-    eval_dataset = dataset["validation"]
+    dataset = load_dataset(script_args.dataset_name)
+    train_dataset = dataset[script_args.dataset_train_split]
+    eval_dataset = dataset[script_args.dataset_test_split]
 
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
@@ -138,6 +142,6 @@ if __name__ == "__main__":
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name="trl-internal-testing/tldr-preference-sft-trl-style")
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
     trainer.generate_completions()
