@@ -77,6 +77,22 @@ if is_deepspeed_available():
     import deepspeed
 
 
+def _flush_left(input_ids: torch.LongTensor, mask: torch.LongTensor, loss_mask: torch.LongTensor) -> torch.Tensor:
+    for i in range(mask.size(0)):
+        first_non_zeros_idx = (mask[i] == 1).nonzero()[0].item()
+        input_ids[i] = torch.roll(input_ids[i], shifts=-first_non_zeros_idx)
+        mask[i] = torch.roll(mask[i], shifts=-first_non_zeros_idx)
+        loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_non_zeros_idx)
+
+    # Get the first column idx that is all zeros and remove every column after that
+    last_non_zeros_idx = (mask == 1).sum(dim=0).max().item()
+    input_ids = input_ids[:, : last_non_zeros_idx - 1]
+    mask = mask[:, : last_non_zeros_idx - 1]
+    loss_mask = loss_mask[:, : last_non_zeros_idx - 1]
+
+    return input_ids, mask, loss_mask
+
+
 @dataclass
 class PreferenceCollator(DataCollatorMixin):
     """
@@ -88,6 +104,30 @@ class PreferenceCollator(DataCollatorMixin):
             Token ID to use for padding.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
+
+    Examples:
+    ```python
+    >>> from trl import PreferenceCollator
+    >>> collator = PreferenceCollator(pad_token_id=0, collation_strategy="split")
+    >>> examples = [
+    ...     {"prompt_input_ids": [1, 2, 3], "chosen_input_ids": [4, 5], "rejected_input_ids": [6]},
+    ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]}
+    ... ]
+    >>> collator(examples)
+    {'prompt_input_ids': tensor([[1, 2, 3],
+                                 [0, 7, 8]]),
+     'prompt_attention_mask': tensor([[1, 1, 1],
+                                      [0, 1, 1]]),
+     'chosen_input_ids': tensor([[ 4,  5],
+                                 [ 9, 10]]),
+     'chosen_attention_mask': tensor([[1, 1],
+                                      [1, 1]]),
+     'rejected_input_ids': tensor([[ 6,  0,  0],
+                                   [11, 12, 13]]),
+     'rejected_attention_mask': tensor([[1, 0, 0],
+                                        [1, 1, 1]])
+    }
+    ```
     """
 
     pad_token_id: int
@@ -459,13 +499,13 @@ class DPOTrainer(Trainer):
                 "You passed `max_prompt_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.max_prompt_length = max_prompt_length
-        if args.max_prompt_length is None:
-            warnings.warn(
-                "`max_prompt_length` is not set in the DPOConfig's init"
-                " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
-            )
-            args.max_prompt_length = 128
+        # if args.max_prompt_length is None:
+        #     warnings.warn(
+        #         "`max_prompt_length` is not set in the DPOConfig's init"
+        #         " it will default to `128` by default, but you should do it yourself in the future.",
+        #         UserWarning,
+        #     )
+        #     args.max_prompt_length = 128
 
         if max_target_length is not None:
             warnings.warn(
@@ -1193,6 +1233,14 @@ class DPOTrainer(Trainer):
                 ),
                 dim=1,
             )
+
+            input_ids, attention_mask, loss_mask = _flush_left(input_ids, attention_mask, loss_mask)
+
+            # Truncate left
+            input_ids = input_ids[:, -self.args.max_length :]
+            attention_mask = attention_mask[:, -self.args.max_length :]
+            loss_mask = loss_mask[:, -self.args.max_length :]
+
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
             logits = outputs.logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
