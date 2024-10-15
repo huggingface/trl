@@ -103,6 +103,12 @@ class DPOCollator(DataCollatorMixin):
         rejected_attention_mask = [torch.ones_like(input_ids) for input_ids in rejected_input_ids]
 
         # Pad
+        if self.tokenizer.pad_token_id is None:
+            raise ValueError(
+                "Padding is enabled, but the tokenizer is not configured with a padding token. "
+                "Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`) "
+                "before calling the trainer."
+            )
         prompt_input_ids = pad(prompt_input_ids, padding_value=self.tokenizer.pad_token_id, padding_side="left")
         prompt_attention_mask = pad(prompt_attention_mask, padding_value=0, padding_side="left")
         chosen_input_ids = pad(chosen_input_ids, padding_value=self.tokenizer.pad_token_id)
