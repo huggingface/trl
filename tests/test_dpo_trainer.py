@@ -301,9 +301,9 @@ class DPOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex=r"Padding is enabled, but the tokenizer is not configured with a padding token."
-                r" Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\)"
-                r" before calling the trainer.",
+                expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
+                r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
+                r"before instantiating the trainer."
             ):
                 trainer = DPOTrainer(
                     model=self.model,
@@ -338,9 +338,9 @@ class DPOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex=r"Padding is enabled, but the tokenizer is not configured with a padding token."
-                r" Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\)"
-                r" before calling the trainer.",
+                expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
+                r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
+                r"before instantiating the trainer.",
             ):
                 trainer = DPOTrainer(
                     model=self.model,
@@ -979,7 +979,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_length=512,
-                max_prompt_length=128,
+                max_prompt_length=512,
                 remove_unused_columns=False,
                 report_to="none",
             )
