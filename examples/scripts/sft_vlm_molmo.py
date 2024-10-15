@@ -97,7 +97,6 @@ if __name__ == "__main__":
         images = [example["images"] for example in examples]
 
         # Tokenize the texts and process the images
-        # batch = processor(text=texts, images=images, return_tensors="pt", padding=True)
         batch = {
             'input_ids': [],
             'images': [],
@@ -122,7 +121,6 @@ if __name__ == "__main__":
         labels[labels == processor.tokenizer.pad_token_id] = -100
 
         batch["labels"] = labels
-
         return batch
 
     ################
