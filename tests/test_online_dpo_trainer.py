@@ -70,6 +70,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 max_steps=3,
                 learning_rate=5.0e-7,
                 eval_strategy="steps",
+                eval_steps=1,
                 report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -118,6 +119,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 max_steps=3,
                 learning_rate=5.0e-7,
                 eval_strategy="steps",
+                eval_steps=1,
                 report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
