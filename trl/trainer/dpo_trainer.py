@@ -1142,25 +1142,37 @@ class DPOTrainer(Trainer):
             attention_mask = torch.cat(
                 (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]), dim=1
             )
+            loss_mask = torch.cat(
+                (torch.zeros_like(concatenated_batch["prompt_attention_mask"]),
+                concatenated_batch["completion_attention_mask"]), dim=1
+            )
 
             def compact_non_zero(tensor, token_id):
                 result = []
                 for row in tensor:
                     non_zero_elements = row[row != token_id]  # Filter non-zero elements
-                    padded_row = torch.cat([non_zero_elements, token_id*torch.ones(row.size(0) - non_zero_elements.size(0), device=row.device, dtype=torch.int64)])  # Pad with zeros
+                    padded_row = torch.cat(
+                        [
+                            non_zero_elements,
+                            token_id
+                            * torch.ones(
+                                row.size(0) - non_zero_elements.size(0), device=row.device, dtype=torch.int64
+                            ),
+                        ]
+                    )  # Pad with zeros
                     result.append(padded_row)
                 result = torch.stack(result)
                 any_not_padded_col = torch.sum(~(result == token_id).all(0))
                 result = result[:, :any_not_padded_col]
                 return result
-                        
-            input_ids = compact_non_zero(input_ids, self.processing_class.pad_token_id)
-            attention_mask = compact_non_zero(attention_mask, 0)
+
+            # input_ids = compact_non_zero(input_ids, self.processing_class.pad_token_id)
+            # attention_mask = compact_non_zero(attention_mask, 0)
 
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
             logits = outputs.logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
-            loss_mask = labels!=self.processing_class.pad_token_id # (attention_mask[:, 1:] * attention_mask[:, :-1]).bool()
+            loss_mask = loss_mask[:, 1:].bool()
 
         if logits.shape[:2] != labels.shape[:2]:
             # for llava, the model returns logits for the entire sequence, including the image tokens (placed before the text tokens)
