@@ -84,13 +84,13 @@ class DPOCollator(DataCollatorMixin):
     are not all of the same length.
 
     Args:
-        tokenizer ([`PreTrainedTokenizer`] or [`PreTrainedTokenizerFast`]):
-            The tokenizer used for encoding the data.
+        pad_token_id (`int`):
+            Token ID to use for padding.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
-            The type of Tensor to return. Only "pt" is currently supported.
+            Type of Tensor to return. Only `"pt"` is currently supported.
     """
 
-    tokenizer: PreTrainedTokenizerBase
+    pad_token_id: int
     return_tensors: str = "pt"
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
@@ -101,29 +101,25 @@ class DPOCollator(DataCollatorMixin):
         chosen_attention_mask = [torch.ones_like(input_ids) for input_ids in chosen_input_ids]
         rejected_input_ids = [torch.tensor(example["rejected_input_ids"]) for example in examples]
         rejected_attention_mask = [torch.ones_like(input_ids) for input_ids in rejected_input_ids]
+        if "pixel_values" in examples[0]:
+            pixel_values = [torch.tensor(example["pixel_values"]) for example in examples]
+        if "pixel_attention_mask" in examples[0]:
+            pixel_attention_mask = [torch.tensor(example["pixel_attention_mask"]) for example in examples]
 
         # Pad
-        if self.tokenizer.pad_token_id is None:
-            raise ValueError(
-                "Padding is enabled, but the tokenizer is not configured with a padding token. "
-                "Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`) "
-                "before calling the trainer."
-            )
-        prompt_input_ids = pad(prompt_input_ids, padding_value=self.tokenizer.pad_token_id, padding_side="left")
-        prompt_attention_mask = pad(prompt_attention_mask, padding_value=0, padding_side="left")
-        chosen_input_ids = pad(chosen_input_ids, padding_value=self.tokenizer.pad_token_id)
-        chosen_attention_mask = pad(chosen_attention_mask, padding_value=0)
-        rejected_input_ids = pad(rejected_input_ids, padding_value=self.tokenizer.pad_token_id)
-        rejected_attention_mask = pad(rejected_attention_mask, padding_value=0)
+        output = {}
+        output["prompt_input_ids"] = pad(prompt_input_ids, padding_value=self.pad_token_id, padding_side="left")
+        output["prompt_attention_mask"] = pad(prompt_attention_mask, padding_value=0, padding_side="left")
+        output["chosen_input_ids"] = pad(chosen_input_ids, padding_value=self.pad_token_id)
+        output["chosen_attention_mask"] = pad(chosen_attention_mask, padding_value=0)
+        output["rejected_input_ids"] = pad(rejected_input_ids, padding_value=self.pad_token_id)
+        output["rejected_attention_mask"] = pad(rejected_attention_mask, padding_value=0)
+        if "pixel_values" in examples[0]:
+            output["pixel_values"] = pad(pixel_values, padding_value=0.0)
+        if "pixel_attention_mask" in examples[0]:
+            output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
 
-        return {
-            "prompt_input_ids": prompt_input_ids,
-            "prompt_attention_mask": prompt_attention_mask,
-            "chosen_input_ids": chosen_input_ids,
-            "chosen_attention_mask": chosen_attention_mask,
-            "rejected_input_ids": rejected_input_ids,
-            "rejected_attention_mask": rejected_attention_mask,
-        }
+        return output
 
 
 class DPOTrainer(Trainer):
@@ -406,12 +402,6 @@ class DPOTrainer(Trainer):
             )
             self.is_vision_model = False
 
-        if self.is_vision_model:
-            self.processor = processing_class
-            self.processing_class = self.processor.tokenizer  # tokenizer is actually a processor at this point
-        else:
-            self.processing_class = processing_class
-
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         if model_adapter_name is not None:
             warnings.warn(
@@ -495,8 +485,23 @@ class DPOTrainer(Trainer):
                 "You passed `label_pad_token_id` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.label_pad_token_id = label_pad_token_id
+
+        if args.padding_value is not None:
+            self.padding_value = args.padding_value
+        else:  # args.padding_value is None
+            if hasattr(processing_class, "pad_token_id"):
+                self.padding_value = processing_class.pad_token_id
+            elif hasattr(processing_class, "tokenizer") and hasattr(processing_class.tokenizer, "pad_token_id"):
+                self.padding_value = processing_class.tokenizer.pad_token_id
+            else:
+                raise ValueError(
+                    "Can't find `pad_token_id` in the processing_class."
+                    "Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`) "
+                    "before calling the trainer."
+                )
+
         if data_collator is None:
-            data_collator = DPOCollator(processing_class)
+            data_collator = DPOCollator(pad_token_id=self.padding_value)
 
         if not disable_dropout:
             warnings.warn(
@@ -516,7 +521,7 @@ class DPOTrainer(Trainer):
                 "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.padding_value = padding_value
-        self.padding_value = args.padding_value if padding_value is not None else self.processing_class.pad_token_id
+
         self.max_prompt_length = args.max_prompt_length
         if truncation_mode != "keep_end":
             warnings.warn(
@@ -599,14 +604,14 @@ class DPOTrainer(Trainer):
 
             # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
             fn_kwargs = {
-                "tokenizer": self.processing_class,
+                "processing_class": processing_class,
                 "max_prompt_length": args.max_prompt_length,
                 "max_completion_length": args.max_completion_length,
                 # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
                 "add_special_tokens": self.is_encoder_decoder,
             }
             train_dataset = train_dataset.map(
-                self.tokenize_row,
+                self.tokenize_row if not self.is_vision_model else self.process_row,
                 fn_kwargs=fn_kwargs,
                 num_proc=self.dataset_num_proc,
                 writer_batch_size=10,
@@ -615,7 +620,7 @@ class DPOTrainer(Trainer):
             )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
-                    self.tokenize_row,
+                    self.tokenize_row if not self.is_vision_model else self.process_row,
                     fn_kwargs=fn_kwargs,
                     num_proc=self.dataset_num_proc,
                     writer_batch_size=10,
@@ -679,7 +684,8 @@ class DPOTrainer(Trainer):
             self.running = RunningMoments(self.accelerator)
 
     @staticmethod
-    def tokenize_row(features, tokenizer, max_prompt_length, max_completion_length, add_special_tokens):
+    def tokenize_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+        tokenizer = processing_class  # the processing class is a tokenizer
         prompt_input_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
         chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
         rejected_input_ids = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
@@ -690,8 +696,8 @@ class DPOTrainer(Trainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+                chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+                rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
@@ -706,6 +712,37 @@ class DPOTrainer(Trainer):
             "rejected_input_ids": rejected_input_ids,
         }
 
+    @staticmethod
+    def process_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+        processor = processing_class  # the processing class is a processor
+        processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
+        
+        output = {}
+        output["prompt_input_ids"] = processed_features["input_ids"][0]
+        output["pixel_values"] = processed_features["pixel_values"][0]
+        if "pixel_attention_mask" in processed_features:
+            output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
+        output["chosen_input_ids"] = processor(features["chosen"], add_special_tokens=False)["input_ids"][0]
+        output["rejected_input_ids"] = processor(features["rejected"], add_special_tokens=False)["input_ids"][0]
+
+        # Add special tokens (typically for encoder-decoder models)
+        if add_special_tokens:
+            if processor.bos_token is not None:
+                output["prompt_input_ids"] = [processor.bos_token_id] + output["prompt_input_ids"]
+            if processor.eos_token is not None:
+                output["prompt_input_ids"] = output["prompt_input_ids"] + [processor.eos_token_id]
+                output["chosen_input_ids"] = output["chosen_input_ids"] + [processor.tokenizer.eos_token_id]
+                output["rejected_input_ids"] = output["rejected_input_ids"] + [processor.tokenizer.eos_token_id]
+
+        # Truncate prompt and completion sequences
+        if max_prompt_length is not None:
+            output["prompt_input_ids"] = output["prompt_input_ids"][-max_prompt_length:]
+        if max_completion_length is not None:
+            output["chosen_input_ids"] = output["chosen_input_ids"][:max_completion_length]
+            output["rejected_input_ids"] = output["rejected_input_ids"][:max_completion_length]
+
+        return output
+    
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
@@ -865,18 +902,39 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: Dict[str, Union[List, torch.LongTensor]], padding_value: int = 0
+        batch: Dict[str, Union[List, torch.LongTensor]], padding_value: int
     ) -> Dict[str, torch.LongTensor]:
-        """Concatenate the chosen and rejected inputs into a single tensor.
+        """
+        Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
+        and completion sequences.
 
         Args:
-            batch: A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors of shape (batch_size, sequence_length).
-            is_encoder_decoder: Whether the model is an encoder-decoder model.
-            label_pad_token_id: The label pad token id.
-            padding_value: The padding value to use for the concatenated inputs_ids.
+            batch (`Dict[str, Union[List, torch.LongTensor]]`):
+                A batch of input data. The batch must contain the following keys:
+
+                - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input IDs.
+                - `"chosen_input_ids"`: Tensor of shape `(batch_size, chosen_length)` representing the chosen completion input IDs.
+                - `"rejected_input_ids"`: Tensor of shape `(batch_size, rejected_length)` representing the rejected completion input IDs.
+                - `"prompt_pixel_values"` (optional): Tensor for pixel values, if available.
+                - `"prompt_pixel_attention_mask"` (optional): Tensor for pixel attention masks, if available.
+
+            padding_value (`int`):
+                The padding value to use for the concatenated completion sequences (`chosen_input_ids` and
+                `rejected_input_ids`).
 
         Returns:
-            A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
+            `Dict[str, torch.LongTensor]`: A dictionary containing:
+
+                - `"prompt_input_ids"`: Concatenated prompt input IDs of shape `(2 * batch_size, prompt_length)`.
+                - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs of shape `(2 * batch_size, max_completion_length)`.
+                - `"prompt_attention_mask"`: Concatenated prompt attention masks of shape `(2 * batch_size, prompt_length)`.
+                - `"completion_attention_mask"`: Concatenated chosen and rejected attention masks of shape `(2 * batch_size, max_completion_length)`.
+                - `"pixel_values"` (optional): Concatenated pixel values if `"prompt_pixel_values"` are present.
+                - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if `"prompt_pixel_attention_mask"` are present.
+
+        Notes:
+            The completion input IDs and attention masks are padded to the maximum completion length of the chosen
+            or rejected sequences.
         """
         output = {}
 
@@ -885,12 +943,12 @@ class DPOTrainer(Trainer):
         output["prompt_attention_mask"] = torch.cat(
             [batch["prompt_attention_mask"], batch["prompt_attention_mask"]], dim=0
         )
-        if "prompt_pixel_values" in batch:
-            output["pixel_values"] = torch.cat([batch["prompt_pixel_values"], batch["prompt_pixel_values"]], dim=0)
+        if "pixel_values" in batch:
+            output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
 
-        if "prompt_pixel_attention_mask" in batch:
+        if "pixel_attention_mask" in batch:
             output["pixel_attention_mask"] = torch.cat(
-                [batch["prompt_pixel_attention_mask"], batch["prompt_pixel_attention_mask"]], dim=0
+                [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
             )
 
         # Concatenate the chosen and rejected completions
@@ -1096,10 +1154,11 @@ class DPOTrainer(Trainer):
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        # if self.is_vision_model:
-        #     model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
-        #     if "pixel_attention_mask" in concatenated_batch:
-        #         model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+        # Add the pixel values and attention masks for vision models
+        if "pixel_values" in concatenated_batch:
+            model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
+        if "pixel_attention_mask" in concatenated_batch:
+            model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
 
         if self.is_encoder_decoder:
             labels = concatenated_batch["completion_input_ids"]
