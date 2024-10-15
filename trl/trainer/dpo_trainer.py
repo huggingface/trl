@@ -1188,9 +1188,7 @@ class DPOTrainer(Trainer):
             )
             loss_mask = torch.cat(
                 (
-                    torch.zeros_like(
-                        concatenated_batch["prompt_attention_mask"]
-                    ),  # don't compute the loss on the prompt
+                    torch.zeros_like(concatenated_batch["prompt_attention_mask"]),  # mask the prompt for the loss
                     concatenated_batch["completion_attention_mask"],
                 ),
                 dim=1,
