@@ -85,7 +85,7 @@ def init_zero_verbose():
 class SFTScriptArguments(ScriptArguments):
     def __post_init__(self):
         logger.warning(
-            "`SFTScriptArguments` is deprecated, please and will be removed in v0.13. Please use "
+            "`SFTScriptArguments` is deprecated, and will be removed in v0.13. Please use "
             "`ScriptArguments` instead."
         )
 
@@ -94,7 +94,7 @@ class SFTScriptArguments(ScriptArguments):
 class RewardScriptArguments(ScriptArguments):
     def __post_init__(self):
         logger.warning(
-            "`RewardScriptArguments` is deprecated, please and will be removed in v0.13. Please use "
+            "`RewardScriptArguments` is deprecated, and will be removed in v0.13. Please use "
             "`ScriptArguments` instead."
         )
 
@@ -103,7 +103,7 @@ class RewardScriptArguments(ScriptArguments):
 class DPOScriptArguments(ScriptArguments):
     def __post_init__(self):
         logger.warning(
-            "`DPOScriptArguments` is deprecated, please and will be removed in v0.13. Please use "
+            "`DPOScriptArguments` is deprecated, and will be removed in v0.13. Please use "
             "`ScriptArguments` instead."
         )
 
