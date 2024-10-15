@@ -717,29 +717,36 @@ class DPOTrainer(Trainer):
         processor, tokenizer = processing_class, processing_class.tokenizer  # the processing class is a processor
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
 
-        output = {}
-        output["prompt_input_ids"] = processed_features["input_ids"][0]
-        output["pixel_values"] = processed_features["pixel_values"][0]
-        if "pixel_attention_mask" in processed_features:
-            output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
-        output["chosen_input_ids"] = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
-        output["rejected_input_ids"] = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
+        prompt_input_ids = processed_features["input_ids"][0]
+        pixel_values = processed_features["pixel_values"][0]
+        chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
+        rejected_input_ids = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
 
         # Add special tokens (typically for encoder-decoder models)
         if add_special_tokens:
             if tokenizer.bos_token is not None:
-                output["prompt_input_ids"] = [tokenizer.bos_token_id] + output["prompt_input_ids"]
+                prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token is not None:
-                output["prompt_input_ids"] = output["prompt_input_ids"] + [tokenizer.eos_token_id]
-                output["chosen_input_ids"] = output["chosen_input_ids"] + [tokenizer.eos_token_id]
-                output["rejected_input_ids"] = output["rejected_input_ids"] + [tokenizer.eos_token_id]
+                prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
+                chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+                rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
-            output["prompt_input_ids"] = output["prompt_input_ids"][-max_prompt_length:]
+            prompt_input_ids = prompt_input_ids[-max_prompt_length:]
         if max_completion_length is not None:
-            output["chosen_input_ids"] = output["chosen_input_ids"][:max_completion_length]
-            output["rejected_input_ids"] = output["rejected_input_ids"][:max_completion_length]
+            chosen_input_ids = chosen_input_ids[:max_completion_length]
+            rejected_input_ids = rejected_input_ids[:max_completion_length]
+
+        output = {
+            "prompt_input_ids": prompt_input_ids,
+            "pixel_values": pixel_values,
+            "chosen_input_ids": chosen_input_ids,
+            "rejected_input_ids": rejected_input_ids,
+        }
+
+        if "pixel_attention_mask" in processed_features:
+            output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
 
         return output
 
