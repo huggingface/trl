@@ -489,15 +489,15 @@ class DPOTrainer(Trainer):
         if args.padding_value is not None:
             self.padding_value = args.padding_value
         else:  # args.padding_value is None
-            if hasattr(processing_class, "pad_token_id"):
+            if hasattr(processing_class, "pad_token_id") and processing_class.pad_token_id is not None:
                 self.padding_value = processing_class.pad_token_id
-            elif hasattr(processing_class, "tokenizer") and hasattr(processing_class.tokenizer, "pad_token_id"):
+            elif hasattr(processing_class, "tokenizer") and processing_class.tokenizer.pad_token_id is not None:
                 self.padding_value = processing_class.tokenizer.pad_token_id
             else:
                 raise ValueError(
-                    "Can't find `pad_token_id` in the processing_class."
+                    "Can't find `pad_token_id` in the `processing_class`. "
                     "Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`) "
-                    "before calling the trainer."
+                    "before instantiating the trainer."
                 )
 
         if data_collator is None:
@@ -714,7 +714,7 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def process_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
-        processor = processing_class  # the processing class is a processor
+        processor, tokenizer = processing_class, processing_class.tokenizer # the processing class is a processor
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
         
         output = {}
@@ -722,17 +722,17 @@ class DPOTrainer(Trainer):
         output["pixel_values"] = processed_features["pixel_values"][0]
         if "pixel_attention_mask" in processed_features:
             output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
-        output["chosen_input_ids"] = processor(features["chosen"], add_special_tokens=False)["input_ids"][0]
-        output["rejected_input_ids"] = processor(features["rejected"], add_special_tokens=False)["input_ids"][0]
+        output["chosen_input_ids"] = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
+        output["rejected_input_ids"] = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
 
         # Add special tokens (typically for encoder-decoder models)
         if add_special_tokens:
-            if processor.bos_token is not None:
-                output["prompt_input_ids"] = [processor.bos_token_id] + output["prompt_input_ids"]
-            if processor.eos_token is not None:
-                output["prompt_input_ids"] = output["prompt_input_ids"] + [processor.eos_token_id]
-                output["chosen_input_ids"] = output["chosen_input_ids"] + [processor.tokenizer.eos_token_id]
-                output["rejected_input_ids"] = output["rejected_input_ids"] + [processor.tokenizer.eos_token_id]
+            if tokenizer.bos_token is not None:
+                output["prompt_input_ids"] = [tokenizer.bos_token_id] + output["prompt_input_ids"]
+            if tokenizer.eos_token is not None:
+                output["prompt_input_ids"] = output["prompt_input_ids"] + [tokenizer.eos_token_id]
+                output["chosen_input_ids"] = output["chosen_input_ids"] + [tokenizer.eos_token_id]
+                output["rejected_input_ids"] = output["rejected_input_ids"] + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
