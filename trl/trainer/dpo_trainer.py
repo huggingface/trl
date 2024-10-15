@@ -78,9 +78,9 @@ if is_deepspeed_available():
 
 
 @dataclass
-class DPOCollator(DataCollatorMixin):
+class PreferenceCollator(DataCollatorMixin):
     """
-    Data collator used for language modeling. Inputs are dynamically padded to the maximum length of a batch if they
+    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they
     are not all of the same length.
 
     Args:
@@ -501,7 +501,7 @@ class DPOTrainer(Trainer):
                 )
 
         if data_collator is None:
-            data_collator = DPOCollator(pad_token_id=self.padding_value)
+            data_collator = PreferenceCollator(pad_token_id=self.padding_value)
 
         if not disable_dropout:
             warnings.warn(
