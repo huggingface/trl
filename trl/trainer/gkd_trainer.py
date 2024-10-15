@@ -89,7 +89,7 @@ class GKDTrainer(SFTTrainer):
         data_collator = DataCollatorForChatML(
             tokenizer=processing_class, max_length=args.max_seq_length, teacher_tokenizer=teacher_processing_class
         )
-        self.uld_loss = teacher_processing_class is not None
+        self.use_uld_loss = teacher_processing_class is not None
 
         super().__init__(
             model,
@@ -222,42 +222,44 @@ class GKDTrainer(SFTTrainer):
             return jsd
 
     @staticmethod
-    def uld_loss(student_logits, teacher_logits, student_labels=None, teacher_labels=None, beta=0.5, reduction="sum"):
+    def uld_loss(student_logits, teacher_logits, student_labels=None, teacher_labels=None, reduction="sum"):
         """
         Compute the Universal Logit Distillation (ULD) loss.
 
         Args:
-            student_logits: Tensor of shape (batch_size, student_sequence_length, vocab_size)
-            teacher_logits: Tensor of shape (batch_size, teacher_sequence_length, vocab_size)
+            student_logits: Tensor of shape (batch_size, student_sequence_length, student_vocab_size)
+            teacher_logits: Tensor of shape (batch_size, teacher_sequence_length, teacher_vocab_size)
             student_labels: Tensor of shape (batch_size, student_sequence_length) with -100 for padding tokens
             teacher_labels: Tensor of shape (batch_size, teacher_sequence_length) with -100 for padding tokens
-            beta: Weight for the Wasserstein distance (default: 0.5)
             reduction: Specifies the reduction to apply to the output (default: 'sum')
 
         Returns:
             loss: Scalar tensor with the ULD loss
         """
-        # mask out logits via the student and teacher labels
-        mask = (student_labels != -100).float()
-        student_logits = student_logits * mask
-        mask = (teacher_labels != -100).float()
-        teacher_logits = teacher_logits * mask
-
         # Convert logits to probabilities
         student_probs = F.softmax(student_logits, dim=-1)
         teacher_probs = F.softmax(teacher_logits, dim=-1)
 
+        # mask out logits via the student and teacher labels
+        student_mask = student_labels != -100
+        # student_logits = student_logits * student_mask
+        teacher_mask = teacher_labels != -100
+        # teacher_logits = teacher_logits * teacher_mask
+
         # Sort probabilities in descending order
-        student_probs_sorted, _ = torch.sort(student_probs, dim=-1, descending=True)
-        teacher_probs_sorted, _ = torch.sort(teacher_probs, dim=-1, descending=True)
+        student_probs_sorted, _ = torch.sort(student_probs[student_mask], dim=-1, descending=True)
+        teacher_probs_sorted, _ = torch.sort(teacher_probs[teacher_mask], dim=-1, descending=True)
 
         # pad the smaller tensor to the same size as the larger tensor by zeros
-        max_length = max(student_probs_sorted.size(1), teacher_probs_sorted.size(1))
-        student_probs_sorted = F.pad(student_probs_sorted, (0, max_length - student_probs_sorted.size(1)))
-        teacher_probs_sorted = F.pad(teacher_probs_sorted, (0, max_length - teacher_probs_sorted.size(1)))
+        min_tokens = min(student_probs_sorted.size(0), teacher_probs_sorted.size(0))
+        max_vocab_size = max(student_probs_sorted.size(1), teacher_probs_sorted.size(1))
+        student_probs_sorted = F.pad(student_probs_sorted, (0, max_vocab_size - student_probs_sorted.size(1)))
+        teacher_probs_sorted = F.pad(teacher_probs_sorted, (0, max_vocab_size - teacher_probs_sorted.size(1)))
 
         # Compute weighted Wasserstein distance
-        wasserstein_distance = beta * torch.abs(student_probs_sorted - teacher_probs_sorted).sum(dim=-1)
+        wasserstein_distance = torch.abs(student_probs_sorted[:min_tokens] - teacher_probs_sorted[:min_tokens]).sum(
+            dim=-1
+        )
 
         # Apply reduction
         if reduction == "batchmean":
@@ -294,14 +296,13 @@ class GKDTrainer(SFTTrainer):
         shifted_labels = inputs["labels"][:, prompt_lengths:]
 
         # compute loss
-        if self.uld_loss:
+        if self.use_uld_loss:
             shifted_teacher_labels = inputs.get("teacher_labels", inputs["labels"])[:, teacher_prompt_lengths:]
             loss = self.uld_loss(
                 student_logits=shifted_student_logits,
                 teacher_logits=shifted_teacher_logits,
                 student_labels=shifted_labels,
                 teacher_labels=shifted_teacher_labels,
-                beta=self.beta,
             )
         else:
             loss = self.generalized_jsd_loss(
