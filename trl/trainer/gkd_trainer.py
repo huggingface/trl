@@ -240,24 +240,35 @@ class GKDTrainer(SFTTrainer):
         student_probs = F.softmax(student_logits, dim=-1)
         teacher_probs = F.softmax(teacher_logits, dim=-1)
 
-        # mask via the student and teacher labels
+        # Create masks for non-padding tokens
         student_mask = student_labels != -100
         teacher_mask = teacher_labels != -100
 
-        # Sort probabilities in descending order of only the non-padding tokens
-        student_probs_sorted, _ = torch.sort(student_probs[student_mask], dim=-1, descending=True)
-        teacher_probs_sorted, _ = torch.sort(teacher_probs[teacher_mask], dim=-1, descending=True)
+        # Ensure the masks have the same shape as their corresponding probabilities
+        student_mask = student_mask.unsqueeze(-1).expand_as(student_probs)
+        teacher_mask = teacher_mask.unsqueeze(-1).expand_as(teacher_probs)
 
-        # pad the probabilities to the max vocab size by zero padding
+        # Apply masks
+        student_probs_masked = student_probs.masked_select(student_mask).view(-1, student_probs.size(-1))
+        teacher_probs_masked = teacher_probs.masked_select(teacher_mask).view(-1, teacher_probs.size(-1))
+
+        # Ensure we have the same number of tokens for both student and teacher
+        min_tokens = min(student_probs_masked.size(0), teacher_probs_masked.size(0))
+        student_probs_masked = student_probs_masked[:min_tokens]
+        teacher_probs_masked = teacher_probs_masked[:min_tokens]
+
+        # Sort probabilities in descending order
+        student_probs_sorted, _ = torch.sort(student_probs_masked, dim=-1, descending=True)
+        teacher_probs_sorted, _ = torch.sort(teacher_probs_masked, dim=-1, descending=True)
+
+        # Pad the probabilities to the max vocab size
         max_vocab_size = max(student_probs_sorted.size(1), teacher_probs_sorted.size(1))
         student_probs_sorted = F.pad(student_probs_sorted, (0, max_vocab_size - student_probs_sorted.size(1)))
         teacher_probs_sorted = F.pad(teacher_probs_sorted, (0, max_vocab_size - teacher_probs_sorted.size(1)))
 
-        # Compute weighted Wasserstein distance
-        min_tokens = min(student_probs_sorted.size(0), teacher_probs_sorted.size(0))
-        wasserstein_distance = torch.abs(student_probs_sorted[:min_tokens] - teacher_probs_sorted[:min_tokens]).sum(
-            dim=-1
-        )
+        # Compute Wasserstein distance
+        wasserstein_distance = torch.abs(student_probs_sorted - teacher_probs_sorted).sum(dim=-1)
+
 
         # Apply reduction
         if reduction == "batchmean":
