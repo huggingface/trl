@@ -492,19 +492,6 @@ class DPOTrainer(Trainer):
         if data_collator is None:
             data_collator = DPOCollator(processing_class)
 
-            if args.remove_unused_columns:
-                args.remove_unused_columns = False
-                # warn users
-                warnings.warn(
-                    "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
-                    " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
-                )
-
-            self.use_dpo_data_collator = True
-        else:
-            self.use_dpo_data_collator = False
-
         if not disable_dropout:
             warnings.warn(
                 "You passed `disable_dropout` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
@@ -707,33 +694,10 @@ class DPOTrainer(Trainer):
             chosen_input_ids = chosen_input_ids[:max_completion_length]
             rejected_input_ids = rejected_input_ids[:max_completion_length]
 
-        # Create labels and combine prompt and completion sequences
-        # chosen_labels = [-100] * len(prompt_input_ids) + chosen_input_ids
-        # rejected_labels = [-100] * len(prompt_input_ids) + rejected_input_ids
-        # chosen_input_ids = prompt_input_ids + chosen_input_ids
-        # rejected_input_ids = prompt_input_ids + rejected_input_ids
-
-        # Truncate combined prompt and completion sequences
-        # if max_length is not None:
-        #     if truncation_mode == "keep_end":
-        #         chosen_input_ids = chosen_input_ids[-max_length:]
-        #         chosen_labels = chosen_labels[-max_length:]
-        #         rejected_input_ids = rejected_input_ids[-max_length:]
-        #         rejected_labels = rejected_labels[-max_length:]
-        #     elif truncation_mode == "keep_start":
-        #         chosen_input_ids = chosen_input_ids[:max_length]
-        #         chosen_labels = chosen_labels[:max_length]
-        #         rejected_input_ids = rejected_input_ids[:max_length]
-        #         rejected_labels = rejected_labels[:max_length]
-        #     else:
-        #         raise ValueError("Invalid truncation_mode")
-
         return {
             "prompt_input_ids": prompt_input_ids,
             "chosen_input_ids": chosen_input_ids,
-            # "chosen_labels": chosen_labels,
             "rejected_input_ids": rejected_input_ids,
-            # "rejected_labels": rejected_labels,
         }
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
@@ -766,6 +730,10 @@ class DPOTrainer(Trainer):
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
+
+    def _set_signature_columns_if_needed(self):
+        if self._signature_columns is None:
+            self._signature_columns = ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids"]
 
     def get_train_dataloader(self) -> DataLoader:
         """
@@ -1143,32 +1111,9 @@ class DPOTrainer(Trainer):
                 (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]), dim=1
             )
             loss_mask = torch.cat(
-                (torch.zeros_like(concatenated_batch["prompt_attention_mask"]),
+                (torch.zeros_like(concatenated_batch["prompt_attention_mask"]), # don't compute the loss on the prompt
                 concatenated_batch["completion_attention_mask"]), dim=1
             )
-
-            def compact_non_zero(tensor, token_id):
-                result = []
-                for row in tensor:
-                    non_zero_elements = row[row != token_id]  # Filter non-zero elements
-                    padded_row = torch.cat(
-                        [
-                            non_zero_elements,
-                            token_id
-                            * torch.ones(
-                                row.size(0) - non_zero_elements.size(0), device=row.device, dtype=torch.int64
-                            ),
-                        ]
-                    )  # Pad with zeros
-                    result.append(padded_row)
-                result = torch.stack(result)
-                any_not_padded_col = torch.sum(~(result == token_id).all(0))
-                result = result[:, :any_not_padded_col]
-                return result
-
-            # input_ids = compact_non_zero(input_ids, self.processing_class.pad_token_id)
-            # attention_mask = compact_non_zero(attention_mask, 0)
-
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
             logits = outputs.logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
@@ -1275,12 +1220,6 @@ class DPOTrainer(Trainer):
         inputs: Dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        if not self.use_dpo_data_collator:
-            warnings.warn(
-                "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
-
         compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
@@ -1348,11 +1287,6 @@ class DPOTrainer(Trainer):
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
     ):
-        if not self.use_dpo_data_collator:
-            warnings.warn(
-                "prediction_step is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
         if ignore_keys is None:
             if hasattr(model, "config"):
                 ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
