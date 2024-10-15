@@ -732,6 +732,10 @@ class DPOTrainer(Trainer):
         return model
 
     def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs.
+        # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
+        # Instead, we set them to the columns expected by `DPODataCollatorWithPadding`, hence the override.
         if self._signature_columns is None:
             self._signature_columns = ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids"]
 
@@ -1111,8 +1115,13 @@ class DPOTrainer(Trainer):
                 (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]), dim=1
             )
             loss_mask = torch.cat(
-                (torch.zeros_like(concatenated_batch["prompt_attention_mask"]), # don't compute the loss on the prompt
-                concatenated_batch["completion_attention_mask"]), dim=1
+                (
+                    torch.zeros_like(
+                        concatenated_batch["prompt_attention_mask"]
+                    ),  # don't compute the loss on the prompt
+                    concatenated_batch["completion_attention_mask"],
+                ),
+                dim=1,
             )
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
             logits = outputs.logits[:, :-1, :]
