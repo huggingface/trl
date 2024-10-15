@@ -714,9 +714,9 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def process_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
-        processor, tokenizer = processing_class, processing_class.tokenizer # the processing class is a processor
+        processor, tokenizer = processing_class, processing_class.tokenizer  # the processing class is a processor
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
-        
+
         output = {}
         output["prompt_input_ids"] = processed_features["input_ids"][0]
         output["pixel_values"] = processed_features["pixel_values"][0]
@@ -742,7 +742,7 @@ class DPOTrainer(Trainer):
             output["rejected_input_ids"] = output["rejected_input_ids"][:max_completion_length]
 
         return output
-    
+
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin

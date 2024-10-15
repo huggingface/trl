@@ -303,7 +303,7 @@ class DPOTrainerTester(unittest.TestCase):
                 ValueError,
                 expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
                 r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
-                r"before instantiating the trainer."
+                r"before instantiating the trainer.",
             ):
                 trainer = DPOTrainer(
                     model=self.model,
