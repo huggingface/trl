@@ -240,23 +240,21 @@ class GKDTrainer(SFTTrainer):
         student_probs = F.softmax(student_logits, dim=-1)
         teacher_probs = F.softmax(teacher_logits, dim=-1)
 
-        # mask out logits via the student and teacher labels
+        # mask via the student and teacher labels
         student_mask = student_labels != -100
-        # student_logits = student_logits * student_mask
         teacher_mask = teacher_labels != -100
-        # teacher_logits = teacher_logits * teacher_mask
 
-        # Sort probabilities in descending order
+        # Sort probabilities in descending order of only the non-padding tokens
         student_probs_sorted, _ = torch.sort(student_probs[student_mask], dim=-1, descending=True)
         teacher_probs_sorted, _ = torch.sort(teacher_probs[teacher_mask], dim=-1, descending=True)
 
-        # pad the smaller tensor to the same size as the larger tensor by zeros
-        min_tokens = min(student_probs_sorted.size(0), teacher_probs_sorted.size(0))
+        # pad the probabilities to the max vocab size by zero padding
         max_vocab_size = max(student_probs_sorted.size(1), teacher_probs_sorted.size(1))
         student_probs_sorted = F.pad(student_probs_sorted, (0, max_vocab_size - student_probs_sorted.size(1)))
         teacher_probs_sorted = F.pad(teacher_probs_sorted, (0, max_vocab_size - teacher_probs_sorted.size(1)))
 
         # Compute weighted Wasserstein distance
+        min_tokens = min(student_probs_sorted.size(0), teacher_probs_sorted.size(0))
         wasserstein_distance = torch.abs(student_probs_sorted[:min_tokens] - teacher_probs_sorted[:min_tokens]).sum(
             dim=-1
         )
