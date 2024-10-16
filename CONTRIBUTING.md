@@ -180,18 +180,21 @@ Follow these steps to start contributing:
    $ make test
    ```
 
-   TRL relies on `ruff` to format its source code
-   consistently. After you make changes, apply automatic style corrections and code verifications
-   that can't be automated in one go with:
+    TRL relies on `ruff` for maintaining consistent code formatting across its source files. Before submitting any PR, you should apply automatic style corrections and run code verification checks.
 
-   This target is also optimized to only work with files modified by the PR you're working on.
+    We provide a `precommit` target in the `Makefile` that simplifies this process by running all required checks and optimizations on only the files modified by your PR.
 
-   If you prefer to run the checks one after the other, the following command apply the
-   style corrections:
+    To apply these checks and corrections in one step, use:
 
-   ```bash
-   $ make precommit
-   ```
+    ```bash
+    $ make precommit
+    ```
+
+    This command runs the following:
+    - Executes `pre-commit` hooks to automatically fix style issues with `ruff` and other tools.
+    - Runs additional scripts such as adding copyright information.
+
+    If you prefer to apply the style corrections separately or review them individually, the `pre-commit` hook will handle the formatting for the files in question.
 
    Once you're happy with your changes, add changed files using `git add` and
    make a commit with `git commit` to record your changes locally:
@@ -204,7 +207,7 @@ Follow these steps to start contributing:
    Please write [good commit messages](https://chris.beams.io/posts/git-commit/).
 
    It is a good idea to sync your copy of the code with the original
-   Repository regularly. This way you can quickly account for changes:
+   repository regularly. This way you can quickly account for changes:
 
    ```bash
    $ git fetch upstream
@@ -249,7 +252,7 @@ repository here's how to run tests with `pytest` for the library:
 $ python -m pytest -sv ./tests
 ```
 
-That's how `make test` is implemented (sans the `pip install` line)!
+That's how `make test` is implemented (without the `pip install` line)!
 
 You can specify a smaller set of tests to test only the feature
 you're working on.

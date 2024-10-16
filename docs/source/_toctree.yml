@@ -42,8 +42,6 @@
       title: ORPO
     - local: ppo_trainer
       title: PPO
-    - local: ppov2_trainer
-      title: PPOv2
     - local: reward_trainer
       title: Reward
     - local: rloo_trainer
