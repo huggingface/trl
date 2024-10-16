@@ -99,7 +99,7 @@ def train(command_name):
             encoding="utf-8",
             cwd=os.getcwd(),
             env=os.environ.copy(),
-            capture_output=True,
+            capture_output=False,
         )
     except (CalledProcessError, ChildProcessError) as exc:
         console.log(f"TRL - {command_name.upper()} failed on ! See the logs above for further details.")

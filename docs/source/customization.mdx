@@ -161,3 +161,49 @@ When training large models, you should better handle the CUDA cache by iterative
 ```python
 training_args = DPOConfig(..., optimize_cuda_cache=True)
 ```
+
+## Mixing Datasets with CLI
+
+You can mix multiple datasets for training by providing a JSON config that details both the training and testing sets.
+
+### Config Structure
+The JSON config should have two keys: `"train"` and `"test"`, each containing a list of datasets to mix. For each dataset, you must provide the following five fields in order:
+1. **Path**: The path to the dataset (e.g., `"lighteval/mmlu"`).
+2. **Name**: The subset of the dataset (if applicable). If there is no subset, pass `null`.
+3. **Split**: The data split you want to use (e.g., `"train"`, `"test"`, `"validation"`).
+4. **Column**: The column from the dataset to use (e.g., `"question"`, `"input"`).
+5. **Proportion**: The proportion of the dataset to use (e.g., `0.5` for 50%).
+
+Here’s an example configuration:
+
+```json
+{
+  "train": [
+    ["lighteval/mmlu", "anatomy", "test", "question", 0.5],
+    ["lukaemon/bbh", "web_of_lies", "test", "input", 0.3],
+    ["nakamoto-yama/us-colleges-universities", null, "train", "alias", 0.1]
+  ],
+  "test": [
+    ["lighteval/mmlu", "anatomy", "validation", "question", 1],
+    ["lukaemon/bbh", "web_of_lies", "test", "input", 0.5],
+    ["nakamoto-yama/us-colleges-universities", null, "train", "alias", 0.4]
+  ]
+}
+```
+
+In this example:
+- For the training set, 50% of the `"question"` column from the `"anatomy"` subset of `lighteval/mmlu` is used.
+- For the testing set, 100% of the `"question"` column from the same dataset is used in the `"validation"` split.
+- The dataset `"nakamoto-yama/us-colleges-universities"` has no subset, so `null` is passed as the second value.
+
+### Using the Mixer Config in CLI
+
+To use the mixer config with the CLI, provide the path to the JSON config using the `--mixer_config` flag. For example:
+
+```bash
+trl sft --model_name_or_path MODEL_NAME \
+    --mixer_config PATH_TO_MIXER_CONFIG \
+    --output_dir OUTPUT_DIR
+```
+
+Replace `MODEL_NAME`, `PATH_TO_MIXER_CONFIG`, and `OUTPUT_DIR` with your desired model, the path to the JSON config file, and the directory for your output, respectively.

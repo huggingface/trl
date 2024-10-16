@@ -49,6 +49,8 @@ python examples/scripts/sft.py \
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
+from trl.utils import data_mixer_from_json
+
 from trl import (
     ModelConfig,
     ScriptArguments,
@@ -87,7 +89,12 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name)
+    #use data mixer if mixer_config is provided
+    if script_args.mixer_config:
+        dataset = data_mixer_from_json(script_args.mixer_config)
+        training_args.dataset_text_field = "text"
+    else:
+        dataset = load_dataset(script_args.dataset_name)
 
     ################
     # Training
