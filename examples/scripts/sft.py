@@ -70,7 +70,7 @@ if __name__ == "__main__":
     ################
     # Model init kwargs & Tokenizer
     ################
-    quantization_config = get_quantization_config(model_config)
+    """quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
@@ -84,7 +84,7 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
     )
-    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token = tokenizer.eos_token"""
 
     ################
     # Dataset
@@ -93,13 +93,15 @@ if __name__ == "__main__":
     if script_args.mixer_config:
         dataset = data_mixer_from_json(script_args.mixer_config)
         training_args.dataset_text_field = "text"
+        print(dataset)
     else:
         dataset = load_dataset(script_args.dataset_name)
+        print(dataset)
 
     ################
     # Training
     ################
-    trainer = SFTTrainer(
+    """trainer = SFTTrainer(
         model=model_config.model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
@@ -113,4 +115,4 @@ if __name__ == "__main__":
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)"""
