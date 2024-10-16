@@ -419,23 +419,35 @@ class OnlineDPOTrainer(Trainer):
             ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
             del ref_output, ref_logits, ref_all_logprobs  # free memory
 
-            # Get the reward from the reward model
+        # Get the reward from the reward model or judge:
+        if self.judge is not None:
+            prompts = [self.processing_class.decode(ids[:context_length]) for ids in prompt_completion_ids]
+            completions = [self.processing_class.decode(ids[context_length:]) for ids in prompt_completion_ids]
+            ranks_of_first_completion = self.judge.judge(
+                prompts, [[completions[i], completions[i + num_examples]] for i in range(num_examples)]
+            )
+            # convert ranks to a True/False mask:
+            # when rank == 0 it means the first completion is the better
+            # when rank == 1 it means the second completion is the bette
+            mask = torch.tensor([rank == 1 for rank in ranks_of_first_completion], device=prompt_completion_ids.device)
+        else:
             _, scores, _ = get_reward(
                 self.reward_model, prompt_completion_ids, self.processing_class.pad_token_id, context_length
             )
 
-        # Filter completion. Ensure that the sample contains stop_token_id
-        # Completions not passing that filter will receive a lower score.
-        contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
-        if self.args.missing_eos_penalty is not None:
-            scores[~contain_eos_token] -= self.args.missing_eos_penalty
+            # Filter completion. Ensure that the sample contains stop_token_id
+            # Completions not passing that filter will receive a lower score.
+            contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
+            if self.args.missing_eos_penalty is not None:
+                scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
-        # Split the scores in 2 (the prompts of the first half are the same as the second half)
-        first_half, second_half = scores.split(num_examples)
+            # Split the scores in 2 (the prompts of the first half are the same as the second half)
+            first_half, second_half = scores.split(num_examples)
 
-        # Get the indices of the chosen and rejected examples
-        num_examples_range = torch.arange(num_examples, device=scores.device)
-        mask = first_half >= second_half
+            # Get the indices of the chosen and rejected examples
+            mask = first_half >= second_half
+
+        num_examples_range = torch.arange(num_examples, device=prompt_completion_ids.device)
         chosen_indices = num_examples_range + (~mask * num_examples)
         rejected_indices = num_examples_range + (mask * num_examples)
 
