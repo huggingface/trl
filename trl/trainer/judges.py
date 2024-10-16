@@ -21,6 +21,7 @@ from typing import List, Optional, Union
 import numpy as np
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
+from scipy.special import softmax
 from transformers.utils import is_openai_available
 
 from ..import_utils import is_llmblender_available
@@ -157,7 +158,25 @@ class PairRMJudge(BasePairwiseJudge):
     """
     LLM judge based on the PairRM model from AllenAI.
 
-    See: https://huggingface.co/llm-blender/PairRM
+    This judge uses the PairRM model to rank pairs of completions for given prompts.
+    It's designed for pairwise comparison of language model outputs.
+
+    The PairRM model is loaded using the llm-blender library and runs on the
+    default Accelerator device.
+
+    Attributes:
+        blender (llm_blender.Blender): An instance of the Blender class from llm-blender.
+
+    Example:
+        >>> judge = PairRMJudge()
+        >>> prompts = ["Translate 'hello' to French", "What's the capital of Japan?"]
+        >>> completions = [["Bonjour", "Salut"], ["Kyoto", "Tokyo"]]
+        >>> results = judge(prompts, completions)
+        >>> print(results)  # [0, 1] (indicating the first completion is preferred for the first prompt and the second)
+
+    Note:
+        This class requires the llm-blender library to be installed.
+        Install it with: pip install llm-blender
     """
 
     def __init__(self):
@@ -166,22 +185,61 @@ class PairRMJudge(BasePairwiseJudge):
         self.blender = llm_blender.Blender()
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
 
-    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[int]:
+    def judge(
+        self,
+        prompts: List[str],
+        completions: List[List[str]],
+        shuffle_order: bool = True,
+        return_scores: bool = False,
+        temperature: float = 1.0,
+    ) -> List[Union[int, float]]:
+        """
+        Judge the completion pairs for the given prompts using the PairRM model.
+
+        Args:
+            prompts (List[str]): List of prompts to judge.
+            completions (List[List[str]]): List of completion pairs for each prompt.
+            shuffle_order (bool, optional): Whether to shuffle the order of completions
+                to avoid positional bias. Defaults to True.
+            return_scores (bool, optional): If True, return probability scores instead of ranks (i.e. a soft-judge).
+                Defaults to False.
+            temperature (float, optional): Temperature for scaling logits if return_scores
+                is True. Defaults to 1.0.
+
+        Returns:
+            List[Union[int, float]]: List of ranks (0 or 1) or scores for each prompt,
+            indicating which completion is preferred or its score.
+
+        Raises:
+            ValueError: If the number of completions per prompt is not exactly 2.
+
+        Note:
+            - Ranks are 0-indexed (0 means the first completion is preferred).
+            - If return_scores is True, returns softmax probabilities for the first completion.
+        """
+
+        if len(completions[0]) != 2:
+            raise ValueError("PairRM judge requires exactly 2 completions per prompt.")
+
         # Shuffle the order of the completions to avoid positional bias
         if shuffle_order:
             flip_mask = np.random.choice([True, False], size=len(prompts))
             completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
 
         # Rank the completions
-        ranks = self.blender.rank(prompts, completions)
-        ranks -= 1  # PairRM is 1-indexed, so we subtract 1 to make it 0-indexed
+        ranks = self.blender.rank(prompts, completions, return_scores=return_scores, disable_tqdm=True)
+        if not return_scores:
+            ranks -= 1  # PairRM rank is 1-indexed, so we subtract 1 to make it 0-indexed
+        else:
+            # scale the logits by temperature
+            ranks /= temperature
 
-        # Flip back the ranks to the original order if needed
+        # Flip back the ranks or scores to the original order if needed
         if shuffle_order:
             ranks[flip_mask] = ranks[flip_mask][:, ::-1]
 
-        # Return the ranks
-        return ranks[:, 0].tolist()
+        # Return the ranks or score probability
+        return softmax(ranks, axis=-1)[:, 0].tolist() if return_scores else ranks[:, 0].tolist()
 
 
 class HfPairwiseJudge(BasePairwiseJudge):
