@@ -711,12 +711,12 @@ class DPOTrainer(Trainer):
                 Whether to add special tokens to the sequences. Typically used for encoder-decoder models. If `True`,
                 the prompt sequence will have a bos token prepended and an eos token appended. In any case, the
                 completion sequences will have an eos token appended.
-        
+
         Returns:
             `Dict[str, List[int]]`:
                 Tokenized sequences with the keys `"prompt_input_ids"`, `"chosen_input_ids"`, and
                 `"rejected_input_ids".
-        
+
         Example:
         ```python
         >>> from transformers import GPT2Tokenizer
