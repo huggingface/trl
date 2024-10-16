@@ -77,22 +77,6 @@ if is_deepspeed_available():
     import deepspeed
 
 
-def _flush_left(input_ids: torch.LongTensor, mask: torch.LongTensor, loss_mask: torch.LongTensor) -> torch.Tensor:
-    for i in range(mask.size(0)):
-        first_non_zeros_idx = (mask[i] == 1).nonzero()[0].item()
-        input_ids[i] = torch.roll(input_ids[i], shifts=-first_non_zeros_idx)
-        mask[i] = torch.roll(mask[i], shifts=-first_non_zeros_idx)
-        loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_non_zeros_idx)
-
-    # Get the first column idx that is all zeros and remove every column after that
-    last_non_zeros_idx = (mask == 1).sum(dim=0).max().item()
-    input_ids = input_ids[:, : last_non_zeros_idx - 1]
-    mask = mask[:, : last_non_zeros_idx - 1]
-    loss_mask = loss_mask[:, : last_non_zeros_idx - 1]
-
-    return input_ids, mask, loss_mask
-
-
 @dataclass
 class PreferenceCollator(DataCollatorMixin):
     """
@@ -1207,34 +1191,45 @@ class DPOTrainer(Trainer):
         if "pixel_attention_mask" in concatenated_batch:
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
 
+        prompt_input_ids = concatenated_batch["prompt_input_ids"]
+        prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
+        completion_input_ids = concatenated_batch["completion_input_ids"]
+        completion_attention_mask = concatenated_batch["completion_attention_mask"]
         if self.is_encoder_decoder:
-            labels = concatenated_batch["completion_input_ids"]
-            labels[concatenated_batch["completion_attention_mask"] == 0] = self.label_pad_token_id
+            labels = completion_input_ids
+            labels[completion_attention_mask == 0] = self.label_pad_token_id
             outputs = model(
-                input_ids=concatenated_batch["prompt_input_ids"],
-                attention_mask=concatenated_batch["prompt_attention_mask"],
+                input_ids=prompt_input_ids,
+                attention_mask=prompt_attention_mask,
                 labels=labels,  # we need the labels for the logits to be returned
                 **model_kwargs,
             )
             logits = outputs.logits
-            loss_mask = concatenated_batch["completion_attention_mask"].bool()
+            loss_mask = completion_attention_mask.bool()
         else:
             # Concatenate the prompt and completion inputs
-            input_ids = torch.cat(
-                (concatenated_batch["prompt_input_ids"], concatenated_batch["completion_input_ids"]), dim=1
-            )
-            attention_mask = torch.cat(
-                (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]), dim=1
-            )
+            input_ids = torch.cat((prompt_input_ids, completion_input_ids), dim=1)
+            attention_mask = torch.cat((prompt_attention_mask, completion_attention_mask), dim=1)
+            # Mask the prompt but not the completion for the loss
             loss_mask = torch.cat(
-                (
-                    torch.zeros_like(concatenated_batch["prompt_attention_mask"]),  # mask the prompt for the loss
-                    concatenated_batch["completion_attention_mask"],
-                ),
+                (torch.zeros_like(prompt_attention_mask), completion_attention_mask),
                 dim=1,
             )
 
-            input_ids, attention_mask, loss_mask = _flush_left(input_ids, attention_mask, loss_mask)
+            # Flush left to reduce the memory usage
+            # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+            #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+            for i in range(attention_mask.size(0)):
+                first_one_idx = torch.nonzero(attention_mask[i])[0].item()
+                input_ids[i] = torch.roll(input_ids[i], shifts=-first_one_idx)
+                attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
+                loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
+
+            # Get the first column idx that is all zeros and remove every column after that
+            first_empty_col = torch.nonzero(torch.sum(attention_mask, dim=0) == 0)[0].item()
+            input_ids = input_ids[:, : first_empty_col - 1]
+            attention_mask = attention_mask[:, : first_empty_col - 1]
+            loss_mask = loss_mask[:, : first_empty_col - 1]
 
             # Truncate left
             input_ids = input_ids[:, -self.args.max_length :]
@@ -1242,12 +1237,14 @@ class DPOTrainer(Trainer):
             loss_mask = loss_mask[:, -self.args.max_length :]
 
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
+
+            # Offset the logits by one to align with the labels
             logits = outputs.logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
             loss_mask = loss_mask[:, 1:].bool()
 
         if logits.shape[:2] != labels.shape[:2]:
-            # for llava, the model returns logits for the entire sequence, including the image tokens (placed before the text tokens)
+            # for llava, the returned logits include the image tokens (placed before the text tokens)
             seq_len = labels.shape[1]
             logits = logits[:, -seq_len:]
 
