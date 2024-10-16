@@ -476,13 +476,6 @@ class DPOTrainer(Trainer):
                 "You passed `max_prompt_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.max_prompt_length = max_prompt_length
-        # if args.max_prompt_length is None:
-        #     warnings.warn(
-        #         "`max_prompt_length` is not set in the DPOConfig's init"
-        #         " it will default to `128` by default, but you should do it yourself in the future.",
-        #         UserWarning,
-        #     )
-        #     args.max_prompt_length = 128
 
         if max_target_length is not None:
             warnings.warn(
@@ -502,6 +495,12 @@ class DPOTrainer(Trainer):
                 "You passed `label_pad_token_id` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.label_pad_token_id = label_pad_token_id
+
+        if padding_value is not None:
+            warnings.warn(
+                "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
+            )
+            args.padding_value = padding_value
 
         if args.padding_value is not None:
             self.padding_value = args.padding_value
@@ -533,12 +532,6 @@ class DPOTrainer(Trainer):
         self.max_length = args.max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        if padding_value is not None:
-            warnings.warn(
-                "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
-            )
-            args.padding_value = padding_value
-
         self.max_prompt_length = args.max_prompt_length
         if truncation_mode != "keep_end":
             warnings.warn(
@@ -702,6 +695,36 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def tokenize_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+        """
+        Tokenize a row of the dataset.
+
+        Args:
+            features (`Dict[str, str]`):
+                Row of the dataset, should contain the keys `"prompt"`, `"chosen"`, and `"rejected"`.
+            processing_class (`PreTrainedTokenizerBase`):
+                Processing class used to process the data.
+            max_prompt_length (`int` or `None`):
+                Maximum length of the prompt sequence. If `None`, the prompt sequence is not truncated.
+            max_completion_length (`int` or `None`):
+                Maximum length of the completion sequences. If `None`, the completion sequences are not truncated.
+            add_special_tokens (`bool`):
+                Whether to add special tokens to the sequences. Typically used for encoder-decoder models. If `True`,
+                the prompt sequence will have a bos token prepended and an eos token appended. In any case, the
+                completion sequences will have an eos token appended.
+        
+        Returns:
+            `Dict[str, List[int]]`:
+                Tokenized sequences with the keys `"prompt_input_ids"`, `"chosen_input_ids"`, and
+                `"rejected_input_ids".
+        
+        Example:
+        ```python
+        >>> from transformers import GPT2Tokenizer
+        >>> tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        >>> features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
+        >>> DPOTrainer.tokenize_row(features, tokenizer, max_prompt_length=3, max_completion_length=3, add_special_tokens=False)
+        {'prompt_input_ids': [464, 6766, 318], 'chosen_input_ids': [4171, 50256], 'rejected_input_ids': [4077, 50256]}
+        """
         tokenizer = processing_class  # the processing class is a tokenizer
         prompt_input_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
         chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
@@ -731,6 +754,9 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def process_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+        """
+        Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
+        """
         processor, tokenizer = processing_class, processing_class.tokenizer  # the processing class is a processor
         processed_features = processor(images=features["images"], text=features["prompt"], add_special_tokens=False)
 
