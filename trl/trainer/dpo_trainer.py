@@ -713,8 +713,8 @@ class DPOTrainer(Trainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-                chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-                rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
@@ -745,8 +745,8 @@ class DPOTrainer(Trainer):
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
             if tokenizer.eos_token is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
-                chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-                rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
+        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
+        rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
