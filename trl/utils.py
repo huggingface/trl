@@ -40,7 +40,7 @@ class ScriptArguments:
         inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
-    dataset_name: str
+    dataset_name: Optional[str] = None
     dataset_train_split: str = "train"
     dataset_test_split: str = "test"
     config: Optional[str] = None
