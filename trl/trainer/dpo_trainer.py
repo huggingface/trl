@@ -470,13 +470,6 @@ class DPOTrainer(Trainer):
                 "You passed `max_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.max_length = max_length
-        if args.max_length is None:
-            warnings.warn(
-                "`max_length` is not set in the DPOConfig's init"
-                " it will default to `512` by default, but you should do it yourself in the future.",
-                UserWarning,
-            )
-            args.max_length = 512
 
         if max_prompt_length is not None:
             warnings.warn(
@@ -1226,15 +1219,17 @@ class DPOTrainer(Trainer):
                 loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
 
             # Get the first column idx that is all zeros and remove every column after that
-            first_empty_col = torch.nonzero(torch.sum(attention_mask, dim=0) == 0)[0].item()
+            empty_cols = torch.sum(attention_mask, dim=0) == 0
+            first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1) + 1
             input_ids = input_ids[:, : first_empty_col - 1]
             attention_mask = attention_mask[:, : first_empty_col - 1]
             loss_mask = loss_mask[:, : first_empty_col - 1]
 
             # Truncate left
-            input_ids = input_ids[:, -self.args.max_length :]
-            attention_mask = attention_mask[:, -self.args.max_length :]
-            loss_mask = loss_mask[:, -self.args.max_length :]
+            if self.args.max_length is not None:
+                input_ids = input_ids[:, -self.args.max_length :]
+                attention_mask = attention_mask[:, -self.args.max_length :]
+                loss_mask = loss_mask[:, -self.args.max_length :]
 
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
 
