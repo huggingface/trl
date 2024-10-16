@@ -724,6 +724,7 @@ class DPOTrainer(Trainer):
         >>> features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
         >>> DPOTrainer.tokenize_row(features, tokenizer, max_prompt_length=3, max_completion_length=3, add_special_tokens=False)
         {'prompt_input_ids': [464, 6766, 318], 'chosen_input_ids': [4171, 50256], 'rejected_input_ids': [4077, 50256]}
+        ```
         """
         tokenizer = processing_class  # the processing class is a tokenizer
         prompt_input_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
