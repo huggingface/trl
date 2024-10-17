@@ -245,7 +245,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             ],
             return_scores=True,
         )
-        return probability
+        return torch.tensor(probability, device=model_data["input_ids"].device)
 
     def _compute_logprobs(self, model, model_data, context_length):
         def compute_logprobs_for_data(m, data):
@@ -386,16 +386,16 @@ class NashMDTrainer(OnlineDPOTrainer):
         loss, score, kl_div = self._compute_losses(model_logprobs_model_data, ref_logprobs_model_data, probability)
 
         # Log everything
-        self._log_statistics(
-            model_data,
-            mixture_data,
-            model_logprobs_model_data.detach(),
-            ref_logprobs_model_data,
-            probability,
-            score.detach(),
-            kl_div.detach(),
-            context_length,
-        )
+        # self._log_statistics(
+        #     model_data,
+        #     mixture_data,
+        #     model_logprobs_model_data.detach(),
+        #     ref_logprobs_model_data,
+        #     probability,
+        #     score.detach(),
+        #     kl_div.detach(),
+        #     context_length,
+        # )
 
         if (
             self.args.torch_empty_cache_steps is not None
