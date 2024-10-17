@@ -244,6 +244,7 @@ class DataCollatorForChatML:
     tokenizer: PreTrainedTokenizerBase
     ignore_index: int = -100
     max_length: int = None
+    prompt_key: str = "prompt"
     messages_key: str = "messages"
 
     def __post_init__(self):
@@ -254,67 +255,69 @@ class DataCollatorForChatML:
             self.max_length = min(self.tokenizer.model_max_length, 1024)
 
     def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        prompts = []
-        completions = []
-
-        for example in examples:
-            messages = example[self.messages_key]
-            formatted_chat = self.tokenizer.apply_chat_template(messages, tokenize=False)
-
-            # Split the formatted chat into prompt and completion
-            assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
-            last_assistant_message = assistant_messages[-1]["content"]
-            prompt = formatted_chat.rsplit(last_assistant_message, 1)[0]
-            completion = last_assistant_message
-
-            prompts.append(prompt)
-            completions.append(completion)
-
-        # Tokenize prompts and completions
-        tokenized_prompts = self.tokenizer(
-            prompts, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
-        )
-        tokenized_completions = self.tokenizer(
-            completions, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
-        )
-
-        # Combine prompts and completions
         input_ids = []
         attention_mask = []
+        prompts_input_ids = []
+        prompt_attention_mask = []
         labels = []
 
-        for prompt, completion in zip(tokenized_prompts["input_ids"], tokenized_completions["input_ids"]):
-            combined_input_ids = prompt + completion
-            combined_attention_mask = [1] * len(combined_input_ids)
+        for example in examples:
+            formatted_prompt = example.get(self.prompt_key, None)
+            if formatted_prompt is None:
+                prompt = example[self.messages_key][:-1]
+                formatted_prompt = self.tokenizer.apply_chat_template(
+                    prompt, tokenize=False, add_generation_prompt=True
+                )
 
-            # Create labels for one-token ahead task, masking the prompt
-            combined_labels = [self.ignore_index] * len(prompt) + completion[:-1]
-            combined_labels.append(self.tokenizer.eos_token_id)  # Add EOS token as final target
+            if "input_ids" not in example:
+                message = example[self.messages_key]
+                formatted_message = self.tokenizer.apply_chat_template(
+                    message, tokenize=False, add_generation_prompt=True
+                )
+                tokenized_message = self.tokenizer(
+                    formatted_message,
+                    truncation=True,
+                    max_length=self.max_length,
+                    padding=False,
+                    return_tensors=None,
+                    add_special_tokens=False,
+                )
+                input_ids.append(tokenized_message["input_ids"])
+                attention_mask.append(tokenized_message["attention_mask"])
+            else:
+                input_ids.append(example["input_ids"])
+                attention_mask.append(example["attention_mask"])
 
-            input_ids.append(combined_input_ids)
-            attention_mask.append(combined_attention_mask)
-            labels.append(combined_labels)
+            tokenized_prompt = self.tokenizer(
+                formatted_prompt,
+                truncation=True,
+                max_length=len(input_ids[-1]),
+                padding=False,
+                return_tensors=None,
+                add_special_tokens=False,
+            )
 
-        # first convert to list of tensors
-        input_ids = [torch.tensor(ids) for ids in input_ids]
-        attention_mask = [torch.tensor(mask) for mask in attention_mask]
-        labels = [torch.tensor(label) for label in labels]
+            prompts_input_ids.append(tokenized_prompt["input_ids"])
+            prompt_attention_mask.append(tokenized_prompt["attention_mask"])
 
-        # pad the input_ids, attention_mask and labels to the same length across the batch
+            # Create the labels that will have all but the completion tokens of the example["input_ids"] set to ignore_index
+            label = [self.ignore_index] * len(input_ids[-1])
+            completion_start_idx = len(tokenized_prompt["input_ids"])
+            label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
+            labels.append(label)
+
+        # convert to list of tensors and pad
+        input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
+        attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
+        labels = [torch.tensor(label, dtype=torch.long) for label in labels]
         input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
         attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
         labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
 
-        # pad the tokenized_prompts on the left to the same length convert to tensor first
-        prompts_input_ids = [torch.tensor(ids) for ids in tokenized_prompts["input_ids"]]
+        prompts_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in prompts_input_ids]
+        prompt_attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in prompt_attention_mask]
         prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
-
-        # prompt attention mask
-        prompt_attention_mask = pad(
-            [torch.tensor([1] * len(ids)) for ids in tokenized_prompts["input_ids"]],
-            padding_side="left",
-            padding_value=0,
-        )
+        prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
 
         return {
             "input_ids": input_ids,
@@ -548,10 +551,12 @@ class ConstantLengthDataset(IterableDataset):
         dataset (`dataset.Dataset`):
             Dataset with text files.
         dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
-            Name of the field in the dataset that contains the text. Used only if `formatting_func` is `None`.
+            Name of the field in the dataset that contains the text. Only one of `dataset_text_field` and
+            `formatting_func` should be provided.
         formatting_func (`Callable`, *optional*):
             Function that formats the text before tokenization. Usually it is recommended to have follows a certain
-            pattern such as `"### Question: {question} ### Answer: {answer}"`
+            pattern such as `"### Question: {question} ### Answer: {answer}"`. Only one of `dataset_text_field` and
+            `formatting_func` should be provided.
         infinite (`bool`, *optional*, defaults to `False`):
             If True the iterator is reset after dataset reaches end else stops.
         seq_length (`int`, *optional*, defaults to `1024`):
@@ -602,10 +607,19 @@ class ConstantLengthDataset(IterableDataset):
         self.shuffle = shuffle
         self.append_concat_token = append_concat_token
         self.add_special_tokens = add_special_tokens
-        if formatting_func is None:
-            self.formatting_func = lambda x: x[dataset_text_field]
-        else:
+
+        if dataset_text_field is not None and formatting_func is not None:
+            warnings.warn(
+                "Only one of `dataset_text_field` and `formatting_func` should be provided. "
+                "Ignoring `dataset_text_field` and using `formatting_func`."
+            )
+
+        if formatting_func is not None:
             self.formatting_func = formatting_func
+        elif dataset_text_field is not None:
+            self.formatting_func = lambda x: x[dataset_text_field]
+        else:  # neither is provided
+            raise ValueError("Either `dataset_text_field` or `formatting_func` should be provided.")
 
         if formatting_func is not None:
             if formatting_func.__code__.co_argcount > 1:
@@ -1377,7 +1391,7 @@ def generate_model_card(
     model_name: str,
     hub_model_id: str,
     dataset_name: Optional[str],
-    tags: Union[str, List[str], None],
+    tags: List[str],
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
@@ -1396,7 +1410,7 @@ def generate_model_card(
             Hub model ID as `username/model_id`.
         dataset_name (`str` or `None`):
             Dataset name.
-        tags (`str`, `List[str]`, or `None`):
+        tags (`List[str]`):
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
@@ -1413,10 +1427,6 @@ def generate_model_card(
         `ModelCard`:
             A ModelCard object.
     """
-    if tags is None:
-        tags = []
-    elif isinstance(tags, str):
-        tags = [tags]
     card_data = ModelCardData(
         base_model=base_model,
         datasets=dataset_name,

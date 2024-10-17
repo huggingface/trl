@@ -222,6 +222,7 @@ class GKDTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
+                report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
@@ -231,7 +232,7 @@ class GKDTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
             )
 
             trainer.train()
@@ -251,7 +252,7 @@ class GKDTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
             )
 
             self.assertEqual(trainer.generation_config.pad_token_id, self.tokenizer.eos_token_id)

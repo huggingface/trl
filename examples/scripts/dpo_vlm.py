@@ -33,9 +33,9 @@ from transformers import AutoModelForVision2Seq, AutoProcessor
 
 from trl import (
     DPOConfig,
-    DPOScriptArguments,
     DPOTrainer,
     ModelConfig,
+    ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
@@ -44,7 +44,7 @@ from trl import (
 
 
 if __name__ == "__main__":
-    parser = TrlParser((DPOScriptArguments, DPOConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
 
     ################
@@ -126,7 +126,7 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
-        tokenizer=processor,
+        processing_class=processor,
         peft_config=peft_config,
     )
 

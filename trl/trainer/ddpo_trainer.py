@@ -617,6 +617,13 @@ class DDPOTrainer(BaseTrainer):
         else:
             base_model = None
 
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
         citation = textwrap.dedent("""\
         @inproceedings{black2024training,
             title        = {{Training Diffusion Models with Reinforcement Learning}},

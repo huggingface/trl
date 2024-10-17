@@ -38,6 +38,9 @@ SUPPORTED_COMMANDS = ["sft", "dpo", "chat", "kto", "env"]
 
 
 def print_env():
+    if torch.cuda.is_available():
+        devices = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
+
     accelerate_config = accelerate_config_str = "not found"
 
     # Get the default from the config file.
@@ -56,7 +59,7 @@ def print_env():
         "Platform": platform.platform(),
         "Python version": platform.python_version(),
         "PyTorch version": version("torch"),
-        "CUDA device": torch.cuda.get_device_name() if torch.cuda.is_available() else "not available",
+        "CUDA device(s)": ", ".join(devices) if torch.cuda.is_available() else "not available",
         "Transformers version": version("transformers"),
         "Accelerate version": version("accelerate"),
         "Accelerate config": accelerate_config_str,
@@ -111,7 +114,7 @@ def chat():
         init_zero_verbose()
         trl_examples_dir = os.path.dirname(__file__)
 
-    command = f"accelerate launch {trl_examples_dir}/scripts/chat.py {' '.join(sys.argv[2:])}"
+    command = f"python {trl_examples_dir}/scripts/chat.py {' '.join(sys.argv[2:])}"
 
     try:
         subprocess.run(

@@ -44,11 +44,11 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
 from trl import (
-    DPOScriptArguments,
     LogCompletionsCallback,
     ModelConfig,
     OnlineDPOConfig,
     OnlineDPOTrainer,
+    ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
@@ -58,7 +58,7 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":
-    parser = TrlParser((DPOScriptArguments, OnlineDPOConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
     script_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
@@ -107,7 +107,7 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_config),
     )
     generation_config = GenerationConfig(
