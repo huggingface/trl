@@ -12,38 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-# regular:
+# Full training
 python examples/scripts/sft.py \
-    --dataset_name trl-lib/ultrafeedback_binarized \
-    --model_name_or_path="facebook/opt-350m" \
-    --report_to="wandb" \
-    --learning_rate=1.41e-5 \
-    --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
-    --output_dir="sft_openassistant-guanaco" \
-    --logging_steps=1 \
-    --num_train_epochs=3 \
-    --max_steps=-1 \
-    --push_to_hub \
-    --gradient_checkpointing
-
-# peft:
-python examples/scripts/sft.py \
-    --dataset_name trl-lib/ultrafeedback_binarized \
-    --model_name_or_path="facebook/opt-350m" \
-    --report_to="wandb" \
-    --learning_rate=1.41e-5 \
-    --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
-    --output_dir="sft_openassistant-guanaco" \
-    --logging_steps=1 \
-    --num_train_epochs=3 \
-    --max_steps=-1 \
-    --push_to_hub \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --learning_rate 2.0e-5 \
+    --num_train_epochs 1 \
+    --packing \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 100 \
+    --output_dir Qwen2-0.5B-SFT \
+    --push_to_hub
+
+# LoRA
+python examples/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --learning_rate 2.0e-4 \
+    --num_train_epochs 1 \
+    --packing \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 100 \
     --use_peft \
-    --lora_r=64 \
-    --lora_alpha=16
+    --lora_r 32 \
+    --lora_alpha 16 \
+    --output_dir Qwen2-0.5B-SFT \
+    --push_to_hub
 """
 
 from datasets import load_dataset
