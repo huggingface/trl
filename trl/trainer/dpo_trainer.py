@@ -848,7 +848,7 @@ class DPOTrainer(Trainer):
             ref_chosen_logps = []
             ref_rejected_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
-                ref_chosen_logp, ref_rejected_logp = self.compute_reference_log_probs(padded_batch)
+                ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(padded_batch)
                 ref_chosen_logp, ref_rejected_logp = self.accelerator.gather_for_metrics(
                     (ref_chosen_logp, ref_rejected_logp)
                 )
@@ -901,7 +901,7 @@ class DPOTrainer(Trainer):
             ref_chosen_logps = []
             ref_rejected_logps = []
             for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
-                ref_chosen_logp, ref_rejected_logp = self.compute_reference_log_probs(padded_batch)
+                ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(padded_batch)
                 ref_chosen_logp, ref_rejected_logp = self.accelerator.gather_for_metrics(
                     (ref_chosen_logp, ref_rejected_logp)
                 )
@@ -933,7 +933,7 @@ class DPOTrainer(Trainer):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
 
-    def compute_reference_log_probs(self, batch: Dict[str, torch.LongTensor]) -> Dict:
+    def compute_ref_log_probs(self, batch: Dict[str, torch.LongTensor]) -> Dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
         compte_ref_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
         with torch.no_grad(), compte_ref_context_manager:
@@ -1316,12 +1316,12 @@ class DPOTrainer(Trainer):
 
         model_output = self.concatenated_forward(model, batch)
 
-        # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
-        if "reference_chosen_logps" in batch and "reference_rejected_logps" in batch:
-            ref_chosen_logps = batch["reference_chosen_logps"]
-            ref_rejected_logps = batch["reference_rejected_logps"]
+        # if ref_chosen_logps and ref_rejected_logps in batch use them, otherwise use the reference model
+        if "ref_chosen_logps" in batch and "ref_rejected_logps" in batch:
+            ref_chosen_logps = batch["ref_chosen_logps"]
+            ref_rejected_logps = batch["ref_rejected_logps"]
         else:
-            ref_chosen_logps, ref_rejected_logps = self.compute_reference_log_probs(batch)
+            ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
 
         losses, chosen_rewards, rejected_rewards = self.dpo_loss(
             model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
@@ -1389,13 +1389,13 @@ class DPOTrainer(Trainer):
                 pad_token_id=self.processing_class.pad_token_id,
             )
 
-            # if reference_output in batch use that otherwise use the reference model
-            if "reference_output" in batch:
-                reference_output = batch["reference_output"]
+            # if ref_output in batch use that otherwise use the reference model
+            if "ref_output" in batch:
+                ref_output = batch["ref_output"]
             else:
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        reference_output = self.model.generate(
+                        ref_output = self.model.generate(
                             input_ids=batch["prompt_input_ids"],
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
@@ -1403,7 +1403,7 @@ class DPOTrainer(Trainer):
                             pad_token_id=self.processing_class.pad_token_id,
                         )
                 else:
-                    reference_output = self.ref_model.generate(
+                    ref_output = self.ref_model.generate(
                         input_ids=batch["prompt_input_ids"],
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
@@ -1414,10 +1414,10 @@ class DPOTrainer(Trainer):
         policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
         policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        reference_output = pad_to_length(reference_output, self.max_length, self.processing_class.pad_token_id)
-        reference_output_decoded = self.processing_class.batch_decode(reference_output, skip_special_tokens=True)
+        ref_output = pad_to_length(ref_output, self.max_length, self.processing_class.pad_token_id)
+        ref_output_decoded = self.processing_class.batch_decode(ref_output, skip_special_tokens=True)
 
-        return policy_output_decoded, reference_output_decoded
+        return policy_output_decoded, ref_output_decoded
 
     def prediction_step(
         self,
