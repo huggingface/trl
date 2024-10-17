@@ -627,7 +627,6 @@ class DPOTrainer(Trainer):
                     num_proc=self.dataset_num_proc,
                     writer_batch_size=10,
                     desc="Tokenizing eval dataset",
-                    load_from_cache_file=False,
                 )
 
         super().__init__(
