@@ -482,13 +482,6 @@ class DPOTrainer(Trainer):
                 "You passed `max_target_length` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.max_completion_length = max_target_length
-        if args.max_completion_length is None and self.is_encoder_decoder:
-            warnings.warn(
-                "When using an encoder decoder architecture, you should set `max_completion_length` in the DPOConfig's init"
-                " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
-            )
-            args.max_completion_length = 128
 
         if label_pad_token_id != -100:
             warnings.warn(
