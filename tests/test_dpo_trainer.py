@@ -930,7 +930,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
         [
             ["trl-internal-testing/tiny-random-idefics2"],
             ["trl-internal-testing/tiny-random-paligemma"],
-            # ["trl-internal-testing/tiny-random-llava-1.5"],
+            ["trl-internal-testing/tiny-random-llava-1.5"],
         ]
     )
     def test_vdpo_trainer(self, model_id):
