@@ -1350,8 +1350,8 @@ class DPOTrainer(Trainer):
         metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().cpu()
         metrics[f"{prefix}logps/chosen"] = model_output["chosen_logps"].detach().mean().cpu()
         metrics[f"{prefix}logps/rejected"] = model_output["rejected_logps"].detach().mean().cpu()
-        metrics[f"{prefix}logits/rejected"] = model_output["mean_chosen_logits"].detach().cpu()
-        metrics[f"{prefix}logits/chosen"] = model_output["mean_rejected_logits"].detach().cpu()
+        metrics[f"{prefix}logits/chosen"] = model_output["mean_chosen_logits"].detach().cpu()
+        metrics[f"{prefix}logits/rejected"] = model_output["mean_rejected_logits"].detach().cpu()
         if self.args.rpo_alpha is not None:
             metrics[f"{prefix}nll_loss"] = model_output["nll_loss"].detach().mean().cpu()
         if self.aux_loss_enabled:
