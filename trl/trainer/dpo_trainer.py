@@ -497,7 +497,7 @@ class DPOTrainer(Trainer):
 
         if args.padding_value is not None:
             self.padding_value = args.padding_value
-        else:  # args.padding_value is None
+        else:
             if hasattr(processing_class, "pad_token_id") and processing_class.pad_token_id is not None:
                 self.padding_value = processing_class.pad_token_id
             elif hasattr(processing_class, "tokenizer") and processing_class.tokenizer.pad_token_id is not None:
