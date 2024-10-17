@@ -160,6 +160,9 @@ class OnlineDPOTrainer(Trainer):
         self.reward_model = reward_model
         self.judge = judge
 
+        if args.missing_eos_penalty is not None and judge is not None:
+            raise ValueError("`missing_eos_penalty` is not supported when `judge` is provided.")
+
         if args is None:
             raise ValueError("`args` must be provided.")
 
@@ -421,12 +424,13 @@ class OnlineDPOTrainer(Trainer):
         # Get the reward from the reward model or judge:
         if self.judge is not None:
             prompts = [
-                self.processing_class.decode(
-                    ids[ids.ne(self.processing_class.pad_token_id).cumsum(0).gt(0)][:context_length]
-                )
+                self.processing_class.decode(ids[:context_length], skip_special_tokens=True)
                 for ids in prompt_completion_ids[:num_examples]
             ]
-            completions = [self.processing_class.decode(ids[context_length:]) for ids in prompt_completion_ids]
+            completions = [
+                self.processing_class.decode(ids[context_length:], skip_special_tokens=True)
+                for ids in prompt_completion_ids
+            ]
 
             ranks_of_first_completion = self.judge.judge(
                 prompts, [[completions[i], completions[i + num_examples]] for i in range(num_examples)]
