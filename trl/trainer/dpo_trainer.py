@@ -714,19 +714,6 @@ class DPOTrainer(Trainer):
                 is_encoder_decoder=self.is_encoder_decoder,
             )
 
-            if args.remove_unused_columns:
-                args.remove_unused_columns = False
-                # warn users
-                warnings.warn(
-                    "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
-                    " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
-                )
-
-            self.use_dpo_data_collator = True
-        else:
-            self.use_dpo_data_collator = False
-
         if not disable_dropout:
             warnings.warn(
                 "You passed `disable_dropout` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
@@ -936,6 +923,23 @@ class DPOTrainer(Trainer):
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
+
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs.
+        # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
+        # Instead, we set them to the columns expected by `DPODataCollatorWithPadding`, hence the override.
+        if self._signature_columns is None:
+            self._signature_columns = [
+                "chosen_input_ids",
+                "chosen_attention_mask",
+                "chosen_labels",
+                "rejected_input_ids",
+                "rejected_attention_mask",
+                "rejected_labels",
+                "prompt_input_ids",
+                "prompt_attention_mask",
+            ]
 
     def get_train_dataloader(self) -> DataLoader:
         """
@@ -1544,12 +1548,6 @@ class DPOTrainer(Trainer):
         inputs: Dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        if not self.use_dpo_data_collator:
-            warnings.warn(
-                "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
-
         compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
@@ -1616,11 +1614,6 @@ class DPOTrainer(Trainer):
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
     ):
-        if not self.use_dpo_data_collator:
-            warnings.warn(
-                "prediction_step is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
         if ignore_keys is None:
             if hasattr(model, "config"):
                 ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
