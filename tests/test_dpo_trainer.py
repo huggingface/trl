@@ -1084,6 +1084,64 @@ class DPOTrainerTester(unittest.TestCase):
             )
             assert torch.isfinite(losses).cpu().numpy().all()
 
+    def test_dpo_trainer_use_num_logits_to_keep(self):
+        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                use_num_logits_to_keep=True,
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            # Fake batch
+            chosen_labels = torch.tensor(
+                [[-100, -100, -100, -100, -100, 4, 5, -100], [-100, -100, -100, -100, 2, 4, 5, 6]]
+            )
+            rejected_labels = torch.tensor(
+                [[-100, -100, -100, -100, 100, 7, 5, 909], [-100, -100, -100, -100, 88, 4, 5, 6]]
+            )
+            chosen_input_ids = torch.randint_like(chosen_labels, high=1000)
+            rejected_input_ids = torch.randint_like(rejected_labels, high=1000)
+            chosen_attention_mask = torch.ones_like(chosen_input_ids)
+            rejected_attention_mask = torch.ones_like(rejected_input_ids)
+
+            batch = {
+                "chosen_labels": chosen_labels,
+                "rejected_labels": rejected_labels,
+                "chosen_input_ids": chosen_input_ids,
+                "rejected_input_ids": rejected_input_ids,
+                "chosen_attention_mask": chosen_attention_mask,
+                "rejected_attention_mask": rejected_attention_mask,
+            }
+
+            _, _, chosen_logits, rejected_logits, _, _ = trainer.concatenated_forward(model, batch)
+
+            assert 4 == chosen_logits.shape[1]
+            assert 4 == rejected_logits.shape[1]
+            trainer.train()
+
 
 class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
