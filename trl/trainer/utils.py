@@ -757,13 +757,23 @@ def get_global_statistics(
 
 def compute_accuracy(eval_pred) -> Dict[str, float]:
     predictions, labels = eval_pred
-    # Here, predictions is rewards_chosen and rewards_rejected.
-    # We want to see how much of the time rewards_chosen > rewards_rejected.
-    if np.array(predictions[:, 0] == predictions[:, 1], dtype=float).sum() > 0:
-        warnings.warn(
-            f"There are {np.array(predictions[:, 0] == predictions[:, 1]).sum()} out of {len(predictions[:, 0])} instances where the predictions for both options are equal. As a consequence the accuracy can be misleading."
+    if predictions.ndim == 3:
+        # Token classification task.
+        # Used to compute the accuracy in the stepwise_reward_trainer.
+        predictions = np.argmax(predictions, axis=2)
+
+        predictions = np.array(
+            [p for prediction, label in zip(predictions, labels) for (p, lbl) in zip(prediction, label) if lbl != -100]
         )
-    predictions = np.argmax(predictions, axis=1)
+        labels = np.array([lbl for label in labels for lbl in label if lbl != -100])
+    else:
+        # Here, predictions is rewards_chosen and rewards_rejected.
+        # We want to see how much of the time rewards_chosen > rewards_rejected.
+        if np.array(predictions[:, 0] == predictions[:, 1], dtype=float).sum() > 0:
+            warnings.warn(
+                f"There are {np.array(predictions[:, 0] == predictions[:, 1]).sum()} out of {len(predictions[:, 0])} instances where the predictions for both options are equal. As a consequence the accuracy can be misleading."
+            )
+        predictions = np.argmax(predictions, axis=1)
 
     accuracy = np.array(predictions == labels, dtype=float).mean().item()
     return {"accuracy": accuracy}
