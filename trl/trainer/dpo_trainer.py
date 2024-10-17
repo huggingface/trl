@@ -1251,11 +1251,11 @@ class DPOTrainer(Trainer):
             attention_mask = attention_mask[:, : first_empty_col - 1]
             loss_mask = loss_mask[:, : first_empty_col - 1]
 
-            # Truncate left
+            # Truncate right
             if self.args.max_length is not None:
-                input_ids = input_ids[:, -self.args.max_length :]
-                attention_mask = attention_mask[:, -self.args.max_length :]
-                loss_mask = loss_mask[:, -self.args.max_length :]
+                input_ids = input_ids[:, : self.args.max_length]
+                attention_mask = attention_mask[:, : self.args.max_length]
+                loss_mask = loss_mask[:, : self.args.max_length]
 
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
 
