@@ -92,7 +92,7 @@ class PreferenceCollator(DataCollatorMixin):
     Examples:
     ```python
     >>> from trl import PreferenceCollator
-    >>> collator = PreferenceCollator(pad_token_id=0, collation_strategy="split")
+    >>> collator = PreferenceCollator(pad_token_id=0)
     >>> examples = [
     ...     {"prompt_input_ids": [1, 2, 3], "chosen_input_ids": [4, 5], "rejected_input_ids": [6]},
     ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]}
