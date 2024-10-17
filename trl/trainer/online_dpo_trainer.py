@@ -432,7 +432,7 @@ class OnlineDPOTrainer(Trainer):
                 prompts, [[completions[i], completions[i + num_examples]] for i in range(num_examples)]
             )
             # convert ranks to a True/False mask:
-            # when rank == 0 it means the first completion is the better
+            # when rank == 0, it means the first completion is the best
             # when rank == 1, it means the second completion is the best
             mask = torch.tensor([rank == 1 for rank in ranks_of_first_completion], device=prompt_completion_ids.device)
         else:
