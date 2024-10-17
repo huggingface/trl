@@ -619,7 +619,6 @@ class DPOTrainer(Trainer):
                 num_proc=self.dataset_num_proc,
                 writer_batch_size=10,
                 desc="Tokenizing train dataset",
-                load_from_cache_file=False,
             )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
