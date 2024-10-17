@@ -35,7 +35,6 @@ from trl import DPOConfig, DPOTrainer, FDivergenceType
 from .testing_utils import require_no_wandb
 
 
-@unittest.skip("CI failing, investigating...")
 class DPOTrainerTester(unittest.TestCase):
     def setUp(self):
         self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
