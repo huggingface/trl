@@ -92,7 +92,7 @@ class PreferenceCollator(DataCollatorMixin):
     Examples:
     ```python
     >>> from trl import PreferenceCollator
-    >>> collator = PreferenceCollator(pad_token_id=0, collation_strategy="split")
+    >>> collator = PreferenceCollator(pad_token_id=0)
     >>> examples = [
     ...     {"prompt_input_ids": [1, 2, 3], "chosen_input_ids": [4, 5], "rejected_input_ids": [6]},
     ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]}
@@ -497,7 +497,7 @@ class DPOTrainer(Trainer):
 
         if args.padding_value is not None:
             self.padding_value = args.padding_value
-        else:  # args.padding_value is None
+        else:
             if hasattr(processing_class, "pad_token_id") and processing_class.pad_token_id is not None:
                 self.padding_value = processing_class.pad_token_id
             elif hasattr(processing_class, "tokenizer") and processing_class.tokenizer.pad_token_id is not None:
@@ -619,7 +619,6 @@ class DPOTrainer(Trainer):
                 num_proc=self.dataset_num_proc,
                 writer_batch_size=10,
                 desc="Tokenizing train dataset",
-                load_from_cache_file=False,
             )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
@@ -628,7 +627,6 @@ class DPOTrainer(Trainer):
                     num_proc=self.dataset_num_proc,
                     writer_batch_size=10,
                     desc="Tokenizing eval dataset",
-                    load_from_cache_file=False,
                 )
 
         super().__init__(
