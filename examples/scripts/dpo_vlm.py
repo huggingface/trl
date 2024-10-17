@@ -27,7 +27,6 @@ accelerate launch examples/scripts/dpo_vlm.py \
 """
 
 import torch
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
@@ -105,17 +104,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name)
-
-    def process(row):
-        row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
-        row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
-        return row
-
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(process, num_proc=training_args.dataset_num_proc)
 
     ################
     # Training
