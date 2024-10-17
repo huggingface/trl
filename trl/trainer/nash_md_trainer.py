@@ -36,6 +36,7 @@ from transformers.utils import is_apex_available
 from ..data_utils import maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
+from .judges import BasePairwiseJudge
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import empty_cache, generate_model_card, get_reward, truncate_right
@@ -95,7 +96,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
         ref_model: Union[PreTrainedModel, nn.Module] = None,
-        reward_model: Optional[nn.Module] = None,
+        reward_model: Union[PreTrainedModel, nn.Module, None] = None,
+        judge: Optional[BasePairwiseJudge] = None,
         args: Optional[NashMDConfig] = None,
         data_collator: Optional[Callable] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -113,6 +115,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             model=model,
             ref_model=ref_model,
             reward_model=reward_model,
+            judge=judge,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
@@ -221,7 +224,28 @@ class NashMDTrainer(OnlineDPOTrainer):
             model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
             mixture_scores[~mixture_contain_eos] -= self.args.missing_eos_penalty
 
-        return model_scores, mixture_scores
+        # probability of the model data vs the mixture data
+        return F.sigmoid(model_scores - mixture_scores)
+
+    def _compute_judge(self, model_data, mixture_data, context_length):
+        prompts = self.processing_class.batch_decode(
+            model_data["input_ids"][:, :context_length], skip_special_tokens=True
+        )
+        model_data_completions = self.processing_class.batch_decode(
+            model_data["input_ids"][:, context_length:], skip_special_tokens=True
+        )
+        mixture_data_completions = self.processing_class.batch_decode(
+            mixture_data["input_ids"][:, context_length:], skip_special_tokens=True
+        )
+        probability = self.judge.judge(
+            prompts,
+            [
+                [model_completion, mixture_completion]
+                for model_completion, mixture_completion in zip(model_data_completions, mixture_data_completions)
+            ],
+            return_scores=True,
+        )
+        return probability
 
     def _compute_logprobs(self, model, model_data, context_length):
         def compute_logprobs_for_data(m, data):
@@ -253,15 +277,11 @@ class NashMDTrainer(OnlineDPOTrainer):
         self,
         model_logprobs_model_data,
         ref_logprobs_model_data,
-        model_data_scores,
-        mixture_data_scores,
+        probability,
     ):
         # Compute log probs
         model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
         ref_logprobs_model_data_sum = ref_logprobs_model_data.sum(1)
-
-        # probability of the model data vs the mixture data
-        probability = F.sigmoid(model_data_scores - mixture_data_scores)
 
         # reinforce score where 0.5 is a control variate
         score = (probability - 0.5) * model_logprobs_model_data_sum
@@ -354,15 +374,16 @@ class NashMDTrainer(OnlineDPOTrainer):
         model_data, mixture_data = self._process_completions(model_output, mixture_output, prompts)
 
         # Compute rewards
-        model_data_scores, mixture_data_scores = self._compute_rewards(model_data, mixture_data, context_length)
+        if self.reward_model is not None:
+            probability = self._compute_rewards(model_data, mixture_data, context_length)
+        else:
+            probability = self._compute_judge(model_data, mixture_data, context_length)
 
         # Compute logprobs
         model_logprobs_model_data, ref_logprobs_model_data = self._compute_logprobs(model, model_data, context_length)
 
         # Compute loss
-        loss, score, kl_div = self._compute_losses(
-            model_logprobs_model_data, ref_logprobs_model_data, model_data_scores, mixture_data_scores
-        )
+        loss, score, kl_div = self._compute_losses(model_logprobs_model_data, ref_logprobs_model_data, probability)
 
         # Log everything
         self._log_statistics(
@@ -370,8 +391,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             mixture_data,
             model_logprobs_model_data.detach(),
             ref_logprobs_model_data,
-            model_data_scores,
-            mixture_data_scores,
+            probability,
             score.detach(),
             kl_div.detach(),
             context_length,
