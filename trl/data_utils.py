@@ -199,7 +199,9 @@ def _unpair_row(examples: List[Dict[str, List[Dict[str, str]]]]) -> List[Dict[st
     return new_rows
 
 
-def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = None) -> DatasetType:
+def unpair_preference_dataset(
+    dataset: DatasetType, num_proc: Optional[int] = None, desc: Optional[str] = None
+) -> DatasetType:
     r"""
     Unpair a preference dataset.
 
@@ -209,6 +211,8 @@ def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = No
             `"prompt"`.
         num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        desc (`str` or `None`, *optional*, defaults to `None`):
+            Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
         `Dataset`: The unpaired preference dataset.
@@ -233,10 +237,12 @@ def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = No
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], num_proc=num_proc)
+    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], num_proc=num_proc, desc=desc)
 
 
-def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = None) -> DatasetType:
+def maybe_unpair_preference_dataset(
+    dataset: DatasetType, num_proc: Optional[int] = None, desc: Optional[str] = None
+) -> DatasetType:
     r"""
     Unpair a preference dataset if it is paired.
 
@@ -246,6 +252,8 @@ def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int
             `"prompt"`.
         num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        desc (`str` or `None`, *optional*, defaults to `None`):
+            Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
         `Dataset` or `DatasetDict`: The unpaired preference dataset if it was paired, otherwise the original dataset.
@@ -275,7 +283,7 @@ def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int
     else:
         column_names = dataset.column_names
     if "chosen" in column_names and "rejected" in column_names:
-        return unpair_preference_dataset(dataset, num_proc=num_proc)
+        return unpair_preference_dataset(dataset, num_proc=num_proc, desc=desc)
     else:
         return dataset
 
@@ -380,6 +388,8 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
     #  "chosen": [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
     #  "rejected": [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}]}
     # That's why we check if the prompt is also conversational before deciding not to extract it.
+    if "chosen" not in example or "rejected" not in example:  # not a preference example
+        return example
     if "prompt" in example:
         # Both conversational or both non-conversational
         chosen_conv = is_conversational({"chosen": example["chosen"]})

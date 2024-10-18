@@ -4,7 +4,7 @@
 
 ## Overview
 
-Odds Ratio Preference Optimization (ORPO) wa introduced in [ORPO: Monolithic Preference Optimization without Reference Model](https://huggingface.co/papers/2403.07691) by [Jiwoo Hong](https://huggingface.co/JW17), [Noah Lee](https://huggingface.co/nlee-208), and [James Thorne](https://huggingface.co/j6mes).
+Odds Ratio Preference Optimization (ORPO) was introduced in [ORPO: Monolithic Preference Optimization without Reference Model](https://huggingface.co/papers/2403.07691) by [Jiwoo Hong](https://huggingface.co/JW17), [Noah Lee](https://huggingface.co/nlee-208), and [James Thorne](https://huggingface.co/j6mes).
 
 The abstract from the paper is the following:
 
@@ -95,7 +95,7 @@ accelerate launch examples/scripts/orpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
     --num_train_epochs 1 \
     --logging_steps 25 \
-    --output_dir Qwen2-0.5B-DPO
+    --output_dir Qwen2-0.5B-ORPO
 ```
 
 ## Usage tips

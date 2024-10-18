@@ -199,21 +199,21 @@ unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "
 
 Choosing the right dataset type depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset types supported by each TRL trainer.
 
-| Trainer                 | Expected dataset type                                   |
-| ----------------------- | ------------------------------------------------------- |
-| [`BCOTrainer`]          | [Unpaired preference](#unpaired-preference)             |
-| [`CPOTrainer`]          | [Preference (explicit prompt recommended)](#preference) |
-| [`DPOTrainer`]          | [Preference (explicit prompt recommended)](#preference) |
-| [`GKDTrainer`]          | [Prompt-completion](#prompt-completion)                 |
-| [`IterativeSFTTrainer`] | [Unpaired preference](#unpaired-preference)             |
-| [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference)             |
-| [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                             |
-| [`OnlineDPOTrainer`]    | [Prompt-only](#prompt-only)                             |
-| [`ORPOTrainer`]         | [Preference (explicit prompt recommended)](#preference) |
-| [`PPOTrainer`]          | Tokenized language modeling                             |
-| [`RewardTrainer`]       | [Preference (implicit prompt recommended)](#preference) |
-| [`SFTTrainer`]          | [Language modeling](#language-modeling)                 |
-| [`XPOTrainer`]          | [Prompt-only](#prompt-only)                             |
+| Trainer                 | Expected dataset type                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------ |
+| [`BCOTrainer`]          | [Unpaired preference](#unpaired-preference)                                                            |
+| [`CPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
+| [`DPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
+| [`GKDTrainer`]          | [Prompt-completion](#prompt-completion)                                                                |
+| [`IterativeSFTTrainer`] | [Unpaired preference](#unpaired-preference)                                                            |
+| [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
+| [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                                                                            |
+| [`OnlineDPOTrainer`]    | [Prompt-only](#prompt-only)                                                                            |
+| [`ORPOTrainer`]         | [Preference (explicit prompt recommended)](#preference)                                                |
+| [`PPOTrainer`]          | Tokenized language modeling                                                                            |
+| [`RewardTrainer`]       | [Preference (implicit prompt recommended)](#preference)                                                |
+| [`SFTTrainer`]          | [Language modeling](#language-modeling)                                                                |
+| [`XPOTrainer`]          | [Prompt-only](#prompt-only)                                                                            |
 
 <Tip>
 
