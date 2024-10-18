@@ -23,12 +23,11 @@ from copy import deepcopy
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
+from accelerate import PartialState, Accelerator
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
@@ -45,6 +44,7 @@ from transformers import (
     TrainingArguments,
     is_wandb_available,
 )
+from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
@@ -56,12 +56,18 @@ from .utils import (
     generate_model_card,
     pad_to_length,
     peft_module_casting_to_bf16,
+    _add_special_tokens,
+    _adjust_prompt_length,
+    _append_prompt_tokens_to_batch,
+    _build_sequence_tokens,
+    _process_answer,
+    _process_prompt,
+    _truncate_tokens,
 )
 
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-
 
 if is_wandb_available():
     import wandb
@@ -70,196 +76,93 @@ if is_deepspeed_available():
     import deepspeed
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
+    from transformers import PreTrainedModel
 
 RUNNING_NAME = "running.pt"
 
 
-def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
+def _tokenize_kto(
+    features: Dict[str, List],
+    tokenizer: PreTrainedTokenizerBase,
+    args: "KTOConfig",
+    processor: Optional[Callable] = None,
+    model: Optional[PreTrainedModel] = None,
+    calculate_KL: bool=True,
+) -> Dict[str, List]:
     """
-    Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions.
-    For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched
-    outputs y used to estimate the rewards in that batch, just paired with different x.
+    Tokenizes and processes a batch of input features for KTO using adapted DPO tokenization functions.
     """
-    batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
-    batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
-    return batch
+    batch = defaultdict(list)
 
+    if model is None:
+        prompt = features["prompt"]
+        output = features["completion"]
+        images = features.get("images", [None] * len(features["prompt"]))
 
-def _tokenize(
-    batch: Dict[str, List[Any]],
-    tokenizer: "PreTrainedTokenizer",
-) -> Dict[str, List[Any]]:
-    """Tokenize a batch from a KTO specific dataset."""
-    prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)
-    prompt_input_ids = prompt_tokenized["input_ids"]
-    prompt_attention_mask = prompt_tokenized["attention_mask"]
-    prompt_and_completion = [prompt + completion for prompt, completion in zip(batch["prompt"], batch["completion"])]
-    full_tokenized = tokenizer(prompt_and_completion, add_special_tokens=False)
-    full_input_ids = full_tokenized["input_ids"]
-    full_attention_mask = full_tokenized["attention_mask"]
-
-    answer_input_ids = [f[len(p) :] for f, p in zip(full_input_ids, prompt_input_ids)]
-    answer_attention_mask = [f[len(p) :] for f, p in zip(full_attention_mask, prompt_attention_mask)]
-
-    # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
-    full_concat_input_ids = [np.concatenate([p, a]) for p, a in zip(prompt_input_ids, answer_input_ids)]
-    # Prepare input tokens for token by token comparison
-    full_input_ids = [np.array(f) for f in full_input_ids]
-    for full, concat in zip(full_input_ids, full_concat_input_ids):
-        if len(full) != len(concat):
-            raise ValueError("Prompt input ids and answer input ids should have the same length.")
-
-    # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
-    # can be merged together when tokenizing prompt+answer. This could result
-    # on the last token from the prompt being different when tokenized on its own
-    # vs when done as prompt+answer.
-    response_token_ids_start_idx = [len(p) for p in prompt_input_ids]
-
-    # If tokenized prompt is different than both prompt+answer, then it means the
-    # last token has changed due to merging.
-    for idx, (p, f, r) in enumerate(zip(prompt_input_ids, full_input_ids, response_token_ids_start_idx)):
-        if not np.array_equal(p, f[:r]):
-            response_token_ids_start_idx[idx] -= 1
-
-    prompt_input_ids = [f[:r] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
-    prompt_attention_mask = [f[:r] for f, r in zip(full_attention_mask, response_token_ids_start_idx)]
-
-    for p, m in zip(prompt_input_ids, prompt_attention_mask):
-        if len(p) != len(m):
-            raise ValueError("Prompt input ids and attention mask should have the same length.")
-
-    answer_input_ids = [f[r:] for f, r in zip(full_input_ids, response_token_ids_start_idx)]
-    answer_attention_mask = [f[r:] for f, r in zip(full_attention_mask, response_token_ids_start_idx)]
-
-    output = dict(
-        prompt_input_ids=prompt_input_ids,
-        prompt_attention_mask=prompt_attention_mask,
-        answer_input_ids=answer_input_ids,
-        answer_attention_mask=answer_attention_mask,
-    )
-
-    return output
-
-
-def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> Dict:
-    """Process tokens of a KTO specific dataset.
-
-    At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
-    in case the prompt + completion responses is/are too long. First
-    we truncate the prompt; if we're still too long, we truncate the completion.
-
-    We also create the labels for the completion responses, which are of length equal to
-    the sum of the length of the prompt and the completion response, with
-    label_pad_token_id  for the prompt tokens.
-    """
-    prompt = example["prompt"]
-    completion = example["completion"]
-
-    batch = {
-        f"{kwargs['prefix']}prompt": prompt,
-        f"{kwargs['prefix']}completion": completion,
-        f"{kwargs['prefix']}label": example["label"],
-    }
-
-    if not kwargs["is_encoder_decoder"]:
-        # Check issues below for more details
-        #  1. https://github.com/huggingface/trl/issues/907
-        #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-        #  3. https://github.com/LianjiaTech/BELLE/issues/337
-
-        if not isinstance(prompt, str):
-            raise ValueError(f"prompt should be an str but got {type(prompt)}")
-
-        if not isinstance(completion, str):
-            raise ValueError(f"completion should be an str but got {type(completion)}")
-
-        # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
-        all_tokens = {
-            "prompt_input_ids": example["prompt_input_ids"],
-            "prompt_attention_mask": example["prompt_attention_mask"],
-            "answer_input_ids": example["answer_input_ids"],
-            "answer_attention_mask": example["answer_attention_mask"],
-        }
-
-        # calculate max length by checking if BOS/EOS is already there
-        max_length = kwargs["max_length"]
-        bos_token_id = kwargs["tokenizer"].bos_token_id
-        eos_token_id = kwargs["tokenizer"].eos_token_id
-        if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
-            max_length -= 1
-        if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
-            max_length -= 1
-
-        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
-        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-            for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                if kwargs["truncation_mode"] == "keep_start":
-                    all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
-                elif kwargs["truncation_mode"] == "keep_end":
-                    all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
-                else:
-                    raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
-
-        # if that's still too long, truncate the response
-        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-            for k in ["answer_input_ids", "answer_attention_mask"]:
-                all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
-
-        # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
-        batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
-        batch[f"{kwargs['prefix']}prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
-        batch[f"{kwargs['prefix']}completion_input_ids"] = (
-            all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"]
+        # regular output
+        prompt_tokens = _process_prompt(prompt, processor, tokenizer, images)
+        output_tokens = _process_answer(prompt, output, processor, tokenizer, images)
+        
+        prompt_len_input_ids = _adjust_prompt_length(prompt_tokens, output_tokens, output_tokens)
+        prompt_tokens, output_tokens, _ = _add_special_tokens(
+            tokenizer, prompt_len_input_ids, prompt_tokens, output_tokens, output_tokens
         )
-        batch[f"{kwargs['prefix']}completion_attention_mask"] = (
-            all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"]
-        )
+        _truncate_tokens(output_tokens, output_tokens, prompt_tokens, args)
+        _build_sequence_tokens(batch, output_tokens, args, "completion")
+        _append_prompt_tokens_to_batch(batch, prompt_tokens)
 
-        # add BOS, which affects both prompt and the full completion
-        if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
-            batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
-                f"{kwargs['prefix']}prompt_input_ids"
-            ]
-            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[f"{kwargs['prefix']}prompt_attention_mask"]
-            batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
-                f"{kwargs['prefix']}completion_input_ids"
-            ]
-            batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
-                f"{kwargs['prefix']}completion_attention_mask"
-            ]
-        # add EOS, which affects only the full completion
-        if len(all_tokens["answer_input_ids"]) == 0 or eos_token_id != all_tokens["answer_input_ids"][-1]:
-            batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
-                eos_token_id
-            ]
-            batch[f"{kwargs['prefix']}completion_attention_mask"] = batch[
-                f"{kwargs['prefix']}completion_attention_mask"
-            ] + [1]
+        # KL output
+        if calculate_KL:
+            # pair x_i with y_{i + 1} to get the mismatched pairs for calculating the KL term
+            KL_output = features["completion"][1:] + features["completion"][:1]
+            KL_prompt_tokens = _process_prompt(prompt, processor, tokenizer, images)
+            KL_output_tokens = _process_answer(prompt, KL_output, processor, tokenizer, images)
 
-        batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
-        batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
-            kwargs["label_pad_token_id"]
-        ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
-    else:
-        completion_tokens = kwargs["tokenizer"](
-            completion, truncation=True, max_length=kwargs["max_completion_length"], add_special_tokens=True
-        )
-        prompt_tokens = kwargs["tokenizer"](
-            prompt, truncation=True, max_length=kwargs["max_prompt_length"], add_special_tokens=True
-        )
-
-        batch[f"{kwargs['prefix']}prompt_input_ids"] = prompt_tokens["input_ids"]
-        batch[f"{kwargs['prefix']}prompt_attention_mask"] = prompt_tokens["attention_mask"]
-
-        batch[f"{kwargs['prefix']}completion_labels"] = completion_tokens["input_ids"]
-        batch[f"{kwargs['prefix']}completion_attention_mask"] = completion_tokens["attention_mask"]
-        if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-            batch[f"{kwargs['prefix']}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                labels=torch.tensor(batch["completion_labels"])
+            KL_prompt_len_input_ids = _adjust_prompt_length(KL_prompt_tokens, KL_output_tokens, KL_output_tokens)
+            KL_prompt_tokens, KL_output_tokens, _ = _add_special_tokens(
+                tokenizer, KL_prompt_len_input_ids, KL_prompt_tokens, KL_output_tokens, KL_output_tokens
             )
+            _truncate_tokens(KL_output_tokens, KL_output_tokens, KL_prompt_tokens, args)
+            _build_sequence_tokens(batch, KL_output_tokens, args, "KL_completion")
 
-    return batch
+        batch.update(
+            {
+                "prompt": features["prompt"],
+                "completion": features["completion"],
+                "label": features["label"],  # True for desired output, False for undesired
+            }
+        )
+    else:
+        _tokenize_encoder_decoder_kto(
+            batch, tokenizer, features["prompt"], features["completion"], features["label"], args, model,
+        )
+
+    return dict(batch)
+
+
+def _tokenize_encoder_decoder_kto(
+    batch: Dict[str, List[int]],
+    tokenizer: PreTrainedTokenizerBase,
+    prompt: List[str],
+    output: List[str],
+    labels: List[bool],
+    args: "KTOConfig",
+    model: Optional[PreTrainedModel],
+    prefix: str = "",
+) -> None:
+    output_tokens = tokenizer(output, truncation=True, max_length=args.max_completion_length, add_special_tokens=True)
+    prompt_tokens = tokenizer(prompt, truncation=True, max_length=args.max_prompt_length, add_special_tokens=True)
+
+    batch[f"{prefix}completion_attention_mask"] = output_tokens["attention_mask"]
+    batch[f"{prefix}completion_labels"] = output_tokens["input_ids"]
+    batch[f"{prefix}prompt_input_ids"] = prompt_tokens["input_ids"]
+    batch[f"{prefix}prompt_attention_mask"] = prompt_tokens["attention_mask"]
+    batch[f"{prefix}label"] = labels
+
+    if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
+        batch[f"{prefix}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
+            labels=torch.tensor(batch[f"{prefix}completion_labels"])
+        ).tolist()  # Convert back to list to maintain consistency
 
 
 class KTOTrainer(Trainer):
@@ -458,6 +361,20 @@ class KTOTrainer(Trainer):
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
 
+        if model is not None:
+            self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
+        else:
+            warnings.warn(
+                "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
+            )
+            self.is_vision_model = False
+
+        if self.is_vision_model:
+            self.processor = processing_class
+            self.processing_class = self.processor.tokenizer  # tokenizer is actually a processor at this point
+        else:
+            self.processing_class = processing_class
+
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
         self.ref_adapter_name = ref_adapter_name
@@ -480,9 +397,7 @@ class KTOTrainer(Trainer):
                 " it will be set to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_length = 512
-        if args.max_length is not None:
-            max_length = args.max_length
+            args.max_length = 512
 
         if args.max_prompt_length is None:
             warnings.warn(
@@ -490,20 +405,15 @@ class KTOTrainer(Trainer):
                 " it will be set to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_prompt_length = 128
-        if args.max_prompt_length is not None:
-            max_prompt_length = args.max_prompt_length
+            args.max_prompt_length = 128
 
-        max_completion_length = None
         if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
                 "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the KTOTrainer's init"
                 " it will be set to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_completion_length = 128
-        if args.max_completion_length is not None and self.is_encoder_decoder:
-            max_completion_length = args.max_completion_length
+            args.max_completion_length = 128
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
@@ -531,13 +441,13 @@ class KTOTrainer(Trainer):
                 disable_dropout_in_model(self.ref_model)
 
         self.loss_type = args.loss_type
-        self.max_length = max_length
+        self.max_length = args.max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
-        self.max_prompt_length = max_prompt_length
+        self.max_prompt_length = args.max_prompt_length
         self.truncation_mode = args.truncation_mode
-        self.max_completion_length = max_completion_length
+        self.max_completion_length = args.max_completion_length
+        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.processing_class = processing_class
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
 
@@ -572,100 +482,41 @@ class KTOTrainer(Trainer):
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.shuffle(seed=args.data_seed)
 
-            # Tokenize and prepare the training datasets
-            train_dataset = train_dataset.map(
-                _tokenize,
-                batched=True,
-                fn_kwargs={"tokenizer": self.processing_class},
-                num_proc=args.dataset_num_proc,
-                desc="Tokenizing train dataset",
-            )
-
             fn_kwargs = {
-                "prefix": "",
-                "is_encoder_decoder": self.is_encoder_decoder,
                 "tokenizer": self.processing_class,
-                "max_length": self.max_length,
-                "truncation_mode": self.truncation_mode,
-                "label_pad_token_id": self.label_pad_token_id,
-                "max_prompt_length": self.max_prompt_length,
-                "max_completion_length": self.max_completion_length,
+                "args": args,
+                "processor": self.processor if self.is_vision_model else None,
+                "model": model if self.is_encoder_decoder else None,
+                "calculate_KL": self.calculate_KL,
             }
 
+            global_bsz = (args.per_device_train_batch_size * Accelerator().num_processes)
+            if global_bsz <= 1:
+                raise ValueError(
+                    "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
+                )
+
+            # Tokenize and prepare the training datasets
             train_dataset = train_dataset.map(
-                _process_tokens,
+                _tokenize_kto,
                 fn_kwargs=fn_kwargs,
+                batched=True,
+                batch_size=global_bsz,
                 num_proc=args.dataset_num_proc,
-                desc="Processing tokenized train dataset",
+                desc="Tokenizing train dataset",
             )
 
             # Tokenize and prepare the eval datasets
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
-                    _tokenize,
-                    fn_kwargs={"tokenizer": self.processing_class},
+                    _tokenize_kto,
+                    fn_kwargs=fn_kwargs,
                     batched=True,
+                    batch_size=global_bsz,
                     num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
                 )
-
-                eval_dataset = eval_dataset.map(
-                    _process_tokens,
-                    fn_kwargs=fn_kwargs,
-                    num_proc=args.dataset_num_proc,
-                    desc="Processing tokenized eval dataset",
-                )
-
-            # Get KL datasets if needed
-            if self.calculate_KL:
-                if args.per_device_train_batch_size <= 1:
-                    raise ValueError(
-                        "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
-                    )
-
-                # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
-                # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-                train_kl_dataset = train_dataset.map(
-                    _get_kl_dataset,
-                    batched=True,
-                    batch_size=args.per_device_train_batch_size,
-                    num_proc=args.dataset_num_proc,
-                    desc="Extracting KL train dataset",
-                )
-
-                fn_kwargs["prefix"] = "KL_"
-                train_kl_dataset = train_kl_dataset.map(
-                    _process_tokens,
-                    fn_kwargs=fn_kwargs,
-                    num_proc=args.dataset_num_proc,
-                    remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
-                    desc="Processing tokenized train KL dataset",
-                )
-
-                # merge the datasets
-                train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
-
-                if eval_dataset is not None:
-                    # Get KL dataset
-                    eval_kl_dataset = eval_dataset.map(
-                        _get_kl_dataset,
-                        batched=True,
-                        batch_size=args.per_device_train_batch_size,
-                        num_proc=args.dataset_num_proc,
-                        desc="Extracting eval KL dataset",
-                    )
-
-                    eval_kl_dataset = eval_kl_dataset.map(
-                        _process_tokens,
-                        fn_kwargs=fn_kwargs,
-                        num_proc=args.dataset_num_proc,
-                        remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
-                        desc="Processing tokenized eval KL dataset",
-                    )
-
-                    # merge the datasets
-                    eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
-
+                
             # calculate dataset desirability balance
             num_desirable = max(sum(train_dataset["label"]), 1)
             num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1)  # "label" is binary
@@ -1038,7 +889,7 @@ class KTOTrainer(Trainer):
             model_kwargs["output_router_logits"] = True
 
         outputs = model(
-            batch["completion_input_ids"],
+            batch["completion_decoder_input_ids"] if self.is_encoder_decoder else batch["completion_input_ids"],
             attention_mask=batch["completion_attention_mask"],
             **model_kwargs,
         )
