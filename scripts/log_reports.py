@@ -13,10 +13,10 @@
 # limitations under the License.
 import argparse
 import json
+import logging
 import os
 from datetime import date
 from pathlib import Path
-import logging  # Added for logging
 
 from tabulate import tabulate
 
@@ -28,6 +28,7 @@ parser.add_argument("--slack_channel_name", default="trl-push-ci")
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
+
 
 def main(slack_channel_name=None):
     failed = []
