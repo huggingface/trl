@@ -154,6 +154,7 @@ class OnlineDPOTrainer(Trainer):
                 "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
                 "Ignoring `judge` and using `reward_model`."
             )
+            judge = None
         elif reward_model is None and judge is None:
             raise ValueError("Either `reward_model` or `judge` must be provided.")
 
