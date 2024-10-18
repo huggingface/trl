@@ -246,6 +246,7 @@ class DataCollatorForChatML:
     max_length: int = None
     prompt_key: str = "prompt"
     messages_key: str = "messages"
+    gold_key: str = None
 
     def __post_init__(self):
         if self.tokenizer.pad_token_id is None:
@@ -260,6 +261,8 @@ class DataCollatorForChatML:
         prompts_input_ids = []
         prompt_attention_mask = []
         labels = []
+        if self.gold_key is not None:
+            golds = []
 
         for example in examples:
             formatted_prompt = example.get(self.prompt_key, None)
@@ -306,6 +309,9 @@ class DataCollatorForChatML:
             label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
             labels.append(label)
 
+            if self.gold_key is not None:
+                golds.append(example[self.gold_key])
+
         # convert to list of tensors and pad
         input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
         attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
@@ -319,13 +325,18 @@ class DataCollatorForChatML:
         prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
         prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
 
-        return {
+        batch = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
         }
+
+        if self.gold_key is not None:
+            batch["gold_answer"] = golds
+
+        return batch
 
 
 @dataclass
