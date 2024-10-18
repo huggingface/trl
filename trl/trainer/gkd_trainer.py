@@ -215,7 +215,7 @@ class GKDTrainer(SFTTrainer):
         else:
             return jsd
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # compute student output
         outputs_student = model(
             input_ids=inputs["input_ids"],
