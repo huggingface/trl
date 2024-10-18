@@ -490,7 +490,7 @@ class OnlineDPOTrainer(Trainer):
         loss = losses.mean()
 
         # Log everything
-        if self.judge is None:
+        if self.reward_model is not None:
             scores_margin = scores[chosen_indices] - scores[rejected_indices]
             self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
             self.stats["objective/scores"].append(self.accelerator.gather(scores.mean()).mean().item())
