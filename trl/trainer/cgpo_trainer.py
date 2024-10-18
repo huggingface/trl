@@ -350,6 +350,7 @@ class CGPOTrainer(Trainer):
         mean_regularized_rewards = regularized_rewards.mean()
 
         total_loss = torch.tensor(0.0, device=self.model.device)
+        total_num_tokens = prompt_completion_mask[:, context_length - 1 : -1].sum()
         for i in range(0, full_bs, bs):
             # Compute loss on a batch of size `bs`, instead of the full batch (`bs` * self.k) to avoid OOM.
             mini_batch_prompt_completion_ids = prompt_completion_ids[i : i + bs]
@@ -362,7 +363,7 @@ class CGPOTrainer(Trainer):
             )
 
             losses = -logprobs * (mini_batch_regularized_rewards - mean_regularized_rewards)
-            loss = losses.mean() / self.k
+            loss = losses.sum() / total_num_tokens
 
             if self.use_apex:
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
