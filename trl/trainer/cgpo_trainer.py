@@ -211,7 +211,7 @@ class CGPOTrainer(Trainer):
         if data_collator is not None:
             warnings.warn(
                 "`CGPOTrainer` only supports training with a custom `DataCollatorForChatML. "
-                "The data collator is replaced by a custom `DataCollatorForChatML`. "
+                "The data collator will be replaced by a custom `DataCollatorForChatML`. "
                 "The specified data collator will not be used."
             )
 
