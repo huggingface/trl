@@ -214,7 +214,7 @@ class CGPOTrainer(Trainer):
                 "The data collator will be replaced by a custom `DataCollatorForChatML`. "
                 "The specified data collator will not be used."
             )
-
+        args.remove_unused_columns = False
         data_collator = DataCollatorForChatML(processing_class, max_length=args.max_length)
 
         self.generation_config = GenerationConfig(
@@ -553,7 +553,9 @@ class CGPOTrainer(Trainer):
 
         return loss
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(
+        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch=None
+    ) -> torch.Tensor:
         bs, context_length = inputs["prompts"].shape
         inputs["prompts_text"] = self.processing_class.batch_decode(inputs["prompts"])
         inputs["baseline_completions_text"] = self.processing_class.batch_decode(
