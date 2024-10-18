@@ -848,7 +848,7 @@ class CPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def generate_from_model(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def generate_from_model(self, model, batch: Dict[str, torch.LongTensor]) -> str:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
