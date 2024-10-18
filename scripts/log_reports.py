@@ -62,12 +62,12 @@ def main(slack_channel_name=None):
             empty_file = i == 0
         except Exception as e:  # Catch any exceptions during file processing
             logging.error(f"Error processing log file {log}: {e}")
-            continue  # Skip to the next log file on error
-
-        group_info.append([str(log), section_num_failed, failed])
-        total_empty_files.append(empty_file)
-        os.remove(log)
-        failed = []
+        else:
+            group_info.append([str(log), section_num_failed, failed])
+            total_empty_files.append(empty_file)
+        finally:
+            os.remove(log)
+            failed = []
 
     no_error_payload = {
         "type": "section",
