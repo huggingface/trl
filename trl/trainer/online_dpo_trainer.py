@@ -504,7 +504,7 @@ class OnlineDPOTrainer(Trainer):
         non_score_reward = (-self.beta * kl).sum(1)
         mean_non_score_reward = non_score_reward.mean()
         self.stats["objective/non_score_reward"].append(self.accelerator.gather(mean_non_score_reward).mean().item())
-        if self.judge is None:
+        if self.reward_model is not None:
             rlhf_reward = scores + non_score_reward
             self.stats["objective/rlhf_reward"].append(self.accelerator.gather(rlhf_reward).mean().item())
         mean_entropy = -logprobs.sum(1).mean()
