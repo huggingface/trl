@@ -137,7 +137,7 @@ class TestTokenizeRow(unittest.TestCase):
         result = DPOTrainer.tokenize_row(
             features=features,
             processing_class=self.tokenizer,
-            max_prompt_length=3,
+            max_prompt_length=4,
             max_completion_length=1,
             add_special_tokens=True,
         )
@@ -146,7 +146,7 @@ class TestTokenizeRow(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                "prompt_input_ids": [0, 6766, 318, 2],  # truncated to 3 tokens with bos_token and eos_token
+                "prompt_input_ids": [464, 6766, 318, 2],  # truncated to 4 tokens with bos_token and eos_token
                 "chosen_input_ids": [4171],  # truncated to 1 token
                 "rejected_input_ids": [4077],  # truncated to 1 token
             },
