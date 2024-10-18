@@ -154,13 +154,15 @@ class OnlineDPOTrainer(Trainer):
                 "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
                 "Ignoring `judge` and using `reward_model`."
             )
+            judge = None
         elif reward_model is None and judge is None:
             raise ValueError("Either `reward_model` or `judge` must be provided.")
-        elif reward_model is None and judge is not None:
-            raise NotImplementedError("Using `judge` is not yet supported.")
 
         self.reward_model = reward_model
         self.judge = judge
+
+        if args.missing_eos_penalty is not None and judge is not None:
+            raise ValueError("`missing_eos_penalty` is not supported when `judge` is provided.")
 
         if args is None:
             raise ValueError("`args` must be provided.")
@@ -396,6 +398,7 @@ class OnlineDPOTrainer(Trainer):
         completion_ids, completion_mask = truncate_right(
             completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
+        contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
 
@@ -421,23 +424,41 @@ class OnlineDPOTrainer(Trainer):
             ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
             del ref_output, ref_logits, ref_all_logprobs  # free memory
 
-            # Get the reward from the reward model
+        # Get the reward from the reward model or judge:
+        if self.judge is not None:
+            prompts = [
+                self.processing_class.decode(ids[:context_length], skip_special_tokens=True)
+                for ids in prompt_completion_ids[:num_examples]
+            ]
+            completions = [
+                self.processing_class.decode(ids[context_length:], skip_special_tokens=True)
+                for ids in prompt_completion_ids
+            ]
+
+            ranks_of_first_completion = self.judge.judge(
+                prompts, [[completions[i], completions[i + num_examples]] for i in range(num_examples)]
+            )
+            # convert ranks to a True/False mask:
+            # when rank == 0, it means the first completion is the best
+            # when rank == 1, it means the second completion is the best
+            mask = torch.tensor([rank == 1 for rank in ranks_of_first_completion], device=prompt_completion_ids.device)
+        else:
             _, scores, _ = get_reward(
                 self.reward_model, prompt_completion_ids, self.processing_class.pad_token_id, context_length
             )
 
-        # Filter completion. Ensure that the sample contains stop_token_id
-        # Completions not passing that filter will receive a lower score.
-        contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
-        if self.args.missing_eos_penalty is not None:
-            scores[~contain_eos_token] -= self.args.missing_eos_penalty
+            # Filter completion. Ensure that the sample contains stop_token_id
+            # Completions not passing that filter will receive a lower score.
+            if self.args.missing_eos_penalty is not None:
+                scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
-        # Split the scores in 2 (the prompts of the first half are the same as the second half)
-        first_half, second_half = scores.split(num_examples)
+            # Split the scores in 2 (the prompts of the first half are the same as the second half)
+            first_half, second_half = scores.split(num_examples)
 
-        # Get the indices of the chosen and rejected examples
-        num_examples_range = torch.arange(num_examples, device=scores.device)
-        mask = first_half >= second_half
+            # Get the indices of the chosen and rejected examples
+            mask = first_half >= second_half
+
+        num_examples_range = torch.arange(num_examples, device=prompt_completion_ids.device)
         chosen_indices = num_examples_range + (~mask * num_examples)
         rejected_indices = num_examples_range + (mask * num_examples)
 
@@ -471,22 +492,25 @@ class OnlineDPOTrainer(Trainer):
         loss = losses.mean()
 
         # Log everything
+        if self.reward_model is not None:
+            scores_margin = scores[chosen_indices] - scores[rejected_indices]
+            self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
+            self.stats["objective/scores"].append(self.accelerator.gather(scores.mean()).mean().item())
         self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
         self.stats["logps/chosen"].append(self.accelerator.gather(chosen_logprobs_sum).mean().item())
         self.stats["logps/rejected"].append(self.accelerator.gather(rejected_logprobs_sum).mean().item())
-        self.stats["objective/scores"].append(self.accelerator.gather(scores.mean()).mean().item())
+
         kl = logprobs - ref_logprobs
         mean_kl = kl.sum(1).mean()
         self.stats["objective/kl"].append(self.accelerator.gather(mean_kl).mean().item())
         non_score_reward = (-self.beta * kl).sum(1)
         mean_non_score_reward = non_score_reward.mean()
         self.stats["objective/non_score_reward"].append(self.accelerator.gather(mean_non_score_reward).mean().item())
-        rlhf_reward = scores + non_score_reward
-        self.stats["objective/rlhf_reward"].append(self.accelerator.gather(rlhf_reward).mean().item())
+        if self.reward_model is not None:
+            rlhf_reward = scores + non_score_reward
+            self.stats["objective/rlhf_reward"].append(self.accelerator.gather(rlhf_reward).mean().item())
         mean_entropy = -logprobs.sum(1).mean()
         self.stats["objective/entropy"].append(self.accelerator.gather(mean_entropy).mean().item())
-        scores_margin = scores[chosen_indices] - scores[rejected_indices]
-        self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
         chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
         gathered_chosen_rewards = self.accelerator.gather(chosen_rewards)
         self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
