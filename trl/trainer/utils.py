@@ -1284,6 +1284,15 @@ def batch_generation(
         )
         query_responses.append(query_response)
         logitss.append(logits)
+
+    # padding tensors
+    max_length = max(query_response.shape[1] for query_response in query_responses)
+    query_responses = [
+        torch.nn.functional.pad(query_response, (0, max_length - query_response.shape[1]), value=pad_token_id)
+        for query_response in query_responses
+    ]
+    logitss = [torch.nn.functional.pad(logits, (0, 0, 0, max_length - logits.shape[1]), value=0) for logits in logitss]
+
     return torch.cat(query_responses, 0), torch.cat(logitss, 0)
 
 
