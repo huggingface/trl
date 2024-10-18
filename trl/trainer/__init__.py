@@ -34,12 +34,15 @@ _import_structure = {
     "gkd_trainer": ["GKDTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
+        "AllTrueJudge",
         "BaseJudge",
+        "BaseBinaryJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
         "PairRMJudge",
+        "RandomBinaryJudge",
         "RandomPairwiseJudge",
         "RandomRankJudge",
     ],
@@ -98,12 +101,15 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .judges import (
+        AllTrueJudge,
+        BaseBinaryJudge,
         BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
         PairRMJudge,
+        RandomBinaryJudge,
         RandomPairwiseJudge,
         RandomRankJudge,
     )
