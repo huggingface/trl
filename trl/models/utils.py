@@ -96,7 +96,9 @@ def setup_chat_format(
     """
     # check if model already had a chat template
     if tokenizer.chat_template is not None:
-        raise ValueError("Chat template is already added to the tokenizer. If you want to overwrite it, please set it to None")
+        raise ValueError(
+            "Chat template is already added to the tokenizer. If you want to overwrite it, please set it to None"
+        )
 
     # check if format available and retrieve
     if format not in FORMAT_MAPPING:
