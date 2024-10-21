@@ -1289,7 +1289,7 @@ def batch_generation(
     padded_query_responses = pad(query_responses, padding_value=pad_token_id, padding_side="right")
     padded_logitss = pad(logitss, padding_value=0, padding_side="right")
 
-    return torch.cat(query_responses, 0), torch.cat(logitss, 0)
+    return padded_query_responses, padded_logitss
 
 
 def add_bos_token_if_needed(
