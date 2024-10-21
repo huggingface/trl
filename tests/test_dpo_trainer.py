@@ -14,6 +14,7 @@
 
 import tempfile
 import unittest
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -27,172 +28,129 @@ from transformers import (
     AutoModelForVision2Seq,
     AutoProcessor,
     AutoTokenizer,
+    PreTrainedTokenizerBase,
 )
 from transformers.testing_utils import require_bitsandbytes, require_peft
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
-from trl.trainer.dpo_trainer import _build_tokenized_answer, _truncate_tokens
 
 from .testing_utils import require_no_wandb
 
 
-class TestBuildTokenizedAnswer(unittest.TestCase):
+class TestTokenizeRow(unittest.TestCase):
     def setUp(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # Set up the mock tokenizer with specific behaviors
+        self.tokenizer = MagicMock(spec=PreTrainedTokenizerBase)
+        self.tokenizer.bos_token_id = 0
+        self.tokenizer.eos_token_id = 2
 
-    def test_basic_functionality(self):
-        prompt = "Hello, how are you?"
-        answer = "I'm doing well, thank you!"
+        # Define mock return values for the tokenizer's 'input_ids' for the different text inputs
+        self.tokenizer.return_value = {
+            "input_ids": {"The sky is": [464, 6766, 318], " blue": [4171], " green": [4077]}
+        }
 
-        result = _build_tokenized_answer(prompt, answer, tokenizer=self.tokenizer)
-
-        self.assertIn("prompt_input_ids", result)
-        self.assertIn("prompt_attention_mask", result)
-        self.assertIn("input_ids", result)
-        self.assertIn("attention_mask", result)
-
-        self.assertEqual(len(result["prompt_input_ids"]), len(result["prompt_attention_mask"]))
-        self.assertEqual(len(result["input_ids"]), len(result["attention_mask"]))
-
-        decoded_prompt = self.tokenizer.decode(result["prompt_input_ids"])
-        self.assertTrue(prompt in decoded_prompt)
-
-        decoded_answer = self.tokenizer.decode(result["input_ids"])
-        self.assertTrue(answer in decoded_answer)
-
-    def test_with_processor(self):
-        def mock_processor(text, images=None, add_special_tokens=True):
-            return {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
-
-        prompt = "Describe this image:"
-        answer = "A beautiful sunset over the ocean."
-
-        result = _build_tokenized_answer(prompt, answer, processor=mock_processor)
-
-        self.assertIn("prompt_input_ids", result)
-        self.assertIn("prompt_attention_mask", result)
-        self.assertIn("input_ids", result)
-        self.assertIn("attention_mask", result)
-
-        self.assertEqual(result["prompt_input_ids"], [1, 2, 3])
-        self.assertEqual(result["prompt_attention_mask"], [1, 1, 1])
-
-    def test_token_merging(self):
-        prompt = "The quick brown"
-        answer = " fox jumps over the lazy dog."
-
-        result = _build_tokenized_answer(prompt, answer, tokenizer=self.tokenizer)
-
-        full_text = prompt + answer
-        full_tokenized = self.tokenizer(full_text, add_special_tokens=False)
-
-        self.assertEqual(result["prompt_input_ids"] + result["input_ids"], full_tokenized["input_ids"])
-
-    def test_vision_model(self):
-        def mock_vision_processor(text, images=None, add_special_tokens=True):
-            return {
-                "input_ids": torch.tensor([[1, 2, 3]]),
-                "attention_mask": torch.tensor([[1, 1, 1]]),
-                "pixel_values": torch.rand(1, 3, 224, 224),
-                "pixel_attention_mask": torch.ones(1, 224, 224),
+        # Define tokenizer behavior when called
+        def mock_tokenizer_call(text, add_special_tokens):
+            token_map = {
+                "The sky is": {"input_ids": [464, 6766, 318]},
+                " blue": {"input_ids": [4171]},
+                " green": {"input_ids": [4077]},
             }
+            return token_map[text]
 
-        prompt = "Describe this image:"
-        answer = "A cat sitting on a windowsill."
+        self.tokenizer.side_effect = mock_tokenizer_call
 
-        result = _build_tokenized_answer(prompt, answer, processor=mock_vision_processor)
+    def test_tokenize_row_no_truncation_no_special_tokens(self):
+        # Define the input features
+        features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
 
-        self.assertIn("prompt_pixel_values", result)
-        self.assertIn("prompt_pixel_attention_mask", result)
-        self.assertTrue(torch.is_tensor(result["prompt_pixel_values"]))
-        self.assertTrue(torch.is_tensor(result["prompt_pixel_attention_mask"]))
+        # Call the method with no truncation and no special tokens
+        result = DPOTrainer.tokenize_row(
+            features=features,
+            processing_class=self.tokenizer,
+            max_prompt_length=None,
+            max_completion_length=None,
+            add_special_tokens=False,
+        )
 
-
-class TestTruncateTokens(unittest.TestCase):
-    def setUp(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            self.training_args = DPOConfig(
-                max_length=20, max_prompt_length=10, truncation_mode="keep_start", output_dir=tmp_dir
-            )
-
-    def test_truncate_tokens(self):
-        chosen_tokens = [
+        # Assert the correct output without truncation or special tokens
+        self.assertEqual(
+            result,
             {
-                "prompt_input_ids": list(range(15)),
-                "prompt_attention_mask": [1] * 15,
-                "input_ids": list(range(10)),
-                "attention_mask": [1] * 10,
-            }
-        ]
-        rejected_tokens = [
+                "prompt_input_ids": [464, 6766, 318],
+                "chosen_input_ids": [4171, 2],  # eos_token added
+                "rejected_input_ids": [4077, 2],  # eos_token added
+            },
+        )
+
+    def test_tokenize_row_with_truncation(self):
+        # Define the input features
+        features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
+
+        # Call the method with truncation
+        result = DPOTrainer.tokenize_row(
+            features=features,
+            processing_class=self.tokenizer,
+            max_prompt_length=2,
+            max_completion_length=1,
+            add_special_tokens=False,
+        )
+
+        # Assert the correct output with truncation applied
+        self.assertEqual(
+            result,
             {
-                "prompt_input_ids": list(range(15)),
-                "prompt_attention_mask": [1] * 15,
-                "input_ids": list(range(12)),
-                "attention_mask": [1] * 12,
-            }
-        ]
-        prompt_tokens = [{"prompt_input_ids": list(range(15)), "prompt_attention_mask": [1] * 15}]
+                "prompt_input_ids": [6766, 318],  # truncated to the last 2 tokens
+                "chosen_input_ids": [4171],  # truncated to 1 token
+                "rejected_input_ids": [4077],  # truncated to 1 token
+            },
+        )
 
-        _truncate_tokens(chosen_tokens, rejected_tokens, prompt_tokens, self.training_args)
+    def test_tokenize_row_with_special_tokens(self):
+        # Define the input features
+        features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
 
-        # Check if prompt is truncated correctly
-        self.assertEqual(len(chosen_tokens[0]["prompt_input_ids"]), 10)
-        self.assertEqual(len(chosen_tokens[0]["prompt_attention_mask"]), 10)
-        self.assertEqual(len(rejected_tokens[0]["prompt_input_ids"]), 10)
-        self.assertEqual(len(rejected_tokens[0]["prompt_attention_mask"]), 10)
-        self.assertEqual(len(prompt_tokens[0]["prompt_input_ids"]), 10)
-        self.assertEqual(len(prompt_tokens[0]["prompt_attention_mask"]), 10)
+        # Call the method with special tokens
+        result = DPOTrainer.tokenize_row(
+            features=features,
+            processing_class=self.tokenizer,
+            max_prompt_length=None,
+            max_completion_length=None,
+            add_special_tokens=True,
+        )
 
-        # Check if responses are truncated correctly
-        self.assertEqual(len(chosen_tokens[0]["input_ids"]), 10)
-        self.assertEqual(len(chosen_tokens[0]["attention_mask"]), 10)
-        self.assertEqual(len(rejected_tokens[0]["input_ids"]), 10)
-        self.assertEqual(len(rejected_tokens[0]["attention_mask"]), 10)
-
-    def test_truncation_mode_keep_end(self):
-        self.training_args.truncation_mode = "keep_end"
-        chosen_tokens = [
+        # Assert the correct output with special tokens added
+        self.assertEqual(
+            result,
             {
-                "prompt_input_ids": list(range(15)),
-                "prompt_attention_mask": [1] * 15,
-                "input_ids": list(range(15, 25)),
-                "attention_mask": [1] * 10,
-            }
-        ]
-        rejected_tokens = [
+                "prompt_input_ids": [0, 464, 6766, 318, 2],  # bos_token and eos_token added
+                "chosen_input_ids": [4171, 2],  # eos_token added
+                "rejected_input_ids": [4077, 2],  # eos_token added
+            },
+        )
+
+    def test_tokenize_row_with_truncation_and_special_tokens(self):
+        # Define the input features
+        features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
+
+        # Call the method with both truncation and special tokens
+        result = DPOTrainer.tokenize_row(
+            features=features,
+            processing_class=self.tokenizer,
+            max_prompt_length=4,
+            max_completion_length=1,
+            add_special_tokens=True,
+        )
+
+        # Assert the correct output with both truncation and special tokens
+        self.assertEqual(
+            result,
             {
-                "prompt_input_ids": list(range(15)),
-                "prompt_attention_mask": [1] * 15,
-                "input_ids": list(range(15, 28)),
-                "attention_mask": [1] * 13,
-            }
-        ]
-        prompt_tokens = [{"prompt_input_ids": list(range(15)), "prompt_attention_mask": [1] * 15}]
-
-        _truncate_tokens(chosen_tokens, rejected_tokens, prompt_tokens, self.training_args)
-
-        # Check if prompt is truncated correctly from the end
-        self.assertEqual(prompt_tokens[0]["prompt_input_ids"], list(range(5, 15)))
-        self.assertEqual(prompt_tokens[0]["prompt_attention_mask"], [1] * 10)
-
-        # Check if chosen tokens are truncated correctly
-        self.assertEqual(chosen_tokens[0]["prompt_input_ids"], list(range(5, 15)))
-        self.assertEqual(chosen_tokens[0]["prompt_attention_mask"], [1] * 10)
-        self.assertEqual(chosen_tokens[0]["input_ids"], list(range(15, 25)))
-        self.assertEqual(chosen_tokens[0]["attention_mask"], [1] * 10)
-
-        # Check if rejected tokens are truncated correctly
-        self.assertEqual(rejected_tokens[0]["prompt_input_ids"], list(range(5, 15)))
-        self.assertEqual(rejected_tokens[0]["prompt_attention_mask"], [1] * 10)
-        self.assertEqual(rejected_tokens[0]["input_ids"], list(range(15, 25)))
-        self.assertEqual(rejected_tokens[0]["attention_mask"], [1] * 10)
-
-    def test_invalid_truncation_mode(self):
-        self.training_args.truncation_mode = "invalid_mode"
-        with self.assertRaises(ValueError):
-            _truncate_tokens([], [], [], self.training_args)
+                "prompt_input_ids": [464, 6766, 318, 2],  # truncated to 4 tokens with bos_token and eos_token
+                "chosen_input_ids": [4171],  # truncated to 1 token
+                "rejected_input_ids": [4077],  # truncated to 1 token
+            },
+        )
 
 
 class DPOTrainerTester(unittest.TestCase):
@@ -461,9 +419,9 @@ class DPOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex=r"Padding is enabled, but the tokenizer is not configured with a padding token."
-                r" Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\)"
-                r" before calling the trainer.",
+                expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
+                r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
+                r"before instantiating the trainer.",
             ):
                 trainer = DPOTrainer(
                     model=self.model,
@@ -498,9 +456,9 @@ class DPOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex=r"Padding is enabled, but the tokenizer is not configured with a padding token."
-                r" Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\)"
-                r" before calling the trainer.",
+                expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
+                r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
+                r"before instantiating the trainer.",
             ):
                 trainer = DPOTrainer(
                     model=self.model,
@@ -1139,7 +1097,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_length=512,
-                max_prompt_length=128,
+                max_prompt_length=512,
                 remove_unused_columns=False,
                 report_to="none",
             )
