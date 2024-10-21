@@ -1274,7 +1274,8 @@ def batch_generation(
 ):
     query_responses = []
     logitss = []
-    for i in range(0, queries.shape[0], local_rollout_forward_batch_size):
+    batch_size = queries.shape[0]
+    for i in range(0, batch_size, local_rollout_forward_batch_size):
         query = queries[i : i + local_rollout_forward_batch_size]
         query_response, logits = generate(
             model,
@@ -1289,7 +1290,11 @@ def batch_generation(
     padded_query_responses = pad(query_responses, padding_value=pad_token_id, padding_side="right")
     padded_logitss = pad(logitss, padding_value=0, padding_side="right")
 
-    return torch.cat(query_responses, 0), torch.cat(logitss, 0)
+    # reshaping
+    padded_query_responses = padded_query_responses.view(-1, padded_query_responses.shape[-1])[:batch_size]
+    padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
+
+    return padded_query_responses, padded_logitss
 
 
 def add_bos_token_if_needed(
