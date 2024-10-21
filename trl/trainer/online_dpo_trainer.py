@@ -426,14 +426,12 @@ class OnlineDPOTrainer(Trainer):
 
         # Get the reward from the reward model or judge:
         if self.judge is not None:
-            prompts = [
-                self.processing_class.decode(ids[:context_length], skip_special_tokens=True)
-                for ids in prompt_completion_ids[:num_examples]
-            ]
-            completions = [
-                self.processing_class.decode(ids[context_length:], skip_special_tokens=True)
-                for ids in prompt_completion_ids
-            ]
+            prompts = self.processing_class.batch_decode(
+                prompt_completion_ids[:num_examples, :context_length], skip_special_tokens=True
+            )
+            completions = self.processing_class.batch_decode(
+                prompt_completion_ids[:, context_length:], skip_special_tokens=True
+            )
 
             ranks_of_first_completion = self.judge.judge(
                 prompts, [[completions[i], completions[i + num_examples]] for i in range(num_examples)]
