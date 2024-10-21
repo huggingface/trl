@@ -589,7 +589,7 @@ dataset = dataset.remove_columns(["chosen", "rejected"])
 
 ### From explicit to implicit prompt preference dataset
 
-To convert a preference dataset with implicit prompt into a preference dataset with explicit prompt, concatenate the prompt to both chosen and rejected, and remove the prompt.
+To convert a preference dataset with explicit prompt into a preference dataset with implicit prompt, concatenate the prompt to both chosen and rejected, and remove the prompt.
 
 ```python
 from datasets import Dataset
