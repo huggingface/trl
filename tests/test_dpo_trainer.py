@@ -263,7 +263,48 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=ref_model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            assert trainer.state.log_history[-1]["train_loss"] is not None
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+
+    def test_dpo_trainer_with_weighting(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                loss_type="sigmoid",
+                precompute_ref_log_probs=False,
+                use_weighting=True,
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            trainer = DPOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=training_args,
+                tokenizer=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -309,7 +350,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -343,7 +384,7 @@ class DPOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=self.model,  # ref_model can't be the same as model
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                 )
 
@@ -379,7 +420,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -428,7 +469,7 @@ class DPOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=None,
                     args=training_args,
-                    tokenizer=tokenizer,
+                    processing_class=tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
@@ -465,7 +506,7 @@ class DPOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=None,
                     args=training_args,
-                    tokenizer=tokenizer,
+                    processing_class=tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
@@ -494,9 +535,8 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=self.model,
                 ref_model=self.ref_model,
-                beta=0.1,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -542,7 +582,7 @@ class DPOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=None,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
@@ -584,7 +624,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model_peft,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -644,7 +684,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -726,7 +766,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -776,7 +816,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -813,7 +853,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -861,7 +901,7 @@ class DPOTrainerTester(unittest.TestCase):
                     model=model_peft,
                     ref_model=ref_model,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                     peft_config=lora_config,
@@ -884,7 +924,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model_peft,
                 ref_model=ref_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -909,7 +949,7 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=self.model_id,
                 ref_model=self.model_id,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
             )
@@ -932,7 +972,7 @@ class DPOTrainerTester(unittest.TestCase):
             ):
                 _ = DPOTrainer(
                     model=self.model_id,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     args=training_args,
                     train_dataset=dummy_dataset["train"],
                 )
@@ -953,7 +993,7 @@ class DPOTrainerTester(unittest.TestCase):
                 _ = DPOTrainer(
                     model=self.model_id,
                     ref_model=self.model_id,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     args=training_args,
                     train_dataset=dummy_dataset["train"],
                 )
@@ -986,7 +1026,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -1029,7 +1069,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -1061,7 +1101,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
                 [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Is this bus in the USA?"}]}],
                 [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Give a thorough description of the image."}]}],
                 [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Who are the people in the image?"}]}],
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What ise written?"}]}],
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What is written?"}]}],
             ],
             "chosen": [
                 [{"role": "assistant", "content": [{"type": "text", "text": "The image features a modern, multi-colored train."}]}],
@@ -1075,7 +1115,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
                 [{"role": "assistant", "content": [{"type": "text", "text": "No, it's not in the USA."}]}],
                 [{"role": "assistant", "content": [{"type": "text", "text": "The image features a forest path surrounded by trees."}]}],
                 [{"role": "assistant", "content": [{"type": "text", "text": "In the image, there are two individuals."}]}],
-                [{"role": "assistant", "content": [{"text": '"ccpb".', "type": "text"}]}],
+                [{"role": "assistant", "content": [{"type": "text", "text": '"ccpb".'}]}],
             ],
             "images": [
                 [Image.fromarray(np.random.randint(0, 255, (92, 33, 3), dtype=np.uint8))],
@@ -1107,7 +1147,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=ref_model,
                 args=training_args,
-                tokenizer=processor,
+                processing_class=processor,
                 train_dataset=dataset,
                 eval_dataset=dataset,
             )

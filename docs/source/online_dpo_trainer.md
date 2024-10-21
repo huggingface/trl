@@ -1,5 +1,7 @@
 # Online DPO Trainer
 
+[![](https://img.shields.io/badge/All_models-Online_DPO-blue)](https://huggingface.co/models?other=online-dpo,trl)
+
 ## Overview 
 
 Online DPO was proposed in [Direct Language Model Alignment from Online AI Feedback](https://huggingface.co/papers/2402.04792) by Shangmin Guo, Biao Zhang, Tianlin Liu, Tianqi Liu, Misha Khalman, Felipe Llinares, Alexandre Rame, Thomas Mesnard, Yao Zhao, Bilal Piot, Johan Ferret, and Mathieu Blondel. 
@@ -38,7 +40,7 @@ train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
 training_args = OnlineDPOConfig(output_dir="online-dpo-qwen2", logging_steps=10)
 trainer = OnlineDPOTrainer(
-    model=model, reward_model=reward_model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset
+    model=model, reward_model=reward_model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
 trainer.train()
 ```
@@ -66,9 +68,9 @@ For example, if the server hosting the domain name does not have the correct IP 
 It's worth noting that the exact cause of DNS failure can vary depending on the specific situation, so it's important to carefully check all relevant factors before attempting to resolve the issue. If you suspect that your DNS problem may be caused by a bug in the system, you should report it to the DNS provider directly for further investigation.
 ```
 
-## Expected dataset format
+## Expected dataset type
 
-Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (unlike offline DPO, that expects [preference dataset](dataset_formats#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (unlike offline DPO, that expects [preference dataset](dataset_formats#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 

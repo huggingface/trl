@@ -33,9 +33,12 @@ from huggingface_hub.utils._deprecation import _deprecate_arguments
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     is_wandb_available,
 )
@@ -43,6 +46,7 @@ from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPIN
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -106,9 +110,7 @@ def _tokenize(
         _append_prompt_tokens_to_batch(batch, prompt_tokens)
 
     else:
-        _tokenize_encoder_decoder(
-            batch, tokenizer, features["prompt"], features["chosen"], features["rejected"], args, model
-        )
+        _tokenize_encoder_decoder(batch, tokenizer, features["prompt"], features["chosen"], features["rejected"], args)
 
     return dict(batch)
 
@@ -255,7 +257,6 @@ def _tokenize_encoder_decoder(
     chosen: List[str],
     rejected: List[str],
     args: DPOConfig,
-    model: Optional[PreTrainedModel],
 ) -> None:
     chosen_tokens = tokenizer(chosen, truncation=True, max_length=args.max_completion_length, add_special_tokens=True)
     rejected_tokens = tokenizer(
@@ -267,23 +268,6 @@ def _tokenize_encoder_decoder(
     batch["rejected_labels"] = rejected_tokens["input_ids"]
     batch["prompt_input_ids"] = prompt_tokens["input_ids"]
     batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
-
-    if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-        # Ensure the sequences are of the same length
-        max_length = max(len(seq) for seq in batch["chosen_labels"] + batch["rejected_labels"])
-        batch["chosen_labels"] = [
-            seq + [tokenizer.pad_token_id] * (max_length - len(seq)) for seq in batch["chosen_labels"]
-        ]
-        batch["rejected_labels"] = [
-            seq + [tokenizer.pad_token_id] * (max_length - len(seq)) for seq in batch["rejected_labels"]
-        ]
-
-        batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-            labels=torch.tensor(batch["rejected_labels"])
-        )
-        batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-            labels=torch.tensor(batch["chosen_labels"])
-        )
 
 
 def _build_tokenized_answer(
@@ -373,8 +357,11 @@ class DPOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
+            This supercedes the `tokenizer` argument, which is now deprecated.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
         callbacks (`List[transformers.TrainerCallback]`):
@@ -393,7 +380,7 @@ class DPOTrainer(Trainer):
     _tag_names = ["trl", "dpo"]
 
     @_deprecate_arguments(
-        version="1.0.0",
+        version="0.13.0",
         deprecated_args=[
             "beta",
             "label_smoothing",
@@ -418,6 +405,7 @@ class DPOTrainer(Trainer):
         ],
         custom_message="Deprecated positional argument(s) used in DPOTrainer, please use the DPOConfig to set these arguments instead.",
     )
+    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.14.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
@@ -432,7 +420,9 @@ class DPOTrainer(Trainer):
         truncation_mode: str = "keep_end",
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
@@ -629,10 +619,10 @@ class DPOTrainer(Trainer):
             self.is_vision_model = False
 
         if self.is_vision_model:
-            self.processor = tokenizer
-            self.tokenizer = tokenizer.tokenizer  # tokenizer is actually a processor at this point
+            self.processor = processing_class
+            self.processing_class = self.processor.tokenizer  # tokenizer is actually a processor at this point
         else:
-            self.tokenizer = tokenizer
+            self.processing_class = processing_class
 
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         if model_adapter_name is not None:
@@ -670,8 +660,8 @@ class DPOTrainer(Trainer):
         else:
             self.ref_model = create_reference_model(model)
 
-        if tokenizer is None:
-            raise ValueError("tokenizer must be specified to tokenize a DPO dataset.")
+        if processing_class is None:
+            raise ValueError("processing_class must be specified to tokenize a DPO dataset.")
 
         if max_length is not None:
             warnings.warn(
@@ -719,7 +709,7 @@ class DPOTrainer(Trainer):
             args.label_pad_token_id = label_pad_token_id
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=self.tokenizer.pad_token_id,
+                pad_token_id=self.processing_class.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
@@ -755,7 +745,7 @@ class DPOTrainer(Trainer):
                 "You passed `padding_value` to the DPOTrainer, the value you passed will override the one in the `DPOConfig`."
             )
             args.padding_value = padding_value
-        self.padding_value = args.padding_value if padding_value is not None else self.tokenizer.pad_token_id
+        self.padding_value = args.padding_value if padding_value is not None else self.processing_class.pad_token_id
         self.max_prompt_length = args.max_prompt_length
         if truncation_mode != "keep_end":
             warnings.warn(
@@ -800,6 +790,13 @@ class DPOTrainer(Trainer):
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.use_weighting = args.use_weighting
+        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
+            warnings.warn(
+                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
+                " meaning the auxiliary loss will not be used."
+            )
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -819,17 +816,19 @@ class DPOTrainer(Trainer):
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(
-                maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
             )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
                 eval_dataset = eval_dataset.map(
-                    maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer}, num_proc=args.dataset_num_proc
+                    maybe_apply_chat_template,
+                    fn_kwargs={"tokenizer": processing_class},
+                    num_proc=args.dataset_num_proc,
                 )
 
             # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
             fn_kwargs = {
-                "tokenizer": self.tokenizer,
+                "tokenizer": self.processing_class,
                 "args": args,
                 "processor": self.processor if self.is_vision_model else None,
                 "model": model if self.is_encoder_decoder else None,
@@ -858,7 +857,7 @@ class DPOTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -1127,9 +1126,6 @@ class DPOTrainer(Trainer):
             concatenated_batch["concatenated_attention_mask"] = (
                 batch["prompt_attention_mask"].repeat(2, 1).to(device=device)
             )
-            concatenated_batch["concatenated_decoder_input_ids"] = torch.cat(
-                [batch["chosen_decoder_input_ids"], batch["rejected_decoder_input_ids"]], dim=0
-            ).to(device=device)
 
         if is_vision_model:
             concatenated_batch["pixel_values"] = torch.cat(
@@ -1328,7 +1324,8 @@ class DPOTrainer(Trainer):
         labels: torch.LongTensor,
         label_pad_token_id: int = -100,
         is_encoder_decoder: bool = False,
-    ) -> Tuple[torch.FloatTensor, torch.LongTensor]:
+        use_weighting: bool = False,
+    ) -> Tuple[torch.FloatTensor, torch.LongTensor, Optional[torch.FloatTensor]]:
         """Compute the log probabilities of the given labels under the given logits.
 
         Args:
@@ -1336,9 +1333,13 @@ class DPOTrainer(Trainer):
             labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
             label_pad_token_id: The label pad token id.
             is_encoder_decoder: Whether the model is an encoder-decoder model.
+            use_weighting: Whether to apply weighting as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
 
-        Returns:
-            A Tuple of two tensor of shape ((batch_size,), (batch_size,)) containing the sum of log probabilities of the given labels under the given logits in the first tensor and the number of non-masked tokens in the second tensor.
+        Returns
+            A Tuple of three tensors of shape ((batch_size,), (batch_size,), Optional[(batch_size,)]) containing:
+            - The sum of log probabilities of the given labels under the given logits.
+            - The number of non-masked tokens.
+            - The wpo weighting (if use_weighting is True, otherwise None).
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError(
@@ -1355,7 +1356,17 @@ class DPOTrainer(Trainer):
 
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
-        return (per_token_logps * loss_mask).sum(-1), loss_mask.sum(-1)
+        all_logps = (per_token_logps * loss_mask).sum(-1)
+
+        all_weights = None
+        if use_weighting:
+            # eqn (2) of the WPO paper: https://huggingface.co/papers/2406.11827
+            probs = F.softmax(logits, dim=-1)
+            weights_adjustment_factor = torch.log((probs**2).sum(-1))
+            per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
+            all_weights = ((per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)).detach()
+
+        return all_logps, loss_mask.sum(-1), all_weights
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
@@ -1378,7 +1389,6 @@ class DPOTrainer(Trainer):
 
         if self.is_encoder_decoder:
             model_kwargs["labels"] = concatenated_batch["concatenated_labels"]
-            model_kwargs["decoder_input_ids"] = concatenated_batch.get("concatenated_decoder_input_ids")
 
         if self.is_vision_model:
             model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
@@ -1401,12 +1411,13 @@ class DPOTrainer(Trainer):
             seq_len = concatenated_batch["concatenated_labels"].shape[1]
             all_logits = all_logits[:, -seq_len:]
 
-        all_logps, size_completion = self.get_batch_logps(
+        all_logps, size_completion, all_weights = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
             # average_log_prob=self.loss_type == "ipo",
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
+            use_weighting=self.use_weighting,
         )
 
         def cross_entropy_loss(logits, labels):
@@ -1429,6 +1440,12 @@ class DPOTrainer(Trainer):
         if self.loss_type == "ipo":
             all_logps = all_logps / size_completion
 
+        policy_weights = None
+        if self.use_weighting:
+            chosen_weights = all_weights[:len_chosen]
+            rejected_weights = all_weights[len_chosen:]
+            policy_weights = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
+
         chosen_logps = all_logps[:len_chosen]
         rejected_logps = all_logps[len_chosen:]
 
@@ -1436,9 +1453,17 @@ class DPOTrainer(Trainer):
         rejected_logits = all_logits[len_chosen:]
 
         if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, outputs.aux_loss)
+            return (
+                chosen_logps,
+                rejected_logps,
+                chosen_logits,
+                rejected_logits,
+                nll_loss,
+                policy_weights,
+                outputs.aux_loss,
+            )
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, policy_weights)
 
     def get_batch_loss_metrics(
         self,
@@ -1456,9 +1481,10 @@ class DPOTrainer(Trainer):
             policy_chosen_logits,
             policy_rejected_logits,
             policy_nll_loss,
-        ) = forward_output[:5]
+            policy_weights,
+        ) = forward_output[:6]
         if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
+            aux_loss = forward_output[6]
 
         # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
         if (
@@ -1492,6 +1518,9 @@ class DPOTrainer(Trainer):
             # RPO loss from V3 of the paper:
             losses = losses + policy_nll_loss * self.args.rpo_alpha
 
+        if self.use_weighting:
+            losses = losses * policy_weights
+
         prefix = "eval_" if train_eval == "eval" else ""
         metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
         metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
@@ -1505,7 +1534,7 @@ class DPOTrainer(Trainer):
             metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
 
         if self.aux_loss_enabled:
-            return losses.mean() + getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss, metrics
+            return losses.mean() + self.aux_loss_coef * aux_loss, metrics
 
         return losses.mean(), metrics
 
@@ -1547,7 +1576,7 @@ class DPOTrainer(Trainer):
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
+                pad_token_id=self.processing_class.pad_token_id,
             )
 
             # if reference_output in batch use that otherwise use the reference model
@@ -1561,7 +1590,7 @@ class DPOTrainer(Trainer):
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
                             do_sample=True,
-                            pad_token_id=self.tokenizer.pad_token_id,
+                            pad_token_id=self.processing_class.pad_token_id,
                         )
                 else:
                     reference_output = self.ref_model.generate(
@@ -1569,14 +1598,14 @@ class DPOTrainer(Trainer):
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
-                        pad_token_id=self.tokenizer.pad_token_id,
+                        pad_token_id=self.processing_class.pad_token_id,
                     )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
-        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+        policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
+        policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
-        reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+        reference_output = pad_to_length(reference_output, self.max_length, self.processing_class.pad_token_id)
+        reference_output_decoded = self.processing_class.batch_decode(reference_output, skip_special_tokens=True)
 
         return policy_output_decoded, reference_output_decoded
 
@@ -1715,15 +1744,24 @@ class DPOTrainer(Trainer):
         else:
             base_model = None
 
-        citation = textwrap.dedent("""\
-        @inproceedings{rafailov2023direct,
-            title        = {{Direct Preference Optimization: Your Language Model is Secretly a Reward Model}},
-            author       = {Rafael Rafailov and Archit Sharma and Eric Mitchell and Christopher D. Manning and Stefano Ermon and Chelsea Finn},
-            year         = 2023,
-            booktitle    = {Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023},
-            url          = {http://papers.nips.cc/paper_files/paper/2023/hash/a85b405ed65c6477a4fe8302b5e06ce7-Abstract-Conference.html},
-            editor       = {Alice Oh and Tristan Naumann and Amir Globerson and Kate Saenko and Moritz Hardt and Sergey Levine},
-        }""")
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
+        citation = textwrap.dedent(
+            """\
+            @inproceedings{rafailov2023direct,
+                title        = {{Direct Preference Optimization: Your Language Model is Secretly a Reward Model}},
+                author       = {Rafael Rafailov and Archit Sharma and Eric Mitchell and Christopher D. Manning and Stefano Ermon and Chelsea Finn},
+                year         = 2023,
+                booktitle    = {Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023},
+                url          = {http://papers.nips.cc/paper_files/paper/2023/hash/a85b405ed65c6477a4fe8302b5e06ce7-Abstract-Conference.html},
+                editor       = {Alice Oh and Tristan Naumann and Amir Globerson and Kate Saenko and Moritz Hardt and Sergey Levine},
+            }"""
+        )
 
         model_card = generate_model_card(
             base_model=base_model,

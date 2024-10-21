@@ -27,7 +27,7 @@ class SFTConfig(TrainingArguments):
     command line.
 
     Parameters:
-        dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
+        dataset_text_field (`str`, *optional*, defaults to `"text"`):
             Name of the text field of the dataset. If provided, the trainer will automatically create a
             [`ConstantLengthDataset`] based on `dataset_text_field`.
         packing (`bool`, *optional*, defaults to `False`):
@@ -56,7 +56,7 @@ class SFTConfig(TrainingArguments):
             Monkey patch the model with Liger kernels to increase throughput and reduce memory usage.
     """
 
-    dataset_text_field: Optional[str] = None
+    dataset_text_field: str = "text"
     packing: bool = False
     max_seq_length: Optional[int] = None
     dataset_num_proc: Optional[int] = None

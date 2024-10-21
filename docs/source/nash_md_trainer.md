@@ -1,5 +1,7 @@
 # Nash-MD Trainer
 
+[![](https://img.shields.io/badge/All_models-Nash--MD-blue)](https://huggingface.co/models?other=nash-md,trl)
+
 ## Overview
 
 Nash-MD was proposed in the paper [Nash Learning from Human Feedback](https://huggingface.co/papers/2312.00886) by Rémi Munos, [Michal Valko](https://huggingface.co/misovalko), Daniele Calandriello, Mohammad Gheshlaghi Azar, Mark Rowland, Daniel Guo, Yunhao Tang, Matthieu Geist, Thomas Mésnard, and Andrea Michi. 
@@ -39,7 +41,7 @@ trainer = NashMDTrainer(
     model=model,
     reward_model=reward_model,
     args=training_args,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     train_dataset=train_dataset,
 )
 trainer.train()
@@ -51,9 +53,9 @@ Execute the script using the following command:
 accelerate launch train_nash_md.py
 ```
 
-## Expected dataset format
+## Expected dataset type
 
-Nash-MD requires a [prompt-only dataset](dataset_formats#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Nash-MD requires a [prompt-only dataset](dataset_formats#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 

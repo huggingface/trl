@@ -40,8 +40,8 @@ from transformers import AutoModelForVision2Seq, AutoProcessor, LlavaForConditio
 
 from trl import (
     ModelConfig,
+    ScriptArguments,
     SFTConfig,
-    SFTScriptArguments,
     SFTTrainer,
     TrlParser,
     get_kbit_device_map,
@@ -51,10 +51,9 @@ from trl import (
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
-    training_args.dataset_text_field = ""  # need a dummy field
     training_args.remove_unused_columns = False
     training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
@@ -120,7 +119,7 @@ if __name__ == "__main__":
         data_collator=collate_fn,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
-        tokenizer=processor.tokenizer,
+        processing_class=processor.tokenizer,
         peft_config=get_peft_config(model_config),
     )
 

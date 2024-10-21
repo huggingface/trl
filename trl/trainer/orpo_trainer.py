@@ -35,9 +35,12 @@ from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     is_torch_xla_available,
     is_wandb_available,
@@ -46,6 +49,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
+from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper
 from .orpo_config import ORPOConfig
 from .utils import (
@@ -89,8 +93,10 @@ class ORPOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
         callbacks (`List[transformers.TrainerCallback]`):
@@ -115,7 +121,9 @@ class ORPOTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
@@ -222,8 +230,8 @@ class ORPOTrainer(Trainer):
             self.decoder_start_token_id = model.config.decoder_start_token_id
             self.pad_token_id = model.config.pad_token_id
 
-        if tokenizer is None:
-            raise ValueError("tokenizer must be specified to tokenize a ORPO dataset.")
+        if processing_class is None:
+            raise ValueError("processing_class must be specified to tokenize a ORPO dataset.")
         if args.max_length is None:
             warnings.warn(
                 "`max_length` is not set in the ORPOConfig's init"
@@ -255,7 +263,7 @@ class ORPOTrainer(Trainer):
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=processing_class.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
@@ -279,22 +287,38 @@ class ORPOTrainer(Trainer):
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else tokenizer.pad_token_id
+        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
-        self.tokenizer = tokenizer
+        self.processing_class = processing_class
 
         self.beta = args.beta
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
+            warnings.warn(
+                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
+                " meaning the auxiliary loss will not be used."
+            )
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
-            # tokenize the dataset
+            # Extract the prompt if needed, and apply the chat template if needed
+            train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
+            )
             train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
             if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    maybe_apply_chat_template,
+                    fn_kwargs={"tokenizer": processing_class},
+                    num_proc=args.dataset_num_proc,
+                )
                 eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
 
         super().__init__(
@@ -303,7 +327,7 @@ class ORPOTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -359,8 +383,8 @@ class ORPOTrainer(Trainer):
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
 
-        full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
-        prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        full_tokenized = self.processing_class(prompt + answer, add_special_tokens=False)
+        prompt_input_ids = self.processing_class(prompt, add_special_tokens=False)["input_ids"]
 
         answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
         answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
@@ -425,7 +449,7 @@ class ORPOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+            prompt_tokens = self.processing_class(prompt, add_special_tokens=False)
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
 
             if not isinstance(chosen, str):
@@ -461,7 +485,7 @@ class ORPOTrainer(Trainer):
 
             # add BOS token to head of prompt. Avoid adding if it's already there
             prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
-                self.tokenizer.bos_token_id,
+                self.processing_class.bos_token_id,
                 prompt_len_input_ids,
                 prompt_tokens,
                 chosen_prompt_len_input_ids,
@@ -472,7 +496,7 @@ class ORPOTrainer(Trainer):
 
             # add EOS token to end of answer. Avoid adding if it's already there
             chosen_tokens, rejected_tokens = add_eos_token_if_needed(
-                self.tokenizer.eos_token_id, chosen_tokens, rejected_tokens
+                self.processing_class.eos_token_id, chosen_tokens, rejected_tokens
             )
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
@@ -522,13 +546,13 @@ class ORPOTrainer(Trainer):
                     batch[f"{k}{type_key}"] = tokens
 
         else:
-            chosen_tokens = self.tokenizer(
+            chosen_tokens = self.processing_class(
                 chosen, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
-            rejected_tokens = self.tokenizer(
+            rejected_tokens = self.processing_class(
                 rejected, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
-            prompt_tokens = self.tokenizer(
+            prompt_tokens = self.processing_class(
                 prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
             )
 
@@ -811,7 +835,7 @@ class ORPOTrainer(Trainer):
         for k, v in metrics.items():
             metrics[k] = v.item()
         if self.aux_loss_enabled:
-            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
+            loss += self.aux_loss_coef * aux_loss
 
         return loss, metrics
 
@@ -855,11 +879,11 @@ class ORPOTrainer(Trainer):
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
+                pad_token_id=self.processing_class.pad_token_id,
             )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
-        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+        policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
+        policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
         return policy_output_decoded
 
@@ -1018,6 +1042,13 @@ class ORPOTrainer(Trainer):
             base_model = self.model.config._name_or_path
         else:
             base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
 
         citation = textwrap.dedent("""\
         @article{hong2024orpo,

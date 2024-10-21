@@ -14,7 +14,7 @@
 
 import unittest
 
-from trl import HfPairwiseJudge, PairRMJudge, RandomPairwiseJudge, RandomRankJudge
+from trl import HfPairwiseJudge, PairRMJudge, RandomPairwiseJudge, RandomRankJudge, is_llmblender_available
 
 
 class TestJudges(unittest.TestCase):
@@ -47,6 +47,7 @@ class TestJudges(unittest.TestCase):
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
         self.assertEqual(ranks, [0, 1])
 
+    @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
     def test_pair_rm_judge(self):
         judge = PairRMJudge()
         prompts, completions = self._get_prompts_and_completions()
@@ -54,3 +55,12 @@ class TestJudges(unittest.TestCase):
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
         self.assertEqual(ranks, [0, 1])
+
+    @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
+    def test_pair_rm_judge_return_scores(self):
+        judge = PairRMJudge()
+        prompts, completions = self._get_prompts_and_completions()
+        probs = judge.judge(prompts=prompts, completions=completions, return_scores=True)
+        self.assertEqual(len(probs), 2)
+        self.assertTrue(all(isinstance(prob, float) for prob in probs))
+        self.assertTrue(all(0 <= prob <= 1 for prob in probs))
