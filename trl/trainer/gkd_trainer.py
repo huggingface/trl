@@ -215,7 +215,7 @@ class GKDTrainer(SFTTrainer):
         else:
             return jsd
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # compute student output
         outputs_student = model(
             input_ids=inputs["input_ids"],
@@ -273,7 +273,9 @@ class GKDTrainer(SFTTrainer):
 
         return generated_tokens, new_attention_mask, new_labels
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(
+        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+    ) -> torch.Tensor:
         """
         Perform a training step for the Generalized Knowledge Distillation (GKD) model.
 
@@ -298,7 +300,7 @@ class GKDTrainer(SFTTrainer):
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
 
-        loss = super().training_step(model, inputs)
+        loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
