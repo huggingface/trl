@@ -212,11 +212,10 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            judge = PairRMJudge()
-
             trainer = OnlineDPOTrainer(
                 model=self.model,
-                judge=judge,
+                judge=PairRMJudge(),
+                reward_model=None,
                 args=training_args,
                 processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],

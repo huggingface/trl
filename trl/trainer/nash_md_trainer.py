@@ -137,8 +137,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             "loss/kl": [],
             "objective/entropy": [],
             "loss/score": [],
-            "rewards/chosen": [],
-            "rewards/rejected": [],
+            "rewards/probabilities": [],
             "rewards/accuracies": [],
             "rewards/margins": [],
             "logps/chosen": [],
@@ -300,8 +299,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         mixture_data,
         model_logprobs_model_data,
         ref_logprobs_model_data,
-        model_scores,
-        mixture_scores,
+        probability,
         score,
         kl_div,
         context_length,
@@ -322,16 +320,15 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["logps/chosen"].append(gather_mean(model_logprobs_model_data_sum))
         self.stats["logps/rejected"].append(gather_mean(ref_logprobs_model_data_sum))
 
-        # Log rewards
-        self.stats["rewards/chosen"].append(gather_mean(model_scores))
-        self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
+        # Log probabilities
+        self.stats["rewards/probabilities"].append(gather_mean(probability))
 
         # Calculate entropy for model data
         entropy_model_data = -model_logprobs_model_data.sum(1)
         self.stats["objective/entropy"].append(gather_mean(entropy_model_data))
 
         # Calculate margins
-        margin = model_scores - mixture_scores
+        margin = model_logprobs_model_data_sum - ref_logprobs_model_data_sum
         self.stats["rewards/margins"].append(gather_mean(margin))
 
         # Calculate accuracy
@@ -386,16 +383,16 @@ class NashMDTrainer(OnlineDPOTrainer):
         loss, score, kl_div = self._compute_losses(model_logprobs_model_data, ref_logprobs_model_data, probability)
 
         # Log everything
-        # self._log_statistics(
-        #     model_data,
-        #     mixture_data,
-        #     model_logprobs_model_data.detach(),
-        #     ref_logprobs_model_data,
-        #     probability,
-        #     score.detach(),
-        #     kl_div.detach(),
-        #     context_length,
-        # )
+        self._log_statistics(
+            model_data,
+            mixture_data,
+            model_logprobs_model_data.detach(),
+            ref_logprobs_model_data,
+            probability,
+            score.detach(),
+            kl_div.detach(),
+            context_length,
+        )
 
         if (
             self.args.torch_empty_cache_steps is not None
