@@ -246,7 +246,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             )
             batch["cu_seq_lens_k"] = batch["cu_seq_lens_q"]
 
-            batch["max_length_k"] = flattened_position_ids.max() + 1
+            batch["max_length_k"] = flattened_position_ids.max().item() + 1
             batch["max_length_q"] = batch["max_length_k"]
 
         return batch
