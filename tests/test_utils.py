@@ -250,3 +250,16 @@ class TestDataCollatorForChatML(unittest.TestCase):
 
         # Verify that EOS token is at the end of labels
         self.assertEqual(labels[-1], self.eos_token_id, "The last token of labels should be EOS token.")
+
+    def test_gold_answer(self):
+        data_no_gold = self.collator(self.examples)
+
+        for example in self.examples:
+            example["gold_answer"] = "This is a gold answer"
+
+        data_with_gold = self.collator(self.examples)
+
+        # Verify that the batch do not contain the gold answers
+        self.assertNotIn("gold_answer", data_no_gold, "Batch should not contain gold answers.")
+        # Verify that the batch contain the gold answers
+        self.assertIn("gold_answer", data_with_gold, "Batch should contain gold answers.")
