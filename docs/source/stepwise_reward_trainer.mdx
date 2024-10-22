@@ -1,0 +1,85 @@
+# Stepwise Reward Modeling
+
+## Overview
+
+Process-supervised Reward Models (PRMs) were proposed in [Solving math word problems with processand outcome-based feedback](https://arxiv.org/pdf/2211.14275) by Jonathan Uesato, Nate Kushman, Ramana Kumar, Francis Song, Noah Siegel, Lisa Wang, Antonia Creswell, Geoffrey Irving and Irina Higgins.
+
+The abstract from the paper is the following:
+
+> Recent work has shown that asking language models to generate reasoning steps improves performance on many reasoning tasks. When moving beyond prompting, this raises the question of how we should supervise such models: outcome-based approaches which supervise the final result, or process-based approaches which supervise the reasoning process itself? Differences between these approaches might naturally be expected not just in final-answer errors but also in reasoning errors, which can be difficult to detect and are problematic in many real-world domains such as education. We run the first comprehensive comparison between process- and outcome-based approaches trained on a natural language task, GSM8K. We find that pure outcome-based supervision produces similar final-answer error rates with less label supervision. However, for correct reasoning steps we find it necessary to use processbased supervision or supervision from learned reward models that emulate process-based feedback. In total, we improve the previous best results from 16.8% → 12.7% final-answer error and 14.0% → 3.4% reasoning error among final-answer-correct solutions.
+
+This post-training method was contributed by [Gaetan Lopez](https://github.com/gaetanlop), [Lewis Tunstall](https://huggingface.co/lewtun) and [Quentin Gallouédec](https://huggingface.co/qgallouedec)
+
+## Usage tips  
+
+The [`StepwiseRewardTrainer`] is a wrapper around the [`Trainer`] class. It needs two parameters to be set via the [`StepwiseRewardConfig`] namely:
+* `max_length`: controls the maximum length of the sequences where a sequence is composed of the prompt and the concatenation of each completion steps.
+* `step_separator`: indicate the separator used to separate each step of the reasoning process. By default, it is set to `"n"`.
+
+The basic API is as follows:
+
+```python
+from datasets import Dataset
+from transformers import AutoModelForTokenClassification, AutoTokenizer
+from trl import StepwiseRewardTrainer, StepwiseRewardConfig
+
+
+NUM_DUMMY_SAMPLES = 100
+
+model = AutoModelForTokenClassification.from_pretrained("Qwen/Qwen2-0.5B-Instruct", num_labels=2)
+
+train_dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            "Hi, how are you?",
+        ],
+        "completion": [
+            [", let me think...", "I'm great thanks."]
+        ]
+        "labels": [
+            [False, True]
+        ]
+        * NUM_DUMMY_SAMPLES
+    }
+)
+eval_dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            "What colour is the sky?",
+        ],
+        "completion": [
+            ["Hmm,", "great question...", "The sky is blue."]
+        ]
+        "labels": [
+            [False, False, True]
+        ]
+        * NUM_DUMMY_SAMPLES
+    }
+)
+
+config = StepwiseRewardConfig(output_dir="stepwise-reward-model", per_device_train_batch_size=1, max_length=512, step_separator="\n")
+trainer = StepwiseRewardTrainer(
+    model=model,
+    args=training_args,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+## Expected dataset format
+
+The dataset should be formatted as a [Name to find](dataset_formats#[Name to find]) which implies that the dataset should contain the following columns: `prompt`, `completion` and `labels` where `completion` contains a list of reasoning steps and `labels` a list of booleans indicating the correctness of each step.
+
+The [`StepwiseRewardTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+
+You can also use a pretokenized dataset, in which case the dataset should contain the following columns: `input_ids`, `attention_mask` and `labels`.
+
+## StepwiseRewardTrainer
+
+[[autodoc]] StepwiseRewardTrainer
+
+## StepwiseRewardConfig
+
+[[autodoc]] StepwiseRewardConfig
