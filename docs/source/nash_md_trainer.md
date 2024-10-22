@@ -114,6 +114,8 @@ The logged metrics are as follows:
 * `loss/kl`: The mean KL divergence between the model and reference data.
 * `objective/entropy`: The mean entropy of the model and reference data.
 * `loss/score`: The mean reinforce score loss.
+* `rewards/chosen`: The mean scores (according to the reward model) of the model completions.
+* `rewards/rejected`: The mean scores (according to the reward model) of the mixture completions.
 * `rewards/probabilities`: The mean probability (according to the reward model or judge) of the model completions chosen vs the mixture completion.
 * `rewards/accuracies`: The accuracies of the Nash-MD's implicit reward model.
 * `rewards/margins`: The mean reward margin (according to reward model) between the chosen and mixture completions.

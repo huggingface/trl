@@ -137,6 +137,8 @@ class NashMDTrainer(OnlineDPOTrainer):
             "loss/kl": [],
             "objective/entropy": [],
             "loss/score": [],
+            "rewards/chosen": [],
+            "rewards/rejected": [],
             "rewards/probabilities": [],
             "rewards/accuracies": [],
             "rewards/margins": [],
@@ -223,8 +225,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
             mixture_scores[~mixture_contain_eos] -= self.args.missing_eos_penalty
 
-        # probability of the model data vs the mixture data
-        return F.sigmoid(model_scores - mixture_scores)
+        return model_scores, mixture_scores
 
     def _compute_judge(self, model_data, mixture_data, context_length):
         prompts = self.processing_class.batch_decode(
@@ -303,6 +304,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         score,
         kl_div,
         context_length,
+        model_scores=None,
+        mixture_scores=None,
     ):
         # Helper function to gather and compute mean
         def gather_mean(tensor):
@@ -319,6 +322,11 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         self.stats["logps/chosen"].append(gather_mean(model_logprobs_model_data_sum))
         self.stats["logps/rejected"].append(gather_mean(ref_logprobs_model_data_sum))
+
+        # Log rewards
+        if model_scores is not None and mixture_scores is not None:
+            self.stats["rewards/chosen"].append(gather_mean(model_scores))
+            self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
 
         # Log probabilities
         self.stats["rewards/probabilities"].append(gather_mean(probability))
@@ -374,8 +382,11 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         # Compute rewards
         if self.reward_model is not None:
-            probability = self._compute_rewards(model_data, mixture_data, context_length)
+            model_scores, mixture_scores = self._compute_rewards(model_data, mixture_data, context_length)
+            # probability of the model data vs the mixture data
+            probability = F.sigmoid(model_scores - mixture_scores)
         else:
+            model_scores, mixture_scores = None, None
             probability = self._compute_judge(model_data, mixture_data, context_length)
 
         # Compute logprobs
@@ -394,6 +405,8 @@ class NashMDTrainer(OnlineDPOTrainer):
             score.detach(),
             kl_div.detach(),
             context_length,
+            model_scores,
+            mixture_scores,
         )
 
         if (
