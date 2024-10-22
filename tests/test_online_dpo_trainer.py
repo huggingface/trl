@@ -215,7 +215,6 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             trainer = OnlineDPOTrainer(
                 model=self.model,
                 judge=PairRMJudge(),
-                reward_model=None,
                 args=training_args,
                 processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
