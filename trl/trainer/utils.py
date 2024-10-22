@@ -246,7 +246,7 @@ class DataCollatorForChatML:
     max_length: int = None
     prompt_key: str = "prompt"
     messages_key: str = "messages"
-    gold_key: str = None
+    gold_key: str = "gold_answer"
 
     def __post_init__(self):
         if self.tokenizer.pad_token_id is None:
@@ -261,8 +261,7 @@ class DataCollatorForChatML:
         prompts_input_ids = []
         prompt_attention_mask = []
         labels = []
-        if self.gold_key is not None:
-            golds = []
+        golds = [] if examples[0].get(self.gold_key, None) is not None else None
 
         for example in examples:
             formatted_prompt = example.get(self.prompt_key, None)
@@ -309,7 +308,7 @@ class DataCollatorForChatML:
             label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
             labels.append(label)
 
-            if self.gold_key is not None:
+            if golds is not None:
                 golds.append(example[self.gold_key])
 
         # convert to list of tensors and pad
@@ -333,7 +332,7 @@ class DataCollatorForChatML:
             "prompt_attention_mask": prompt_attention_mask,
         }
 
-        if self.gold_key is not None:
+        if golds is not None:
             batch["gold_answer"] = golds
 
         return batch

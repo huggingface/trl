@@ -76,7 +76,7 @@ class MixtureOfConstraintJudges:
     def __init__(self, method: Literal["all_violated", "all_satisfied", "all_random"] = "all_random"):
         self.method = method
 
-    def judge(self, prompts, completions=None, shuffle_order=None):
+    def judge(self, prompts, completions=None, gold_answers=None, shuffle_order=None):
         if self.method == "all_violated":
             return [0 for _ in range(len(prompts))]
         elif self.method == "all_satisfied":
@@ -214,6 +214,7 @@ class CGPOTrainer(Trainer):
                 "The data collator will be replaced by a custom `DataCollatorForChatML`. "
                 "The specified data collator will not be used."
             )
+
         args.remove_unused_columns = False
         data_collator = DataCollatorForChatML(processing_class, max_length=args.max_length)
 
@@ -280,13 +281,14 @@ class CGPOTrainer(Trainer):
             )
             self.ref_model = prepare_deepspeed(self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16)
         else:
-            self.reward_model = self.reward_model.to(self.accelerator.device)
+            self.reward_model = self.accelerator.prepare_model(self.reward_model, evaluation_mode=True)
             if self.ref_model is not None:
-                self.ref_model = self.ref_model.to(self.accelerator.device)
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         self.stats = {
             "constraints/judgements": [],
             "constraints/rewards": [],
+            "objective/regularized_rewards": [],
         }
 
     def _get_batch_logprobs(
@@ -302,11 +304,13 @@ class CGPOTrainer(Trainer):
                 with self.model.disable_adapter():
                     logits = self.model(input_ids, attention_mask=attention_mask).logits
 
-        all_logprobs = F.log_softmax(logits, dim=-1)
-        logprobs = torch.take_along_dim(all_logprobs, input_ids.unsqueeze(-1), dim=-1).squeeze(-1)
-        logprobs = torch.masked_fill(logprobs, ~attention_mask.bool(), 0.0)
+        completion_logprobs = F.log_softmax(logits, dim=-1)[:, context_length - 1 : -1]
+        completion_ids = input_ids[:, context_length:]
+        completion_mask = attention_mask[:, context_length:]
 
-        return logprobs[:, context_length - 1 : -1].sum(1)
+        logprobs = torch.take_along_dim(completion_logprobs, completion_ids.unsqueeze(-1), dim=-1).squeeze(-1)
+        logprobs = torch.masked_fill(logprobs, ~completion_mask.bool(), 0.0)
+        return logprobs.sum(1)
 
     def crpg_optimization(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         context_length = inputs["context_length"]
@@ -350,7 +354,7 @@ class CGPOTrainer(Trainer):
         mean_regularized_rewards = regularized_rewards.mean()
 
         total_loss = torch.tensor(0.0, device=self.model.device)
-        total_num_tokens = prompt_completion_mask[:, context_length - 1 : -1].sum()
+        total_num_tokens = prompt_completion_mask[:, context_length:].sum()
         for i in range(0, full_bs, bs):
             # Compute loss on a batch of size `bs`, instead of the full batch (`bs` * self.k) to avoid OOM.
             mini_batch_prompt_completion_ids = prompt_completion_ids[i : i + bs]
@@ -364,6 +368,7 @@ class CGPOTrainer(Trainer):
 
             losses = -logprobs * (mini_batch_regularized_rewards - mean_regularized_rewards)
             loss = losses.sum() / total_num_tokens
+            loss = loss / self.k
 
             if self.use_apex:
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
@@ -372,6 +377,8 @@ class CGPOTrainer(Trainer):
                 self.accelerator.backward(loss)
 
             total_loss += loss
+
+        self.stats["objective/regularized_rewards"].append(self.accelerator.gather(regularized_rewards).mean().item())
 
         return total_loss
 
@@ -386,7 +393,7 @@ class CGPOTrainer(Trainer):
         prompt_completion_mask = inputs["prompt_completion_mask"].view(bs, self.k, -1)
 
         positive_masked_rewards = judgements * rewards
-        negative_masked_rewards = ~judgements * rewards
+        negative_masked_rewards = torch.where(judgements, torch.inf, 1) * rewards
 
         # get chosen and rejected completions
         chosen_idx = torch.argmax(positive_masked_rewards, dim=1)
@@ -503,12 +510,16 @@ class CGPOTrainer(Trainer):
         if no_positive_completion_mask.any():
             # only compute the baseline logprobs if we need to (ie some prompts do not have any positive samples)
             # check that the baseline satisfy all constraints: judgements and kl
+            gold_answers = inputs.get("gold_answer", None)
             baseline_judgements = torch.zeros_like(best_rewards, dtype=torch.bool)
             prompts_text = [text for i, text in enumerate(inputs["prompts_text"]) if no_positive_completion_mask[i]]
+            if gold_answers is not None:
+                gold_answers = [text for i, text in enumerate(gold_answers) if no_positive_completion_mask[i]]
+
             baseline_completions_text = [
                 text for i, text in enumerate(inputs["baseline_completions_text"]) if no_positive_completion_mask[i]
             ]
-            no_positive_judgements = self.moj.judge(prompts_text, baseline_completions_text)
+            no_positive_judgements = self.moj.judge(prompts_text, baseline_completions_text, gold_answers)
 
             baseline_judgements[no_positive_completion_mask] = torch.tensor(
                 no_positive_judgements, device=self.model.device, dtype=torch.bool
@@ -537,13 +548,25 @@ class CGPOTrainer(Trainer):
             best_completion_logprobs = torch.where(
                 replace_by_baseline_mask, baseline_logprobs, best_completion_logprobs
             )
+
+            baseline_mask = prompt_baseline_mask[:, context_length:].sum(1)
+            best_completion_mask = best_prompt_completion_mask[:, context_length:].sum(1)
+            best_completion_mask = torch.where(
+                replace_by_baseline_mask,
+                baseline_mask,
+                best_completion_mask,
+            )
             # calibrated reward for the baseline is always 0.5 ie sigmoid(0)
             best_rewards = torch.where(replace_by_baseline_mask, 0.5, best_rewards)
 
+        else:
+            best_completion_mask = best_prompt_completion_mask[:, context_length:].sum(1)
+
+        best_rewards_mask = best_rewards != 0
+        total_num_tokens = (best_completion_mask * best_rewards_mask).sum()
         # compute loss as done in eqn (18) of the CGPO paper: https://huggingface.co/papers/2409.20370
         losses = -best_completion_logprobs * best_rewards
-        # simulate skipping samples instead of using .mean()
-        loss = losses.sum() / ((best_rewards != 0).sum() + self.epsilon)
+        loss = losses.sum() / (total_num_tokens + self.epsilon)
 
         if self.use_apex:
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
@@ -551,16 +574,17 @@ class CGPOTrainer(Trainer):
         else:
             self.accelerator.backward(loss)
 
+        self.stats["objective/regularized_rewards"].append(self.accelerator.gather(regularized_rewards).mean().item())
+
         return loss
 
-    def training_step(
-        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch=None
-    ) -> torch.Tensor:
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         bs, context_length = inputs["prompts"].shape
         inputs["prompts_text"] = self.processing_class.batch_decode(inputs["prompts"])
         inputs["baseline_completions_text"] = self.processing_class.batch_decode(
             inputs["input_ids"][:, context_length:]
         )
+        gold_answers = inputs.get("gold_answer", None)
 
         # step 4 of algorithm 1 of the CGPO paper: https://huggingface.co/papers/2409.20370
         prompt_ids = inputs["prompts"].repeat_interleave(repeats=self.k, dim=0)
@@ -575,20 +599,23 @@ class CGPOTrainer(Trainer):
             )
 
         completion_ids = query_responses_ids[:, context_length:]
-        completion_logprobs = F.log_softmax(completion_logits, dim=-1)
-        completion_logprobs = (
-            torch.take_along_dim(completion_logprobs, completion_ids.unsqueeze(-1), dim=-1).squeeze(-1).sum(-1)
-        )
 
         query_responses = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         # step 5 of algorithm 1 of the CGPO paper: https://huggingface.co/papers/2409.20370
         with torch.no_grad():
             prompt_repeated = [item for item in inputs["prompts_text"] for _ in range(self.k)]
-            judgements = self.moj.judge(prompt_repeated, query_responses)
+            if gold_answers is not None:
+                gold_answers = [item for item in gold_answers for _ in range(self.k)]
+            judgements = self.moj.judge(prompt_repeated, query_responses, gold_answers)
 
         completion_ids, completion_mask = truncate_right(
             completion_ids, self.generation_config.eos_token_id, self.processing_class.pad_token_id
         )
+        completion_logprobs = F.log_softmax(completion_logits, dim=-1)
+        completion_logprobs = torch.take_along_dim(completion_logprobs, completion_ids.unsqueeze(-1), dim=-1).squeeze(
+            -1
+        )
+        completion_logprobs = torch.masked_fill(completion_logprobs, ~completion_mask.bool(), 0.0).sum(1)
 
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
@@ -652,7 +679,9 @@ class CGPOTrainer(Trainer):
 
             # Add our metrics
             for key, val in self.stats.items():
-                logs[key] = sum(val) / len(val)
+                if len(val) != 0:
+                    # CODPO do not update kl div
+                    logs[key] = sum(val) / len(val)
             self.stats = {key: [] for key in self.stats}  # reset stats
 
             self._total_loss_scalar += tr_loss_scalar
