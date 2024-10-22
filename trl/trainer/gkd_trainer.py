@@ -269,7 +269,6 @@ class GKDTrainer(SFTTrainer):
         # Compute Wasserstein distance
         wasserstein_distance = torch.abs(student_probs_sorted - teacher_probs_sorted).sum(dim=-1)
 
-
         # Apply reduction
         if reduction == "batchmean":
             return wasserstein_distance.sum() / (wasserstein_distance.size(0) * wasserstein_distance.size(1))
