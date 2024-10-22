@@ -138,6 +138,9 @@ class XPOTrainer(OnlineDPOTrainer):
             "objective/kl": [],
             "objective/entropy": [],
             # Replace "scores" by "model_scores" and "ref_scores"
+            "objective/model_scores": [],
+            "objective/ref_scores": [],
+            "objective/scores_margin": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
             "rewards/accuracies": [],
@@ -218,7 +221,7 @@ class XPOTrainer(OnlineDPOTrainer):
             model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
             ref_scores[~ref_contain_eos] -= self.args.missing_eos_penalty
 
-        return model_scores >= ref_scores
+        return model_scores, ref_scores
 
     def _compute_judge(self, model_data, ref_data, context_length):
         prompts = self.processing_class.batch_decode(
@@ -324,6 +327,8 @@ class XPOTrainer(OnlineDPOTrainer):
         dpo_losses,
         xpo_losses,
         context_length,
+        model_scores=None,
+        ref_scores=None,
     ):
         # Helper function to gather and compute mean
         def gather_mean(tensor):
@@ -332,6 +337,12 @@ class XPOTrainer(OnlineDPOTrainer):
         # Log losses
         self.stats["loss/dpo"].append(gather_mean(dpo_losses))
         self.stats["loss/xpo"].append(gather_mean(xpo_losses))
+
+        # Log scores
+        if model_scores is not None and ref_scores is not None:
+            self.stats["objective/model_scores"].append(gather_mean(model_scores))
+            self.stats["objective/ref_scores"].append(gather_mean(ref_scores))
+            self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
 
         # Log logprobs
         model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
@@ -416,8 +427,10 @@ class XPOTrainer(OnlineDPOTrainer):
 
         # Compute rewards
         if self.reward_model is not None:
-            chosen_mask = self._compute_rewards(model_data, ref_data, context_length)
+            model_scores, ref_scores = self._compute_rewards(model_data, ref_data, context_length)
+            chosen_mask = model_scores >= ref_scores
         else:
+            model_scores, ref_scores = None, None
             chosen_mask = self._compute_judge(model_data, ref_data, context_length)
 
         # Compute logprobs
@@ -446,6 +459,8 @@ class XPOTrainer(OnlineDPOTrainer):
             dpo_losses.detach(),
             xpo_losses.detach(),
             context_length,
+            model_scores,
+            ref_scores,
         )
 
         if (
