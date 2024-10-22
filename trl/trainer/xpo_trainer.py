@@ -339,7 +339,7 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["loss/xpo"].append(gather_mean(xpo_losses))
 
         # Log scores
-        if model_scores is not None and ref_scores is not None:
+        if self.reward_model is not None:
             self.stats["objective/model_scores"].append(gather_mean(model_scores))
             self.stats["objective/ref_scores"].append(gather_mean(ref_scores))
             self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
