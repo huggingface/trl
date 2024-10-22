@@ -325,7 +325,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["logps/rejected"].append(gather_mean(ref_logprobs_model_data_sum))
 
         # Log rewards
-        if model_scores is not None and mixture_scores is not None:
+        if self.reward_model is not None:
             self.stats["rewards/chosen"].append(gather_mean(model_scores))
             self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
 
