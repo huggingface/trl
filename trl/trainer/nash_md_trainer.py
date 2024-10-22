@@ -137,8 +137,6 @@ class NashMDTrainer(OnlineDPOTrainer):
             "loss/kl": [],
             "objective/entropy": [],
             "loss/score": [],
-            "rewards/chosen": [],
-            "rewards/rejected": [],
             "rewards/probabilities": [],
             "rewards/accuracies": [],
             "rewards/margins": [],
@@ -149,6 +147,9 @@ class NashMDTrainer(OnlineDPOTrainer):
             "beta": [],
             "mixture_coef": [],
         }
+        if self.reward_model is not None:
+            self.stats["rewards/chosen"] = []
+            self.stats["rewards/rejected"] = []
 
     @property
     def mixture_coef(self):

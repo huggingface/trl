@@ -218,8 +218,6 @@ class OnlineDPOTrainer(Trainer):
             "objective/entropy": [],
             "objective/non_score_reward": [],
             "objective/rlhf_reward": [],
-            "objective/scores": [],
-            "objective/scores_margin": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
             "rewards/accuracies": [],
@@ -229,6 +227,9 @@ class OnlineDPOTrainer(Trainer):
             "val/contain_eos_token": [],
             "beta": [],
         }
+        if self.reward_model is not None:
+            self.stats["objective/scores_margin"] = []
+            self.stats["objective/scores"] = []
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
