@@ -217,7 +217,6 @@ class OnlineDPOTrainer(Trainer):
             "objective/kl": [],
             "objective/entropy": [],
             "objective/non_score_reward": [],
-            "objective/rlhf_reward": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
             "rewards/accuracies": [],
@@ -228,6 +227,7 @@ class OnlineDPOTrainer(Trainer):
             "beta": [],
         }
         if self.reward_model is not None:
+            self.stats["objective/rlhf_reward"] = []
             self.stats["objective/scores_margin"] = []
             self.stats["objective/scores"] = []
 
