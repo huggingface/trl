@@ -32,6 +32,8 @@ class SFTConfig(TrainingArguments):
             [`ConstantLengthDataset`] based on `dataset_text_field`.
         packing (`bool`, *optional*, defaults to `False`):
             Controls whether the [`ConstantLengthDataset`] packs the sequences of the dataset.
+        learning_rate (`float`, *optional*, defaults to `2e-5`):
+            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of [`~transformers.TrainingArguments`].
         max_seq_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum sequence length for the [`ConstantLengthDataset`] and for automatically creating the dataset. If
             `None`, it uses the smaller value between `tokenizer.model_max_length` and `1024`.
@@ -58,6 +60,7 @@ class SFTConfig(TrainingArguments):
 
     dataset_text_field: str = "text"
     packing: bool = False
+    learning_rate: float = 2.0e-5
     max_seq_length: Optional[int] = None
     dataset_num_proc: Optional[int] = None
     dataset_batch_size: int = 1000
