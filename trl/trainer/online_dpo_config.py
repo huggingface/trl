@@ -75,9 +75,3 @@ class OnlineDPOConfig(TrainingArguments):
         super().__post_init__()
         if hasattr(self.beta, "__len__") and len(self.beta) == 1:
             self.beta = self.beta[0]
-
-        if self.reward_model_path is None and self.judge is None:
-            raise ValueError("Either reward_model_path or judge must be set.")
-
-        if self.reward_model_path is not None and self.judge is not None:
-            raise ValueError("reward_model_path and judge cannot be set at the same time.")
