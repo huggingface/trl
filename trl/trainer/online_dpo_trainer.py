@@ -440,7 +440,7 @@ class OnlineDPOTrainer(Trainer):
             # convert ranks to a True/False mask:
             # when rank == 0, it means the first completion is the best
             # when rank == 1, it means the second completion is the best
-            mask = torch.tensor([rank == 1 for rank in ranks_of_first_completion], device=prompt_completion_ids.device)
+            mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=prompt_completion_ids.device)
         else:
             _, scores, _ = get_reward(
                 self.reward_model, prompt_completion_ids, self.processing_class.pad_token_id, context_length
