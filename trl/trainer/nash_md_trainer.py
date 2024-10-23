@@ -39,7 +39,7 @@ from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import empty_cache, generate_model_card, get_reward, truncate_right
+from .utils import decode_and_strip_padding, empty_cache, generate_model_card, get_reward, truncate_right
 
 
 if is_apex_available():
@@ -229,14 +229,12 @@ class NashMDTrainer(OnlineDPOTrainer):
         return model_scores, mixture_scores
 
     def _compute_judge(self, model_data, mixture_data, context_length):
-        prompts = self.processing_class.batch_decode(
-            model_data["input_ids"][:, :context_length], skip_special_tokens=True
+        prompts = decode_and_strip_padding(model_data["input_ids"][:, :context_length], self.processing_class)
+        model_data_completions = decode_and_strip_padding(
+            model_data["input_ids"][:, context_length:], self.processing_class
         )
-        model_data_completions = self.processing_class.batch_decode(
-            model_data["input_ids"][:, context_length:], skip_special_tokens=True
-        )
-        mixture_data_completions = self.processing_class.batch_decode(
-            mixture_data["input_ids"][:, context_length:], skip_special_tokens=True
+        mixture_data_completions = decode_and_strip_padding(
+            mixture_data["input_ids"][:, context_length:], self.processing_class
         )
         probability = self.judge.judge(
             prompts,

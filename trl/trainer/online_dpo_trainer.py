@@ -50,6 +50,7 @@ from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
+    decode_and_strip_padding,
     disable_dropout_in_model,
     empty_cache,
     generate_model_card,
@@ -427,16 +428,14 @@ class OnlineDPOTrainer(Trainer):
 
         # Get the reward from the reward model or judge:
         if self.judge is not None:
-            prompts = self.processing_class.batch_decode(
-                prompt_completion_ids[:num_examples, :context_length], skip_special_tokens=True
+            prompts = decode_and_strip_padding(
+                prompt_completion_ids[:num_examples, :context_length], self.processing_class
             )
-            completions = self.processing_class.batch_decode(
-                prompt_completion_ids[:, context_length:], skip_special_tokens=True
-            )
-
+            completions = decode_and_strip_padding(prompt_completion_ids[:, context_length:], self.processing_class)
             ranks_of_first_completion = self.judge.judge(
                 prompts, [[completions[i], completions[i + num_examples]] for i in range(num_examples)]
             )
+
             # convert ranks to a True/False mask:
             # when rank == 0, it means the first completion is the best
             # when rank == 1, it means the second completion is the best

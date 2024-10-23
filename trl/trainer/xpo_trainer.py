@@ -37,7 +37,7 @@ from ..data_utils import maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import empty_cache, generate_model_card, get_reward, truncate_right
+from .utils import decode_and_strip_padding, empty_cache, generate_model_card, get_reward, truncate_right
 from .xpo_config import XPOConfig
 
 
@@ -224,14 +224,12 @@ class XPOTrainer(OnlineDPOTrainer):
         return model_scores, ref_scores
 
     def _compute_judge(self, model_data, ref_data, context_length):
-        prompts = self.processing_class.batch_decode(
-            model_data["input_ids"][:, :context_length], skip_special_tokens=True
+        prompts = decode_and_strip_padding(model_data["input_ids"][:, :context_length], self.processing_class)
+        model_data_completions = decode_and_strip_padding(
+            model_data["input_ids"][:, context_length:], self.processing_class
         )
-        model_data_completions = self.processing_class.batch_decode(
-            model_data["input_ids"][:, context_length:], skip_special_tokens=True
-        )
-        ref_data_completions = self.processing_class.batch_decode(
-            ref_data["input_ids"][:, context_length:], skip_special_tokens=True
+        ref_data_completions = decode_and_strip_padding(
+            ref_data["input_ids"][:, context_length:], self.processing_class
         )
         ranks = self.judge.judge(
             prompts,
