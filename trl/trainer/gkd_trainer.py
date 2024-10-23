@@ -136,6 +136,7 @@ class GKDTrainer(SFTTrainer):
         self.lmbda = args.lmbda
         self.beta = args.beta
         self.temperature = args.temperature
+        self.seq_kd = args.seq_kd
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
@@ -214,7 +215,7 @@ class GKDTrainer(SFTTrainer):
         else:
             return jsd
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # compute student output
         outputs_student = model(
             input_ids=inputs["input_ids"],
@@ -272,7 +273,9 @@ class GKDTrainer(SFTTrainer):
 
         return generated_tokens, new_attention_mask, new_labels
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(
+        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+    ) -> torch.Tensor:
         """
         Perform a training step for the Generalized Knowledge Distillation (GKD) model.
 
@@ -280,6 +283,14 @@ class GKDTrainer(SFTTrainer):
         With probability `self.lmbda`, it generates new responses using the student model,
         which are then used for training instead of the original inputs.
         """
+        if self.seq_kd:
+            with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
+                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
+                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                )
+            inputs["input_ids"] = new_input_ids
+            inputs["attention_mask"] = new_attention_mask
+            inputs["labels"] = new_labels
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
@@ -289,7 +300,7 @@ class GKDTrainer(SFTTrainer):
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
 
-        loss = super().training_step(model, inputs)
+        loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
