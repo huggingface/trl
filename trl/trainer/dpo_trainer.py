@@ -1270,12 +1270,21 @@ class DPOTrainer(Trainer):
                 attention_mask = attention_mask[:, : self.args.max_length]
                 loss_mask = loss_mask[:, : self.args.max_length]
 
+            if self.use_num_logits_to_keep:
+                first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
+                num_logits_to_keep = loss_mask.shape[1] - first_compute_index
+                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item()
+
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
 
             # Offset the logits by one to align with the labels
             logits = outputs.logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
             loss_mask = loss_mask[:, 1:].bool()
+
+            if self.use_num_logits_to_keep:
+                labels = labels[:, -num_logits_to_keep:]
+                loss_mask = loss_mask[:, -num_logits_to_keep:]
 
         if logits.shape[:2] != labels.shape[:2]:
             # for llava, the returned logits include the image tokens (placed before the text tokens)
