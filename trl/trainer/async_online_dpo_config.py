@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from dataclasses import dataclass, field
 from typing import List, Literal
-import os
 
 from ..trainer.utils import OnPolicyConfig
 
