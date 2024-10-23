@@ -19,6 +19,7 @@ from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import datasets
+import jinja2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -43,14 +44,14 @@ from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
-from ..data_utils import maybe_apply_chat_template
+from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
+    SIMPLE_CHAT_TEMPLATE,
     DPODataCollatorWithPadding,
-    decode_and_strip_padding,
     disable_dropout_in_model,
     empty_cache,
     generate_model_card,
@@ -378,6 +379,7 @@ class OnlineDPOTrainer(Trainer):
         # Apply chat template and tokenize the input.
         # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
         batch_size = len(next(iter(inputs.values())))
+        prompts = inputs["prompt"]
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
         inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
         inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
@@ -428,12 +430,20 @@ class OnlineDPOTrainer(Trainer):
 
         # Get the reward from the reward model or judge:
         if self.judge is not None:
-            prompts = decode_and_strip_padding(
-                prompt_completion_ids[:num_examples, :context_length], self.processing_class
+            completions = self.processing_class.batch_decode(
+                prompt_completion_ids[:, context_length:], skip_special_tokens=True
             )
-            completions = decode_and_strip_padding(prompt_completion_ids[:, context_length:], self.processing_class)
+            completions = [completion.strip() for completion in completions]  # remove the heading space
+
+            if is_conversational({"prompt": prompts[0]}):
+                completions = [[{"role": "assistant", "content": completion}] for completion in completions]
+                environment = jinja2.Environment()
+                template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
+                prompts = [template.render(messages=message) for message in prompts]
+                completions = [template.render(messages=completion) for completion in completions]
+
             ranks_of_first_completion = self.judge.judge(
-                prompts, [[completions[i], completions[i + num_examples]] for i in range(num_examples)]
+                prompts, list(zip(completions[:num_examples], completions[num_examples:]))
             )
 
             # convert ranks to a True/False mask:
