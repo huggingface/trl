@@ -46,13 +46,20 @@ from transformers.utils import (
     is_torch_npu_available,
     is_torch_xpu_available,
 )
+from transformers.import_utils import _is_package_available
 
 from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
+_vllm_available = _is_package_available("vllm")
+
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
+
+
+def is_vllm_available():
+    return _vllm_available
 
 
 class AdaptiveKLController:
