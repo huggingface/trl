@@ -433,7 +433,7 @@ class OnlineDPOTrainer(Trainer):
             completions = self.processing_class.batch_decode(
                 prompt_completion_ids[:, context_length:], skip_special_tokens=True
             )
-            completions = [completion.strip() for completion in completions]  # remove the heading space
+            completions = [completion.strip() for completion in completions]  # remove the leading space
 
             if is_conversational({"prompt": prompts[0]}):
                 completions = [[{"role": "assistant", "content": completion}] for completion in completions]
