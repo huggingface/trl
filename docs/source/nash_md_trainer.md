@@ -14,7 +14,7 @@ This post-training method was contributed by [Kashif Rasul](https://huggingface.
 
 ## Quick start
 
-This example demonstrates how to train a model using the Nash-MD method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and the [Qwen 0.5B reward model](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) as the reward model. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+This example demonstrates how to train a model using the Nash-MD method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and [`PairRMJudge`] as a judge. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
@@ -28,21 +28,17 @@ Below is the script to train the model:
 ```python
 # train_nash_md.py
 from datasets import load_dataset
-from trl import NashMDConfig, NashMDTrainer
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from trl import NashMDConfig, NashMDTrainer, PairRMJudge
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
+judge = PairRMJudge()
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-training_args = NashMDConfig(output_dir="nash-md-qwen2", logging_steps=10)
+training_args = NashMDConfig(output_dir="Qwen2-0.5B-NashMD", logging_steps=10)
 trainer = NashMDTrainer(
-    model=model,
-    reward_model=reward_model,
-    args=training_args,
-    processing_class=tokenizer,
-    train_dataset=train_dataset,
+    model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
 trainer.train()
 ```
@@ -53,15 +49,47 @@ Execute the script using the following command:
 accelerate launch train_nash_md.py
 ```
 
+Distributed across 8 GPUs, the training takes approximately 3 hours.
+
+To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-NashMD) performs, you can use the [TRL Chat CLI](clis#chat-interface).
+
+<pre><code>$ trl chat --model_name_or_path trl-lib/Qwen2-0.5B-NashMD
+<strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
+What is the best programming language?
+
+<strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-NashMD&gt;:</span></strong>
+The best programming language depends on personal preference, the complexity of the project, and the specific requirements of the task. Some programming languages that are often recommended include Python, Java, and JavaScript, and there are many other languages to choose from depending on individual needs.
+</code></pre>
+
 ## Expected dataset type
 
 Nash-MD requires a [prompt-only dataset](dataset_formats#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
-### ⚠️ Use the same chat template
+### Use a reward model
 
-Make sure that the SFT model and reward model use the _same_ chat template. Otherwise, you may find the model completions are scored incorrectly during training.
+Instead of a judge, you can chose to use a reward model -- see [Reward Bench](https://huggingface.co/spaces/allenai/reward-bench) for a leaderboard of public models you can use. Below is a code example showing how to replace a judge with the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) model:
+
+```diff
+- from trl import PairRMJudge
++ from transformers import AutoModelForSequenceClassification
+
+- judge = PairRMJudge()
++ reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
+
+  trainer = NashMDTrainer(
+      ...
+-     judge=judge,
++     reward_model=reward_model,
+  )
+```
+
+<Tip warning={true}>
+
+Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
+
+</Tip>
 
 ### Encourage EOS token generation
 
@@ -89,21 +117,17 @@ This callback logs the model's generated completions directly to Weights & Biase
 
 We provide an example script to train a model using the Nash-MD method. The script is available in [`examples/scripts/nash_md.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/nash_md.py)
 
-To test the Nash-MD script with the [Pythia 14M model](https://huggingface.co/EleutherAI/pythia-14m) on the TL;DR summarization task, run the following command:
+To test the online DPO script with the [Qwen2.5 0.5B model](https://huggingface.co/trl-lib/Qwen/Qwen2.5-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback), run the following command:
 
 ```bash
 python examples/scripts/nash_md.py \
-    --model_name_or_path EleutherAI/pythia-14m  \
-    --reward_model_path EleutherAI/pythia-14m \
-    --dataset_name trl-lib/tldr \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --judge pair_rm \
+    --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --output_dir pythia-14m-tldr-nash-md \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 32 \
-    --num_train_epochs 3 \
-    --max_new_tokens 64 \
+    --logging_steps 25 \
+    --output_dir Qwen2.5-0.5B-NashMD-PairRM \
     --warmup_ratio 0.1 \
-    --missing_eos_penalty 1.0 \
     --push_to_hub
 ```
 
@@ -116,6 +140,7 @@ The logged metrics are as follows:
 * `loss/score`: The mean reinforce score loss.
 * `rewards/chosen`: The mean scores (according to the reward model) of the model completions.
 * `rewards/rejected`: The mean scores (according to the reward model) of the mixture completions.
+* `rewards/probabilities`: The mean probability (according to the reward model or judge) of the model completions chosen vs the mixture completion.
 * `rewards/accuracies`: The accuracies of the Nash-MD's implicit reward model.
 * `rewards/margins`: The mean reward margin (according to reward model) between the chosen and mixture completions.
 * `logps/chosen`: The mean log probabilities of the chosen completions.
