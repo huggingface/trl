@@ -19,9 +19,8 @@ https://github.com/allenai/allennlp.
 import os
 from datetime import datetime as dt
 from datetime import timezone
-
 from github import Github
-
+from github.GithubException import GithubException, RateLimitExceededException
 
 LABELS_TO_EXEMPT = [
     "good first issue",
@@ -32,27 +31,43 @@ LABELS_TO_EXEMPT = [
 
 
 def main():
-    g = Github(os.environ["GITHUB_TOKEN"])
-    repo = g.get_repo("huggingface/trl")
-    open_issues = repo.get_issues(state="open")
+    try:
+        github_token = os.environ.get("GITHUB_TOKEN")
+        if not github_token:
+            raise ValueError("GITHUB_TOKEN environment variable not set.")
+
+        g = Github(github_token)
+        repo = g.get_repo("huggingface/trl")
+        open_issues = repo.get_issues(state="open")
+    except (GithubException, ValueError) as e:
+        print(f"Error initializing GitHub connection or fetching repo: {e}")
+        return
 
     for issue in open_issues:
-        comments = sorted(issue.get_comments(), key=lambda i: i.created_at, reverse=True)
-        involved_users = [comment.user.login for comment in comments]
-        inactive_days = (dt.now(timezone.utc) - issue.updated_at).days
-        is_old = (dt.now(timezone.utc) - issue.created_at).days >= 30
-        has_comments = len([user for user in involved_users if user != "github-actions[bot]"]) > 0
-        to_exempt = any(label.name.lower() in LABELS_TO_EXEMPT for label in issue.get_labels())
-
-        if is_old and not to_exempt:
-            if has_comments and inactive_days > 23:
-                issue.create_comment(
-                    "This issue has been automatically marked as stale because it has not had "
-                    "recent activity. If you think this still needs to be addressed "
-                    "please comment on this thread.\n\n"
-                )
-            elif involved_users and involved_users[0] == "github-actions[bot]" and inactive_days > 7:
-                issue.edit(state="closed")
+        try:
+            comments = sorted(issue.get_comments(), key=lambda i: i.created_at, reverse=True)
+            involved_users = [comment.user.login for comment in comments]
+            inactive_days = (dt.now(timezone.utc) - issue.updated_at).days
+            is_old = (dt.now(timezone.utc) - issue.created_at).days >= 30
+            has_comments = len([user for user in involved_users if user != "github-actions[bot]"]) > 0
+            to_exempt = any(label.name.lower() in LABELS_TO_EXEMPT for label in issue.get_labels())
+            
+            if is_old and not to_exempt:
+                if has_comments and inactive_days > 23:
+                    issue.create_comment(
+                        "This issue has been automatically marked as stale because it has not had "
+                        "recent activity. If you think this still needs to be addressed "
+                        "please comment on this thread.\n\n"
+                    )
+                elif involved_users and involved_users[0] == "github-actions[bot]" and inactive_days > 7:
+                    issue.edit(state="closed")
+        except RateLimitExceededException as e:
+            print(f"Rate limit exceeded: {e}. Pausing the script temporarily.")
+            return
+        except GithubException as e:
+            print(f"Error processing issue #{issue.number}: {e}")
+        except Exception as e:
+            print(f"Unexpected error processing issue #{issue.number}: {e}")
 
 
 if __name__ == "__main__":
