@@ -260,10 +260,7 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         probability = self.judge.judge(
             prompts,
-            [
-                [model_completion, mixture_completion]
-                for model_completion, mixture_completion in zip(model_data_completions, mixture_data_completions)
-            ],
+            list(zip(model_data_completions, mixture_data_completions)),
             return_scores=True,
         )
         return torch.tensor(probability, device=model_data["input_ids"].device)
