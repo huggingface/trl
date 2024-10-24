@@ -144,7 +144,7 @@ def main(slack_channel_name):
             "type": "section",
             "text": {
                 "type": "plain_text",
-                "text": "🌞 No failures! All tests passed successfully.",
+                "text": "✅ No failures! All tests passed successfully.",
                 "emoji": True,
             },
         })
