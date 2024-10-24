@@ -49,9 +49,7 @@ Execute the script using the following command:
 accelerate launch train_nash_md.py
 ```
 
-Distributed across 8 GPUs, the training takes approximately 1 hour. You can verify the training progress by checking the reward graph. An increasing trend in both the reward for rejected and chosen completions indicates that the model is improving and generating better responses over time.
-
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/nashmd-qwen2.png) TODO: upload the image
+Distributed across 8 GPUs, the training takes approximately 3 hours.
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-NashMD) performs, you can use the [TRL Chat CLI](clis#chat-interface).
 
@@ -60,7 +58,7 @@ To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-NashMD)
 What is the best programming language?
 
 <strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-NashMD&gt;:</span></strong>
-TODO
+The best programming language depends on personal preference, the complexity of the project, and the specific requirements of the task. Some programming languages that are often recommended include Python, Java, and JavaScript, and there are many other languages to choose from depending on individual needs.
 </code></pre>
 
 ## Expected dataset type
