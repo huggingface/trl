@@ -26,10 +26,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--slack_channel_name", default="trl-push-ci")
 
 # Set up logging using context manager
-def setup_logging():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-setup_logging()
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def process_log_file(log):
     failed_tests = []
