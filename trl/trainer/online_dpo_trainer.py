@@ -44,7 +44,7 @@ from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
-from ..data_utils import is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
@@ -56,6 +56,7 @@ from .utils import (
     empty_cache,
     generate_model_card,
     get_reward,
+    pad,
     prepare_deepspeed,
     truncate_right,
 )
@@ -137,6 +138,7 @@ class OnlineDPOTrainer(Trainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
+        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -161,6 +163,7 @@ class OnlineDPOTrainer(Trainer):
             raise ValueError("Either `reward_model` or `judge` must be provided.")
 
         self.reward_model = reward_model
+        self.reward_processing_class = reward_processing_class
         self.judge = judge
 
         if args.missing_eos_penalty is not None and judge is not None:
@@ -428,15 +431,16 @@ class OnlineDPOTrainer(Trainer):
             ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
             del ref_output, ref_logits, ref_all_logprobs  # free memory
 
-        # Get the reward from the reward model or judge:
-        if self.judge is not None:
-            completions = self.processing_class.batch_decode(
-                prompt_completion_ids[:, context_length:], skip_special_tokens=True
-            )
-            completions = [completion.strip() for completion in completions]  # remove the leading space
+        # Decode the completions
+        completions_ids = prompt_completion_ids[:, context_length:]
+        completions = self.processing_class.batch_decode(completions_ids, skip_special_tokens=True)
+        completions = [completion.strip() for completion in completions]  # remove the leading space # MAYBE MOVE
+        if is_conversational({"prompt": prompts[0]}):
+            completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
+        # Get the reward from the reward model or judge
+        if self.judge is not None:
             if is_conversational({"prompt": prompts[0]}):
-                completions = [[{"role": "assistant", "content": completion}] for completion in completions]
                 environment = jinja2.Environment()
                 template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
                 prompts = [template.render(messages=message) for message in prompts]
@@ -451,8 +455,30 @@ class OnlineDPOTrainer(Trainer):
             # when rank == 1, it means the second completion is the best
             mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=prompt_completion_ids.device)
         else:
+            if is_conversational({"prompt": prompts[0]}):
+                examples = [{"prompt": p, "completion": c} for p, c in zip(2 * prompts, completions)]
+                examples = [apply_chat_template(example, self.reward_processing_class) for example in examples]
+                prompts = [example["prompt"] for example in examples]
+                completions = [example["completion"] for example in examples]
+            else:
+                prompts = 2 * prompts
+
+            # Tokenize the prompts
+            device = prompt_completion_ids.device
+            prompts_ids = self.reward_processing_class(prompts)["input_ids"]
+            prompts_ids = [torch.tensor(prompt_ids, device=device) for prompt_ids in prompts_ids]
+            prompts_ids = pad(prompts_ids, self.reward_processing_class.pad_token_id, padding_side="left")
+            context_length = prompts_ids.shape[1]
+
+            # Tokenize the completions
+            completions_ids = self.reward_processing_class(completions)["input_ids"]
+            completions_ids = [torch.tensor(completion_ids, device=device) for completion_ids in completions_ids]
+            completions_ids = pad(completions_ids, self.reward_processing_class.pad_token_id, padding_side="right")
+
+            # Concatenate the prompts and completions and get the reward
+            prompt_completion_ids = torch.cat((prompts_ids, completions_ids), dim=1)
             _, scores, _ = get_reward(
-                self.reward_model, prompt_completion_ids, self.processing_class.pad_token_id, context_length
+                self.reward_model, prompt_completion_ids, self.reward_processing_class.pad_token_id, context_length
             )
 
             # Filter completion. Ensure that the sample contains stop_token_id
