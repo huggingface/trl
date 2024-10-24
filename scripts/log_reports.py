@@ -112,7 +112,7 @@ def main(slack_channel_name):
         print(f"### {message}")
 
         if len(message) > MAX_LEN_MESSAGE:
-            message = f"There are {total_num_failed} failed tests in total! Please check the action results directly."
+            message = f"❌ There are {total_num_failed} failed tests in total! Please check the action results directly."
 
         payload.append({"type": "section", "text": {"type": "mrkdwn", "text": message}})
         payload.append(
