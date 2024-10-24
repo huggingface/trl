@@ -121,7 +121,7 @@ if __name__ == "__main__":
         train_dataset = prepare_dataset(train_dataset, tokenizer)
         eval_dataset = prepare_dataset(eval_dataset, tokenizer)
 
-    trainer = SyncOnlineDPOTrainer(
+    trainer = AsyncOnlineDPOTrainer(
         config=training_args,
         processing_class=tokenizer,
         policy=model,

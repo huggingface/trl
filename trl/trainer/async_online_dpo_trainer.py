@@ -109,6 +109,7 @@ class AsyncOnlineDPOTrainer(Trainer):
         args = config
         self.processing_class = processing_class
         self.policy = policy
+        self.beta = config.beta
 
         self.policy.generation_config.eos_token_id = (
             None  # disable `pad_token_id` and `eos_token_id` because we just want to
@@ -142,10 +143,6 @@ class AsyncOnlineDPOTrainer(Trainer):
         args.local_mini_batch_size = exact_div(
             args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
-        if args.whiten_rewards:
-            assert (
-                args.local_mini_batch_size >= 8
-            ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
         # `per_rank_rollout_batch_size` is our `args.local_batch_size`
         # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
         args.num_total_batches = math.ceil(
@@ -157,9 +154,9 @@ class AsyncOnlineDPOTrainer(Trainer):
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
-        self.local_dataloader_batch_size = exact_div(
-            args.local_batch_size, 2, "`local_batch_size` must be a multiple of 2"
-        )  # Online DPO logic: needed because Online DPO repeats the same prompt 2 times
+        # To be similar to online_dpo_trainer.py, our batch size refers to the number of prompts
+        # This is unlike rloo_trainer.py where batch size is prompts * rloo_k (or in our case 2)
+        self.local_dataloader_batch_size = args.local_batch_size
 
         #########
         # setup model, optimizer, and others
@@ -248,7 +245,7 @@ class AsyncOnlineDPOTrainer(Trainer):
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         backup_model = self.model
-        self.model = self.model.policy  # save only the policy
+        self.model = self.model  # save only the policy
 
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
@@ -344,7 +341,7 @@ class AsyncOnlineDPOTrainer(Trainer):
 
         data = next(iter_dataloader)
         next_queries = data["input_ids"].to(device)
-        next_queries = next_queries.repeat(args.rloo_k, 1)
+        next_queries = next_queries.repeat(2, 1)
         g_queries_list = gather_object(next_queries.tolist())
         if accelerator.is_main_process:
             g_queries_list = [
@@ -359,16 +356,13 @@ class AsyncOnlineDPOTrainer(Trainer):
             self.state.episode += 1 * args.batch_size
             data = next(iter_dataloader)
             vllm_responses = torch.zeros(
-                (args.batch_size * args.rloo_k, args.response_length),
+                (args.batch_size * 2, args.response_length),
                 device=accelerator.device,
                 dtype=torch.long,
             )
             with torch.no_grad():
                 next_queries = data["input_ids"].to(device)
-                next_queries = next_queries.repeat(args.rloo_k, 1)
-
-                if self.args.sync:
-                    queries = next_queries
+                next_queries = next_queries.repeat(2, 1)
 
                 # with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 g_queries_list = gather_object(next_queries.tolist())
@@ -449,7 +443,6 @@ class AsyncOnlineDPOTrainer(Trainer):
                 padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
 
                 # 4. compute rewards
-                rlhf_reward = scores
                 num_examples = scores.size(0) // 2
                 scores_reshaped = scores.reshape(2, num_examples).t()
 
@@ -558,12 +551,12 @@ class AsyncOnlineDPOTrainer(Trainer):
 
                             logits = pi_logratios - ref_logratios
 
-                            if self.loss_type == "sigmoid":
+                            if self.args.loss_type == "sigmoid":
                                 losses = -F.logsigmoid(self.beta * logits)
-                            elif self.loss_type == "ipo":
+                            elif self.args.loss_type == "ipo":
                                 losses = (logits - 1 / (2 * self.beta)) ** 2
                             else:
-                                raise NotImplementedError(f"invalid loss type {self.loss_type}")
+                                raise NotImplementedError(f"invalid loss type {self.args.loss_type}")
 
                             chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum).detach()
                             rejected_rewards = self.beta * (rejected_logprobs_sum - rejected_ref_logprobs_sum).detach()
@@ -626,29 +619,22 @@ class AsyncOnlineDPOTrainer(Trainer):
                     + (rejected_logprobs_stats - rejected_ref_logprobs_stats)
                 ) / 2
                 mean_kl = kl.mean()
-                self.stats["objective/kl"].append(self.accelerator.gather(mean_kl).mean().item())
-                non_score_reward = (-self.beta * kl).sum(1)
-                mean_non_score_reward = non_score_reward.mean()
-                self.stats["objective/non_score_reward"].append(
-                    self.accelerator.gather(mean_non_score_reward).mean().item()
-                )
-                rlhf_reward = scores + non_score_reward
-                self.stats["objective/rlhf_reward"].append(self.accelerator.gather(rlhf_reward).mean().item())
+                metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
+                mean_non_score_reward = (-self.beta * kl).mean()
+                metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
+                mean_rlhf_reward = scores.mean() + mean_non_score_reward
+                metrics["objective/rlhf_reward"] = self.accelerator.gather(mean_rlhf_reward).mean().item()
                 logprobs_sum = (chosen_logprobs_stats + rejected_logprobs_stats) / 2
                 mean_entropy = -logprobs_sum.mean()
-                self.stats["objective/entropy"].append(self.accelerator.gather(mean_entropy).mean().item())
-                self.stats["objective/scores_margin"].append(
-                    self.accelerator.gather(scores_margin.mean()).mean().item()
-                )
-                self.stats["rewards/chosen"].append(self.accelerator.gather(chosen_reward_stats.mean()).mean().item())
-                self.stats["rewards/rejected"].append(
-                    self.accelerator.gather(rejected_reward_stats.mean()).mean().item()
-                )
+                metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
+                metrics["objective/scores_margin"] = self.accelerator.gather(scores_margin.mean()).mean().item()
+                metrics["rewards/chosen"] = self.accelerator.gather(chosen_reward_stats.mean()).mean().item()
+                metrics["rewards/rejected"] = self.accelerator.gather(rejected_reward_stats.mean()).mean().item()
                 margin = chosen_reward_stats - rejected_reward_stats
-                self.stats["rewards/margins"].append(self.accelerator.gather(margin.mean()).mean().item())
+                metrics["rewards/margins"] = self.accelerator.gather(margin.mean()).mean().item()
                 accuracy = margin > 0
-                self.stats["rewards/accuracies"].append(self.accelerator.gather(accuracy.float().mean()).mean().item())
-                self.stats["beta"].append(self.beta)
+                metrics["rewards/accuracies"] = self.accelerator.gather(accuracy.float().mean()).mean().item()
+                metrics["beta"] = self.beta
 
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
                 self.state.global_step += 1
@@ -659,7 +645,7 @@ class AsyncOnlineDPOTrainer(Trainer):
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None, metrics=metrics)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
-            del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
+            del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, mean_rlhf_reward
             torch.cuda.empty_cache()
             gc.collect()
 
@@ -702,7 +688,7 @@ class AsyncOnlineDPOTrainer(Trainer):
                 with torch.no_grad():
                     context_length = query.shape[1]
                     query_response, _ = batch_generation(
-                        unwrapped_model.policy,
+                        unwrapped_model,
                         query,
                         query.shape[0],
                         processing_class.pad_token_id,
