@@ -44,6 +44,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
 from trl import (
+    HfPairwiseJudge,
     LogCompletionsCallback,
     ModelConfig,
     OnlineDPOConfig,
@@ -59,7 +60,7 @@ from trl import (
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
-JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge}
+JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig))
