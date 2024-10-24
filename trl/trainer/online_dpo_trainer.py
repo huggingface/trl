@@ -19,6 +19,7 @@ from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import datasets
+import jinja2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,25 +28,29 @@ from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainerCallback,
     is_apex_available,
     is_wandb_available,
 )
-from transformers.modeling_utils import PreTrainedModel
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
-from ..data_utils import maybe_apply_chat_template
+from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
+    SIMPLE_CHAT_TEMPLATE,
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     empty_cache,
@@ -100,8 +105,10 @@ class OnlineDPOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         peft_config (`Dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
@@ -127,7 +134,9 @@ class OnlineDPOTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset], "datasets.Dataset"]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -147,20 +156,22 @@ class OnlineDPOTrainer(Trainer):
                 "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
                 "Ignoring `judge` and using `reward_model`."
             )
+            judge = None
         elif reward_model is None and judge is None:
             raise ValueError("Either `reward_model` or `judge` must be provided.")
-        elif reward_model is None and judge is not None:
-            raise NotImplementedError("Using `judge` is not yet supported.")
 
         self.reward_model = reward_model
         self.judge = judge
 
+        if args.missing_eos_penalty is not None and judge is not None:
+            raise ValueError("`missing_eos_penalty` is not supported when `judge` is provided.")
+
         if args is None:
             raise ValueError("`args` must be provided.")
 
-        # Check that the tokenizer is provided
-        if tokenizer is None:
-            raise ValueError("`tokenizer` must be provided.")
+        # Check that the processing_class is provided
+        if processing_class is None:
+            raise ValueError("`processing_class` must be provided.")
 
         # Convert to PEFT model if peft_config is provided
         if peft_config is not None:
@@ -202,15 +213,12 @@ class OnlineDPOTrainer(Trainer):
 
         # Define the collator is not provided
         if data_collator is None:
-            data_collator = DPODataCollatorWithPadding(pad_token_id=tokenizer.pad_token_id)
+            data_collator = DPODataCollatorWithPadding(pad_token_id=processing_class.pad_token_id)
 
         self.stats = {
             "objective/kl": [],
             "objective/entropy": [],
             "objective/non_score_reward": [],
-            "objective/rlhf_reward": [],
-            "objective/scores": [],
-            "objective/scores_margin": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
             "rewards/accuracies": [],
@@ -220,6 +228,10 @@ class OnlineDPOTrainer(Trainer):
             "val/contain_eos_token": [],
             "beta": [],
         }
+        if self.reward_model is not None:
+            self.stats["objective/rlhf_reward"] = []
+            self.stats["objective/scores_margin"] = []
+            self.stats["objective/scores"] = []
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
@@ -236,7 +248,7 @@ class OnlineDPOTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
@@ -359,18 +371,21 @@ class OnlineDPOTrainer(Trainer):
 
         return self.accelerator.prepare(eval_dataloader)
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(
+        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+    ) -> torch.Tensor:
         model.train()
 
         # Apply chat template and tokenize the input.
         # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
         batch_size = len(next(iter(inputs.values())))
+        prompts = inputs["prompt"]
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
-        inputs = [maybe_apply_chat_template(x, self.tokenizer) for x in inputs]
-        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.tokenizer) for x in inputs]
+        inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
+        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
         inputs = self.data_collator(inputs)
 
-        # Sample 2 completations per prompt of size `max_new_tokens` from the model
+        # Sample 2 completions per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
         num_examples, context_length = inputs["prompt_input_ids"].shape
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
@@ -385,8 +400,9 @@ class OnlineDPOTrainer(Trainer):
 
         completion_ids = output[:, context_length:]
         completion_ids, completion_mask = truncate_right(
-            completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+            completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
+        contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
 
@@ -412,23 +428,45 @@ class OnlineDPOTrainer(Trainer):
             ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
             del ref_output, ref_logits, ref_all_logprobs  # free memory
 
-            # Get the reward from the reward model
-            _, scores, _ = get_reward(
-                self.reward_model, prompt_completion_ids, self.tokenizer.pad_token_id, context_length
+        # Get the reward from the reward model or judge:
+        if self.judge is not None:
+            completions = self.processing_class.batch_decode(
+                prompt_completion_ids[:, context_length:], skip_special_tokens=True
+            )
+            completions = [completion.strip() for completion in completions]  # remove the leading space
+
+            if is_conversational({"prompt": prompts[0]}):
+                completions = [[{"role": "assistant", "content": completion}] for completion in completions]
+                environment = jinja2.Environment()
+                template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
+                prompts = [template.render(messages=message) for message in prompts]
+                completions = [template.render(messages=completion) for completion in completions]
+
+            ranks_of_first_completion = self.judge.judge(
+                prompts, list(zip(completions[:num_examples], completions[num_examples:]))
             )
 
-        # Filter completion. Ensure that the sample contains stop_token_id
-        # Completions not passing that filter will receive a lower score.
-        contain_eos_token = torch.any(completion_ids == self.tokenizer.eos_token_id, dim=-1)
-        if self.args.missing_eos_penalty is not None:
-            scores[~contain_eos_token] -= self.args.missing_eos_penalty
+            # convert ranks to a True/False mask:
+            # when rank == 0, it means the first completion is the best
+            # when rank == 1, it means the second completion is the best
+            mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=prompt_completion_ids.device)
+        else:
+            _, scores, _ = get_reward(
+                self.reward_model, prompt_completion_ids, self.processing_class.pad_token_id, context_length
+            )
 
-        # Split the scores in 2 (the prompts of the first half are the same as the second half)
-        first_half, second_half = scores.split(num_examples)
+            # Filter completion. Ensure that the sample contains stop_token_id
+            # Completions not passing that filter will receive a lower score.
+            if self.args.missing_eos_penalty is not None:
+                scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
-        # Get the indices of the chosen and rejected examples
-        num_examples_range = torch.arange(num_examples, device=scores.device)
-        mask = first_half >= second_half
+            # Split the scores in 2 (the prompts of the first half are the same as the second half)
+            first_half, second_half = scores.split(num_examples)
+
+            # Get the indices of the chosen and rejected examples
+            mask = first_half >= second_half
+
+        num_examples_range = torch.arange(num_examples, device=prompt_completion_ids.device)
         chosen_indices = num_examples_range + (~mask * num_examples)
         rejected_indices = num_examples_range + (mask * num_examples)
 
@@ -462,22 +500,25 @@ class OnlineDPOTrainer(Trainer):
         loss = losses.mean()
 
         # Log everything
+        if self.reward_model is not None:
+            scores_margin = scores[chosen_indices] - scores[rejected_indices]
+            self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
+            self.stats["objective/scores"].append(self.accelerator.gather(scores.mean()).mean().item())
         self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
         self.stats["logps/chosen"].append(self.accelerator.gather(chosen_logprobs_sum).mean().item())
         self.stats["logps/rejected"].append(self.accelerator.gather(rejected_logprobs_sum).mean().item())
-        self.stats["objective/scores"].append(self.accelerator.gather(scores.mean()).mean().item())
+
         kl = logprobs - ref_logprobs
         mean_kl = kl.sum(1).mean()
         self.stats["objective/kl"].append(self.accelerator.gather(mean_kl).mean().item())
         non_score_reward = (-self.beta * kl).sum(1)
         mean_non_score_reward = non_score_reward.mean()
         self.stats["objective/non_score_reward"].append(self.accelerator.gather(mean_non_score_reward).mean().item())
-        rlhf_reward = scores + non_score_reward
-        self.stats["objective/rlhf_reward"].append(self.accelerator.gather(rlhf_reward).mean().item())
+        if self.reward_model is not None:
+            rlhf_reward = scores + non_score_reward
+            self.stats["objective/rlhf_reward"].append(self.accelerator.gather(rlhf_reward).mean().item())
         mean_entropy = -logprobs.sum(1).mean()
         self.stats["objective/entropy"].append(self.accelerator.gather(mean_entropy).mean().item())
-        scores_margin = scores[chosen_indices] - scores[rejected_indices]
-        self.stats["objective/scores_margin"].append(self.accelerator.gather(scores_margin.mean()).mean().item())
         chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
         gathered_chosen_rewards = self.accelerator.gather(chosen_rewards)
         self.stats["rewards/chosen"].append(gathered_chosen_rewards.mean().item())
@@ -572,6 +613,13 @@ class OnlineDPOTrainer(Trainer):
             base_model = self.model.config._name_or_path
         else:
             base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
 
         citation = textwrap.dedent("""\
         @article{guo2024direct,

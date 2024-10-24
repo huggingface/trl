@@ -1,5 +1,7 @@
 # RLOO Trainer
 
+[![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
+
 TRL supports training LLMs with REINFORCE Leave-One-Out (RLOO). The idea is that instead of using a value function, RLOO generates K completions for each prompt. For each completion, RLOO uses the mean scores from the other K-1 completions as a baseline to calculate the advantage. RLOO also models the entire completion as a single action, where as PPO models each token as an action. Note that REINFORCE / A2C is a special case of PPO, when the number of PPO epochs is 1 and the number of mini-batches is 1, which is how we implement RLOO in TRL.
 
 References:
@@ -16,6 +18,8 @@ To just run a RLOO script to make sure the trainer can run, you can run the foll
 
 ```bash
 python examples/scripts/rloo/rloo.py \
+    --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --output_dir models/minimal/rloo \
     --per_device_train_batch_size 64 \
@@ -208,8 +212,9 @@ To validate the RLOO implementation works, we ran experiment on the 1B model. He
 
 ```
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/rloo/rloo_tldr.py \
     --output_dir models/minimal/rloo_tldr \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_test_split validation \
     --num_ppo_epochs 2 \
     --num_mini_batches 2 \
     --learning_rate 3e-6 \

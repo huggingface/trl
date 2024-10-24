@@ -17,6 +17,7 @@ In general, the optimal configuration for CPO will be similar to that of DPO:
 
 # regular:
 python examples/scripts/cpo.py \
+    --dataset_name trl-lib/ultrafeedback_binarized \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
@@ -33,6 +34,7 @@ python examples/scripts/cpo.py \
 
 # peft:
 python examples/scripts/cpo.py \
+    --dataset_name trl-lib/ultrafeedback_binarized \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
@@ -52,22 +54,11 @@ python examples/scripts/cpo.py \
     --lora_alpha=16
 """
 
-from dataclasses import dataclass, field
-
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import CPOConfig, CPOTrainer, ModelConfig, get_peft_config
+from trl import CPOConfig, CPOTrainer, ModelConfig, ScriptArguments, get_peft_config
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
-
-
-@dataclass
-class ScriptArguments:
-    dataset_name: str = field(
-        default="trl-internal-testing/hh-rlhf-helpful-base-trl-style",
-        metadata={"help": "The name of the dataset to use."},
-    )
 
 
 if __name__ == "__main__":
@@ -93,25 +84,15 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
-    def process(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
-        return row
-
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(process, num_proc=training_args.dataset_num_proc)
-
     ################
     # Training
     ################
     trainer = CPOTrainer(
         model,
         args=training_args,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset["test"],
-        tokenizer=tokenizer,
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split],
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_config),
     )
 

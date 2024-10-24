@@ -35,6 +35,7 @@ from transformers import (
 from transformers.integrations import WandbCallback
 from transformers.trainer_utils import has_length
 
+from ..data_utils import maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 
@@ -255,7 +256,7 @@ class WinRateCallback(TrainerCallback):
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # When the trainer is initialized, we generate completions for the reference model.
-        tokenizer = kwargs["tokenizer"]
+        tokenizer = kwargs["processing_class"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         # Use the reference model if available, otherwise use the initial model
@@ -307,7 +308,7 @@ class WinRateCallback(TrainerCallback):
         # At every evaluation step, we generate completions for the model and compare them with the reference
         # completions that have been generated at the beginning of training. We then compute the win rate and log it to
         # the trainer.
-        tokenizer = kwargs["tokenizer"]
+        tokenizer = kwargs["processing_class"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
@@ -401,11 +402,12 @@ class LogCompletionsCallback(WandbCallback):
         if state.global_step % freq != 0:
             return
 
-        tokenizer = kwargs["tokenizer"]
+        tokenizer = kwargs["processing_class"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
+            prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
             completions = _generate_completions(
                 prompts,
                 model=model,

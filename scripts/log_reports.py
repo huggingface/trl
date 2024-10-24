@@ -13,6 +13,7 @@
 # limitations under the License.
 import argparse
 import json
+import logging
 import os
 from datetime import date
 from pathlib import Path
@@ -24,6 +25,9 @@ MAX_LEN_MESSAGE = 2900  # slack endpoint has a limit of 3001 characters
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--slack_channel_name", default="trl-push-ci")
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 
 
 def main(slack_channel_name=None):
@@ -40,25 +44,31 @@ def main(slack_channel_name=None):
     for log in Path().glob("*.log"):
         section_num_failed = 0
         i = 0
-        with open(log) as f:
-            for line in f:
-                line = json.loads(line)
-                i += 1
-                if line.get("nodeid", "") != "":
-                    test = line["nodeid"]
-                    if line.get("duration", None) is not None:
-                        duration = f'{line["duration"]:.4f}'
-                        if line.get("outcome", "") == "failed":
-                            section_num_failed += 1
-                            failed.append([test, duration, log.name.split("_")[0]])
-                            total_num_failed += 1
-                        else:
-                            passed.append([test, duration, log.name.split("_")[0]])
+        try:  # Added error handling for file operations
+            with open(log) as f:
+                for line in f:
+                    line = json.loads(line)
+                    i += 1
+                    if line.get("nodeid", "") != "":
+                        test = line["nodeid"]
+                        if line.get("duration", None) is not None:
+                            duration = f'{line["duration"]:.4f}'
+                            if line.get("outcome", "") == "failed":
+                                section_num_failed += 1
+                                failed.append([test, duration, log.name.split("_")[0]])
+                                total_num_failed += 1
+                            else:
+                                passed.append([test, duration, log.name.split("_")[0]])
             empty_file = i == 0
-        group_info.append([str(log), section_num_failed, failed])
-        total_empty_files.append(empty_file)
-        os.remove(log)
-        failed = []
+        except Exception as e:  # Catch any exceptions during file processing
+            logging.error(f"Error processing log file {log}: {e}")
+        else:
+            group_info.append([str(log), section_num_failed, failed])
+            total_empty_files.append(empty_file)
+        finally:
+            os.remove(log)
+            failed = []
+
     no_error_payload = {
         "type": "section",
         "text": {
@@ -104,6 +114,7 @@ def main(slack_channel_name=None):
 
             if total_empty_files[i]:
                 message += f"\n*{name}: Warning! Empty file - please check the GitHub action job *\n"
+        logging.info(f"Total failed tests: {total_num_failed}")  # Log the total failed tests
         print(f"### {message}")
     else:
         payload.append(no_error_payload)

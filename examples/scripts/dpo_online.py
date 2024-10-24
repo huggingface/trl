@@ -44,11 +44,14 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
 from trl import (
-    DPOScriptArguments,
+    HfPairwiseJudge,
     LogCompletionsCallback,
     ModelConfig,
     OnlineDPOConfig,
     OnlineDPOTrainer,
+    OpenAIPairwiseJudge,
+    PairRMJudge,
+    ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
@@ -57,8 +60,10 @@ from trl import (
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
+JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}
+
 if __name__ == "__main__":
-    parser = TrlParser((DPOScriptArguments, OnlineDPOConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
     script_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
@@ -81,12 +86,21 @@ if __name__ == "__main__":
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
 
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path,
-        num_labels=1,
-        trust_remote_code=model_config.trust_remote_code,
-        **model_kwargs,
-    )
+    if training_args.reward_model_path is not None:
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            training_args.reward_model_path,
+            num_labels=1,
+            trust_remote_code=model_config.trust_remote_code,
+            **model_kwargs,
+        )
+    else:
+        reward_model = None
+
+    if training_args.judge is not None:
+        judge_cls = JUDGES[training_args.judge]
+        judge = judge_cls()
+    else:
+        judge = None
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
@@ -104,10 +118,11 @@ if __name__ == "__main__":
     trainer = OnlineDPOTrainer(
         model=model,
         reward_model=reward_model,
+        judge=judge,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_config),
     )
     generation_config = GenerationConfig(

@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer
+from trl import OnlineDPOConfig, OnlineDPOTrainer, PairRMJudge, is_llmblender_available
 
 
 if is_peft_available():
@@ -53,7 +53,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 model=self.model,
                 reward_model=self.reward_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -79,7 +79,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -104,7 +104,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                     model=self.model,
                     ref_model=self.model,  # ref_model can't be the same as model
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                 )
 
@@ -126,7 +126,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 model=self.model,
                 reward_model=self.reward_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -156,7 +156,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -188,12 +188,38 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 model=model,
                 reward_model=self.reward_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_train_config,
             )
 
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
+    def test_training_with_judge(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+            trainer = OnlineDPOTrainer(
+                model=self.model,
+                judge=PairRMJudge(),
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
             trainer.train()
 
             # Check if training loss is available
