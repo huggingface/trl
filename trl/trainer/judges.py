@@ -142,7 +142,7 @@ class BaseBinaryJudge(BaseJudge):
 
     @abstractmethod
     def judge(
-        self, prompts: List[str], completions: List[str], gold_answers: List[str] = None, shuffle_order: bool = True
+        self, prompts: List[str], completions: List[str], gold_answers: Optional[List[str]] = None, shuffle_order: bool = True
     ) -> List[int]:
         """
         Judge the completion for a given prompt. Used to assess if a completion satisfies a constraint.
