@@ -77,7 +77,7 @@ __version__ = "0.12.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc
 
 REQUIRED_PKGS = [
     "torch>=1.4.0",
-    "transformers>=4.40.0",
+    "transformers>=4.46.0",
     "numpy>=1.18.2;platform_system!='Windows'",
     "numpy<2;platform_system=='Windows'",
     "accelerate",
