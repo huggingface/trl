@@ -84,6 +84,8 @@ def setup_chat_format(
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
+    If the model already has a chat template, this will throw an error. If you want to overwrite it, please set `tokenizer.chat_template` to `None`.
+
     Args:
         model (`~transformers.PreTrainedModel`): The model to be modified.
         tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
@@ -94,6 +96,12 @@ def setup_chat_format(
         model (`~transformers.PreTrainedModel`): The modified model.
         tokenizer (`~transformers.PreTrainedTokenizer`): The modified tokenizer.
     """
+    # check if model already had a chat template
+    if tokenizer.chat_template is not None:
+        raise ValueError(
+            "Chat template is already added to the tokenizer. If you want to overwrite it, please set it to None"
+        )
+
     # check if format available and retrieve
     if format not in FORMAT_MAPPING:
         raise ValueError(f"Format {format} not available. Please use one of {FORMAT_MAPPING.keys()}")
