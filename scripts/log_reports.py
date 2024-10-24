@@ -26,7 +26,7 @@ MAX_LEN_MESSAGE = 2900  # Slack endpoint has a limit of 3001 characters
 parser = argparse.ArgumentParser()
 parser.add_argument("--slack_channel_name", default="trl-push-ci")
 
-# Setup logging
+# Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
