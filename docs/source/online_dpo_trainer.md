@@ -54,7 +54,7 @@ Distributed across 8 GPUs, the training takes approximately 1 hour. You can veri
 ![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/online-dpo-qwen2.png)
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-OnlineDPO) performs, you can use the [TRL Chat CLI](clis#chat-interface).
-#TODO: fill the demo below when the training is done.
+
 <pre><code>$ trl chat --model_name_or_path trl-lib/Qwen2-0.5B-OnlineDPO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
