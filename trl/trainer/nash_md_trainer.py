@@ -297,20 +297,19 @@ class NashMDTrainer(OnlineDPOTrainer):
         ref_logprobs_model_data,
         probability,
     ):
-        # Compute log probs
-        model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
-        ref_logprobs_model_data_sum = ref_logprobs_model_data.sum(1)
-
         # reinforce score where 0.5 is a control variate
-        score = (probability - 0.5) * model_logprobs_model_data_sum
+        score = (probability - 0.5) * model_logprobs_model_data.sum(1)
 
-        # kl divergence
-        kl_div = model_logprobs_model_data_sum - ref_logprobs_model_data_sum
+        # kl divergence via reinforce
+        with torch.no_grad():
+            log_ratio = model_logprobs_model_data - ref_logprobs_model_data
+            kl_div_log = log_ratio.sum(1)
+        kl_div_loss = (log_ratio * model_logprobs_model_data).sum(1)
 
         # final loss
-        loss = self.beta * kl_div - score
+        loss = self.beta * kl_div_loss - score
 
-        return loss.mean(), score, kl_div
+        return loss.mean(), score, kl_div_log
 
     def _log_statistics(
         self,
