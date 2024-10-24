@@ -16,6 +16,7 @@ import os
 import textwrap
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import jinja2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,13 +34,13 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_apex_available
 
-from ..data_utils import maybe_apply_chat_template
+from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import decode_and_strip_padding, empty_cache, generate_model_card, get_reward, truncate_right
+from .utils import SIMPLE_CHAT_TEMPLATE, empty_cache, generate_model_card, get_reward, truncate_right
 
 
 if is_apex_available():
@@ -196,6 +197,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         model_data = {
             "input_ids": torch.cat((prompts["input_ids"], model_completion_ids), dim=1),
             "attention_mask": torch.cat((prompts["attention_mask"], model_completion_mask), dim=1),
+            "raw": prompts["raw"],
         }
 
         # Process reference model completions
@@ -206,6 +208,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         mixture_data = {
             "input_ids": torch.cat((prompts["input_ids"], mixture_completion_ids), dim=1),
             "attention_mask": torch.cat((prompts["attention_mask"], mixture_completion_mask), dim=1),
+            "raw": prompts["raw"],
         }
 
         return model_data, mixture_data
@@ -229,13 +232,32 @@ class NashMDTrainer(OnlineDPOTrainer):
         return model_scores, mixture_scores
 
     def _compute_judge(self, model_data, mixture_data, context_length):
-        prompts = decode_and_strip_padding(model_data["input_ids"][:, :context_length], self.processing_class)
-        model_data_completions = decode_and_strip_padding(
-            model_data["input_ids"][:, context_length:], self.processing_class
+        prompts = model_data["raw"]
+        model_data_completions = self.processing_class.batch_decode(
+            model_data["input_ids"][:, context_length:], skip_special_tokens=True
         )
-        mixture_data_completions = decode_and_strip_padding(
-            mixture_data["input_ids"][:, context_length:], self.processing_class
+        model_data_completions = [completion.strip() for completion in model_data_completions]
+
+        mixture_data_completions = self.processing_class.batch_decode(
+            mixture_data["input_ids"][:, context_length:], skip_special_tokens=True
         )
+        mixture_data_completions = [completion.strip() for completion in mixture_data_completions]
+        if is_conversational({"prompt": prompts[0]}):
+            model_data_completions = [
+                [{"role": "assistant", "content": completion}] for completion in model_data_completions
+            ]
+            environment = jinja2.Environment()
+            template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
+            prompts = [template.render(messages=message) for message in prompts]
+            model_data_completions = [template.render(messages=completion) for completion in model_data_completions]
+
+            mixture_data_completions = [
+                [{"role": "assistant", "content": completion}] for completion in mixture_data_completions
+            ]
+            mixture_data_completions = [
+                template.render(messages=completion) for completion in mixture_data_completions
+            ]
+
         probability = self.judge.judge(
             prompts,
             [
@@ -359,6 +381,7 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         # Apply chat template and tokenize the input
         batch_size = len(next(iter(inputs.values())))
+        prompts = inputs["prompt"]
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
         inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
         inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
@@ -370,6 +393,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         prompts = {
             "input_ids": inputs["prompt_input_ids"],
             "attention_mask": inputs["prompt_attention_mask"],
+            "raw": prompts,
         }
         del inputs
 

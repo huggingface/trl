@@ -16,6 +16,7 @@ import os
 import textwrap
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import jinja2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,11 +34,11 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 
-from ..data_utils import maybe_apply_chat_template
+from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import decode_and_strip_padding, empty_cache, generate_model_card, get_reward, truncate_right
+from .utils import SIMPLE_CHAT_TEMPLATE, empty_cache, generate_model_card, get_reward, truncate_right
 from .xpo_config import XPOConfig
 
 
@@ -191,6 +192,7 @@ class XPOTrainer(OnlineDPOTrainer):
         model_data = {
             "input_ids": torch.cat((prompts["input_ids"], model_completion_ids), dim=1),
             "attention_mask": torch.cat((prompts["attention_mask"], model_completion_mask), dim=1),
+            "raw": prompts["raw"],
         }
 
         # Process reference model completions
@@ -201,6 +203,7 @@ class XPOTrainer(OnlineDPOTrainer):
         ref_data = {
             "input_ids": torch.cat((prompts["input_ids"], ref_completion_ids), dim=1),
             "attention_mask": torch.cat((prompts["attention_mask"], ref_completion_mask), dim=1),
+            "raw": prompts["raw"],
         }
 
         return model_data, ref_data
@@ -224,21 +227,39 @@ class XPOTrainer(OnlineDPOTrainer):
         return model_scores, ref_scores
 
     def _compute_judge(self, model_data, ref_data, context_length):
-        prompts = decode_and_strip_padding(model_data["input_ids"][:, :context_length], self.processing_class)
-        model_data_completions = decode_and_strip_padding(
-            model_data["input_ids"][:, context_length:], self.processing_class
+        prompts = model_data["raw"]
+        model_data_completions = self.processing_class.batch_decode(
+            model_data["input_ids"][:, context_length:], skip_special_tokens=True
         )
-        ref_data_completions = decode_and_strip_padding(
-            ref_data["input_ids"][:, context_length:], self.processing_class
+        model_data_completions = [completion.strip() for completion in model_data_completions]
+
+        ref_data_completions = self.processing_class.batch_decode(
+            ref_data["input_ids"][:, context_length:], skip_special_tokens=True
         )
-        ranks = self.judge.judge(
+        ref_data_completions = [completion.strip() for completion in ref_data_completions]
+
+        if is_conversational({"prompt": prompts[0]}):
+            model_data_completions = [
+                [{"role": "assistant", "content": completion}] for completion in model_data_completions
+            ]
+            environment = jinja2.Environment()
+            template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
+            prompts = [template.render(messages=message) for message in prompts]
+            model_data_completions = [template.render(messages=completion) for completion in model_data_completions]
+
+            ref_data_completions = [
+                [{"role": "assistant", "content": completion}] for completion in ref_data_completions
+            ]
+            ref_data_completions = [template.render(messages=completion) for completion in ref_data_completions]
+
+        ranks_of_first_completion = self.judge.judge(
             prompts,
-            [
-                [model_completion, ref_completion]
-                for model_completion, ref_completion in zip(model_data_completions, ref_data_completions)
-            ],
+            list(zip(model_data_completions, ref_data_completions)),
         )
-        return torch.tensor([rank == 0 for rank in ranks], device=model_data["input_ids"].device)
+        # convert ranks to a True/False mask:
+        # when rank == 0, it means the first completion is the best
+        # when rank == 1, it means the second completion is the best
+        return torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=model_data["input_ids"].device)
 
     def _compute_logprobs(self, model, model_data, ref_data, context_length):
         def compute_logprobs_for_data(m, data):
@@ -403,6 +424,7 @@ class XPOTrainer(OnlineDPOTrainer):
 
         # Apply chat template and tokenize the input
         batch_size = len(next(iter(inputs.values())))
+        prompts = inputs["prompt"]
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
         inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
         inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
@@ -414,6 +436,7 @@ class XPOTrainer(OnlineDPOTrainer):
         prompts = {
             "input_ids": inputs["prompt_input_ids"],
             "attention_mask": inputs["prompt_attention_mask"],
+            "raw": prompts,
         }
         del inputs
 
