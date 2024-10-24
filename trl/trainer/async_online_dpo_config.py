@@ -36,13 +36,12 @@ class AsyncOnlineDPOConfig(OnPolicyConfig):
         learning_rate (`float`, *optional*, defaults to `5e-7`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        reward_model_path (`Optional[str]`, *optional*, defaults to `None`):
+        reward_model_path (`str`, defaults to `None`):
             Path to the reward model.
-        beta (`float` or `list[float]`, *optional*, defaults to `0.1`):
+        beta (`float`, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
-            the [paper](https://huggingface.co/papers/2310.12036). If a list of floats is provided then the β is
-            selected for each new epoch and the last β is used for the rest of the epochs.
+            the [paper](https://huggingface.co/papers/2310.12036).
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
@@ -60,7 +59,7 @@ class AsyncOnlineDPOConfig(OnPolicyConfig):
     num_ppo_epochs: int = 1
     learning_rate: float = 5e-7
     reward_model_path: str = None
-    beta: List[float] = field(default_factory=lambda: [0.1])
+    beta: float = 0.1
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
 
     vllm_device: str | None = None
