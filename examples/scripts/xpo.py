@@ -34,8 +34,11 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
 from trl import (
+    HfPairwiseJudge,
     LogCompletionsCallback,
     ModelConfig,
+    OpenAIPairwiseJudge,
+    PairRMJudge,
     ScriptArguments,
     TrlParser,
     XPOConfig,
@@ -44,6 +47,9 @@ from trl import (
     get_quantization_config,
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
+
+JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}
 
 
 if __name__ == "__main__":
@@ -72,9 +78,23 @@ if __name__ == "__main__":
     ref_model = AutoModelForCausalLM.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path, num_labels=1, trust_remote_code=model_config.trust_remote_code
-    )
+
+    if training_args.reward_model_path is not None:
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            training_args.reward_model_path,
+            num_labels=1,
+            trust_remote_code=model_config.trust_remote_code,
+            **model_kwargs,
+        )
+    else:
+        reward_model = None
+
+    if training_args.judge is not None:
+        judge_cls = JUDGES[training_args.judge]
+        judge = judge_cls()
+    else:
+        judge = None
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         padding_side="left",
@@ -91,6 +111,7 @@ if __name__ == "__main__":
         model=model,
         ref_model=ref_model,
         reward_model=reward_model,
+        judge=judge,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
