@@ -138,10 +138,6 @@ class XPOTrainer(OnlineDPOTrainer):
             "loss/xpo": [],
             "objective/kl": [],
             "objective/entropy": [],
-            # Replace "scores" by "model_scores" and "ref_scores"
-            "objective/model_scores": [],
-            "objective/ref_scores": [],
-            "objective/scores_margin": [],
             "rewards/chosen": [],
             "rewards/rejected": [],
             "rewards/accuracies": [],
@@ -154,6 +150,11 @@ class XPOTrainer(OnlineDPOTrainer):
             "alpha": [],
             "beta": [],
         }
+        if self.reward_model is not None:
+            # Replace "scores" by "model_scores" and "ref_scores"
+            self.stats["objective/model_scores"] = []
+            self.stats["objective/ref_scores"] = []
+            self.stats["objective/scores_margin"] = []
 
     @property
     def alpha(self):
