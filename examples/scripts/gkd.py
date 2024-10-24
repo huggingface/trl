@@ -42,6 +42,21 @@ python examples/scripts/gkd.py \
     --use_peft \
     --lora_r 64 \
     --lora_alpha 16
+
+# ULD
+python examples/scripts/gkd.py \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --teacher_model_name_or_path google/gemma-2-2b-it \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --output_dir gkd-model \
+    --logging_steps 10 \
+    --num_train_epochs 1 \
+    --push_to_hub \
+    --gradient_checkpointing \
+    --torch_dtype bfloat16
 """
 
 from accelerate import PartialState
@@ -75,7 +90,7 @@ if __name__ == "__main__":
         attn_implementation=model_config.attn_implementation,
         torch_dtype=model_config.torch_dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        device_map=get_kbit_device_map() if quantization_config is not None else "auto",
         quantization_config=quantization_config,
     )
     training_args.model_init_kwargs = model_kwargs
@@ -86,7 +101,7 @@ if __name__ == "__main__":
         attn_implementation=model_config.attn_implementation,
         torch_dtype=model_config.torch_dtype,
         use_cache=True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        device_map=get_kbit_device_map() if quantization_config is not None else "auto",
         quantization_config=quantization_config,
     )
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
@@ -99,6 +114,14 @@ if __name__ == "__main__":
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+
+    teacher_tokenizer = AutoTokenizer.from_pretrained(
+        training_args.teacher_model_name_or_path,
+        revision=model_config.model_revision,
+        trust_remote_code=model_config.trust_remote_code,
+    )
+    if teacher_tokenizer.pad_token is None:
+        teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
 
     ################
     # Dataset
@@ -123,6 +146,7 @@ if __name__ == "__main__":
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
         processing_class=tokenizer,
+        teacher_processing_class=teacher_tokenizer,
         peft_config=get_peft_config(model_config),
     )
     completions_callback = LogCompletionsCallback(trainer, trainer.generation_config, num_prompts=8)

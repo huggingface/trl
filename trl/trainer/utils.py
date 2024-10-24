@@ -242,6 +242,7 @@ class DataCollatorForChatML:
     """
 
     tokenizer: PreTrainedTokenizerBase
+    teacher_tokenizer: Optional[PreTrainedTokenizerBase] = None
     ignore_index: int = -100
     max_length: int = None
     prompt_key: str = "prompt"
@@ -250,9 +251,15 @@ class DataCollatorForChatML:
     def __post_init__(self):
         if self.tokenizer.pad_token_id is None:
             raise ValueError("The tokenizer does not have a pad token. Please set `pad_token_id` in the tokenizer.")
+        if self.teacher_tokenizer is not None and self.teacher_tokenizer.pad_token_id is None:
+            raise ValueError(
+                "The teacher tokenizer does not have a pad token. Please set `pad_token_id` in the teacher tokenizer."
+            )
         if self.max_length is None:
             # set a sensible default
             self.max_length = min(self.tokenizer.model_max_length, 1024)
+        if self.teacher_tokenizer is not None:
+            self.max_length = min(self.teacher_tokenizer.model_max_length, self.max_length)
 
     def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         input_ids = []
@@ -260,6 +267,13 @@ class DataCollatorForChatML:
         prompts_input_ids = []
         prompt_attention_mask = []
         labels = []
+
+        if self.teacher_tokenizer is not None:
+            teacher_input_ids = []
+            teacher_attention_mask = []
+            teacher_labels = []
+            teacher_prompts_input_ids = []
+            teacher_prompt_attention_mask = []
 
         for example in examples:
             formatted_prompt = example.get(self.prompt_key, None)
@@ -306,6 +320,42 @@ class DataCollatorForChatML:
             label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
             labels.append(label)
 
+            if self.teacher_tokenizer is not None:
+                message = example[self.messages_key]
+                formatted_teacher_message = self.teacher_tokenizer.apply_chat_template(
+                    message, tokenize=False, add_generation_prompt=True
+                )
+                tokenized_teacher_message = self.teacher_tokenizer(
+                    formatted_teacher_message,
+                    truncation=True,
+                    max_length=self.max_length,
+                    padding=False,
+                    return_tensors=None,
+                    add_special_tokens=False,
+                )
+                teacher_input_ids.append(tokenized_teacher_message["input_ids"])
+                teacher_attention_mask.append(tokenized_teacher_message["attention_mask"])
+
+                formatted_teacher_prompt = self.teacher_tokenizer.apply_chat_template(
+                    example[self.messages_key][:-1], tokenize=False, add_generation_prompt=True
+                )
+
+                teacher_tokenized_prompt = self.teacher_tokenizer(
+                    formatted_teacher_prompt,
+                    truncation=True,
+                    max_length=len(teacher_input_ids[-1]),
+                    padding=False,
+                    return_tensors=None,
+                    add_special_tokens=False,
+                )
+                teacher_prompts_input_ids.append(teacher_tokenized_prompt["input_ids"])
+                teacher_prompt_attention_mask.append(teacher_tokenized_prompt["attention_mask"])
+
+                teacher_label = [self.ignore_index] * len(teacher_input_ids[-1])
+                teacher_completion_start_idx = len(teacher_tokenized_prompt["input_ids"])
+                teacher_label[teacher_completion_start_idx:] = teacher_input_ids[-1][teacher_completion_start_idx:]
+                teacher_labels.append(teacher_label)
+
         # convert to list of tensors and pad
         input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
         attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
@@ -319,13 +369,40 @@ class DataCollatorForChatML:
         prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
         prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
 
-        return {
+        if self.teacher_tokenizer is not None:
+            teacher_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in teacher_input_ids]
+            teacher_attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in teacher_attention_mask]
+            teacher_labels = [torch.tensor(label, dtype=torch.long) for label in teacher_labels]
+            teacher_input_ids = pad(
+                teacher_input_ids, padding_side="left", padding_value=self.teacher_tokenizer.pad_token_id
+            )
+            teacher_attention_mask = pad(teacher_attention_mask, padding_side="left", padding_value=0)
+            teacher_labels = pad(teacher_labels, padding_side="left", padding_value=self.ignore_index)
+            teacher_prompts_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in teacher_prompts_input_ids]
+            teacher_prompt_attention_mask = [
+                torch.tensor(mask, dtype=torch.long) for mask in teacher_prompt_attention_mask
+            ]
+            teacher_prompts_input_ids = pad(
+                teacher_prompts_input_ids, padding_side="left", padding_value=self.teacher_tokenizer.pad_token_id
+            )
+            teacher_prompt_attention_mask = pad(teacher_prompt_attention_mask, padding_side="left", padding_value=0)
+
+        batch = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
         }
+
+        if self.teacher_tokenizer is not None:
+            batch["teacher_input_ids"] = teacher_input_ids
+            batch["teacher_attention_mask"] = teacher_attention_mask
+            batch["teacher_labels"] = teacher_labels
+            batch["teacher_prompts"] = teacher_prompts_input_ids
+            batch["teacher_prompt_attention_mask"] = teacher_prompt_attention_mask
+
+        return batch
 
 
 @dataclass
