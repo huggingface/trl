@@ -39,7 +39,6 @@ from trl import (
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
-    get_peft_config,
     get_quantization_config,
 )
 from trl.trainer.sync_online_dpo_trainer import SyncOnlineDPOTrainer
@@ -121,7 +120,12 @@ if __name__ == "__main__":
         train_dataset = prepare_dataset(train_dataset, tokenizer)
         eval_dataset = prepare_dataset(eval_dataset, tokenizer)
 
-    trainer = AsyncOnlineDPOTrainer(
+    if training_args.sync_fallback is True:
+        TrainerCls = SyncOnlineDPOTrainer
+    else:
+        TrainerCls = AsyncOnlineDPOTrainer
+
+    trainer = TrainerCls(
         config=training_args,
         processing_class=tokenizer,
         policy=model,

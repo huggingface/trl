@@ -13,8 +13,8 @@
 # limitations under the License.
 
 import os
-from dataclasses import dataclass, field
-from typing import List, Literal
+from dataclasses import dataclass
+from typing import Literal
 
 from ..trainer.utils import OnPolicyConfig
 
@@ -48,6 +48,8 @@ class AsyncOnlineDPOConfig(OnPolicyConfig):
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
 
+        sync_fallback (`bool`, defaults to `False`):
+            Whether to fallback from asynchronous training, switches from async_online_dpo_trainer to sync_online_dpo_trainer
         vllm_device (`str`, *optional*, defaults to `None`):
             device to put the vllm generation on, defaults to accelerate.num_processes + 1"
         vllm_gpu_memory_utilization (`float`, defaults to 0.9)
@@ -62,5 +64,6 @@ class AsyncOnlineDPOConfig(OnPolicyConfig):
     beta: float = 0.1
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
 
+    sync_fallback: bool = False
     vllm_device: str | None = None
     vllm_gpu_memory_utilization: float = 0.9
