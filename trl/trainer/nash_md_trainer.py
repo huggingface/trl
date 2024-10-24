@@ -328,7 +328,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["beta"].append(self.beta)
         self.stats["mixture_coef"].append(self.mixture_coef)
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(
+        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+    ) -> torch.Tensor:
         model.train()
 
         # Apply chat template and tokenize the input

@@ -1260,6 +1260,7 @@ class BCOTrainer(Trainer):
         model: Union[PreTrainedModel, nn.Module],
         inputs: Dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
+        num_items_in_batch=None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if not self.use_dpo_data_collator:
             warnings.warn(
@@ -1290,7 +1291,7 @@ class BCOTrainer(Trainer):
             return None
         return SequentialSampler(self.train_dataset)
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def generate_from_model_and_ref(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
@@ -1407,7 +1408,7 @@ class BCOTrainer(Trainer):
                 "prompt_attention_mask": itemgetter(*target_indicies)(random_batch["prompt_attention_mask"]),
                 "prompt": itemgetter(*target_indicies)(random_batch["prompt"]),
             }
-            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, target_batch)
+            policy_output_decoded, ref_output_decoded = self.generate_from_model_and_ref(self.model, target_batch)
 
             self.log(
                 {
