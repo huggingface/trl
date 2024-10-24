@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from importlib.metadata import version
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+import datasets
 import numpy as np
 import pandas as pd
 import torch
@@ -627,6 +628,14 @@ class ConstantLengthDataset(IterableDataset):
                     "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
                     " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
                 )
+        self.pretokenized = False
+        column_names = (
+            dataset.column_names if isinstance(dataset, (datasets.Dataset, datasets.IterableDataset)) else None
+        )
+        if column_names is not None and "input_ids" in column_names:
+            self.pretokenized = True
+            # since the dataset is tokenized, the unit of buffer size should be tokens
+            self.max_buffer_size = seq_length * num_of_sequences
 
     def __len__(self):
         return len(self.dataset)
@@ -651,9 +660,12 @@ class ConstantLengthDataset(IterableDataset):
                         break
             if self.shuffle:
                 random.shuffle(buffer)
-            tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
-                "input_ids"
-            ]
+            if self.pretokenized:
+                tokenized_inputs = buffer
+            else:
+                tokenized_inputs = self.tokenizer(
+                    buffer, add_special_tokens=self.add_special_tokens, truncation=False
+                )["input_ids"]
             all_token_ids = []
             for tokenized_input in tokenized_inputs:
                 if self.append_concat_token:
