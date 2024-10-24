@@ -20,14 +20,15 @@ from pathlib import Path
 
 from tabulate import tabulate
 
+
 MAX_LEN_MESSAGE = 2900  # Slack endpoint has a limit of 3001 characters
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--slack_channel_name", default="trl-push-ci")
 
-# Set up logging using context manager
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
 
 def process_log_file(log):
     failed_tests = []
@@ -35,7 +36,7 @@ def process_log_file(log):
     section_num_failed = 0
 
     try:
-        with open(log, 'r') as f:
+        with open(log) as f:
             for line in f:
                 try:
                     data = json.loads(line)
@@ -56,8 +57,9 @@ def process_log_file(log):
         logging.error(f"Log file {log} not found: {e}")
     except Exception as e:
         logging.error(f"Error processing log file {log}: {e}")
-    
+
     return failed_tests, passed_tests, section_num_failed
+
 
 def main(slack_channel_name):
     group_info = []
@@ -97,10 +99,13 @@ def main(slack_channel_name):
             if num_failed > 0:
                 message += f"*{name}: {num_failed} failed test(s)*\n"
                 failed_table = [
-                    test[0].split("::")[:2] + [test[0].split("::")[-1][:30] + ".."]
-                    for test in failed_tests
+                    test[0].split("::")[:2] + [test[0].split("::")[-1][:30] + ".."] for test in failed_tests
                 ]
-                message += "\n```\n" + tabulate(failed_table, headers=["Test Location", "Test Name"], tablefmt="grid") + "\n```\n"
+                message += (
+                    "\n```\n"
+                    + tabulate(failed_table, headers=["Test Location", "Test Name"], tablefmt="grid")
+                    + "\n```\n"
+                )
 
             if any(total_empty_files):
                 message += f"\n*{name}: Warning! Empty file - check GitHub action job*\n"
@@ -110,7 +115,9 @@ def main(slack_channel_name):
         print(f"### {message}")
 
         if len(message) > MAX_LEN_MESSAGE:
-            message = f"❌ There are {total_num_failed} failed tests in total! Please check the action results directly."
+            message = (
+                f"❌ There are {total_num_failed} failed tests in total! Please check the action results directly."
+            )
 
         payload.append({"type": "section", "text": {"type": "mrkdwn", "text": message}})
         payload.append(
@@ -127,7 +134,12 @@ def main(slack_channel_name):
         payload.append(
             {
                 "type": "context",
-                "elements": [{"type": "plain_text", "text": f"On Push main {os.environ.get('TEST_TYPE')} results for {date.today()}"}],
+                "elements": [
+                    {
+                        "type": "plain_text",
+                        "text": f"On Push main {os.environ.get('TEST_TYPE')} results for {date.today()}",
+                    }
+                ],
             }
         )
 
@@ -138,15 +150,18 @@ def main(slack_channel_name):
         slack_client.chat_postMessage(channel=f"#{slack_channel_name}", text=message, blocks=payload)
 
     else:
-        payload.append({
-            "type": "section",
-            "text": {
-                "type": "plain_text",
-                "text": "✅ No failures! All tests passed successfully.",
-                "emoji": True,
-            },
-        })
+        payload.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "plain_text",
+                    "text": "✅ No failures! All tests passed successfully.",
+                    "emoji": True,
+                },
+            }
+        )
         logging.info("All tests passed. No errors detected.")
+
 
 if __name__ == "__main__":
     args = parser.parse_args()
