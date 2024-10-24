@@ -21,6 +21,8 @@ from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffu
 _import_structure = {
     "alignprop_config": ["AlignPropConfig"],
     "alignprop_trainer": ["AlignPropTrainer"],
+    "async_online_dpo_config": ["AsyncOnlineDPOConfig"],
+    "async_online_dpo_trainer": ["AsyncOnlineDPOTrainer"],
     "base": ["BaseTrainer"],
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
@@ -85,6 +87,8 @@ else:
 if TYPE_CHECKING:
     from .alignprop_config import AlignPropConfig
     from .alignprop_trainer import AlignPropTrainer
+    from .async_online_dpo_config import AsyncOnlineDPOConfig
+    from .async_online_dpo_trainer import AsyncOnlineDPOTrainer
     from .base import BaseTrainer
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer

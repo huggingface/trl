@@ -46,7 +46,7 @@ from transformers.utils import (
     is_torch_npu_available,
     is_torch_xpu_available,
 )
-from transformers.import_utils import _is_package_available
+from transformers.utils.import_utils import _is_package_available
 
 from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig

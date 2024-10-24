@@ -148,6 +148,8 @@ if TYPE_CHECKING:
     from .trainer import (
         AlignPropConfig,
         AlignPropTrainer,
+        AsyncOnlineDPOConfig,
+        AsyncOnlineDPOTrainer,
         BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,

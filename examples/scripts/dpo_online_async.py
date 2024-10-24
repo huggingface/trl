@@ -19,7 +19,7 @@ accelerate launch --num_processes 3 examples/scripts/dpo_online_async.py \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
     --learning_rate 5.0e-7 \
-    --output_dir pythia-1b-tldr-online-dpo-async \
+    --output_dir pythia-1b-tldr-online-dpo \
     --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 16 \
     --warmup_ratio 0.1 \
@@ -27,6 +27,7 @@ accelerate launch --num_processes 3 examples/scripts/dpo_online_async.py \
 """
 
 import torch
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
 
@@ -41,7 +42,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl.trainer.sync_online_dpo_trainer import SyncOnlineDPOTrainer
 
 
 if __name__ == "__main__":
@@ -49,6 +50,7 @@ if __name__ == "__main__":
     script_args, training_args, model_config = parser.parse_args_and_config()
     script_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
+    # make sure using same base model
     training_args.sft_model_path = model_config.model_name_or_path
 
     torch_dtype = (
@@ -70,6 +72,10 @@ if __name__ == "__main__":
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
 
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
+    )
+
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         training_args.reward_model_path,
         num_labels=1,
@@ -83,27 +89,52 @@ if __name__ == "__main__":
         trust_remote_code=model_config.trust_remote_code,
         **model_kwargs,
     )
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
-    dataset = load_dataset(script_args.dataset_name)
+    ################
+    # Dataset
+    ################
+    train_dataset = load_dataset(script_args.dataset_name, split=script_args.dataset_train_split).select(range(1000))
+    eval_dataset = load_dataset(script_args.dataset_name, split=script_args.dataset_test_split)
 
-    trainer = AsyncOnlineDPOTrainer(
-        model=model,
-        reward_model=reward_model,
-        args=training_args,
-        train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split],
+    def prepare_dataset(dataset, tokenizer):
+        """pre-tokenize the dataset before training; only collate during training"""
+
+        def tokenize(element):
+            outputs = tokenizer(
+                element["prompt"],
+                padding=False,
+            )
+            return {"input_ids": outputs["input_ids"]}
+
+        return dataset.map(
+            tokenize,
+            batched=True,
+            remove_columns=dataset.column_names,
+            num_proc=training_args.dataset_num_proc,
+        )
+
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        train_dataset = prepare_dataset(train_dataset, tokenizer)
+        eval_dataset = prepare_dataset(eval_dataset, tokenizer)
+
+    trainer = SyncOnlineDPOTrainer(
+        config=training_args,
         processing_class=tokenizer,
-        peft_config=get_peft_config(model_config),
+        policy=model,
+        ref_policy=ref_model,
+        reward_model=reward_model,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
     )
-    generation_config = GenerationConfig(
-        max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
-    )
-    completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
-    trainer.add_callback(completions_callback)
+    # generation_config = GenerationConfig(
+    #     max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+    # )
+    # completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
+    # trainer.add_callback(completions_callback)
     trainer.train()
 
     # Save and push to hub
