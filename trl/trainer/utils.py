@@ -46,13 +46,20 @@ from transformers.utils import (
     is_torch_npu_available,
     is_torch_xpu_available,
 )
+from transformers.utils.import_utils import _is_package_available
 
 from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
+_vllm_available = _is_package_available("vllm")
+
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
+
+
+def is_vllm_available():
+    return _vllm_available
 
 
 class AdaptiveKLController:
@@ -1001,7 +1008,7 @@ class OnPolicyConfig(TrainingArguments):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
             to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.
-        sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
+        sft_model_path (`str`, *optional*, defaults to None):
             Path to the SFT model.
         world_size (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes (GPUs) to use for the training.
@@ -1032,7 +1039,7 @@ class OnPolicyConfig(TrainingArguments):
     stop_token_id: Optional[int] = None
     temperature: float = 0.7
     missing_eos_penalty: Optional[float] = None
-    sft_model_path: str = "EleutherAI/pythia-160m"
+    sft_model_path: Optional[str] = None
     world_size: Optional[int] = None
     num_total_batches: Optional[int] = None
     micro_batch_size: Optional[int] = None
