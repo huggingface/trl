@@ -76,6 +76,7 @@ Instead of a judge, you can chose to use a reward model to evaluate the completi
 Instead of a judge, you can opt to use a reward model to evaluate completions and leverage its capabilities. For a list of public models available, check the [Reward Bench leaderboard](https://huggingface.co/spaces/allenai/reward-bench). Below is a code example showing how to replace a judge with the [trl-lib/Qwen2-0.5B-Reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward) model:
 
 ```diff
+- from trl import PairRMJudge
 + from transformers import AutoModelForSequenceClassification
 
 - judge = PairRMJudge()
