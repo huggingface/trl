@@ -58,7 +58,6 @@ class PeftModelTester(unittest.TestCase):
         model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model)
 
         # Check that the value head has requires_grad=True
-        # assert model.v_head.summary.weight.requires_grad
         self.assertTrue(model.v_head.summary.weight.requires_grad)
 
     def test_check_peft_model_nb_trainable_params(self):
@@ -72,13 +71,11 @@ class PeftModelTester(unittest.TestCase):
 
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        # assert nb_trainable_params == 10273
         self.assertEqual(nb_trainable_params, 10273)
 
         # Check that the number of trainable param for the non-peft model is correct
         non_peft_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)
         nb_trainable_params = sum(p.numel() for p in non_peft_model.parameters() if p.requires_grad)
-        # assert nb_trainable_params == 99578
         self.assertEqual(nb_trainable_params, 99578)
 
     def test_create_peft_model_from_config(self):
@@ -90,14 +87,12 @@ class PeftModelTester(unittest.TestCase):
         )
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
-        # assert nb_trainable_params == 10273
         self.assertEqual(nb_trainable_params, 10273)
 
         causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
         trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
-        # assert nb_trainable_params == 10273
         self.assertEqual(nb_trainable_params, 10273)
 
     @require_bitsandbytes
@@ -112,8 +107,6 @@ class PeftModelTester(unittest.TestCase):
         )
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
-        # assert nb_trainable_params == 10273
-        # assert trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__ == Linear8bitLt
         self.assertEqual(nb_trainable_params, 10273)
         self.assertEqual(trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__, Linear8bitLt)
 
@@ -123,8 +116,6 @@ class PeftModelTester(unittest.TestCase):
         trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
-        # assert nb_trainable_params == 10273
-        # assert trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__ == Linear8bitLt
         self.assertEqual(nb_trainable_params, 10273)
         self.assertEqual(trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__, Linear8bitLt)
 
@@ -141,22 +132,16 @@ class PeftModelTester(unittest.TestCase):
             model.save_pretrained(tmp_dir)
 
             # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
-            # assert os.path.isfile(
-            #     f"{tmp_dir}/adapter_model.safetensors"
-            # ), f"{tmp_dir}/adapter_model.safetensors does not exist"
-            # assert os.path.exists(f"{tmp_dir}/adapter_config.json"), f"{tmp_dir}/adapter_config.json does not exist"
-            # check also for `pytorch_model.bin` and make sure it only contains `v_head` weights
-            # assert os.path.exists(f"{tmp_dir}/pytorch_model.bin"), f"{tmp_dir}/pytorch_model.bin does not exist"
-            maybe_v_head = torch.load(f"{tmp_dir}/pytorch_model.bin", weights_only=True)
-            # check that only keys that starts with `v_head` are in the dict
-            # assert all(
-            #     k.startswith("v_head") for k in maybe_v_head.keys()
-            # ), f"keys in {tmp_dir}/pytorch_model.bin do not start with `v_head`"
             self.assertTrue(os.path.isfile(
                 f"{tmp_dir}/adapter_model.safetensors"
             ), f"{tmp_dir}/adapter_model.safetensors does not exist")
             self.assertTrue(os.path.exists(f"{tmp_dir}/adapter_config.json"), f"{tmp_dir}/adapter_config.json does not exist")
+
+            # check also for `pytorch_model.bin` and make sure it only contains `v_head` weights
             self.assertTrue(os.path.exists(f"{tmp_dir}/pytorch_model.bin"), f"{tmp_dir}/pytorch_model.bin does not exist")
+            
+            # check that only keys that starts with `v_head` are in the dict 
+            maybe_v_head = torch.load(f"{tmp_dir}/pytorch_model.bin", weights_only=True)
             self.assertTrue(all(
                 k.startswith("v_head") for k in maybe_v_head.keys()
             ), f"keys in {tmp_dir}/pytorch_model.bin do not start with `v_head`")
@@ -165,7 +150,6 @@ class PeftModelTester(unittest.TestCase):
 
             # check all the weights are the same
             for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters()):
-                # assert torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
                 self.assertTrue(torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}")
 
     def test_load_pretrained_peft(self):
@@ -182,10 +166,6 @@ class PeftModelTester(unittest.TestCase):
             model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(tmp_dir)
 
             # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
-            # assert os.path.isfile(
-            #     f"{tmp_dir}/adapter_model.safetensors"
-            # ), f"{tmp_dir}/adapter_model.safetensors does not exist"
-            # assert os.path.exists(f"{tmp_dir}/adapter_config.json"), f"{tmp_dir}/adapter_config.json does not exist"
             self.assertTrue(os.path.isfile(
                 f"{tmp_dir}/adapter_model.safetensors"
             ), f"{tmp_dir}/adapter_model.safetensors does not exist")
@@ -194,7 +174,6 @@ class PeftModelTester(unittest.TestCase):
             # check all the weights are the same
             for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters()):
                 if p1[0] not in ["v_head.summary.weight", "v_head.summary.bias"]:
-                    # assert torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}"
                     self.assertTrue(torch.allclose(p1[1], p2[1]), f"{p1[0]} != {p2[0]}")
 
     def test_continue_training_peft_model(self):
@@ -210,5 +189,4 @@ class PeftModelTester(unittest.TestCase):
             model = AutoModelForCausalLMWithValueHead.from_pretrained(tmp_dir, is_trainable=True)
             # Check that the number of trainable parameters is correct
             nb_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            # assert nb_trainable_params == 10273
             self.assertEqual(nb_trainable_params, 10273)

@@ -111,8 +111,6 @@ class RLOOTrainerTester(unittest.TestCase):
             advantages[i : i + local_batch_size] = rlhf_reward[i : i + local_batch_size] - torch.stack(
                 other_response_rlhf_rewards
             ).mean(0)
-        # assert (1 - (2 + 5 + 8) / 3 - advantages[0].item()) < 1e-6
-        # assert (6 - (3 + 2 + 9) / 3 - advantages[7].item()) < 1e-6
         self.assertLess((1 - (2 + 5 + 8) / 3 - advantages[0].item()), 1e-6)
         self.assertLess((6 - (3 + 2 + 9) / 3 - advantages[7].item()), 1e-6)
 

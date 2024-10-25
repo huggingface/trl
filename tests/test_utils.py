@@ -150,14 +150,6 @@ class TestGenerateModelCard(unittest.TestCase):
             paper_id="1234.56789",
         )
         card_text = str(model_card)
-        # assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
-        # assert "my_model" in card_text
-        # assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
-        # assert "datasets: username/my_dataset" in card_text
-        # assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
-        # assert "My Trainer" in card_text
-        # assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
-        # assert "[My Paper](https://huggingface.co/papers/1234.56789)" in card_text
         self.assertIn("[username/my_base_model](https://huggingface.co/username/my_base_model)", card_text)
         self.assertIn("my_model", card_text)
         self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
@@ -181,9 +173,6 @@ class TestGenerateModelCard(unittest.TestCase):
             paper_id=None,
         )
         card_text = str(model_card)
-        # assert "my_model" in card_text
-        # assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
-        # assert "My Trainer" in card_text
         self.assertIn("my_model", card_text)
         self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
         self.assertIn("My Trainer", card_text)
