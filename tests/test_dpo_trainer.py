@@ -1204,6 +1204,4 @@ class DPOVisionTrainerTester(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # unittest.main()
-    dpt = DPOTrainerTester()
-    dpt.test_dpo_trainer_use_num_logits_to_keep()
+    unittest.main()
