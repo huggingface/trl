@@ -1273,7 +1273,7 @@ class DPOTrainer(Trainer):
             if self.use_num_logits_to_keep:
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
                 num_logits_to_keep = loss_mask.shape[1] - first_compute_index
-                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item()
+                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
 
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
 

@@ -1073,31 +1073,40 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
+            training_args.use_num_logits_to_keep = False
+            trainer2 = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
             # Fake batch
-            chosen_labels = torch.tensor(
-                [[-100, -100, -100, -100, -100, 4, 5, -100], [-100, -100, -100, -100, 2, 4, 5, 6]]
-            )
-            rejected_labels = torch.tensor(
-                [[-100, -100, -100, -100, 100, 7, 5, 909], [-100, -100, -100, -100, 88, 4, 5, 6]]
-            )
-            chosen_input_ids = torch.randint_like(chosen_labels, high=1000)
-            rejected_input_ids = torch.randint_like(rejected_labels, high=1000)
+            prompt_input_ids = torch.randint(1, 1000, (2, 10))
+            chosen_input_ids = torch.randint(1, 1000, (2, 5))
+            rejected_input_ids = torch.randint(1, 1000, (2, 7))
+            prompt_attention_mask = torch.ones_like(prompt_input_ids)
             chosen_attention_mask = torch.ones_like(chosen_input_ids)
             rejected_attention_mask = torch.ones_like(rejected_input_ids)
 
             batch = {
-                "chosen_labels": chosen_labels,
-                "rejected_labels": rejected_labels,
-                "chosen_input_ids": chosen_input_ids,
-                "rejected_input_ids": rejected_input_ids,
-                "chosen_attention_mask": chosen_attention_mask,
-                "rejected_attention_mask": rejected_attention_mask,
+                "prompt_input_ids": prompt_input_ids.to(model.device),
+                "chosen_input_ids": chosen_input_ids.to(model.device),
+                "rejected_input_ids": rejected_input_ids.to(model.device),
+                "prompt_attention_mask": prompt_attention_mask.to(model.device),
+                "chosen_attention_mask": chosen_attention_mask.to(model.device),
+                "rejected_attention_mask": rejected_attention_mask.to(model.device),
             }
 
-            _, _, chosen_logits, rejected_logits, _, _ = trainer.concatenated_forward(model, batch)
+            output = trainer.concatenated_forward(model, batch)
+            output2 = trainer2.concatenated_forward(model, batch)
 
-            assert 4 == chosen_logits.shape[1]
-            assert 4 == rejected_logits.shape[1]
+            for i in range(output["chosen_logps"].shape[0]):
+                assert output["chosen_logps"][i].item() == pytest.approx(output2["chosen_logps"][i].item())
+                assert output["rejected_logps"][i].item() == pytest.approx(output2["rejected_logps"][i].item())
+
             trainer.train()
 
 
@@ -1190,4 +1199,6 @@ class DPOVisionTrainerTester(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # unittest.main()
+    dpt = DPOTrainerTester()
+    dpt.test_dpo_trainer_use_num_logits_to_keep()
