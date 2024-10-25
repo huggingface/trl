@@ -17,7 +17,6 @@ import unittest
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 import torch
 from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
@@ -958,7 +957,6 @@ class DPOTrainerTester(unittest.TestCase):
                 "Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
                 str(context.exception),
             )
-
 
     def test_dpo_loss_alpha_div_f(self):
         model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
