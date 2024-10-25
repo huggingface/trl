@@ -142,7 +142,11 @@ class BaseBinaryJudge(BaseJudge):
 
     @abstractmethod
     def judge(
-        self, prompts: List[str], completions: List[str], gold_answers: Optional[List[str]] = None, shuffle_order: bool = True
+        self,
+        prompts: List[str],
+        completions: List[str],
+        gold_completions: Optional[List[str]] = None,
+        shuffle_order: bool = True,
     ) -> List[int]:
         """
         Judge the completion for a given prompt. Used to assess if a completion satisfies a constraint.
@@ -174,7 +178,7 @@ class RandomBinaryJudge(BaseBinaryJudge):
     Random binary judge, for testing purposes.
     """
 
-    def judge(self, prompts, completions, gold_answers=None, shuffle_order=True):
+    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
         return [random.choice([0, 1]) for _ in range(len(prompts))]
 
 
@@ -422,10 +426,14 @@ class AllTrueJudge(BaseBinaryJudge):
         self.judges = judges
 
     def judge(
-        self, prompts: List[str], completions: List[str], gold_answers: List[str] = None, shuffle_order: bool = True
+        self,
+        prompts: List[str],
+        completions: List[str],
+        gold_completions: Optional[List[str]] = None,
+        shuffle_order: bool = True,
     ) -> List[bool]:
         all_binary_judgments = [
-            judge.judge(prompts, completions, gold_answers, shuffle_order) for judge in self.judges
+            judge.judge(prompts, completions, gold_completions, shuffle_order) for judge in self.judges
         ]
 
         return [
