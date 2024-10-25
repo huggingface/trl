@@ -39,6 +39,7 @@ from ..data_utils import maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 
+from ..mergekit_utils import Merge,upload_model_to_hf,get_last_checkpoint_path
 
 if is_deepspeed_available():
     import deepspeed
