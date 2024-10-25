@@ -157,7 +157,7 @@ class BaseBinaryJudge(BaseJudge):
         Args:
             prompts (`List[str]`): List of prompts.
             completions (`List[str]`): List of completions.
-            gold_answers (`List[str]`): List of gold answers if it exists.
+            gold_completions (`List[str]`, `optional`): List of gold completions if it exists.
             shuffle_order (`bool`): Whether to shuffle the order of the completions to avoid positional bias.
 
         Returns:
