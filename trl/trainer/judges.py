@@ -168,10 +168,10 @@ class PairRMJudge(BasePairwiseJudge):
         blender (llm_blender.Blender): An instance of the Blender class from llm-blender.
 
     Example:
-        >>> judge = PairRMJudge()
+        >>> pairrm_judge = PairRMJudge()
         >>> prompts = ["Translate 'hello' to French", "What's the capital of Japan?"]
         >>> completions = [["Bonjour", "Salut"], ["Kyoto", "Tokyo"]]
-        >>> results = judge(prompts, completions)
+        >>> results = pairrm_judge.judge(prompts, completions)
         >>> print(results)  # [0, 1] (indicating the first completion is preferred for the first prompt and the second)
 
     Note:

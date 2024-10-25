@@ -35,6 +35,7 @@ from transformers import (
 from transformers.integrations import WandbCallback
 from transformers.trainer_utils import has_length
 
+from ..data_utils import maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 
@@ -406,6 +407,7 @@ class LogCompletionsCallback(WandbCallback):
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
+            prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
             completions = _generate_completions(
                 prompts,
                 model=model,
