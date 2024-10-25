@@ -25,7 +25,7 @@ class CLITester(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-        except BaseException as exc:
+        except BaseException:
             self.fail("An error occurred while running the CLI, please double check")
 
     @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
@@ -36,7 +36,7 @@ class CLITester(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-        except BaseException as exc:
+        except BaseException:
             self.fail("An error occurred while running the CLI, please double check")
 
     def test_env_cli(self):

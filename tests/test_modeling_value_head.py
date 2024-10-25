@@ -16,7 +16,6 @@ import sys
 import tempfile
 import unittest
 
-import pytest
 import torch
 from parameterized import parameterized
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
@@ -59,6 +58,7 @@ ALL_SEQ2SEQ_MODELS = [
     "trl-internal-testing/tiny-random-T5ForConditionalGeneration",
 ]
 
+
 class BaseTester:
     class VHeadModelTester(unittest.TestCase):
         all_model_names = None
@@ -89,7 +89,9 @@ class BaseTester:
             """
             for model_name in self.all_model_names:
                 model = self.trl_model_class.from_pretrained(model_name)
-                self.assertFalse(torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias)))
+                self.assertFalse(
+                    torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias))
+                )
 
         def test_value_head_not_str(self):
             r"""
@@ -148,13 +150,17 @@ class BaseTester:
 
                 with tempfile.TemporaryDirectory() as tmp_dir:
                     trl_model.save_pretrained(tmp_dir, max_shard_size="1MB")
-                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(tmp_dir)
+                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
+                        tmp_dir
+                    )
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
-                    self.assertTrue(torch.allclose(
-                        transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
-                    ))
+                    self.assertTrue(
+                        torch.allclose(
+                            transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
+                        )
+                    )
 
         @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
         def test_from_save_transformers(self):
@@ -169,13 +175,17 @@ class BaseTester:
 
                 with tempfile.TemporaryDirectory() as tmp_dir:
                     trl_model.save_pretrained(tmp_dir)
-                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(tmp_dir)
+                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
+                        tmp_dir
+                    )
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
-                    self.assertTrue(torch.allclose(
-                        transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
-                    ))
+                    self.assertTrue(
+                        torch.allclose(
+                            transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
+                        )
+                    )
 
                 # Check if the trl model has the same keys as the transformers model
                 # except the v_head
@@ -183,7 +193,9 @@ class BaseTester:
                     if "v_head" not in key:
                         self.assertIn(key, transformers_model.state_dict())
                         # check if the weights are the same
-                        self.assertTrue(torch.allclose(trl_model.state_dict()[key], transformers_model.state_dict()[key]))
+                        self.assertTrue(
+                            torch.allclose(trl_model.state_dict()[key], transformers_model.state_dict()[key])
+                        )
 
                 # check if they have the same modules
                 self.assertEqual(
@@ -268,7 +280,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
         # Test with a model without a LM head
         model_id = "trl-internal-testing/tiny-random-GPT2Model"
         # This should raise a ValueError
-        with pytest.raises(ValueError):
+        with self.assertRaises(ValueError):
             pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
             _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
 
@@ -284,7 +296,9 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
 
             lm_head_namings = self.trl_model_class.lm_head_namings
 
-            self.assertTrue(any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings))
+            self.assertTrue(
+                any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
+            )
 
             for lm_head_naming in lm_head_namings:
                 if hasattr(trl_model.pretrained_model, lm_head_naming):
@@ -309,9 +323,10 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
             self.assertEqual(model.state_dict().keys(), model_from_pretrained.state_dict().keys())
 
             for name, param in model.state_dict().items():
-                self.assertTrue(torch.allclose(
-                    param, model_from_pretrained.state_dict()[name]
-                ), f"Parameter {name} is not the same after push_to_hub and from_pretrained")
+                self.assertTrue(
+                    torch.allclose(param, model_from_pretrained.state_dict()[name]),
+                    f"Parameter {name} is not the same after push_to_hub and from_pretrained",
+                )
 
 
 class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase):
@@ -392,7 +407,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
         # Test with a model without a LM head
         model_id = "trl-internal-testing/tiny-random-T5Model"
         # This should raise a ValueError
-        with pytest.raises(ValueError):
+        with self.assertRaises(ValueError):
             pretrained_model = AutoModel.from_pretrained(model_id)
             _ = self.trl_model_class.from_pretrained(pretrained_model)
 
@@ -410,9 +425,10 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
             self.assertEqual(model.state_dict().keys(), model_from_pretrained.state_dict().keys())
 
             for name, param in model.state_dict().items():
-                self.assertTrue(torch.allclose(
-                    param, model_from_pretrained.state_dict()[name]
-                ), f"Parameter {name} is not the same after push_to_hub and from_pretrained")
+                self.assertTrue(
+                    torch.allclose(param, model_from_pretrained.state_dict()[name]),
+                    f"Parameter {name} is not the same after push_to_hub and from_pretrained",
+                )
 
     def test_transformers_bf16_kwargs(self):
         r"""
@@ -430,7 +446,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
                 # skip the test for FSMT as it does not support mixed-prec
                 continue
 
-            self.assertTrue(any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings))
+            self.assertTrue(
+                any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
+            )
 
             for lm_head_naming in lm_head_namings:
                 if hasattr(trl_model.pretrained_model, lm_head_naming):

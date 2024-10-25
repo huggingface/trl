@@ -132,19 +132,25 @@ class PeftModelTester(unittest.TestCase):
             model.save_pretrained(tmp_dir)
 
             # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
-            self.assertTrue(os.path.isfile(
-                f"{tmp_dir}/adapter_model.safetensors"
-            ), f"{tmp_dir}/adapter_model.safetensors does not exist")
-            self.assertTrue(os.path.exists(f"{tmp_dir}/adapter_config.json"), f"{tmp_dir}/adapter_config.json does not exist")
+            self.assertTrue(
+                os.path.isfile(f"{tmp_dir}/adapter_model.safetensors"),
+                f"{tmp_dir}/adapter_model.safetensors does not exist",
+            )
+            self.assertTrue(
+                os.path.exists(f"{tmp_dir}/adapter_config.json"), f"{tmp_dir}/adapter_config.json does not exist"
+            )
 
             # check also for `pytorch_model.bin` and make sure it only contains `v_head` weights
-            self.assertTrue(os.path.exists(f"{tmp_dir}/pytorch_model.bin"), f"{tmp_dir}/pytorch_model.bin does not exist")
-            
-            # check that only keys that starts with `v_head` are in the dict 
+            self.assertTrue(
+                os.path.exists(f"{tmp_dir}/pytorch_model.bin"), f"{tmp_dir}/pytorch_model.bin does not exist"
+            )
+
+            # check that only keys that starts with `v_head` are in the dict
             maybe_v_head = torch.load(f"{tmp_dir}/pytorch_model.bin", weights_only=True)
-            self.assertTrue(all(
-                k.startswith("v_head") for k in maybe_v_head.keys()
-            ), f"keys in {tmp_dir}/pytorch_model.bin do not start with `v_head`")
+            self.assertTrue(
+                all(k.startswith("v_head") for k in maybe_v_head.keys()),
+                f"keys in {tmp_dir}/pytorch_model.bin do not start with `v_head`",
+            )
 
             model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(tmp_dir)
 
@@ -166,10 +172,13 @@ class PeftModelTester(unittest.TestCase):
             model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(tmp_dir)
 
             # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
-            self.assertTrue(os.path.isfile(
-                f"{tmp_dir}/adapter_model.safetensors"
-            ), f"{tmp_dir}/adapter_model.safetensors does not exist")
-            self.assertTrue(os.path.exists(f"{tmp_dir}/adapter_config.json"), f"{tmp_dir}/adapter_config.json does not exist")
+            self.assertTrue(
+                os.path.isfile(f"{tmp_dir}/adapter_model.safetensors"),
+                f"{tmp_dir}/adapter_model.safetensors does not exist",
+            )
+            self.assertTrue(
+                os.path.exists(f"{tmp_dir}/adapter_config.json"), f"{tmp_dir}/adapter_config.json does not exist"
+            )
 
             # check all the weights are the same
             for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters()):

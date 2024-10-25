@@ -17,7 +17,6 @@ import tempfile
 import unittest
 
 import numpy as np
-import pytest
 import torch
 from datasets import Dataset, Image, Sequence, load_dataset
 from transformers import (
@@ -178,7 +177,6 @@ class SFTTrainerTester(unittest.TestCase):
 
             decoded_text = self.tokenizer.decode(example["input_ids"])
             self.assertTrue(("Question" in decoded_text) and ("Answer" in decoded_text))
-            
 
     def test_sft_trainer_backward_compatibility(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -342,7 +340,7 @@ class SFTTrainerTester(unittest.TestCase):
                 packing=True,
                 report_to="none",
             )
-            with pytest.raises(ValueError):
+            with self.assertRaises(ValueError):
                 _ = SFTTrainer(
                     model=self.model,
                     args=training_args,
@@ -351,7 +349,7 @@ class SFTTrainerTester(unittest.TestCase):
                 )
 
             # This should not work as well
-            with pytest.raises(ValueError):
+            with self.assertRaises(ValueError):
                 training_args = SFTConfig(
                     output_dir=tmp_dir,
                     dataloader_drop_last=True,
@@ -489,7 +487,6 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
             self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))
-
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -1259,13 +1256,15 @@ class SFTTrainerTester(unittest.TestCase):
                 model_init_kwargs={"torch_dtype": -1},
                 report_to="none",
             )
-            with pytest.raises(
-                ValueError,
-                match="Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
-            ):
+            with self.assertRaises(ValueError) as context:
                 _ = SFTTrainer(
                     model=self.model_id,
                     args=training_args,
                     train_dataset=self.train_dataset,
                     eval_dataset=self.eval_dataset,
                 )
+
+            self.assertIn(
+                "Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+                str(context.exception),
+            )

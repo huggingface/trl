@@ -273,5 +273,6 @@ class TextEnvironmentTester(unittest.TestCase):
         )
         self.assertEqual(
             histories[1].text,
-            ("I am a prompt!\n" + "Hello there! General Kenobi!") + (2 * "<request><DummyTool>test<call>test<response>"),
+            ("I am a prompt!\n" + "Hello there! General Kenobi!")
+            + (2 * "<request><DummyTool>test<call>test<response>"),
         )
