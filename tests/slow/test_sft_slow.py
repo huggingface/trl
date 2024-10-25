@@ -148,7 +148,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 peft_config=self.peft_config,
             )
 
-            # assert isinstance(trainer.model, PeftModel)
             self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
@@ -256,7 +255,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 peft_config=self.peft_config,
             )
 
-            # assert isinstance(trainer.model, PeftModel)
             self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
@@ -339,7 +337,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 peft_config=self.peft_config,
             )
 
-            # assert isinstance(trainer.model, PeftModel)
             self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
@@ -383,7 +380,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 peft_config=self.peft_config,
             )
 
-            # assert isinstance(trainer.model, PeftModel)
             self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
