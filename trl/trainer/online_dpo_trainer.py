@@ -56,7 +56,6 @@ from .utils import (
     empty_cache,
     generate_model_card,
     get_reward,
-    pad,
     prepare_deepspeed,
     truncate_right,
 )
@@ -431,7 +430,8 @@ class OnlineDPOTrainer(Trainer):
             ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
             del ref_output, ref_logits, ref_all_logprobs  # free memory
 
-        # Decode the completions
+        # Decode the completions, and format them if the input is conversational
+        device = prompt_completion_ids.device
         completions_ids = prompt_completion_ids[:, context_length:]
         completions = self.processing_class.batch_decode(completions_ids, skip_special_tokens=True)
         completions = [completion.strip() for completion in completions]  # remove the leading space # MAYBE MOVE
@@ -440,10 +440,14 @@ class OnlineDPOTrainer(Trainer):
 
         # Get the reward from the reward model or judge
         if self.judge is not None:
+            # Once formatted, conversational data may contain special tokens (such as <|im_start|>) that are not
+            # directly understandable by the judge and could alter its judgment. To avoid this and make the judge
+            # independent of the model's chat template, we use the raw conversation data, and apply our own chat
+            # template to it.
             if is_conversational({"prompt": prompts[0]}):
                 environment = jinja2.Environment()
                 template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
-                prompts = [template.render(messages=message) for message in prompts]
+                prompts = [template.render(messages=prompt) for prompt in prompts]
                 completions = [template.render(messages=completion) for completion in completions]
 
             ranks_of_first_completion = self.judge.judge(
@@ -453,27 +457,27 @@ class OnlineDPOTrainer(Trainer):
             # convert ranks to a True/False mask:
             # when rank == 0, it means the first completion is the best
             # when rank == 1, it means the second completion is the best
-            mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=prompt_completion_ids.device)
+            mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=device)
         else:
+            # The reward model may not have the same chat template or tokenizer as the model, so we need to use the
+            # raw data (string), apply the chat template (if needed), and tokenize it with the reward processing class.
+            prompts = 2 * prompts  # repeat the prompt: [prompt0, prompt1] -> [prompt0, prompt1, prompt0, prompt1]
             if is_conversational({"prompt": prompts[0]}):
-                examples = [{"prompt": p, "completion": c} for p, c in zip(2 * prompts, completions)]
+                examples = [{"prompt": p, "completion": c} for p, c in zip(prompts, completions)]
                 examples = [apply_chat_template(example, self.reward_processing_class) for example in examples]
                 prompts = [example["prompt"] for example in examples]
                 completions = [example["completion"] for example in examples]
-            else:
-                prompts = 2 * prompts
 
             # Tokenize the prompts
-            device = prompt_completion_ids.device
-            prompts_ids = self.reward_processing_class(prompts)["input_ids"]
-            prompts_ids = [torch.tensor(prompt_ids, device=device) for prompt_ids in prompts_ids]
-            prompts_ids = pad(prompts_ids, self.reward_processing_class.pad_token_id, padding_side="left")
+            prompts_ids = self.reward_processing_class(
+                prompts, padding=True, return_tensors="pt", padding_side="left"
+            )["input_ids"].to(device)
             context_length = prompts_ids.shape[1]
 
             # Tokenize the completions
-            completions_ids = self.reward_processing_class(completions)["input_ids"]
-            completions_ids = [torch.tensor(completion_ids, device=device) for completion_ids in completions_ids]
-            completions_ids = pad(completions_ids, self.reward_processing_class.pad_token_id, padding_side="right")
+            completions_ids = self.reward_processing_class(
+                completions, padding=True, return_tensors="pt", padding_side="right"
+            )["input_ids"].to(device)
 
             # Concatenate the prompts and completions and get the reward
             prompt_completion_ids = torch.cat((prompts_ids, completions_ids), dim=1)
@@ -492,7 +496,7 @@ class OnlineDPOTrainer(Trainer):
             # Get the indices of the chosen and rejected examples
             mask = first_half >= second_half
 
-        num_examples_range = torch.arange(num_examples, device=prompt_completion_ids.device)
+        num_examples_range = torch.arange(num_examples, device=device)
         chosen_indices = num_examples_range + (~mask * num_examples)
         rejected_indices = num_examples_range + (mask * num_examples)
 
