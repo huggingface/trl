@@ -18,6 +18,11 @@ from trl import HfPairwiseJudge, PairRMJudge, RandomPairwiseJudge, RandomRankJud
 
 
 class TestJudges(unittest.TestCase):
+    def setUpClass(self):
+        # Initialize once to download the model. This ensures it’s downloaded before running tests, preventing issues
+        # where concurrent tests attempt to load the model while it’s still downloading.
+        PairRMJudge()
+
     def _get_prompts_and_completions(self):
         prompts = ["The capital of France is", "The biggest planet in the solar system is"]
         completions = [["Paris", "Marseille"], ["Saturn", "Jupiter"]]

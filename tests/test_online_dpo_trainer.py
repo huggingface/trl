@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer, PairRMJudge, is_llmblender_available
+from trl import OnlineDPOConfig, OnlineDPOTrainer, RandomPairwiseJudge, is_llmblender_available
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
@@ -226,7 +226,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
             trainer = OnlineDPOTrainer(
                 model=self.model,
-                judge=PairRMJudge(),
+                judge=RandomPairwiseJudge(),
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
