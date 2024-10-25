@@ -237,7 +237,7 @@ class CGPOTrainer(Trainer):
         self.k = args.k
         self.rlhf_optimizer = args.rlhf_optimizer
         self.beta = args.beta
-        self.kl_threshold = args.kl_threshold
+        self.kl_threshold = args.kl_threshold if args.kl_threshold is not None else torch.inf
         self.lamb = args.lamb
         self.local_genscore_mini_batch_size = (
             args.local_genscore_mini_batch_size
