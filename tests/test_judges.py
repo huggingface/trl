@@ -14,25 +14,52 @@
 
 import unittest
 
-from trl import HfPairwiseJudge, PairRMJudge, RandomPairwiseJudge, RandomRankJudge, is_llmblender_available
+from trl import (
+    AllTrueJudge,
+    HfPairwiseJudge,
+    PairRMJudge,
+    RandomBinaryJudge,
+    RandomPairwiseJudge,
+    RandomRankJudge,
+    is_llmblender_available,
+)
 
 
 class TestJudges(unittest.TestCase):
-    def _get_prompts_and_completions(self):
+    def _get_prompts_and_pairwise_completions(self):
         prompts = ["The capital of France is", "The biggest planet in the solar system is"]
         completions = [["Paris", "Marseille"], ["Saturn", "Jupiter"]]
         return prompts, completions
 
+    def _get_prompts_and_single_completions(self):
+        prompts = ["What's the capital of France?", "What's the color of the sky?"]
+        completions = ["Marseille", "blue"]
+        return prompts, completions
+
+    def test_all_true_judge(self):
+        moj = AllTrueJudge(judges=[RandomBinaryJudge(), RandomBinaryJudge()])
+        prompts, completions = self._get_prompts_and_single_completions()
+        judgements = moj.judge(prompts=prompts, completions=completions)
+        self.assertEqual(len(judgements), 2)
+        self.assertTrue(all(judgement in {True, False} for judgement in judgements))
+
+    def test_random_constraint_judge(self):
+        judge = RandomBinaryJudge()
+        prompts, completions = self._get_prompts_and_single_completions()
+        judgements = judge.judge(prompts=prompts, completions=completions)
+        self.assertEqual(len(judgements), 2)
+        self.assertTrue(all(judgement in {0, 1, -1} for judgement in judgements))
+
     def test_random_pairwise_judge(self):
         judge = RandomPairwiseJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
 
     def test_random_rank_judge(self):
         judge = RandomRankJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, list) for rank in ranks))
@@ -41,7 +68,7 @@ class TestJudges(unittest.TestCase):
     @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
     def test_hugging_face_judge(self):
         judge = HfPairwiseJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
@@ -50,7 +77,7 @@ class TestJudges(unittest.TestCase):
     @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
     def test_pair_rm_judge(self):
         judge = PairRMJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
@@ -59,7 +86,7 @@ class TestJudges(unittest.TestCase):
     @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
     def test_pair_rm_judge_return_scores(self):
         judge = PairRMJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         probs = judge.judge(prompts=prompts, completions=completions, return_scores=True)
         self.assertEqual(len(probs), 2)
         self.assertTrue(all(isinstance(prob, float) for prob in probs))
