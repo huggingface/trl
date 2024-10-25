@@ -18,7 +18,7 @@ from trl import HfPairwiseJudge, PairRMJudge, RandomPairwiseJudge, RandomRankJud
 
 
 class TestJudges(unittest.TestCase):
-    def setUpClass(self):
+    def setUpClass(cls):
         # Initialize once to download the model. This ensures it’s downloaded before running tests, preventing issues
         # where concurrent tests attempt to load the model while it’s still downloading.
         PairRMJudge()
