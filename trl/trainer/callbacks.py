@@ -429,3 +429,59 @@ class LogCompletionsCallback(WandbCallback):
 
         # Save the last logged step, so we don't log the same completions multiple times
         self._last_logged_step = state.global_step
+class MergeModelCallBack(TrainerCallback):
+    """
+    A [`~transformers.TrainerCallback`] that merges the policy model (the model being trained) with another model based on a merge configuration.
+
+    ## Usage
+    ```python
+    pip install trl[mergekit]
+
+    trainer = DPOTrainer(...)
+    from trl.mergekit_utils import MergeConfig
+    config = MergeConfig("ties")
+    merge_callback = MergeModelCallBack(config)
+    trainer.add_callback(callback)
+    ```
+
+    ## Args
+    - `merge_config`: `MergeConfig` used for the merging process.
+    - `merge_at_every_checkpoint` =: `bool`, optional, default=`False`. Merges the model at every checkpoint instead of just at the end.
+    - `push_to_hub`: `bool`, optional, default=`False`. Pushes the merged model to Hugging Face hub.
+    """
+    def __init__(self, merge_config, push_to_hub=False, merge_at_every_checkpoint=False):
+        self.push_to_hub = push_to_hub
+        self.merge_at_every_checkpoint = merge_at_every_checkpoint
+        self.merge_config = merge_config
+    
+    def on_save(self, args, state, control, model=None, **kwargs):
+        if self.merge_at_every_checkpoint:
+            policy_model_path = get_last_checkpoint_path(args.output_dir)
+            reference_model_path = model.config._name_or_path
+            self.merge_config.policy_model_path = policy_model_path
+            if not self.merge_config.target_model_path:
+                self.merge_config.target_model_path = reference_model_path
+            output_path = policy_model_path+"/merged"
+            
+            Merge(self.merge_config.create(),output_path)
+
+            if self.push_to_hub:
+                last_checkpoint = policy_model_path.split('/')[-1]
+                repo_name =  f"{args.logging_dir.split('/')[-1]}_{last_checkpoint}_merged"
+                upload_model_to_hf(output_path,repo_name)
+                
+    def on_train_end(self, args, state, control, model=None, **kwargs):
+        if not self.merge_at_every_checkpoint:
+            policy_model_path = get_last_checkpoint_path(args.output_dir)
+            reference_model_path = model.config._name_or_path
+            self.merge_config.policy_model_path = policy_model_path
+            if not self.merge_config.target_model_path:
+                self.merge_config.target_model_path = reference_model_path
+           
+            output_path = policy_model_path+"/merged"
+        
+            Merge(self.merge_config.create(),output_path)
+            
+            if self.push_to_hub:
+                repo_name =  f"{args.logging_dir.split('/')[-1]}_merged"
+                upload_model_to_hf(output_path,repo_name)
