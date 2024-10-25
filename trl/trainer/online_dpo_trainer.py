@@ -480,14 +480,15 @@ class OnlineDPOTrainer(Trainer):
 
             # Concatenate the prompts and completions and get the reward
             prompt_completion_ids = torch.cat((prompts_ids, completions_ids), dim=1)
-            _, scores, _ = get_reward(
-                self.reward_model, prompt_completion_ids, self.reward_processing_class.pad_token_id, context_length
-            )
+            with torch.inference_mode():
+                _, scores, _ = get_reward(
+                    self.reward_model, prompt_completion_ids, self.reward_processing_class.pad_token_id, context_length
+                )
 
-            # Filter completion. Ensure that the sample contains stop_token_id
-            # Completions not passing that filter will receive a lower score.
-            if self.args.missing_eos_penalty is not None:
-                scores[~contain_eos_token] -= self.args.missing_eos_penalty
+                # Filter completion. Ensure that the sample contains stop_token_id
+                # Completions not passing that filter will receive a lower score.
+                if self.args.missing_eos_penalty is not None:
+                    scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
             # Split the scores in 2 (the prompts of the first half are the same as the second half)
             first_half, second_half = scores.split(num_examples)
