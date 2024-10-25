@@ -93,8 +93,13 @@ if __name__ == "__main__":
             trust_remote_code=model_config.trust_remote_code,
             **model_kwargs,
         )
+        reward_tokenizer = AutoTokenizer.from_pretrained(
+            training_args.reward_model_path,
+            trust_remote_code=model_config.trust_remote_code,
+        )
     else:
         reward_model = None
+        reward_tokenizer = None
 
     if training_args.judge is not None:
         judge_cls = JUDGES[training_args.judge]
@@ -123,6 +128,7 @@ if __name__ == "__main__":
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
         processing_class=tokenizer,
+        reward_processing_class=reward_tokenizer,
         peft_config=get_peft_config(model_config),
     )
     generation_config = GenerationConfig(
