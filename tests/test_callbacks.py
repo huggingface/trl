@@ -28,7 +28,7 @@ class HalfPairwiseJudge(BasePairwiseJudge):
 
     def judge(self, prompts, completions, shuffle_order=True):
         # just check that the batch size is 2
-        assert len(prompts) == 2
+        self.assertEqual(len(prompts), 2)
         return [1, 0]
 
 
