@@ -1107,6 +1107,7 @@ class DPOTrainerTester(unittest.TestCase):
 
             assert output["nll_loss"].item() == pytest.approx(output2["nll_loss"].item())
             assert output["mean_chosen_logits"].item() == pytest.approx(output2["mean_chosen_logits"].item())
+            assert output["mean_rejected_logits"].item() == pytest.approx(output2["mean_rejected_logits"].item())
 
             for i in range(output["chosen_logps"].shape[0]):
                 assert output["chosen_logps"][i].item() == pytest.approx(output2["chosen_logps"][i].item())
