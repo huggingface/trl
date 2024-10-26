@@ -374,8 +374,8 @@ class LogCompletionsCallback(WandbCallback):
         self,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_prompts: int = None,
-        freq: int = None,
+        num_prompts: Optional[int] = None,
+        freq: Optional[int] = None,
     ):
         super().__init__()
         self.trainer = trainer
