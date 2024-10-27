@@ -91,7 +91,7 @@ The dataset should be formatted as a list of "messages" where each message is a 
 
 ##  Universal Logit Distillation Loss 
 
-In the case where the student and teacher vocabs differ, we can use the Universal Logit Distillation Loss (ULD) proposed in [Towards Cross-Tokenizer Distillation](https://huggingface.co/papers/2402.12030) to distill the teacher model into the student model by utilizing the Wasserstein distance between the teacher and student logit distributions. In the offline setting, this loss can be used in the [`GKDTrainer`] by passing a `teacher_processing_class` argument to the [`GKDTrainer`] and setting the `lmbda=0.0` in the [`GKDConfig`]. This trainer for non-zero `lmbda` will perform (partial) on-policy distillation which is as far as we are aware not mentioned in the ULD paper.
+In the case where the student and teacher vocabs differ, we can use the Universal Logit Distillation Loss (ULD) proposed in [Towards Cross-Tokenizer Distillation](https://huggingface.co/papers/2402.12030) to distill the teacher model into the student model by utilizing the Wasserstein distance between the teacher and student logit distributions. In the offline setting, this loss can be used in the [`GKDTrainer`] by passing a `teacher_processing_class` argument to the [`GKDTrainer`] and setting the `lmbda=0.0` and `seq_kd=True` in the [`GKDConfig`]. This trainer for non-zero `lmbda` or `seq_kd=False` will perform (partial) on-policy distillation which is as far as we are aware not mentioned in the ULD paper and could be an interesting extension.
 
 ## GKDTrainer
 
