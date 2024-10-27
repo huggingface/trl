@@ -123,7 +123,6 @@ class SetupChatFormatTestCase(unittest.TestCase):
         self.tokenizer.chat_template = None
 
     def test_setup_chat_format(self):
-        original_tokenizer_len = len(self.tokenizer)
         modified_model, modified_tokenizer = setup_chat_format(
             self.model, self.tokenizer, format="chatml", resize_to_multiple_of=64
         )
