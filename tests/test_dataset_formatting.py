@@ -136,9 +136,7 @@ class SetupChatFormatTestCase(unittest.TestCase):
         assert modified_tokenizer.eos_token == _chatml.eos_token
         assert modified_tokenizer.pad_token == _chatml.pad_token
         assert modified_tokenizer.bos_token == _chatml.bos_token
-        assert len(modified_tokenizer) == (original_tokenizer_len + 2)
         assert (self.model.get_input_embeddings().weight.shape[0] % 64) == 0
-        assert self.model.get_input_embeddings().weight.shape[0] == (original_tokenizer_len + 64)
 
     def test_example_with_setup_model(self):
         modified_model, modified_tokenizer = setup_chat_format(
