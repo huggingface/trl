@@ -24,10 +24,10 @@ The [`GKDTrainer`] is a wrapper around the [`SFTTrainer`] class that takes in a 
 * `seq_kd`:  controls whether to perform Sequence-Level KD (can be viewed as supervised FT on teacher-generated out). When `seq_kd=True` and `lmbda=0.0`, the loss reduces to supervised JSD, where the teacher generates output sequences and the student receives token-specific feedback on these sequences from the teacher. 
 * `beta`: controls the interpolation in the generalized Jensen-Shannon Divergence.  When `beta=0.0` the loss approximates forward KL divergence, while for `beta=1.0` the loss approximates reverse KL divergence. For values in between [0, 1] it interpolates between the two.
 
-The authors find that on-policy data (high `lmbda`) performs better and the optimal `beta` varied depending on the task and evaluation method.
+The authors find that on-policy data (high `lmbda`) performs better and the optimal `beta` varies depending on the task and evaluation method.
 
 > [!WARNING]
-> Make sure that `attn_implementation="flash_attention_2"` when training [Gemma models](https://huggingface.co/models?other=gemma2). Otherwise you will encounter NaNs in the logits due to the [soft capping technique](https://huggingface.co/blog/gemma2#soft-capping-and-attention-implementations) adopted by this architecture.
+> Make sure that `attn_implementation="flash_attention_2"` when training [Gemma models](https://huggingface.co/models?other=gemma2). Otherwise, you will encounter NaNs in the logits due to the [soft capping technique](https://huggingface.co/blog/gemma2#soft-capping-and-attention-implementations) adopted by this architecture.
 
 The basic API is as follows:
 
@@ -91,7 +91,7 @@ The dataset should be formatted as a list of "messages" where each message is a 
 
 ##  Universal Logit Distillation Loss 
 
-In the case where the student and teacher vocabs differ, we can use the Universal Logit Distillation Loss (ULD) proposed in [Towards Cross-Tokenizer Distillation](https://huggingface.co/papers/22402.12030) to distill the teacher model into the student model by utilizing the Wasserstein distance between the teacher and student logit distributions. In the offline setting this loss can be used in the [`GKDTrainer`] by passing a `teacher_processing_class` argument to the [`GKDTrainer`] and setting the `lmbda=0.0` in the [`GKDConfig`]. This trainer for non-zero `lmbda` will perform (partial) on-policy distillation which is as far as we are aware of not mentioned in the ULD paper.
+In the case where the student and teacher vocabs differ, we can use the Universal Logit Distillation Loss (ULD) proposed in [Towards Cross-Tokenizer Distillation](https://huggingface.co/papers/2402.12030) to distill the teacher model into the student model by utilizing the Wasserstein distance between the teacher and student logit distributions. In the offline setting, this loss can be used in the [`GKDTrainer`] by passing a `teacher_processing_class` argument to the [`GKDTrainer`] and setting the `lmbda=0.0` in the [`GKDConfig`]. This trainer for non-zero `lmbda` will perform (partial) on-policy distillation which is as far as we are aware not mentioned in the ULD paper.
 
 ## GKDTrainer
 
