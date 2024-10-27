@@ -117,8 +117,8 @@ class DatasetFormattingTestCase(unittest.TestCase):
 
 class SetupChatFormatTestCase(unittest.TestCase):
     def setUp(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
-        self.model = AutoModelForCausalLM.from_pretrained("hf-internal-testing/tiny-random-MistralForCausalLM")
+        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
+        self.model = AutoModelForCausalLM.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
         # remove built-in chat_template to simulate a model having no chat_template
         self.tokenizer.chat_template = None
 

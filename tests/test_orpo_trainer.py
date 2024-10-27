@@ -25,7 +25,7 @@ from trl import ORPOConfig, ORPOTrainer
 
 class ORPOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -37,9 +37,9 @@ class ORPOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("gpt2", "standard_preference"),
+            ("qwen", "standard_preference"),
             ("t5", "standard_implicit_prompt_preference"),
-            ("gpt2", "conversational_preference"),
+            ("qwen", "conversational_preference"),
             ("t5", "conversational_implicit_prompt_preference"),
         ]
     )
@@ -59,7 +59,7 @@ class ORPOTrainerTester(unittest.TestCase):
 
             dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            if name == "gpt2":
+            if name == "qwen":
                 model = self.model
                 tokenizer = self.tokenizer
             elif name == "t5":

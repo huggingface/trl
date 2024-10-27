@@ -25,7 +25,7 @@ from trl import CPOConfig, CPOTrainer
 
 class CPOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -37,13 +37,13 @@ class CPOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", "sigmoid", "standard_preference"],
+            ["qwen", "sigmoid", "standard_preference"],
             ["t5", "hinge", "standard_implicit_prompt_preference"],
-            ["gpt2", "ipo", "conversational_preference"],
+            ["qwen", "ipo", "conversational_preference"],
             ["t5", "ipo", "conversational_implicit_prompt_preference"],
-            ["gpt2", "simpo", "standard_preference"],
+            ["qwen", "simpo", "standard_preference"],
             ["t5", "simpo", "standard_implicit_prompt_preference"],
-            ["gpt2", "hinge", "conversational_preference"],
+            ["qwen", "hinge", "conversational_preference"],
         ]
     )
     def test_cpo_trainer(self, name, loss_type, config_name):
@@ -64,7 +64,7 @@ class CPOTrainerTester(unittest.TestCase):
 
             dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            if name == "gpt2":
+            if name == "qwen":
                 model = self.model
                 tokenizer = self.tokenizer
             elif name == "t5":

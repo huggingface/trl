@@ -155,7 +155,7 @@ class TestTokenizeRow(unittest.TestCase):
 
 class DPOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -169,24 +169,24 @@ class DPOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", "sigmoid", True],
+            ["qwen", "sigmoid", True],
             ["t5", "hinge", False],
-            ["gpt2", "ipo", False],
+            ["qwen", "ipo", False],
             ["t5", "ipo", True],
-            ["gpt2", "aot_pair", True],
+            ["qwen", "aot_pair", True],
             ["t5", "aot_pair", False],
-            ["gpt2", "aot", True],
+            ["qwen", "aot", True],
             ["t5", "aot", False],
-            ["gpt2", "bco_pair", False],
+            ["qwen", "bco_pair", False],
             ["t5", "bco_pair", True],
-            ["gpt2", "sppo_hard", False],
+            ["qwen", "sppo_hard", False],
             ["t5", "sppo_hard", True],
-            ["gpt2", "nca_pair", False],
+            ["qwen", "nca_pair", False],
             ["t5", "nca_pair", True],
-            ["gpt2", "robust", True],
-            ["gpt2", "exo_pair", False],
+            ["qwen", "robust", True],
+            ["qwen", "exo_pair", False],
             ["t5", "exo_pair", True],
-            ["gpt2", "apo_zero", True],
+            ["qwen", "apo_zero", True],
             ["t5", "apo_down", False],
         ]
     )
@@ -208,7 +208,7 @@ class DPOTrainerTester(unittest.TestCase):
 
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-            if name == "gpt2":
+            if name == "qwen":
                 model = self.model
                 ref_model = self.ref_model
                 tokenizer = self.tokenizer
@@ -606,7 +606,7 @@ class DPOTrainerTester(unittest.TestCase):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
 
-        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         lora_config = LoraConfig(
@@ -656,30 +656,30 @@ class DPOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", "sigmoid", False, False],
-            ["gpt2", "sigmoid", False, True],
-            ["gpt2", "sigmoid", True, False],
-            ["gpt2", "sigmoid", True, True],
-            ["gpt2", "ipo", False, False],
-            ["gpt2", "ipo", False, True],
-            ["gpt2", "ipo", True, False],
-            ["gpt2", "ipo", True, True],
-            ["gpt2", "aot_pair", False, False],
-            ["gpt2", "aot_pair", False, True],
-            ["gpt2", "aot_pair", True, False],
-            ["gpt2", "aot_pair", True, True],
-            ["gpt2", "aot", False, False],
-            ["gpt2", "aot", False, True],
-            ["gpt2", "aot", True, False],
-            ["gpt2", "aot", True, True],
-            ["gpt2", "bco_pair", False, False],
-            ["gpt2", "bco_pair", False, True],
-            ["gpt2", "bco_pair", True, False],
-            ["gpt2", "bco_pair", True, True],
-            ["gpt2", "robust", False, False],
-            ["gpt2", "robust", False, True],
-            ["gpt2", "robust", True, False],
-            ["gpt2", "robust", True, True],
+            ["qwen", "sigmoid", False, False],
+            ["qwen", "sigmoid", False, True],
+            ["qwen", "sigmoid", True, False],
+            ["qwen", "sigmoid", True, True],
+            ["qwen", "ipo", False, False],
+            ["qwen", "ipo", False, True],
+            ["qwen", "ipo", True, False],
+            ["qwen", "ipo", True, True],
+            ["qwen", "aot_pair", False, False],
+            ["qwen", "aot_pair", False, True],
+            ["qwen", "aot_pair", True, False],
+            ["qwen", "aot_pair", True, True],
+            ["qwen", "aot", False, False],
+            ["qwen", "aot", False, True],
+            ["qwen", "aot", True, False],
+            ["qwen", "aot", True, True],
+            ["qwen", "bco_pair", False, False],
+            ["qwen", "bco_pair", False, True],
+            ["qwen", "bco_pair", True, False],
+            ["qwen", "bco_pair", True, True],
+            ["qwen", "robust", False, False],
+            ["qwen", "robust", False, True],
+            ["qwen", "robust", True, False],
+            ["qwen", "robust", True, True],
         ]
     )
     @require_bitsandbytes
@@ -740,7 +740,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_lora_tags(self):
         from peft import LoraConfig
 
-        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         lora_config = LoraConfig(
@@ -785,7 +785,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_peft
     def test_dpo_tags(self):
-        model_id = "HuggingFaceM4/tiny-random-LlamaForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
@@ -957,7 +957,7 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
     def test_dpo_loss_alpha_div_f(self):
-        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
@@ -1000,7 +1000,7 @@ class DPOTrainerTester(unittest.TestCase):
             assert torch.isfinite(losses).cpu().numpy().all()
 
     def test_dpo_loss_js_div_f(self):
-        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
@@ -1046,7 +1046,7 @@ class DPOTrainerTester(unittest.TestCase):
 class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
-            ["trl-internal-testing/tiny-random-idefics2"],
+            ["qgallouedec/tiny-Idefics2ForConditionalGeneration"],
             ["trl-internal-testing/tiny-random-paligemma"],
             ["trl-internal-testing/tiny-random-llava-1.5"],
         ]
@@ -1096,8 +1096,6 @@ class DPOVisionTrainerTester(unittest.TestCase):
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_length=512,
-                max_prompt_length=512,
                 remove_unused_columns=False,
                 report_to="none",
             )

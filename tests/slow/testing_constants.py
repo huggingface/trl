@@ -14,8 +14,8 @@
 
 # TODO: push them under trl-org
 MODELS_TO_TEST = [
-    "trl-internal-testing/tiny-random-LlamaForCausalLM",
-    "HuggingFaceM4/tiny-random-MistralForCausalLM",
+    "qgallouedec/tiny-LlamaForCausalLM-3.2",
+    "qgallouedec/tiny-MistralForCausalLM-0.3",
 ]
 
 # We could have also not declared these variables but let's be verbose

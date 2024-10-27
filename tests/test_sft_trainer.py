@@ -59,7 +59,7 @@ class SFTTrainerTester(unittest.TestCase):
     r""" """
 
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token

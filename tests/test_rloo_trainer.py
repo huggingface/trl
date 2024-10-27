@@ -85,8 +85,8 @@ def test_rloo_reward():
 
 class RLOOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.sft_model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        self.reward_model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.sft_model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        self.reward_model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
 
         self.policy_model = AutoModelForCausalLM.from_pretrained(self.sft_model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id)

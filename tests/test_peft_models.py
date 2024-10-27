@@ -30,7 +30,7 @@ if is_peft_available():
 @require_peft
 class PeftModelTester(unittest.TestCase):
     def setUp(self):
-        self.causal_lm_model_id = "trl-internal-testing/tiny-random-GPTNeoXForCausalLM"
+        self.causal_lm_model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         self.lora_config = LoraConfig(
             r=16,
             lora_alpha=32,
