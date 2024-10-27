@@ -14,10 +14,13 @@
 
 from huggingface_hub import ModelCard
 from transformers import (
+    AutoProcessor,
     AutoTokenizer,
     CohereConfig,
     CohereForCausalLM,
     CohereTokenizerFast,
+    Idefics2Config,
+    Idefics2ForConditionalGeneration,
     LlamaConfig,
     LlamaForCausalLM,
     LlamaTokenizerFast,
@@ -32,7 +35,6 @@ from transformers import (
     T5ForConditionalGeneration,
     T5TokenizerFast,
 )
-from transformers import Idefics2Config, AutoProcessor, MistralConfig, Idefics2ForConditionalGeneration
 from transformers.models.idefics2.configuration_idefics2 import Idefics2VisionConfig
 
 
@@ -62,143 +64,142 @@ def push_to_hub(model, tokenizer, suffix=None):
     model_card.push_to_hub(repo_id)
 
 
-# # Cohere
-# tokenizer = CohereTokenizerFast.from_pretrained("CohereForAI/aya-expanse-8b")
-# vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
-# config = CohereConfig(
-#     vocab_size=vocab_size,
-#     hidden_size=8,
-#     num_attention_heads=4,
-#     num_key_value_heads=2,
-#     num_hidden_layers=2,
-#     intermediate_size=32,
-# )
-# model = CohereForCausalLM(config)
-# push_to_hub(model, tokenizer)
+# Cohere
+tokenizer = CohereTokenizerFast.from_pretrained("CohereForAI/aya-expanse-8b")
+vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
+config = CohereConfig(
+    vocab_size=vocab_size,
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = CohereForCausalLM(config)
+push_to_hub(model, tokenizer)
 
-# # Llama 3
-# tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
-# vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
-# config = LlamaConfig(
-#     vocab_size=vocab_size,
-#     hidden_size=8,
-#     num_attention_heads=4,
-#     num_key_value_heads=2,
-#     num_hidden_layers=2,
-#     intermediate_size=32,
-# )
-# model = LlamaForCausalLM(config)
-# push_to_hub(model, tokenizer, suffix="3")
+# Llama 3
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
+vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
+config = LlamaConfig(
+    vocab_size=vocab_size,
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = LlamaForCausalLM(config)
+push_to_hub(model, tokenizer, suffix="3")
 
-# # Llama 3.1
-# tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
-# vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
-# config = LlamaConfig(
-#     vocab_size=vocab_size,
-#     hidden_size=8,
-#     num_attention_heads=4,
-#     num_key_value_heads=2,
-#     num_hidden_layers=2,
-#     intermediate_size=32,
-# )
-# model = LlamaForCausalLM(config)
-# push_to_hub(model, tokenizer, suffix="3.1")
+# Llama 3.1
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
+config = LlamaConfig(
+    vocab_size=vocab_size,
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = LlamaForCausalLM(config)
+push_to_hub(model, tokenizer, suffix="3.1")
 
-# # Llama 3.2
-# tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-# vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
-# config = LlamaConfig(
-#     vocab_size=vocab_size,
-#     hidden_size=8,
-#     num_attention_heads=4,
-#     num_key_value_heads=2,
-#     num_hidden_layers=2,
-#     intermediate_size=32,
-# )
-# model = LlamaForCausalLM(config)
-# push_to_hub(model, tokenizer, suffix="3.2")
-
-
-# # Mistral v0.1
-# tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.1")
-# config = MistralConfig(
-#     vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-#     hidden_size=8,
-#     num_attention_heads=4,
-#     num_key_value_heads=2,
-#     num_hidden_layers=2,
-#     intermediate_size=32,
-# )
-# model = MistralForCausalLM(config)
-# push_to_hub(model, tokenizer, suffix="0.1")
-
-# # Mistral v0.2
-# tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2")
-# config = MistralConfig(
-#     vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-#     hidden_size=8,
-#     num_attention_heads=4,
-#     num_key_value_heads=2,
-#     num_hidden_layers=2,
-#     intermediate_size=32,
-# )
-# model = MistralForCausalLM(config)
-# push_to_hub(model, tokenizer, suffix="0.2")
-
-# # Mistral v0.3
-# tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3")
-# config = MistralConfig(
-#     vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-#     hidden_size=8,
-#     num_attention_heads=4,
-#     num_key_value_heads=2,
-#     num_hidden_layers=2,
-#     intermediate_size=32,
-# )
-# model = MistralForCausalLM(config)
-# push_to_hub(model, tokenizer, suffix="0.3")
+# Llama 3.2
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
+vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
+config = LlamaConfig(
+    vocab_size=vocab_size,
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = LlamaForCausalLM(config)
+push_to_hub(model, tokenizer, suffix="3.2")
 
 
-# # Phi3
-# tokenizer = LlamaTokenizerFast.from_pretrained("microsoft/Phi-3.5-mini-instruct")
-# config = Phi3Config(
-#     vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-#     hidden_size=8,
-#     num_attention_heads=4,
-#     num_key_value_heads=2,
-#     num_hidden_layers=2,
-#     intermediate_size=32,
-# )
-# model = Phi3ForCausalLM(config)
-# push_to_hub(model, tokenizer)
+# Mistral v0.1
+tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.1")
+config = MistralConfig(
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = MistralForCausalLM(config)
+push_to_hub(model, tokenizer, suffix="0.1")
 
-# # Qwen
-# tokenizer = Qwen2Tokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
-# config = Qwen2Config(
-#     vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-#     hidden_size=8,
-#     num_attention_heads=4,
-#     num_key_value_heads=2,
-#     num_hidden_layers=2,
-#     intermediate_size=32,
-# )
-# model = Qwen2ForCausalLM(config)
-# push_to_hub(model, tokenizer)
+# Mistral v0.2
+tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2")
+config = MistralConfig(
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = MistralForCausalLM(config)
+push_to_hub(model, tokenizer, suffix="0.2")
 
-# # T5
-# tokenizer = T5TokenizerFast.from_pretrained("google/flan-t5-small")
-# config = T5Config(
-#     vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-#     d_model=16,
-#     d_kv=2,
-#     d_ff=64,
-#     num_layers=6,
-#     num_heads=8,
-#     decoder_start_token_id=0,
-# )
-# model = T5ForConditionalGeneration(config)
-# push_to_hub(model, tokenizer)
+# Mistral v0.3
+tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3")
+config = MistralConfig(
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = MistralForCausalLM(config)
+push_to_hub(model, tokenizer, suffix="0.3")
 
+
+# Phi3
+tokenizer = LlamaTokenizerFast.from_pretrained("microsoft/Phi-3.5-mini-instruct")
+config = Phi3Config(
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = Phi3ForCausalLM(config)
+push_to_hub(model, tokenizer)
+
+# Qwen
+tokenizer = Qwen2Tokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
+config = Qwen2Config(
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    hidden_size=8,
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = Qwen2ForCausalLM(config)
+push_to_hub(model, tokenizer)
+
+# T5
+tokenizer = T5TokenizerFast.from_pretrained("google/flan-t5-small")
+config = T5Config(
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    d_model=16,
+    d_kv=2,
+    d_ff=64,
+    num_layers=6,
+    num_heads=8,
+    decoder_start_token_id=0,
+)
+model = T5ForConditionalGeneration(config)
+push_to_hub(model, tokenizer)
 
 
 # Idefics2
