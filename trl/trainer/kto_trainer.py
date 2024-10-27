@@ -218,17 +218,20 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
         )
 
         # add BOS, which affects both prompt and the full completion
-        if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
-            batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
-                f"{kwargs['prefix']}prompt_input_ids"
-            ]
-            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[f"{kwargs['prefix']}prompt_attention_mask"]
-            batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
-                f"{kwargs['prefix']}completion_input_ids"
-            ]
-            batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
-                f"{kwargs['prefix']}completion_attention_mask"
-            ]
+        if bos_token_id is not None:
+            if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
+                batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
+                    f"{kwargs['prefix']}prompt_input_ids"
+                ]
+                batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[
+                    f"{kwargs['prefix']}prompt_attention_mask"
+                ]
+                batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
+                    f"{kwargs['prefix']}completion_input_ids"
+                ]
+                batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
+                    f"{kwargs['prefix']}completion_attention_mask"
+                ]
         # add EOS, which affects only the full completion
         if len(all_tokens["answer_input_ids"]) == 0 or eos_token_id != all_tokens["answer_input_ids"][-1]:
             batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
