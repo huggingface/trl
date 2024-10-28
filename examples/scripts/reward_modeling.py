@@ -124,9 +124,11 @@ if __name__ == "__main__":
     # Save model and push to Hub
     ############################
     trainer.save_model(training_args.output_dir)
-    metrics = trainer.evaluate()
-    trainer.log_metrics("eval", metrics)
-    trainer.save_metrics("eval", metrics)
+
+    if training_args.eval_strategy != "no":
+        metrics = trainer.evaluate()
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
 
     # Save and push to hub
     trainer.save_model(training_args.output_dir)

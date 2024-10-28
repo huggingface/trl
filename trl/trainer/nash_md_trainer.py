@@ -122,6 +122,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
+            reward_processing_class=processing_class,  # for now, NashMDTrainer can't use any reward model
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
