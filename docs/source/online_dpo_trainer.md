@@ -79,19 +79,16 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
 
 - judge = PairRMJudge()
 + reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
++ reward_tokenizer = AutoTokenizer.from_pretrained("trl-lib/Qwen2-0.5B-Reward")
 
   trainer = OnlineDPOTrainer(
       ...
 -     judge=judge,
 +     reward_model=reward_model,
++     reward_processing_class=reward_tokenizer,
+      ...
   )
 ```
-
-<Tip warning={true}>
-
-Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
-
-</Tip>
 
 ### Encourage EOS token generation
 
