@@ -40,7 +40,7 @@ from transformers import (
     is_apex_available,
     is_wandb_available,
 )
-from transformers.trainer_utils import EvalPrediction, seed_worker
+from transformers.trainer_utils import EvalPrediction, SaveStrategy, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
@@ -614,9 +614,13 @@ class OnlineDPOTrainer(Trainer):
         metrics = None
         if self.control.should_evaluate:
             metrics = self._evaluate(trial, ignore_keys_for_eval)
+            is_new_best_metric = self._determine_best_metric(metrics=metrics, trial=trial)
+
+            if self.args.save_strategy == SaveStrategy.BEST:
+                self.control.should_save = is_new_best_metric
 
         if self.control.should_save:
-            self._save_checkpoint(model, trial, metrics=metrics)
+            self._save_checkpoint(model, trial)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def create_model_card(
