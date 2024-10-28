@@ -21,7 +21,6 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import OnlineDPOConfig, OnlineDPOTrainer, RandomPairwiseJudge, is_llmblender_available
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if is_peft_available():
