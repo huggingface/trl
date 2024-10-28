@@ -290,12 +290,13 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
             )
             trainer = OnlineDPOTrainer(
-                args=training_args,
-                processing_class=tokenizer,
                 model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
+                args=training_args,
                 train_dataset=dataset,
+                processing_class=tokenizer,
+                reward_processing_class=tokenizer,
             )
             self.assertEqual(trainer.args.max_new_tokens, 42)
             self.assertEqual(trainer.args.temperature, 0.5)
