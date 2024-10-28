@@ -93,8 +93,15 @@ if __name__ == "__main__":
             trust_remote_code=model_config.trust_remote_code,
             **model_kwargs,
         )
+        reward_tokenizer = AutoTokenizer.from_pretrained(
+            training_args.reward_model_path,
+            trust_remote_code=model_config.trust_remote_code,
+            truncation=True,
+            truncation_side="left",  # since we judge the completion, truncating left is more appropriate
+        )
     else:
         reward_model = None
+        reward_tokenizer = None
 
     if training_args.judge is not None:
         judge_cls = JUDGES[training_args.judge]
@@ -123,13 +130,17 @@ if __name__ == "__main__":
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
+        reward_processing_class=reward_tokenizer,
         peft_config=get_peft_config(model_config),
     )
-    generation_config = GenerationConfig(
-        max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
-    )
-    completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
-    trainer.add_callback(completions_callback)
+
+    if training_args.eval_strategy != "no":
+        generation_config = GenerationConfig(
+            max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
+        )
+        completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
+        trainer.add_callback(completions_callback)
+
     trainer.train()
 
     # Save and push to hub
