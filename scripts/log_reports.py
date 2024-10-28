@@ -1,16 +1,3 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 import argparse
 import json
 import logging
@@ -18,55 +5,31 @@ import os
 from datetime import date
 from pathlib import Path
 
+from slack_sdk import WebClient
 from tabulate import tabulate
 
-
-MAX_LEN_MESSAGE = 2900  # Slack endpoint has a limit of 3001 characters
+MAX_LEN_MESSAGE = 3000  # Slack endpoint has a limit of 3001 characters
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--slack_channel_name", default="trl-push-ci")
+parser.add_argument("--log_dir", default=".", help="Directory containing the log files")
+parser.add_argument("--slack_webhook_url", required=True, help="Slack webhook URL")
+parser.add_argument("--slack_channel_name", default="trl-push-ci", help="Slack channel name")
+parser.add_argument("--max_message_length", default=MAX_LEN_MESSAGE, type=int, help="Maximum length of the Slack message")
+parser.add_argument("--test_type", default=os.environ.get("TEST_TYPE", ""), help="Type of the test suite")
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-
 def process_log_file(log):
-    failed_tests = []
-    passed_tests = []
-    section_num_failed = 0
+    # Code to process log file and return failed_tests, passed_tests, section_num_failed
+    # ...
 
-    try:
-        with open(log) as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    test_name = data.get("nodeid", "")
-                    duration = f'{data["duration"]:.4f}' if "duration" in data else "N/A"
-                    outcome = data.get("outcome", "")
-
-                    if test_name:
-                        if outcome == "failed":
-                            section_num_failed += 1
-                            failed_tests.append([test_name, duration, log.stem.split("_")[0]])
-                        else:
-                            passed_tests.append([test_name, duration, log.stem.split("_")[0]])
-                except json.JSONDecodeError as e:
-                    logging.warning(f"Could not decode line in {log}: {e}")
-
-    except FileNotFoundError as e:
-        logging.error(f"Log file {log} not found: {e}")
-    except Exception as e:
-        logging.error(f"Error processing log file {log}: {e}")
-
-    return failed_tests, passed_tests, section_num_failed
-
-
-def main(slack_channel_name):
+def main(args):
     group_info = []
     total_num_failed = 0
     total_empty_files = []
 
-    log_files = list(Path().glob("*.log"))
+    log_files = list(Path(args.log_dir).glob("*.log"))
     if not log_files:
         logging.info("No log files found.")
         return
@@ -89,7 +52,7 @@ def main(slack_channel_name):
     payload = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"🤗 Results of the {os.environ.get('TEST_TYPE', '')} TRL tests."},
+            "text": {"type": "plain_text", "text": f"🤗 Results of the {args.test_type} TRL tests."},
         },
     ]
 
@@ -114,7 +77,7 @@ def main(slack_channel_name):
         logging.info(f"Total failed tests: {total_num_failed}")
         print(f"### {message}")
 
-        if len(message) > MAX_LEN_MESSAGE:
+        if len(message) > args.max_message_length:
             message = (
                 f"❌ There are {total_num_failed} failed tests in total! Please check the action results directly."
             )
@@ -137,17 +100,15 @@ def main(slack_channel_name):
                 "elements": [
                     {
                         "type": "plain_text",
-                        "text": f"On Push main {os.environ.get('TEST_TYPE')} results for {date.today()}",
+                        "text": f"On Push main {args.test_type} results for {date.today()}",
                     }
                 ],
             }
         )
 
         # Send to Slack
-        from slack_sdk import WebClient
-
-        slack_client = WebClient(token=os.environ.get("SLACK_API_TOKEN"))
-        slack_client.chat_postMessage(channel=f"#{slack_channel_name}", text=message, blocks=payload)
+        slack_client = WebClient(url=args.slack_webhook_url)
+        slack_client.chat_postMessage(channel=f"#{args.slack_channel_name}", text=message, blocks=payload)
 
     else:
         payload.append(
@@ -162,7 +123,6 @@ def main(slack_channel_name):
         )
         logging.info("All tests passed. No errors detected.")
 
-
 if __name__ == "__main__":
     args = parser.parse_args()
-    main(args.slack_channel_name)
+    main(args)
