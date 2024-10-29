@@ -54,16 +54,16 @@ from trl import (
     ModelConfig,
     RewardConfig,
     RewardTrainer,
+    ScriptArguments,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
     setup_chat_format,
 )
-from trl.commands.cli_utils import RewardScriptArguments
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((RewardScriptArguments, RewardConfig, ModelConfig))
+    parser = HfArgumentParser((ScriptArguments, RewardConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_into_dataclasses()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
@@ -81,6 +81,7 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
         use_cache=False if training_args.gradient_checkpointing else True,
+        torch_dtype=torch_dtype,
     )
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
@@ -114,7 +115,7 @@ if __name__ == "__main__":
         processing_class=tokenizer,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         peft_config=get_peft_config(model_config),
     )
     trainer.train()
@@ -123,9 +124,11 @@ if __name__ == "__main__":
     # Save model and push to Hub
     ############################
     trainer.save_model(training_args.output_dir)
-    metrics = trainer.evaluate()
-    trainer.log_metrics("eval", metrics)
-    trainer.save_metrics("eval", metrics)
+
+    if training_args.eval_strategy != "no":
+        metrics = trainer.evaluate()
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
 
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
