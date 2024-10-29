@@ -142,3 +142,25 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         self.assertTrue((input_ids_remove_pad == batch_paddingfree["input_ids"]).all())
         self.assertTrue((expected_position_ids == batch_paddingfree["position_ids"]).all())
         self.assertTrue((expected_labels == batch_paddingfree["labels"]).all())
+
+    def test_token_validation_warnings(self):
+        """Test that the collator properly warns about out-of-vocabulary tokens"""
+        tokenizer = AutoTokenizer.from_pretrained(
+            "trl-internal-testing/dummy-GPT2-correct-vocab")
+        response_template = "\n### Assistant:"
+        collator = DataCollatorForCompletionOnlyLM(
+            response_template, tokenizer=tokenizer)
+
+        vocab_size = tokenizer.vocab_size
+        invalid_sequence = [1, 2, vocab_size + 1, 4,
+                            vocab_size + 2]
+
+        with self.assertWarns(UserWarning) as warning_context:
+            collator.torch_call([invalid_sequence])
+
+        warning_msg = str(warning_context.warning)
+        print(warning_msg)
+        self.assertIn(
+            "Found token IDs exceeding the vocabulary size", warning_msg)
+        self.assertIn(f"Vocabulary size: {vocab_size}", warning_msg)
+        self.assertIn(str(vocab_size + 1), warning_msg)

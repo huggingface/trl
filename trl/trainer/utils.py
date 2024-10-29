@@ -140,6 +140,38 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
         self.ignore_index = ignore_index
         self.padding_free = padding_free
+    
+    def _validate_tokens(self, batch: Dict[str, Any]) -> None:
+        """
+        Validates token IDs in the batch and warns if they are outside the tokenizer's vocabulary range.
+
+        Args:
+            batch: The batch of data containing input_ids and labels
+        """
+        if not hasattr(self.tokenizer, 'vocab_size'):
+            return
+
+        for key in ['input_ids', 'labels']:
+            if key not in batch or not torch.is_tensor(batch[key]):
+                continue
+
+            max_token_id = batch[key].max().item()
+            if max_token_id >= self.tokenizer.vocab_size:
+                problematic_indices = torch.where(
+                    batch[key] >= self.tokenizer.vocab_size)
+                problematic_tokens = batch[key][problematic_indices].tolist()
+
+                warnings.warn(
+                    f"Found token IDs exceeding the vocabulary size in '{key}':\n"
+                    f"- Max token ID: {max_token_id}\n"
+                    f"- Vocabulary size: {self.tokenizer.vocab_size}\n"
+                    f"- Number of invalid tokens: {len(problematic_tokens)}\n"
+                    f"- Invalid token IDs: {problematic_tokens}\n\n"
+                    f"This often occurs when:\n"
+                    f"1. The tokenizer vocabulary has been modified without updating the model\n"
+                    f"2. Custom tokens were added without resizing model embeddings\n\n"
+                    f"These tokens will likely cause issues during training."
+                )
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         batch = super().torch_call(examples)
