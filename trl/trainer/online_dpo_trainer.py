@@ -44,7 +44,7 @@ from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
-from ..data_utils import is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
@@ -137,6 +137,7 @@ class OnlineDPOTrainer(Trainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
+        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         peft_config: Optional[Dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -161,6 +162,7 @@ class OnlineDPOTrainer(Trainer):
             raise ValueError("Either `reward_model` or `judge` must be provided.")
 
         self.reward_model = reward_model
+        self.reward_processing_class = reward_processing_class
         self.judge = judge
 
         if args.missing_eos_penalty is not None and judge is not None:
@@ -428,18 +430,23 @@ class OnlineDPOTrainer(Trainer):
             ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
             del ref_output, ref_logits, ref_all_logprobs  # free memory
 
-        # Get the reward from the reward model or judge:
-        if self.judge is not None:
-            completions = self.processing_class.batch_decode(
-                prompt_completion_ids[:, context_length:], skip_special_tokens=True
-            )
-            completions = [completion.strip() for completion in completions]  # remove the leading space
+        # Decode the completions, and format them if the input is conversational
+        device = prompt_completion_ids.device
+        completions_ids = prompt_completion_ids[:, context_length:]
+        completions = self.processing_class.batch_decode(completions_ids, skip_special_tokens=True)
+        if is_conversational({"prompt": prompts[0]}):
+            completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
+        # Get the reward from the reward model or judge
+        if self.judge is not None:
+            # Once formatted, conversational data may contain special tokens (such as <|im_start|>) that are not
+            # directly understandable by the judge and could alter its judgment. To avoid this and make the judge
+            # independent of the model's chat template, we use the raw conversation data, and apply our own chat
+            # template to it.
             if is_conversational({"prompt": prompts[0]}):
-                completions = [[{"role": "assistant", "content": completion}] for completion in completions]
                 environment = jinja2.Environment()
                 template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
-                prompts = [template.render(messages=message) for message in prompts]
+                prompts = [template.render(messages=prompt) for prompt in prompts]
                 completions = [template.render(messages=completion) for completion in completions]
 
             ranks_of_first_completion = self.judge.judge(
@@ -449,16 +456,39 @@ class OnlineDPOTrainer(Trainer):
             # convert ranks to a True/False mask:
             # when rank == 0, it means the first completion is the best
             # when rank == 1, it means the second completion is the best
-            mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=prompt_completion_ids.device)
+            mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=device)
         else:
-            _, scores, _ = get_reward(
-                self.reward_model, prompt_completion_ids, self.processing_class.pad_token_id, context_length
-            )
+            # The reward model may not have the same chat template or tokenizer as the model, so we need to use the
+            # raw data (string), apply the chat template (if needed), and tokenize it with the reward processing class.
+            prompts = 2 * prompts  # repeat the prompt: [prompt0, prompt1] -> [prompt0, prompt1, prompt0, prompt1]
+            if is_conversational({"prompt": prompts[0]}):
+                examples = [{"prompt": p, "completion": c} for p, c in zip(prompts, completions)]
+                examples = [apply_chat_template(example, self.reward_processing_class) for example in examples]
+                prompts = [example["prompt"] for example in examples]
+                completions = [example["completion"] for example in examples]
 
-            # Filter completion. Ensure that the sample contains stop_token_id
-            # Completions not passing that filter will receive a lower score.
-            if self.args.missing_eos_penalty is not None:
-                scores[~contain_eos_token] -= self.args.missing_eos_penalty
+            # Tokenize the prompts
+            prompts_ids = self.reward_processing_class(
+                prompts, padding=True, return_tensors="pt", padding_side="left"
+            )["input_ids"].to(device)
+            context_length = prompts_ids.shape[1]
+
+            # Tokenize the completions
+            completions_ids = self.reward_processing_class(
+                completions, padding=True, return_tensors="pt", padding_side="right"
+            )["input_ids"].to(device)
+
+            # Concatenate the prompts and completions and get the reward
+            prompt_completion_ids = torch.cat((prompts_ids, completions_ids), dim=1)
+            with torch.inference_mode():
+                _, scores, _ = get_reward(
+                    self.reward_model, prompt_completion_ids, self.reward_processing_class.pad_token_id, context_length
+                )
+
+                # Filter completion. Ensure that the sample contains stop_token_id
+                # Completions not passing that filter will receive a lower score.
+                if self.args.missing_eos_penalty is not None:
+                    scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
             # Split the scores in 2 (the prompts of the first half are the same as the second half)
             first_half, second_half = scores.split(num_examples)
@@ -466,7 +496,7 @@ class OnlineDPOTrainer(Trainer):
             # Get the indices of the chosen and rejected examples
             mask = first_half >= second_half
 
-        num_examples_range = torch.arange(num_examples, device=prompt_completion_ids.device)
+        num_examples_range = torch.arange(num_examples, device=device)
         chosen_indices = num_examples_range + (~mask * num_examples)
         rejected_indices = num_examples_range + (mask * num_examples)
 

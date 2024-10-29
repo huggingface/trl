@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import PairRMJudge, XPOConfig, XPOTrainer, is_llmblender_available
+from trl import RandomPairwiseJudge, XPOConfig, XPOTrainer, is_llmblender_available
 
 
 if is_peft_available():
@@ -171,7 +171,7 @@ class TestXPOTrainer(unittest.TestCase):
                 report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
-            judge = PairRMJudge()
+            judge = RandomPairwiseJudge()
 
             trainer = XPOTrainer(
                 model=self.model,
