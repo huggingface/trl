@@ -151,7 +151,8 @@ class BaseBinaryJudge(BaseJudge):
         """
         Judge the completion for a given prompt. Used to assess if a completion satisfies a constraint.
 
-        This base class should be used to implement binary evaluations as done in section 4.1.4 of the CGPO paper (https://arxiv.org/pdf/2409.20370).
+        This base class should be used to implement binary evaluations as done in section 4.1.4 of the
+        [CGPO paper](https://huggingface.co/papers/2409.20370).
         It is relevant for assessing whether or not a prompt completion pair satisfies a specific contraint.
 
         Args:
