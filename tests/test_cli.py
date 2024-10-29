@@ -14,6 +14,10 @@
 import subprocess
 import sys
 import unittest
+from pathlib import Path
+import os
+import glob
+from trl.commands.cli_utils import populate_supported_commands
 
 
 @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
@@ -43,3 +47,22 @@ def test_dpo_cli():
 def test_env_cli():
     output = subprocess.run("trl env", capture_output=True, text=True, shell=True, check=True)
     assert "- Python version: " in output.stdout
+
+
+def test_populate_supported_commands():
+    commands = populate_supported_commands()
+    
+    # Check for specific commands
+    assert 'sft' in commands, "SFT command not found"
+    assert 'dpo' in commands, "DPO command not found"
+    
+    # Check that all commands are strings and don't have .py extension
+    for cmd in commands:
+        assert isinstance(cmd, str), f"Command {cmd} is not a string"
+        assert not cmd.endswith('.py'), f"Command {cmd} should not have .py extension"
+    
+    # Check that the number of commands matches the number of .py files in the scripts directory
+    trl_dir = Path(__file__).resolve().parent.parent
+    scripts_path = os.path.join(trl_dir, 'examples', 'scripts', '*.py')
+    py_files = glob.glob(scripts_path)
+    assert len(commands) == len(py_files), f"Number of commands ({len(commands)}) doesn't match number of .py files ({len(py_files)})"
