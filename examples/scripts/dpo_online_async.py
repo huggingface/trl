@@ -29,12 +29,11 @@ accelerate launch --num_processes 3 examples/scripts/dpo_online_async.py \
 import torch
 from accelerate import PartialState
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl import (
     AsyncOnlineDPOConfig,
     AsyncOnlineDPOTrainer,
-    LogCompletionsCallback,
     ModelConfig,
     ScriptArguments,
     TrlParser,
