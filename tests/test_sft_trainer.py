@@ -695,6 +695,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             with self.assertRaises(Exception):
                 trainer.train()
+            del os.environ["CUDA_VISIBLE_DEVICES"]    
 
     def test_data_collator_completion_lm_without_padding(self):
         os.environ["CUDA_VISIBLE_DEVICES"]="0"
@@ -738,6 +739,7 @@ class SFTTrainerTester(unittest.TestCase):
             trainer.train()
             assert trainer.state.log_history[(-1)]["train_loss"] is not None
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
+            del os.environ["CUDA_VISIBLE_DEVICES"]
 
     def test_data_collator_chat_completion_lm(self):
         instruction_template = "### Human:"
