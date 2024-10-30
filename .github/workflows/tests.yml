@@ -22,9 +22,9 @@ jobs:
     name: Tests
     strategy:
       matrix:
-        fail-fast: false
         python-version: ['3.9', '3.10', '3.11', '3.12']
         os: ['ubuntu-latest', 'windows-latest']
+      fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
