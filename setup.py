@@ -76,33 +76,20 @@ from setuptools import find_packages, setup
 __version__ = "0.12.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
-    "torch>=1.4.0",
-    "transformers>=4.46.0",
-    "numpy>=1.18.2;platform_system!='Windows'",
-    "numpy<2;platform_system=='Windows'",
     "accelerate",
     "datasets",
-    "tyro>=0.5.11",
+    "transformers>=4.46.0",
 ]
 EXTRAS = {
-    "test": [
-        "parameterized",
-        "peft>=0.8.0",
-        "pytest",
-        "pytest-xdist",
-        "pytest-cov",
-        "pytest-xdist",
-        "scikit-learn",
-        "Pillow",
-        "pytest-rerunfailures",
-        "llm-blender>=0.0.2",
-    ],
-    "peft": ["peft>=0.8.0"],
-    "liger": ["liger-kernel>=0.2.1"],
-    "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.14.4"],
-    "quantization": ["bitsandbytes<=0.41.1"],
+    "diffusers": ["diffusers>=0.18.0"],
+    "liger": ["liger-kernel>=0.2.1"],
     "llm_judge": ["openai>=1.23.2", "llm-blender>=0.0.2"],
+    "peft": ["peft>=0.8.0"],
+    "quantization": ["bitsandbytes"],
+    "scikit": ["scikit-learn"],
+    "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
+    "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
