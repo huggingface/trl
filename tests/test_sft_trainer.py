@@ -655,6 +655,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertEqual(result_text, "I have not been masked correctly.")
 
     def test_data_collator_completion_lm_with_padding(self):
+        os.environ["CUDA_VISIBLE_DEVICES"]="0"
         model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
         torch_dtype = getattr(torch, "bfloat16", None)
         model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, attn_implementation="flash_attention_2")
@@ -696,6 +697,7 @@ class SFTTrainerTester(unittest.TestCase):
                 trainer.train()
 
     def test_data_collator_completion_lm_without_padding(self):
+        os.environ["CUDA_VISIBLE_DEVICES"]="0"
         model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
         torch_dtype = getattr(torch, "bfloat16", None)
         model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, attn_implementation="flash_attention_2")
