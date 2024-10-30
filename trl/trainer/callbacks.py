@@ -35,6 +35,7 @@ from transformers import (
 from transformers.integrations import WandbCallback
 from transformers.trainer_utils import has_length
 
+from ..data_utils import maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 
@@ -363,9 +364,9 @@ class LogCompletionsCallback(WandbCallback):
             column containing the prompts for generating completions.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_prompts (`int`, *optional*):
+        num_prompts (`int` or `None`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in the evaluation dataset.
-        freq (`int`, *optional*):
+        freq (`int` or `None`, *optional*):
             The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
 
@@ -373,8 +374,8 @@ class LogCompletionsCallback(WandbCallback):
         self,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_prompts: int = None,
-        freq: int = None,
+        num_prompts: Optional[int] = None,
+        freq: Optional[int] = None,
     ):
         super().__init__()
         self.trainer = trainer
@@ -406,6 +407,7 @@ class LogCompletionsCallback(WandbCallback):
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
+            prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
             completions = _generate_completions(
                 prompts,
                 model=model,
