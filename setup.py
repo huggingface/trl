@@ -78,6 +78,7 @@ __version__ = "0.12.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc
 REQUIRED_PKGS = [
     "accelerate",
     "datasets",
+    "rich",  # rich shouldn't be a required package for trl, we should remove it from here
     "transformers>=4.46.0",
 ]
 EXTRAS = {
