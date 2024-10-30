@@ -82,8 +82,10 @@ REQUIRED_PKGS = [
     "transformers>=4.46.0",
 ]
 EXTRAS = {
+    # Windows support is partially supported with DeepSpeed https://github.com/microsoft/DeepSpeed/tree/master#windows
     "deepspeed": ["deepspeed>=0.14.4; sys_platform != 'win32'"],
     "diffusers": ["diffusers>=0.18.0"],
+    # liger-kernel depends on triton, which is only available on Linux https://github.com/triton-lang/triton#compatibility
     "liger": ["liger-kernel>=0.2.1; sys_platform != 'win32'"],
     "llm_judge": ["openai>=1.23.2", "llm-blender>=0.0.2"],
     "peft": ["peft>=0.8.0"],
