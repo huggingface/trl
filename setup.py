@@ -82,7 +82,7 @@ REQUIRED_PKGS = [
     "transformers>=4.46.0",
 ]
 EXTRAS = {
-    "deepspeed": ["deepspeed>=0.14.4"],
+    "deepspeed": ["deepspeed>=0.14.4; sys_platform != 'win32'"],
     "diffusers": ["diffusers>=0.18.0"],
     "liger": ["liger-kernel>=0.2.1"],
     "llm_judge": ["openai>=1.23.2", "llm-blender>=0.0.2"],
@@ -114,6 +114,7 @@ try:
             "Programming Language :: Python :: 3.9",
             "Programming Language :: Python :: 3.10",
             "Programming Language :: Python :: 3.11",
+            "Programming Language :: Python :: 3.12",
         ],
         url="https://github.com/huggingface/trl",
         entry_points={
@@ -124,7 +125,7 @@ try:
         packages=find_packages(exclude={"tests"}),
         install_requires=REQUIRED_PKGS,
         extras_require=EXTRAS,
-        python_requires=">=3.7",
+        python_requires=">=3.9",
         long_description=open("README.md", encoding="utf-8").read(),
         long_description_content_type="text/markdown",
         zip_safe=False,
