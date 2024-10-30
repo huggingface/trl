@@ -113,7 +113,7 @@ if __name__ == "__main__":
         ref_model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=processor,
         peft_config=peft_config,
     )

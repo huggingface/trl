@@ -42,17 +42,17 @@ class KTOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", "kto", True, True],
-            ["gpt2", "kto", True, False],
-            ["gpt2", "kto", False, True],
-            ["gpt2", "kto", False, False],
-            ["gpt2", "apo_zero_unpaired", True, True],
-            ["gpt2", "apo_zero_unpaired", True, False],
-            ["gpt2", "apo_zero_unpaired", False, True],
-            ["gpt2", "apo_zero_unpaired", False, False],
+            ("gpt2", "standard_preference", "kto", True, True),
+            # ("t5", "standard_implicit_prompt_preference", "kto", True, False), # KTO broken for enc-dec
+            ("gpt2", "standard_unpaired_preference", "kto", False, True),
+            # ("t5", "conversational_preference", "kto", False, False),
+            ("gpt2", "conversational_implicit_prompt_preference", "apo_zero_unpaired", True, True),
+            # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", True, False),
+            ("gpt2", "standard_unpaired_preference", "apo_zero_unpaired", False, True),
+            # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", False, False),
         ]
     )
-    def test_kto_trainer(self, name, loss_type, pre_compute, eval_dataset):
+    def test_kto_trainer(self, name, config_name, loss_type, pre_compute, eval_dataset):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
                 output_dir=tmp_dir,
@@ -68,7 +68,7 @@ class KTOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             if name == "gpt2":
                 model = self.model
