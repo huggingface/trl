@@ -29,8 +29,8 @@ accelerate launch
 
 import torch
 from datasets import load_dataset
-from transformers import AutoProcessor, AutoModelForCausalLM
-from peft import get_peft_model, LoraConfig, TaskType
+from peft import LoraConfig, TaskType, get_peft_model
+from transformers import AutoModelForCausalLM, AutoProcessor
 
 from trl import (
     ModelConfig,
@@ -76,10 +76,14 @@ if __name__ == "__main__":
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
     peft_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM, inference_mode=False, r=64, lora_alpha=128, lora_dropout=0.1, target_modules="all-linear"
+        task_type=TaskType.CAUSAL_LM,
+        inference_mode=False,
+        r=64,
+        lora_alpha=128,
+        lora_dropout=0.1,
+        target_modules="all-linear",
     )
     model = get_peft_model(model, peft_config)
-
 
     ################
     # Create a data collator to encode text and image pairs
@@ -89,33 +93,30 @@ if __name__ == "__main__":
         texts = []
         for example in examples:
             flattened_messages = []
-            for message in example['messages']:
-                content_texts = ''.join(content['text'] for content in message['content'] if content['text'] is not None)
-                flattened_messages.append({'role': message['role'], 'content': content_texts})
+            for message in example["messages"]:
+                content_texts = "".join(
+                    content["text"] for content in message["content"] if content["text"] is not None
+                )
+                flattened_messages.append({"role": message["role"], "content": content_texts})
             texts.append(processor.apply_chat_template(flattened_messages, tokenize=False))
 
         images = [example["images"] for example in examples]
 
         # Tokenize the texts and process the images
-        batch = {
-            'input_ids': [],
-            'images': [],
-            'image_input_idx': [],
-            'image_masks': []
-        }
+        batch = {"input_ids": [], "images": [], "image_input_idx": [], "image_masks": []}
 
         # https://huggingface.co/allenai/Molmo-7B-D-0924/blob/main/preprocessing_molmo.py#L115
         for text, image in zip(texts, images):
             processed = processor.process(text=text, images=image, return_tensors="pt", padding=True)
-            batch['input_ids'].append(processed['input_ids'])
-            batch['images'].append(processed['images'])
-            batch['image_input_idx'].append(processed['image_input_idx'])
-            batch['image_masks'].append(processed['image_masks'])
+            batch["input_ids"].append(processed["input_ids"])
+            batch["images"].append(processed["images"])
+            batch["image_input_idx"].append(processed["image_input_idx"])
+            batch["image_masks"].append(processed["image_masks"])
 
-        batch['input_ids'] = torch.stack(batch['input_ids'])
-        batch['images'] = torch.stack(batch['images'])
-        batch['image_input_idx'] = torch.stack(batch['image_input_idx'])
-        batch['image_masks'] = torch.stack(batch['image_masks'])
+        batch["input_ids"] = torch.stack(batch["input_ids"])
+        batch["images"] = torch.stack(batch["images"])
+        batch["image_input_idx"] = torch.stack(batch["image_input_idx"])
+        batch["image_masks"] = torch.stack(batch["image_masks"])
 
         labels = batch["input_ids"].clone()
         labels[labels == processor.tokenizer.pad_token_id] = -100
