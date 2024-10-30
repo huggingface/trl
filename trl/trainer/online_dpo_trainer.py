@@ -624,9 +624,9 @@ class OnlineDPOTrainer(Trainer):
             self._save_checkpoint(model, trial)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
-    # This is copy-pasted from transformers.Trainer to ensure retro-compatibility with the previous versions.
-    # It can be removed once we bump the minimum version of transformers to 4.47.
-    # See https://github.com/huggingface/trl/pull/2288
+    # Copy-pasted from transformers.Trainer to maintain compatibility with earlier versions.
+    # This can be removed once the minimum transformers version is updated to 4.47.
+    # Refer to https://github.com/huggingface/trl/pull/2288 for more details.
     def _determine_best_metric(self, metrics, trial):
         """
         Determine if the model should be saved based on the evaluation metrics.
