@@ -38,7 +38,7 @@ jobs:
               requirements.txt
     
       - name: Install torch and deepspeed on Windows
-        if: ${{ matrix.os }} == 'windows-latest'
+        if: ${{ matrix.os == 'windows-latest' }}
         run: |
           python -m pip install --upgrade pip
           python -m pip install torch
