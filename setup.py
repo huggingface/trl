@@ -103,7 +103,7 @@ EXTRAS = {
     "deepspeed": ["deepspeed>=0.14.4"],
     "quantization": ["bitsandbytes<=0.41.1"],
     "llm_judge": ["openai>=1.23.2", "llm-blender>=0.0.2"],
-    "mergekit": ["mergekit @ git+https://github.com/arcee-ai/mergekit.git"],
+    "mergekit": ["mergekit>=0.0.5"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
