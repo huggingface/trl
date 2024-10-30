@@ -1,3 +1,4 @@
+<a name="top"></a>
 # TRL - Transformer Reinforcement Learning
 
 <div style="text-align: center">
@@ -213,7 +214,12 @@ make dev
   howpublished = {\url{https://github.com/huggingface/trl}}
 }
 ```
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=huggingface/trl&type=Date)](https://star-history.com/#huggingface/trl&Date)
 
 ## License
 
 This repository's source code is available under the [Apache-2.0 License](LICENSE).
+
+[Back to top🚀](#top)
