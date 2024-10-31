@@ -88,7 +88,6 @@ class ORPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
 
-    @require_peft
     @parameterized.expand(
         [
             ("standard_preference",),
@@ -97,6 +96,7 @@ class ORPOTrainerTester(unittest.TestCase):
             ("conversational_implicit_prompt_preference",),
         ]
     )
+    @require_peft
     def test_orpo_trainer_with_lora(self, config_name):
         from peft import LoraConfig
 

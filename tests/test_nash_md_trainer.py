@@ -20,7 +20,9 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import NashMDConfig, NashMDTrainer, PairRMJudge, is_llmblender_available
+from trl import NashMDConfig, NashMDTrainer, PairRMJudge
+
+from .testing_utils import require_llm_blender
 
 
 if is_peft_available():
@@ -125,6 +127,7 @@ class TestNashMDTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
+    @require_peft
     def test_training_with_peft_model_and_peft_config(self):
         model_lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
         model = get_peft_model(self.model, model_lora_config)
@@ -156,8 +159,8 @@ class TestNashMDTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @require_llm_blender
     def test_nash_md_trainer_judge_training(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(

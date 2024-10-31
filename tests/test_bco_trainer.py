@@ -25,7 +25,7 @@ from transformers.testing_utils import require_peft
 from trl import BCOConfig, BCOTrainer
 from trl.trainer.bco_trainer import _process_tokens, _tokenize
 
-from .testing_utils import require_no_wandb
+from .testing_utils import require_no_wandb, require_sklearn
 
 
 class BCOTrainerTester(unittest.TestCase):
@@ -56,6 +56,7 @@ class BCOTrainerTester(unittest.TestCase):
             ["qwen", True, True, "conversational_unpaired_preference"],
         ]
     )
+    @require_sklearn
     def test_bco_trainer(self, name, pre_compute, eval_dataset, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -103,6 +104,7 @@ class BCOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
+    @require_sklearn
     def test_bco_trainer_with_ref_model_is_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -123,6 +125,7 @@ class BCOTrainerTester(unittest.TestCase):
                     train_dataset=dummy_dataset["train"],
                 )
 
+    @require_sklearn
     def test_tokenize_and_process_tokens(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -183,6 +186,7 @@ class BCOTrainerTester(unittest.TestCase):
             self.assertListEqual(processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
             self.assertListEqual(processed_dataset["completion_labels"][0], [-100, 374, 2664, 1091, 16965, 13, 151645])
 
+    @require_sklearn
     def test_bco_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -220,6 +224,7 @@ class BCOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
+    @require_sklearn
     def test_bco_trainer_udm(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -267,6 +272,7 @@ class BCOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
+    @require_sklearn
     @require_peft
     def test_bco_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
@@ -317,6 +323,7 @@ class BCOTrainerTester(unittest.TestCase):
                     if param.sum() != 0:
                         self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
+    @require_sklearn
     @require_no_wandb
     def test_bco_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -348,6 +355,7 @@ class BCOTrainerTester(unittest.TestCase):
                     eval_dataset=dummy_dataset["test"],
                 )
 
+    @require_sklearn
     @require_peft
     def test_bco_lora_save(self):
         from peft import LoraConfig, get_peft_model

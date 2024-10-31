@@ -42,8 +42,11 @@ from trl import (
     XPOTrainer,
 )
 
+from .testing_utils import require_sklearn
+
 
 class TrainerArgTester(unittest.TestCase):
+    @require_sklearn
     def test_bco(self):
         model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
