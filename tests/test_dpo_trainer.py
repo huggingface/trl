@@ -21,7 +21,6 @@ import pytest
 import torch
 from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
-from PIL import Image
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
@@ -29,16 +28,22 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     PreTrainedTokenizerBase,
+    is_vision_available,
 )
 from transformers.testing_utils import (
     require_bitsandbytes,
     require_peft,
     require_torch_gpu_if_bnb_not_multi_backend_enabled,
+    require_vision,
 )
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
 from .testing_utils import require_no_wandb
+
+
+if is_vision_available():
+    from PIL import Image
 
 
 class TestTokenizeRow(unittest.TestCase):
@@ -1047,6 +1052,7 @@ class DPOTrainerTester(unittest.TestCase):
             assert torch.isfinite(losses).cpu().numpy().all()
 
 
+@require_vision
 class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [

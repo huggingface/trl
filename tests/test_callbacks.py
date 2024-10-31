@@ -18,11 +18,15 @@ import tempfile
 import unittest
 
 from datasets import load_dataset
-from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 from transformers.testing_utils import require_wandb
+from transformers.utils import is_peft_available
 
 from trl import BasePairwiseJudge, LogCompletionsCallback, WinRateCallback
+
+
+if is_peft_available():
+    from peft import LoraConfig
 
 
 class HalfPairwiseJudge(BasePairwiseJudge):
