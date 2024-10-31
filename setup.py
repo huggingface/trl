@@ -76,33 +76,23 @@ from setuptools import find_packages, setup
 __version__ = "0.12.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
-    "torch>=1.4.0",
-    "transformers>=4.46.0",
-    "numpy>=1.18.2;platform_system!='Windows'",
-    "numpy<2;platform_system=='Windows'",
     "accelerate",
     "datasets",
-    "tyro>=0.5.11",
+    "rich",  # rich shouldn't be a required package for trl, we should remove it from here
+    "transformers>=4.46.0",
 ]
 EXTRAS = {
-    "test": [
-        "parameterized",
-        "peft>=0.8.0",
-        "pytest",
-        "pytest-xdist",
-        "pytest-cov",
-        "pytest-xdist",
-        "scikit-learn",
-        "Pillow",
-        "pytest-rerunfailures",
-        "llm-blender>=0.0.2",
-    ],
-    "peft": ["peft>=0.8.0"],
-    "liger": ["liger-kernel>=0.2.1"],
+    # Windows support is partially supported with DeepSpeed https://github.com/microsoft/DeepSpeed/tree/master#windows
+    "deepspeed": ["deepspeed>=0.14.4; sys_platform != 'win32'"],
     "diffusers": ["diffusers>=0.18.0"],
-    "deepspeed": ["deepspeed>=0.14.4"],
-    "quantization": ["bitsandbytes<=0.41.1"],
+    # liger-kernel depends on triton, which is only available on Linux https://github.com/triton-lang/triton#compatibility
+    "liger": ["liger-kernel>=0.2.1; sys_platform != 'win32'"],
     "llm_judge": ["openai>=1.23.2", "llm-blender>=0.0.2"],
+    "peft": ["peft>=0.8.0"],
+    "quantization": ["bitsandbytes"],
+    "scikit": ["scikit-learn"],
+    "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
+    "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
@@ -126,6 +116,7 @@ try:
             "Programming Language :: Python :: 3.9",
             "Programming Language :: Python :: 3.10",
             "Programming Language :: Python :: 3.11",
+            "Programming Language :: Python :: 3.12",
         ],
         url="https://github.com/huggingface/trl",
         entry_points={
@@ -136,7 +127,7 @@ try:
         packages=find_packages(exclude={"tests"}),
         install_requires=REQUIRED_PKGS,
         extras_require=EXTRAS,
-        python_requires=">=3.7",
+        python_requires=">=3.9",
         long_description=open("README.md", encoding="utf-8").read(),
         long_description_content_type="text/markdown",
         zip_safe=False,
