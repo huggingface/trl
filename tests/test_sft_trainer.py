@@ -1067,7 +1067,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # with this dataset, we end up with 46 sequences
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # with this dataset, we end up with 46 seqs
             self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
     def test_sft_trainer_eval_packing(self):
@@ -1092,7 +1092,9 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # with this dataset, we end up with 21 sequences
+            self.assertEqual(
+                len(trainer.train_dataset["input_ids"]), 46
+            )  # with this dataset, we end up with 21 sequences
             self.assertEqual(len(trainer.eval_dataset["input_ids"]), 2)  # with this dataset, we end up with 2 sequence
 
     def test_sft_trainer_no_packing(self):
