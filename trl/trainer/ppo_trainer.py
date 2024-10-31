@@ -131,6 +131,7 @@ class PPOTrainer(Trainer):
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
+        self.optimizer_cls_and_kwargs = None # needed for transformers >= 4.47
 
         #########
         # calculate various batch sizes
