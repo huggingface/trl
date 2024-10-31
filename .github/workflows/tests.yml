@@ -18,6 +18,22 @@ env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
 
 jobs:
+  check_code_quality:
+    name: Check code quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files
+
   tests:
     name: Tests
     strategy:
