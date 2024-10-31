@@ -20,7 +20,8 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer, PairRMJudge, is_llmblender_available
+from trl import OnlineDPOConfig, OnlineDPOTrainer, RandomPairwiseJudge, is_llmblender_available
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if is_peft_available():
@@ -33,6 +34,9 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
+        self.reward_tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
+        self.reward_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
+        self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -53,9 +57,10 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 model=self.model,
                 reward_model=self.reward_model,
                 args=training_args,
-                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+                reward_processing_class=self.reward_tokenizer,
             )
             trainer.train()
 
@@ -79,9 +84,10 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
                 args=training_args,
-                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+                reward_processing_class=self.reward_tokenizer,
             )
             trainer.train()
 
@@ -103,9 +109,11 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 OnlineDPOTrainer(
                     model=self.model,
                     ref_model=self.model,  # ref_model can't be the same as model
+                    reward_model=self.reward_model,
                     args=training_args,
-                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
+                    processing_class=self.tokenizer,
+                    reward_processing_class=self.reward_tokenizer,
                 )
 
     @require_peft
@@ -126,9 +134,10 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 model=self.model,
                 reward_model=self.reward_model,
                 args=training_args,
-                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+                reward_processing_class=self.reward_tokenizer,
                 peft_config=lora_config,
             )
 
@@ -156,9 +165,10 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
                 args=training_args,
-                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+                reward_processing_class=self.reward_tokenizer,
                 peft_config=lora_config,
             )
 
@@ -188,9 +198,10 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 model=model,
                 reward_model=self.reward_model,
                 args=training_args,
-                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+                reward_processing_class=self.reward_tokenizer,
                 peft_config=lora_train_config,
             )
 
@@ -200,7 +211,8 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
     @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
-    def test_training_with_judge(self):
+    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    def test_training_with_judge(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
@@ -210,15 +222,15 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 eval_strategy="steps",
                 report_to="none",
             )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             trainer = OnlineDPOTrainer(
                 model=self.model,
-                judge=PairRMJudge(),
+                judge=RandomPairwiseJudge(),
                 args=training_args,
-                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
             )
             trainer.train()
 
