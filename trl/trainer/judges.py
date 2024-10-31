@@ -21,7 +21,6 @@ from typing import List, Optional, Union
 import numpy as np
 from accelerate import Accelerator
 from huggingface_hub import InferenceClient
-from scipy.special import softmax
 from transformers.utils import is_openai_available
 
 from ..import_utils import is_llmblender_available
@@ -239,7 +238,13 @@ class PairRMJudge(BasePairwiseJudge):
             ranks[flip_mask] = ranks[flip_mask][:, ::-1]
 
         # Return the ranks or score probability
-        return softmax(ranks, axis=-1)[:, 0].tolist() if return_scores else ranks[:, 0].tolist()
+        if return_scores:
+            logit_max = np.amax(ranks, axis=-1, keepdims=True)
+            exp_logit_shifted = np.exp(ranks - logit_max)
+            probs = exp_logit_shifted / np.sum(exp_logit_shifted, axis=-1, keepdims=True)
+            return probs[:, 0].tolist()
+        else:
+            return ranks[:, 0].tolist()
 
 
 class HfPairwiseJudge(BasePairwiseJudge):
