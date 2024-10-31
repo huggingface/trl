@@ -23,10 +23,10 @@ from accelerate import Accelerator
 from huggingface_hub import InferenceClient
 from transformers.utils import is_openai_available
 
-from ..import_utils import is_llmblender_available
+from ..import_utils import is_llm_blender_available
 
 
-if is_llmblender_available():
+if is_llm_blender_available():
     import llm_blender
 
 if is_openai_available():
@@ -179,7 +179,7 @@ class PairRMJudge(BasePairwiseJudge):
     """
 
     def __init__(self):
-        if not is_llmblender_available():
+        if not is_llm_blender_available():
             raise ValueError("llm-blender is not installed. Please install it with 'pip install llm-blender'.")
         self.blender = llm_blender.Blender()
         self.blender.loadranker("llm-blender/PairRM", device=Accelerator().device)
