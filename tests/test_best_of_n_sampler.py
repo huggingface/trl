@@ -73,8 +73,8 @@ class BestOfNSamplerTester(unittest.TestCase):
 
         for q, expected_length in various_queries_formats:
             results = best_of_n.generate(q)
-            assert isinstance(results, list)
-            assert len(results) == expected_length
+            self.assertIsInstance(results, list)
+            self.assertEqual(len(results), expected_length)
 
     def test_different_sample_sizes_and_n_candidates_values(self):
         r"""
@@ -109,4 +109,4 @@ class BestOfNSamplerTester(unittest.TestCase):
             tokenized_queries = [self.tokenizer.encode(query) for query in queries]
             results = best_of_n.generate(tokenized_queries)
             for result in results:
-                assert len(result) == expected
+                self.assertEqual(len(result), expected)

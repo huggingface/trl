@@ -17,7 +17,6 @@ import unittest
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 import torch
 from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
@@ -239,14 +238,14 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     def test_dpo_trainer_with_weighting(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -280,14 +279,14 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @parameterized.expand(
         [
@@ -326,14 +325,14 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    assert not torch.equal(param, new_param)
+                    self.assertFalse(torch.equal(param, new_param))
 
     def test_dpo_trainer_with_ref_model_is_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -397,7 +396,7 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
@@ -405,7 +404,7 @@ class DPOTrainerTester(unittest.TestCase):
                     new_param = trainer.model.get_parameter(n)
                     # check the params have changed - ignore 0 biases
                     if param.sum() != 0:
-                        assert not torch.equal(param, new_param)
+                        self.assertFalse(torch.equal(param, new_param))
 
     def test_dpo_trainer_padding_token_is_none(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -513,14 +512,14 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.ref_model.get_parameter(n)
                 # check the ref model's params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    assert not torch.equal(param, new_param)
+                    self.assertFalse(torch.equal(param, new_param))
 
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
@@ -603,7 +602,6 @@ class DPOTrainerTester(unittest.TestCase):
             # save peft adapter
             trainer.save_model()
 
-            # assert that the model is loaded without giving OSError
             try:
                 AutoModelForCausalLM.from_pretrained(tmp_dir)
             except OSError:
@@ -920,8 +918,8 @@ class DPOTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
             )
-            assert trainer.model.config.torch_dtype == torch.float16
-            assert trainer.ref_model.config.torch_dtype == torch.float16
+            self.assertEqual(trainer.model.config.torch_dtype, torch.float16)
+            self.assertEqual(trainer.ref_model.config.torch_dtype, torch.float16)
 
         # Now test when `torch_dtype` is provided but is wrong to either the model or the ref_model
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -933,16 +931,18 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            with pytest.raises(
-                ValueError,
-                match="Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
-            ):
+            with self.assertRaises(ValueError) as context:
                 _ = DPOTrainer(
                     model=self.model_id,
                     processing_class=self.tokenizer,
                     args=training_args,
                     train_dataset=dummy_dataset["train"],
                 )
+
+            self.assertIn(
+                "Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+                str(context.exception),
+            )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
@@ -953,10 +953,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            with pytest.raises(
-                ValueError,
-                match="Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
-            ):
+            with self.assertRaises(ValueError) as context:
                 _ = DPOTrainer(
                     model=self.model_id,
                     ref_model=self.model_id,
@@ -964,6 +961,11 @@ class DPOTrainerTester(unittest.TestCase):
                     args=training_args,
                     train_dataset=dummy_dataset["train"],
                 )
+
+            self.assertIn(
+                "Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+                str(context.exception),
+            )
 
     def test_dpo_loss_alpha_div_f(self):
         model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
@@ -1006,7 +1008,7 @@ class DPOTrainerTester(unittest.TestCase):
             losses, _, _ = trainer.dpo_loss(
                 policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
             )
-            assert torch.isfinite(losses).cpu().numpy().all()
+            self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
     def test_dpo_loss_js_div_f(self):
         model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
@@ -1049,7 +1051,7 @@ class DPOTrainerTester(unittest.TestCase):
             losses, _, _ = trainer.dpo_loss(
                 policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
             )
-            assert torch.isfinite(losses).cpu().numpy().all()
+            self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
 
 @require_vision
@@ -1125,7 +1127,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # Check that the trainable params have changed
             for n, param in previous_trainable_params.items():
@@ -1138,7 +1140,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
                         # For some reason, these params are not updated. This is probably not related to TRL, but to
                         # the model itself. We should investigate this further, but for now we just skip these params.
                         continue
-                    assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
 
 if __name__ == "__main__":
