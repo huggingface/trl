@@ -239,7 +239,9 @@ class PairRMJudge(BasePairwiseJudge):
 
         # Return the ranks or score probability
         if return_scores:
-            probs = np.exp(ranks) / sum(np.exp(ranks))
+            logit_max = np.amax(ranks, axis=-1, keepdims=True)
+            exp_logit_shifted = np.exp(ranks - logit_max)
+            probs = exp_logit_shifted / np.sum(exp_logit_shifted, axis=-1, keepdims=True)
             return probs[:, 0].tolist()
         else:
             return ranks[:, 0].tolist()
