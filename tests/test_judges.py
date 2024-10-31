@@ -14,7 +14,9 @@
 
 import unittest
 
-from trl import HfPairwiseJudge, PairRMJudge, RandomPairwiseJudge, RandomRankJudge, is_llmblender_available
+from trl import HfPairwiseJudge, PairRMJudge, RandomPairwiseJudge, RandomRankJudge, is_llm_blender_available
+
+from .testing_utils import require_llm_blender
 
 
 class TestJudges(unittest.TestCase):
@@ -22,7 +24,8 @@ class TestJudges(unittest.TestCase):
     def setUpClass(cls):
         # Initialize once to download the model. This ensures it’s downloaded before running tests, preventing issues
         # where concurrent tests attempt to load the model while it’s still downloading.
-        PairRMJudge()
+        if is_llm_blender_available():
+            PairRMJudge()
 
     def _get_prompts_and_completions(self):
         prompts = ["The capital of France is", "The biggest planet in the solar system is"]
@@ -53,7 +56,7 @@ class TestJudges(unittest.TestCase):
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
         self.assertEqual(ranks, [0, 1])
 
-    @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
+    @require_llm_blender
     def test_pair_rm_judge(self):
         judge = PairRMJudge()
         prompts, completions = self._get_prompts_and_completions()
@@ -62,7 +65,7 @@ class TestJudges(unittest.TestCase):
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
         self.assertEqual(ranks, [0, 1])
 
-    @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
+    @require_llm_blender
     def test_pair_rm_judge_return_scores(self):
         judge = PairRMJudge()
         prompts, completions = self._get_prompts_and_completions()

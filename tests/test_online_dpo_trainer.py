@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer, RandomPairwiseJudge, is_llmblender_available
+from trl import OnlineDPOConfig, OnlineDPOTrainer, RandomPairwiseJudge, is_llm_blender_available
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
@@ -210,7 +210,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_llmblender_available(), "llm-blender is not available")
+    @unittest.skipIf(not is_llm_blender_available(), "llm-blender is not available")
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training_with_judge(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:

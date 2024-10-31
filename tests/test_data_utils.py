@@ -93,7 +93,6 @@ class ApplyChatTemplateTester(unittest.TestCase):
         "trl-internal-testing/tiny-random-gemma-2-9b-it",
         "trl-internal-testing/tiny-random-Mistral-7B-Instruct-v0.1",
         "trl-internal-testing/tiny-random-Mistral-7B-Instruct-v0.2",
-        "trl-internal-testing/tiny-random-Mistral-7B-Instruct-v0.3",
     ]
 
     conversational_examples = [
