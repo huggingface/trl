@@ -7,11 +7,12 @@ on:
     branches: [ main ]
     paths:
       # Run only when relevant files are modified
-      - "trl/**.py"
+      - ".github/**.yml"
       - "examples/**.py"
       - "scripts/**.py"
-      - ".github/**.yml"
       - "tests/**.py"
+      - "trl/**.py"
+      - "setup.py"
 
 env:
   TQDM_DISABLE: 1
