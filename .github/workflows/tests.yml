@@ -4,20 +4,36 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
     paths:
       # Run only when relevant files are modified
-      - "trl/**.py"
+      - ".github/**.yml"
       - "examples/**.py"
       - "scripts/**.py"
-      - ".github/**.yml"
       - "tests/**.py"
+      - "trl/**.py"
+      - "setup.py"
 
 env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
 
 jobs:
+  check_code_quality:
+    name: Check code quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files
+
   tests:
     name: Tests
     strategy:
@@ -49,7 +65,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: 🤗 Results of the TRL CI with dev dependencies
+          title: Results with ${{ matrix.python-version }} on ${{ matrix.os }} with lastest dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -81,7 +97,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: 🤗 Results of the TRL CI with dev dependencies
+          title: Results with ${{ matrix.python-version }} on ${{ matrix.os }} with dev dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -110,6 +126,38 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: 🤗 Results of the TRL CI with dev dependencies
+          title: Results with ${{ matrix.python-version }} on ${{ matrix.os }} without optional dependencies
+          status: ${{ job.status }}
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+
+  tests_min_versions:
+    name: Tests with minimum versions
+    runs-on: 'ubuntu-latest'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: "pip"
+          cache-dependency-path: |
+              setup.py
+              requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install accelerate==0.34.0
+          python -m pip install datasets==2.21.0
+          python -m pip install transformers==4.46.0
+          python -m pip install ".[dev]"
+      - name: Test with pytest
+        run: |
+          make test
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
+        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Results with ${{ matrix.python-version }} on ${{ matrix.os }} with minimum versions
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
