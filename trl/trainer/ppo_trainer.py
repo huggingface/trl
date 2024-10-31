@@ -566,7 +566,7 @@ class PPOTrainer(Trainer):
             self.lr_scheduler.step()
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
-                self._save_checkpoint(model, trial=None, metrics=metrics)
+                self._save_checkpoint(model, trial=None)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
             torch.cuda.empty_cache()
