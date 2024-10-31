@@ -39,7 +39,7 @@ class RewardTrainerTester(unittest.TestCase):
     def test_accuracy_metrics(self):
         dummy_eval_predictions = EvalPrediction(torch.FloatTensor([[0.1, 0.9], [0.9, 0.1]]), torch.LongTensor([0, 0]))
         accuracy = compute_accuracy(dummy_eval_predictions)
-        assert accuracy["accuracy"] == 0.5
+        self.assertEqual(accuracy["accuracy"], 0.5)
 
     def test_preprocessing_conversational(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
