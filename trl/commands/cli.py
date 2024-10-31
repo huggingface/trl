@@ -22,15 +22,9 @@ import torch
 from accelerate.commands.config import default_config_file, load_config_from_file
 from rich.console import Console
 from transformers import is_bitsandbytes_available
-from transformers.utils import is_openai_available, is_peft_available
+from transformers.utils import is_liger_kernel_available, is_openai_available, is_peft_available
 
-from .. import (
-    __version__,
-    is_deepspeed_available,
-    is_diffusers_available,
-    is_liger_kernel_available,
-    is_llmblender_available,
-)
+from .. import __version__, is_deepspeed_available, is_diffusers_available, is_llmblender_available
 from .cli_utils import get_git_commit_hash
 
 
