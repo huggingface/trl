@@ -17,7 +17,10 @@ import unittest
 
 import torch
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import require_bitsandbytes, require_peft
+from transformers.testing_utils import (
+    require_peft,
+    require_torch_gpu_if_bnb_not_multi_backend_enabled,
+)
 from transformers.utils import is_peft_available
 
 from trl import AutoModelForCausalLMWithValueHead
@@ -95,7 +98,7 @@ class PeftModelTester(unittest.TestCase):
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
         assert nb_trainable_params == 10273
 
-    @require_bitsandbytes
+    @require_torch_gpu_if_bnb_not_multi_backend_enabled
     def test_create_bnb_peft_model_from_config(self):
         r"""
         Simply creates a peft model and checks that it can be loaded.

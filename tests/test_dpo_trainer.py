@@ -30,7 +30,11 @@ from transformers import (
     AutoTokenizer,
     PreTrainedTokenizerBase,
 )
-from transformers.testing_utils import require_bitsandbytes, require_peft
+from transformers.testing_utils import (
+    require_bitsandbytes,
+    require_peft,
+    require_torch_gpu_if_bnb_not_multi_backend_enabled,
+)
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
@@ -601,7 +605,7 @@ class DPOTrainerTester(unittest.TestCase):
                 self.fail("Loading the saved peft adapter failed")
 
     @require_peft
-    @require_bitsandbytes
+    @require_torch_gpu_if_bnb_not_multi_backend_enabled
     def test_dpo_lora_bf16_autocast_llama(self):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
