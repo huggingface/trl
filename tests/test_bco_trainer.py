@@ -47,7 +47,6 @@ class BCOTrainerTester(unittest.TestCase):
         self.embedding_model = AutoModel.from_pretrained(model_id)
         self.embedding_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    @require_sklearn
     @parameterized.expand(
         [
             ["gpt2", True, True, "standard_unpaired_preference"],
@@ -57,6 +56,7 @@ class BCOTrainerTester(unittest.TestCase):
             ["gpt2", True, True, "conversational_unpaired_preference"],
         ]
     )
+    @require_sklearn
     def test_bco_trainer(self, name, pre_compute, eval_dataset, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(

@@ -19,7 +19,7 @@ import unittest
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
-from transformers.testing_utils import require_wandb
+from transformers.testing_utils import require_peft, require_wandb
 from transformers.utils import is_peft_available
 
 from trl import BasePairwiseJudge, LogCompletionsCallback, WinRateCallback
@@ -132,6 +132,7 @@ class WinRateCallbackTester(unittest.TestCase):
             winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
             self.assertListEqual(winrate_history, self.expected_winrates)
 
+    @require_peft
     def test_lora(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             peft_config = LoraConfig(

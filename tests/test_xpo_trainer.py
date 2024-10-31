@@ -125,6 +125,7 @@ class TestXPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
+    @require_peft
     def test_training_with_peft_model_and_peft_config(self):
         model_lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
         model = get_peft_model(self.model, model_lora_config)
