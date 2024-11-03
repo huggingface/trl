@@ -650,11 +650,11 @@ class SFTTrainer(Trainer):
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else contextlib.nullcontext()
 
         with context_manager:
-            return super().compute_loss(model, inputs, return_outputs=True)
+            return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
     
     def prediction_step(
         self,
