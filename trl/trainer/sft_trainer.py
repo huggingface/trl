@@ -130,6 +130,7 @@ class SFTTrainer(Trainer):
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: Optional[SFTConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
+        eval_data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         processing_class: Optional[
@@ -409,6 +410,7 @@ class SFTTrainer(Trainer):
             model=model,
             args=args,
             data_collator=data_collator,
+            eval_data_collator=eval_data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
