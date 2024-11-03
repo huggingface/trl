@@ -63,7 +63,6 @@ if is_liger_kernel_available():
 if is_wandb_available():
     import wandb
 
-
 class SFTTrainer(Trainer):
     r"""
     Class definition of the Supervised Finetuning Trainer (SFT Trainer).
