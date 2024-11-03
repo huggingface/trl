@@ -15,7 +15,7 @@ import dataclasses
 import inspect
 import os
 import warnings
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union, Any
 
 import datasets
 import torch
@@ -655,7 +655,7 @@ class SFTTrainer(Trainer):
         
     def prediction_step(
         self,
-        model: nn.Module,
+        model: Union[PreTrainedModel, nn.Module],
         inputs: Dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
