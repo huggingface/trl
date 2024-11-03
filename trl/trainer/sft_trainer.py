@@ -663,7 +663,7 @@ class SFTTrainer(Trainer):
     ):
         context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with torch.no_grad(), prediction_context_manager:
+        with torch.no_grad(), context_manager:
             return super().prediction_step(
                 model, inputs, prediction_loss_only, ignore_keys, **gen_kwargs
             )
