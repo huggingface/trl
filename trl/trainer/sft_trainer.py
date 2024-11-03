@@ -646,23 +646,6 @@ class SFTTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
-        
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
-    
-        with context_manager:
-            if return_outputs:
-                # Directly unpack when expecting both loss and outputs
-                loss, outputs = super().compute_loss(model, inputs, return_outputs=True)
-            else:
-                # Only retrieve loss when outputs are not needed
-                loss = super().compute_loss(model, inputs, return_outputs=False)
-    
-        # Move loss to the correct device in a single place
-        # loss = loss.to(self.args.device)
-        
-        # Return the appropriate values based on `return_outputs`
-        return (loss, outputs) if return_outputs else loss
 
     def prediction_step(
         self,
