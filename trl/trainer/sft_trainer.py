@@ -132,6 +132,7 @@ class SFTTrainer(Trainer):
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: Optional[SFTConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
+        eval_data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         processing_class: Optional[
@@ -225,11 +226,11 @@ class SFTTrainer(Trainer):
             raise ValueError(
                 "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
-            
+
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
         self._peft_has_been_casted_to_bf16 = False
-        
+
         if is_peft_available() and peft_config is not None:
             if not isinstance(peft_config, PeftConfig):
                 raise ValueError(
@@ -417,6 +418,7 @@ class SFTTrainer(Trainer):
             model=model,
             args=args,
             data_collator=data_collator,
+            eval_data_collator=eval_data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,

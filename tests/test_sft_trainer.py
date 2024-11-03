@@ -27,7 +27,7 @@ from transformers import (
     TrainingArguments,
     is_vision_available,
 )
-from transformers.testing_utils import require_peft, require_vision
+from transformers.testing_utils import require_peft, require_vision, require_bitsandbytes
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -1268,3 +1268,68 @@ class SFTTrainerTester(unittest.TestCase):
                 "Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
                 str(context.exception),
             )
+
+    @require_peft
+    @require_bitsandbytes
+    def test_sft_trainer_lora_bf16_autocast_llama(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                per_device_eval_batch_size=2,
+                remove_unused_columns=False,
+                dataset_kwargs={"skip_prepare_dataset": True},
+                report_to="none",
+                generation_config={"num_beams": 1, "max_length": 1024},
+                predict_with_generate=True,
+            )
+            tiny_llava = LlavaForConditionalGeneration.from_pretrained(
+                "trl-internal-testing/tiny-random-LlavaForConditionalGeneration"
+            )
+            processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
+
+            processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
+
+            def collate_fn(examples, mode="train"):
+                # Get the texts and images, and apply the chat template
+                texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+                texts_eval = [processor.apply_chat_template([example["messages"][0]], add_generation_prompt=True).strip() for example in examples]
+
+                images = [example["images"][0] for example in examples]
+
+                # Tokenize the texts and process the images
+                batch = processor(texts, images, return_tensors="pt", padding=True)
+
+                if mode == 'test':
+                    processor.tokenizer.padding_side = "left"
+                    batch_eval = processor(text=texts_eval, images=images, return_tensors="pt", padding=True)
+                    batch["generation_input_ids"] = batch_eval["input_ids"]
+                    batch["generation_attention_mask"] = batch_eval["attention_mask"]
+
+                # The labels are the input_ids, and we mask the padding tokens in the loss computation
+                labels = batch["input_ids"].clone()
+                labels[labels == processor.tokenizer.pad_token_id] = -100
+                batch["labels"] = labels
+
+                return batch
+
+            trainer = SFTTrainer(
+                model=tiny_llava,
+                args=training_args,
+                train_dataset=self.dummy_vsft_instruction_dataset,
+                eval_dataset=self.dummy_vsft_instruction_dataset,
+                data_collator=lambda x: collate_fn(x, mode='train'),
+                eval_data_collator=lambda x: collate_fn(x, mode='test'),
+            )
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+
+            self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))
