@@ -659,7 +659,7 @@ class SFTTrainer(Trainer):
                 loss = super().compute_loss(model, inputs, return_outputs=False)
     
         # Move loss to the correct device in a single place
-        loss = loss.to(self.args.device)
+        # loss = loss.to(self.args.device)
         
         # Return the appropriate values based on `return_outputs`
         return (loss, outputs) if return_outputs else loss
