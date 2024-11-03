@@ -19,6 +19,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import datasets
 import torch
+import torch.amp as amp
 import torch.nn as nn
 from accelerate.state import PartialState
 from datasets import Dataset
@@ -223,7 +224,11 @@ class SFTTrainer(Trainer):
             raise ValueError(
                 "You passed a `DataCollatorForCompletionOnlyLM` to the SFTTrainer. This is not compatible with the `packing` argument."
             )
-
+            
+        # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
+        # has been called in order to properly call autocast if needed.
+        self._peft_has_been_casted_to_bf16 = False
+        
         if is_peft_available() and peft_config is not None:
             if not isinstance(peft_config, PeftConfig):
                 raise ValueError(
@@ -290,6 +295,8 @@ class SFTTrainer(Trainer):
                     and not is_sharded_qlora
                 ):
                     peft_module_casting_to_bf16(model)
+                    # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
+                    self._peft_has_been_casted_to_bf16 = True
 
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
@@ -639,3 +646,24 @@ class SFTTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+        
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+
+        with context_manager:
+            return super().compute_loss(model, inputs, return_outputs)
+        
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+        **gen_kwargs,
+    ):
+        context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+
+        with torch.no_grad(), prediction_context_manager:
+            return super().prediction_step(
+                model, inputs, prediction_loss_only, ignore_keys, **gen_kwargs
+            )
