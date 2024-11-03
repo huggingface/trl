@@ -1295,6 +1295,22 @@ class SFTTrainerTester(unittest.TestCase):
 
             processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 
+
+            # def collate_fn(examples):
+            #     # Get the texts and images, and apply the chat template
+            #     texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+            #     images = [example["images"][0] for example in examples]
+
+            #     # Tokenize the texts and process the images
+            #     batch = processor(texts, images, return_tensors="pt", padding=True)
+
+            #     # The labels are the input_ids, and we mask the padding tokens in the loss computation
+            #     labels = batch["input_ids"].clone()
+            #     labels[labels == processor.tokenizer.pad_token_id] = -100
+            #     batch["labels"] = labels
+
+            #     return batch
+
             def collate_fn(examples, mode="train"):
                 # Get the texts and images, and apply the chat template
                 texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
@@ -1303,6 +1319,7 @@ class SFTTrainerTester(unittest.TestCase):
                 images = [example["images"][0] for example in examples]
 
                 # Tokenize the texts and process the images
+                processor.tokenizer.padding_side = "right"
                 batch = processor(texts, images, return_tensors="pt", padding=True)
 
                 if mode == 'test':
@@ -1314,6 +1331,8 @@ class SFTTrainerTester(unittest.TestCase):
                 # The labels are the input_ids, and we mask the padding tokens in the loss computation
                 labels = batch["input_ids"].clone()
                 labels[labels == processor.tokenizer.pad_token_id] = -100
+                image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
+                labels[labels == image_token_id] = -100
                 batch["labels"] = labels
 
                 return batch

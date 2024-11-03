@@ -1,4 +1,4 @@
 accelerate
 datasets
 rich
-git+https://github.com/pdufour/transformers.git@train_predict
+transformers>=4.46.0
