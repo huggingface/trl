@@ -651,8 +651,15 @@ class SFTTrainer(Trainer):
         context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
         with context_manager:
-            return super().compute_loss(model, inputs, return_outputs)
+            loss = super().compute_loss(model, inputs, return_outputs)
         
+        # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
+        loss = loss.to(self.args.device)
+
+        if return_outputs:
+            return (loss, metrics)
+        return loss
+
     def prediction_step(
         self,
         model: Union[PreTrainedModel, nn.Module],
