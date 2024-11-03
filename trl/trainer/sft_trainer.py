@@ -653,7 +653,7 @@ class SFTTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False):
             context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else contextlib.nullcontext()
     
-            with torch.no_grad(), context_manager:
+            with context_manager:
                 return super().compute_loss(model, inputs, return_outputs=True)
         
     def prediction_step(
