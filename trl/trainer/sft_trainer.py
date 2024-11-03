@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import dataclasses
+import contextlib
 import inspect
 import os
 import warnings
@@ -655,7 +656,7 @@ class SFTTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
         **gen_kwargs,
     ):
-        context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else contextlib.nullcontext()
 
         with torch.no_grad(), context_manager:
             return super().prediction_step(
