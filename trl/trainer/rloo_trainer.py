@@ -472,7 +472,7 @@ class RLOOTrainer(Trainer):
                 metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
-                self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
+                self.state.epoch = self.state.episode / (args.rloo_k * self.train_dataset_len)  # used by self.log
                 self.log(metrics)
             del kl, mean_kl, mean_entropy, scores
 
