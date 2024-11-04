@@ -222,7 +222,7 @@ class PairRMJudge(BasePairwiseJudge):
                 Temperature for scaling logits if `return_scores` is True.
 
         Returns:
-            `List[Union[int, float]]`:
+            `Union[List[int, float]]`:
                 If `return_scores` is `False`, returns a list of ranks (`0` or `1`) for each prompt, indicating which
                 completion is preferred.
                 If `return_scores` is `True`, returns softmax probabilities for the first completion.
