@@ -76,7 +76,7 @@ class BaseRankJudge(ABC):
     """
     Base class for LLM ranking judges.
 
-    Example:
+    **Example**:
     ```python
     class MyRankJudge(BaseRankJudge):
         def judge(self, prompts, completions, shuffle_order=True):
@@ -164,14 +164,16 @@ class PairRMJudge(BasePairwiseJudge):
     default Accelerator device.
 
     Attributes:
-        blender (llm_blender.Blender): An instance of the Blender class from llm-blender.
+        blender (`llm_blender.Blender`): An instance of the Blender class from llm-blender.
 
     Example:
-        >>> pairrm_judge = PairRMJudge()
-        >>> prompts = ["Translate 'hello' to French", "What's the capital of Japan?"]
-        >>> completions = [["Bonjour", "Salut"], ["Kyoto", "Tokyo"]]
-        >>> results = pairrm_judge.judge(prompts, completions)
-        >>> print(results)  # [0, 1] (indicating the first completion is preferred for the first prompt and the second)
+    ```python
+    >>> pairrm_judge = PairRMJudge()
+    >>> prompts = ["Translate 'hello' to French", "What's the capital of Japan?"]
+    >>> completions = [["Bonjour", "Salut"], ["Kyoto", "Tokyo"]]
+    >>> results = pairrm_judge.judge(prompts, completions)
+    >>> print(results)  # [0, 1] (indicating the first completion is preferred for the first prompt and the second)
+    ```
 
     Note:
         This class requires the llm-blender library to be installed.
@@ -206,7 +208,7 @@ class PairRMJudge(BasePairwiseJudge):
                 is True. Defaults to 1.0.
 
         Returns:
-            List[Union[int, float]]: List of ranks (0 or 1) or scores for each prompt,
+            `List[Union[int, float]]`: List of ranks (0 or 1) or scores for each prompt,
             indicating which completion is preferred or its score.
 
         Raises:
