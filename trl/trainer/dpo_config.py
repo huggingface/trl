@@ -181,7 +181,7 @@ class DPOConfig(TrainingArguments):
     ref_model_mixup_alpha: float = 0.9
     ref_model_sync_steps: int = 64
     rpo_alpha: Optional[float] = None
-    discopop_tau: Optional[float] = 0.05
+    discopop_tau: float = 0.05
 
     def __post_init__(self):
         if self.max_target_length is not None:
