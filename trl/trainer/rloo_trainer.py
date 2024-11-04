@@ -440,7 +440,6 @@ class RLOOTrainer(Trainer):
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
-                    self.state.global_step += 1
                     # del everything and empty cache
                     # fmt: off
                     del (
@@ -474,11 +473,11 @@ class RLOOTrainer(Trainer):
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
-                self.state.global_step += 1
                 self.log(metrics)
             del kl, mean_kl, mean_entropy, scores
 
             self.lr_scheduler.step()
+            self.state.global_step += 1
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None)
