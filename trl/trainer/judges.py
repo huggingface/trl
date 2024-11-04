@@ -76,7 +76,7 @@ class BaseRankJudge(ABC):
     """
     Base class for LLM ranking judges.
 
-    **Example**:
+    **Example**
     ```python
     class MyRankJudge(BaseRankJudge):
         def judge(self, prompts, completions, shuffle_order=True):
