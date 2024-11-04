@@ -63,9 +63,9 @@ class DPOConfig(TrainingArguments):
                 - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675) paper.
                 - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
+                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
-                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
         use_weighting (`bool`, *optional*, defaults to `False`):
             Whether or not to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
