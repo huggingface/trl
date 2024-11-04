@@ -172,6 +172,7 @@ class PairRMJudge(BasePairwiseJudge):
     default Accelerator device.
 
     **Attributes**:
+
         blender (`llm_blender.Blender`):
             An instance of the Blender class from llm-blender.
 
