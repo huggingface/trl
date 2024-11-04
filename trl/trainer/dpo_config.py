@@ -134,7 +134,7 @@ class DPOConfig(TrainingArguments):
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
             DPO loss. The paper recommends `rpo_alpha=1.0`.
         discopop_tau (`float`, *optional*, defaults to `0.05`):
-            tau/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
+            τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
     """
 
