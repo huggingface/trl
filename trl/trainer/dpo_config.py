@@ -65,6 +65,7 @@ class DPOConfig(TrainingArguments):
                 - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
         use_weighting (`bool`, *optional*, defaults to `False`):
             Whether or not to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
@@ -132,6 +133,9 @@ class DPOConfig(TrainingArguments):
             α parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper (v3), which controls the
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
             DPO loss. The paper recommends `rpo_alpha=1.0`.
+        discopop_tau (`float`, *optional*, defaults to `0.05`):
+            tau/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
+            the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
     """
 
     learning_rate: float = 1e-6
@@ -150,6 +154,7 @@ class DPOConfig(TrainingArguments):
         "aot_pair",
         "apo_zero",
         "apo_down",
+        "discopop",
     ] = "sigmoid"
     use_weighting: bool = False
     label_pad_token_id: int = -100
@@ -176,6 +181,7 @@ class DPOConfig(TrainingArguments):
     ref_model_mixup_alpha: float = 0.9
     ref_model_sync_steps: int = 64
     rpo_alpha: Optional[float] = None
+    discopop_tau: Optional[float] = 0.05
 
     def __post_init__(self):
         if self.max_target_length is not None:

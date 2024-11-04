@@ -167,6 +167,10 @@ The [RPO](https://huggingface.co/papers/2404.19733) paper implements an iterativ
 
 The [WPO](https://huggingface.co/papers/2406.11827) paper adapts off-policy data to resemble on-policy data more closely by reweighting preference pairs according to their probability under the current policy. To use this method, set the `use_weighting` flag to `True` in the [`DPOConfig`].
 
+### DiscoPOP loss
+
+The [DiscoPOP](https://huggingface.co/papers/2406.08414) paper uses LLMs to discover more efficient offline preference optimization losses. In the paper the proposed DiscoPOP loss (which is a log-ratio modulated loss) outperformed other optimization losses on different tasks (IMDb positive text generation, Reddit TLDR summarization, and Alpaca Eval 2.0). To use this discovered loss, set the `loss_type` value to `discopop` in the [`DPOConfig`]. Additionally, you can change the `discopop_tau` value to change the shape of the DiscoPOP loss. However, the authors recommed the default value `discopop_tau=0.05`.
+
 ### For Mixture of Experts Models: Enabling the auxiliary loss
 
 MOEs are the most efficient if the load is about equally distributed between experts.  
