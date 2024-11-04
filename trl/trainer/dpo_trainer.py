@@ -1033,7 +1033,6 @@ class DPOTrainer(Trainer):
             exp_component = torch.exp(-logits)
             # Blend between logistic and exponential component based on log ratio modulation
             losses = logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
-            return losses
 
         else:
             raise ValueError(
