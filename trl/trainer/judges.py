@@ -171,7 +171,7 @@ class PairRMJudge(BasePairwiseJudge):
     comparison of language model outputs. The PairRM model is loaded using the llm-blender library and runs on the
     default Accelerator device.
 
-    **Attributes**:
+    **Test**:
 
         blender (`llm_blender.Blender`):
             An instance of the Blender class from llm-blender.
