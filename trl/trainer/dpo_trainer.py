@@ -1023,9 +1023,9 @@ class DPOTrainer(Trainer):
         elif self.loss_type == "discopop":
             # Eqn (5) of the DiscoPOP paper (https://huggingface.co/papers/2406.08414)
             # This loss was discovered with LLM discovery
-            pi_logratios = chosen_logps - rejected_logps
+            logratios = chosen_logps - rejected_logps
             ref_logratios = ref_chosen_logps - ref_rejected_logps
-            logits = pi_logratios - ref_logratios
+            logits = logratios - ref_logratios
             logits = logits * self.beta
             # Modulate the mixing coefficient based on the log ratio magnitudes
             log_ratio_modulation = torch.sigmoid(logits / self.args.discopop_tau)
