@@ -572,9 +572,9 @@ class DPOTrainer(Trainer):
 
         # Add special tokens (typically for encoder-decoder models)
         if add_special_tokens:
-            if tokenizer.bos_token is not None:
+            if tokenizer.bos_token_id is not None:
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
-            if tokenizer.eos_token is not None:
+            if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
         chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
         rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
@@ -607,9 +607,9 @@ class DPOTrainer(Trainer):
 
         # Add special tokens (typically for encoder-decoder models)
         if add_special_tokens:
-            if tokenizer.bos_token is not None:
+            if tokenizer.bos_token_id is not None:
                 prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
-            if tokenizer.eos_token is not None:
+            if tokenizer.eos_token_id is not None:
                 prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
         chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
         rejected_input_ids = rejected_input_ids + [tokenizer.eos_token_id]
