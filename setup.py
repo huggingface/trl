@@ -73,7 +73,7 @@ import os
 from setuptools import find_packages, setup
 
 
-__version__ = "0.12.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.13.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "accelerate>=0.34.0",
