@@ -36,8 +36,7 @@ _import_structure = {
     "import_utils": [
         "is_deepspeed_available",
         "is_diffusers_available",
-        "is_liger_kernel_available",
-        "is_llmblender_available",
+        "is_llm_blender_available",
     ],
     "models": [
         "SUPPORTED_ARCHITECTURES",
@@ -129,12 +128,7 @@ if TYPE_CHECKING:
     )
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
-    from .import_utils import (
-        is_deepspeed_available,
-        is_diffusers_available,
-        is_liger_kernel_available,
-        is_llmblender_available,
-    )
+    from .import_utils import is_deepspeed_available, is_diffusers_available, is_llm_blender_available
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,

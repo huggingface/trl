@@ -42,8 +42,11 @@ from trl import (
     XPOTrainer,
 )
 
+from .testing_utils import require_sklearn
+
 
 class TrainerArgTester(unittest.TestCase):
+    @require_sklearn
     def test_bco(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")

@@ -40,11 +40,10 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_peft_available
+from transformers.utils import is_liger_kernel_available, is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
-from ..import_utils import is_liger_kernel_available
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
