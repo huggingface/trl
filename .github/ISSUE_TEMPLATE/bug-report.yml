@@ -7,16 +7,13 @@ body:
       value: |
         Thanks for taking the time to fill out this bug report! 🤗
 
-        Before you submit your bug report:
-
-          - If it is your first time submitting, be sure to check our [bug report guidelines](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md#did-you-find-a-bug)
+        🚩 If it is your first time submitting, be sure to check our [bug report guidelines](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md#did-you-find-a-bug)
 
   - type: textarea
     id: system-info
     attributes:
       label: System Info
-      description: Please share your system info with us. You can run the command `trl env` and copy-paste its output below.
-      placeholder: trl version, transformers version, platform, python version, ...
+      placeholder: Copy-paste the output of `trl env`.
     validations:
       required: true
 
