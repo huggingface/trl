@@ -63,7 +63,7 @@ body:
       label: Expected behavior
       description: "A clear and concise description of what you would expect to happen."
 
- - type: checkboxes
+  - type: checkboxes
     id: terms
     attributes:
       label: Checklist
@@ -71,13 +71,13 @@ body:
         Before submitting, please confirm that you've completed each of the following.
         If an item doesn't apply to your issue, check it anyway to show you've reviewed it.
       options:
-        - label: I have checked that my issue isn't already filed (see [open issues](https://github.com/huggingface/trl/issues?q=is%3Aissue))
+        - label: "I have checked that my issue isn't already filed (see [open issues](https://github.com/huggingface/trl/issues?q=is%3Aissue))"
           required: true
-        - label: I have included my system information
+        - label: "I have included my system information"
           required: true
-        - label: Any code provided is minimal, complete, and reproducible ([more on MREs](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks))
+        - label: "Any code provided is minimal, complete, and reproducible ([more on MREs](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks))"
           required: true
-        - label: Any code provided is properly formatted in code blocks ([more on code blocks](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks))
+        - label: "Any code provided is properly formatted in code blocks (no screenshot, [more on code blocks](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks))"
           required: true
-        - label: Any traceback provided is complete
+        - label: "Any traceback provided is complete"
           required: true
