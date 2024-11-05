@@ -51,7 +51,7 @@ body:
         Important! Use code tags to correctly format your code. See https://help.github.com/en/github/writing-on-github/creating-and-highlighting-code-blocks#syntax-highlighting
         Do not use screenshots, as they are hard to read and (more importantly) don't allow others to copy-and-paste your code.
 
-      placeholder: |
+      value: |
         ```python
         from trl import ...
 
