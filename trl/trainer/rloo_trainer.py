@@ -110,6 +110,7 @@ class RLOOTrainer(Trainer):
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
+        self.optimizer_cls_and_kwargs = None  # needed for transformers >= 4.47
 
         #########
         # calculate various batch sizes
@@ -482,7 +483,7 @@ class RLOOTrainer(Trainer):
             self.lr_scheduler.step()
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
-                self._save_checkpoint(model, trial=None, metrics=metrics)
+                self._save_checkpoint(model, trial=None)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             torch.cuda.empty_cache()
             gc.collect()

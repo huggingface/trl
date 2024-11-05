@@ -364,9 +364,9 @@ class LogCompletionsCallback(WandbCallback):
             column containing the prompts for generating completions.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_prompts (`int`, *optional*):
+        num_prompts (`int` or `None`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in the evaluation dataset.
-        freq (`int`, *optional*):
+        freq (`int` or `None`, *optional*):
             The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
 
@@ -374,8 +374,8 @@ class LogCompletionsCallback(WandbCallback):
         self,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_prompts: int = None,
-        freq: int = None,
+        num_prompts: Optional[int] = None,
+        freq: Optional[int] = None,
     ):
         super().__init__()
         self.trainer = trainer
