@@ -52,12 +52,18 @@ body:
         Do not use screenshots, as they are hard to read and (more importantly) don't allow others to copy-and-paste your code.
 
       placeholder: |
-        Steps to reproduce the behavior:
+        ```python
+        from trl import ...
 
-          1.
-          2.
-          3.
+        ```
 
+        outputs:
+
+        ```
+        Traceback (most recent call last):
+          File "example.py", line 42, in <module>
+            ...
+        ```
 
   - type: textarea
     id: expected-behavior
