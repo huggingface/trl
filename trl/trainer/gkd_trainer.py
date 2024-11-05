@@ -361,8 +361,14 @@ class GKDTrainer(SFTTrainer):
         """
         if self.seq_kd:
             with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
+                teacher_inputs = {
+                    "prompts": inputs.get("teacher_prompts", inputs["prompts"]),
+                    "prompt_attention_mask": inputs.get(
+                        "teacher_prompt_attention_mask", inputs["prompt_attention_mask"]
+                    ),
+                }
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    unwrapped_model, teacher_inputs, self.generation_config, self.processing_class.pad_token_id
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
