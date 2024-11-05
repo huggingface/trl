@@ -221,7 +221,7 @@ class GKDTrainer(SFTTrainer):
             return jsd
 
     @staticmethod
-    def uld_loss(student_logits, teacher_logits, student_labels=None, teacher_labels=None, reduction="sum"):
+    def uld_loss(student_logits, teacher_logits, student_labels, teacher_labels, reduction="sum"):
         """
         Compute the Universal Logit Distillation (ULD) loss.
 
