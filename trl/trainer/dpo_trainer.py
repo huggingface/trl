@@ -31,7 +31,6 @@ import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset
-from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -534,13 +533,9 @@ class DPOTrainer(Trainer):
 
         # num_logits_to_keep is supported since transformers v4.45.0
         if self.use_num_logits_to_keep:
-            import transformers
+            from transformers.utils import check_min_version
 
-            transformers_version = transformers.__version__
-            if Version(transformers_version) < Version("4.45.0"):
-                raise ValueError(
-                    f"num_logits_to_keep is only supported since transformers v4.45.0. Your current version is {transformers_version}."
-                )
+            check_min_version("4.45.0")
 
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
