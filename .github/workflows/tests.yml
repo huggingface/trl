@@ -65,7 +65,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with ${{ matrix.python-version }} on ${{ matrix.os }} with lastest dependencies
+          title: Results with Python ${{ matrix.python-version }} on ${{ matrix.os }} with lastest dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -97,7 +97,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with ${{ matrix.python-version }} on ${{ matrix.os }} with dev dependencies
+          title: Results with Python 3.12 on ubuntu-latest with dev dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -126,7 +126,7 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with ${{ matrix.python-version }} on ${{ matrix.os }} without optional dependencies
+          title: Results with Python 3.12 on ubuntu-latest without optional dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -158,6 +158,6 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with ${{ matrix.python-version }} on ${{ matrix.os }} with minimum versions
+          title: Results with Python 3.12 on ubuntu-latest with minimum versions
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

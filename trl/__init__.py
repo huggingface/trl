@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.12.0.dev0"
+__version__ = "0.13.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -79,8 +79,6 @@ _import_structure = {
         "PairRMJudge",
         "PPOConfig",
         "PPOTrainer",
-        "PPOv2Config",
-        "PPOv2Trainer",
         "RandomPairwiseJudge",
         "RandomRankJudge",
         "RewardConfig",
@@ -170,8 +168,6 @@ if TYPE_CHECKING:
         PairRMJudge,
         PPOConfig,
         PPOTrainer,
-        PPOv2Config,
-        PPOv2Trainer,
         RandomPairwiseJudge,
         RandomRankJudge,
         RewardConfig,
