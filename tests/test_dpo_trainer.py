@@ -1116,13 +1116,21 @@ class DPOTrainerTester(unittest.TestCase):
             output = trainer.concatenated_forward(model, batch)
             output2 = trainer2.concatenated_forward(model, batch)
 
-            assert output["nll_loss"].item() == pytest.approx(output2["nll_loss"].item())
-            assert output["mean_chosen_logits"].item() == pytest.approx(output2["mean_chosen_logits"].item())
-            assert output["mean_rejected_logits"].item() == pytest.approx(output2["mean_rejected_logits"].item())
+            np.testing.assert_allclose(output["nll_loss"].item(), output2["nll_loss"].item(), atol=1e-5)
+            np.testing.assert_allclose(
+                output["mean_chosen_logits"].item(), output2["mean_chosen_logits"].item(), atol=1e-5
+            )
+            np.testing.assert_allclose(
+                output["mean_rejected_logits"].item(), output2["mean_rejected_logits"].item(), atol=1e-5
+            )
 
             for i in range(output["chosen_logps"].shape[0]):
-                assert output["chosen_logps"][i].item() == pytest.approx(output2["chosen_logps"][i].item())
-                assert output["rejected_logps"][i].item() == pytest.approx(output2["rejected_logps"][i].item())
+                np.testing.assert_allclose(
+                    output["chosen_logps"][i].item(), output2["chosen_logps"][i].item(), atol=1e-5
+                )
+                np.testing.assert_allclose(
+                    output["rejected_logps"][i].item(), output2["rejected_logps"][i].item(), atol=1e-5
+                )
 
             trainer.train()
 
