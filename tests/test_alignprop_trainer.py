@@ -70,8 +70,8 @@ class AlignPropTrainerTester(unittest.TestCase):
     def test_generate_samples(self, use_lora):
         trainer = self.trainer_with_lora if use_lora else self.trainer_without_lora
         output_pairs = trainer._generate_samples(2, with_grad=True)
-        assert len(output_pairs.keys()) == 3
-        assert len(output_pairs["images"]) == 2
+        self.assertEqual(len(output_pairs.keys()), 3)
+        self.assertEqual(len(output_pairs["images"]), 2)
 
     @parameterized.expand([True, False])
     def test_calculate_loss(self, use_lora):
@@ -81,10 +81,10 @@ class AlignPropTrainerTester(unittest.TestCase):
         images = sample["images"]
         prompts = sample["prompts"]
 
-        assert images.shape == (2, 3, 128, 128)
-        assert len(prompts) == 2
+        self.assertTupleEqual(images.shape, (2, 3, 128, 128))
+        self.assertEqual(len(prompts), 2)
 
         rewards = trainer.compute_rewards(sample)
         loss = trainer.calculate_loss(rewards)
 
-        assert torch.isfinite(loss.cpu())
+        self.assertTrue(torch.isfinite(loss.cpu()))

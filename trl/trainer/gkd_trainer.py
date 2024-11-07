@@ -36,9 +36,8 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_peft_available
+from transformers.utils import is_liger_kernel_available, is_peft_available
 
-from ..import_utils import is_liger_kernel_available
 from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
@@ -136,6 +135,7 @@ class GKDTrainer(SFTTrainer):
         self.lmbda = args.lmbda
         self.beta = args.beta
         self.temperature = args.temperature
+        self.seq_kd = args.seq_kd
 
         self.generation_config = GenerationConfig(
             max_new_tokens=args.max_new_tokens,
@@ -183,13 +183,18 @@ class GKDTrainer(SFTTrainer):
         student_log_probs = F.log_softmax(student_logits, dim=-1)
         teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
-        # Compute the interpolated log probabilities
-        interpolated_log_probs = beta * student_log_probs + (1 - beta) * teacher_log_probs
+        # Compute the log of the mixture distribution
+        # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
+        beta = torch.tensor(beta, dtype=student_log_probs.dtype)
+        mixture_log_probs = torch.logsumexp(
+            torch.stack([student_log_probs + torch.log(beta), teacher_log_probs + torch.log(1 - beta)]),
+            dim=0,
+        )
 
         # Compute KL divergences using F.kl_div
         # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
-        kl_teacher = F.kl_div(interpolated_log_probs, teacher_log_probs, reduction="none", log_target=True)
-        kl_student = F.kl_div(interpolated_log_probs, student_log_probs, reduction="none", log_target=True)
+        kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
+        kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
 
         # Compute the Generalized Jensen-Shannon Divergence
         jsd = beta * kl_teacher + (1 - beta) * kl_student
@@ -209,7 +214,7 @@ class GKDTrainer(SFTTrainer):
         else:
             return jsd
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # compute student output
         outputs_student = model(
             input_ids=inputs["input_ids"],
@@ -267,7 +272,9 @@ class GKDTrainer(SFTTrainer):
 
         return generated_tokens, new_attention_mask, new_labels
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(
+        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+    ) -> torch.Tensor:
         """
         Perform a training step for the Generalized Knowledge Distillation (GKD) model.
 
@@ -275,6 +282,14 @@ class GKDTrainer(SFTTrainer):
         With probability `self.lmbda`, it generates new responses using the student model,
         which are then used for training instead of the original inputs.
         """
+        if self.seq_kd:
+            with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
+                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
+                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                )
+            inputs["input_ids"] = new_input_ids
+            inputs["attention_mask"] = new_attention_mask
+            inputs["labels"] = new_labels
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
@@ -284,7 +299,7 @@ class GKDTrainer(SFTTrainer):
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
 
-        loss = super().training_step(model, inputs)
+        loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):

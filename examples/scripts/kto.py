@@ -17,6 +17,7 @@ Run the KTO training script with the commands below. In general, the optimal con
 
 # Full training:
 python examples/scripts/kto.py \
+    --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
@@ -33,6 +34,7 @@ python examples/scripts/kto.py \
 
 # QLoRA:
 python examples/scripts/kto.py \
+    --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
@@ -53,23 +55,17 @@ python examples/scripts/kto.py \
     --lora_alpha=16
 """
 
-from dataclasses import dataclass
-
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, maybe_unpair_preference_dataset, setup_chat_format
-
-
-# Define and parse arguments.
-@dataclass
-class ScriptArguments:
-    """
-    The arguments for the KTO training script.
-    """
-
-    dataset_name: str = "trl-lib/kto-mix-14k"
+from trl import (
+    KTOConfig,
+    KTOTrainer,
+    ModelConfig,
+    ScriptArguments,
+    get_peft_config,
+    setup_chat_format,
+)
 
 
 if __name__ == "__main__":
@@ -97,31 +93,13 @@ if __name__ == "__main__":
     # Load the dataset
     dataset = load_dataset(script_args.dataset_name)
 
-    # If needed, reformat a DPO-formatted dataset (prompt, chosen, rejected) to a KTO-format (prompt, completion, label)
-    dataset = maybe_unpair_preference_dataset(dataset, num_proc=training_args.dataset_num_proc)
-
-    # Apply chat template
-    def format_dataset(example):
-        if isinstance(example["completion"], str):
-            example["prompt"] = tokenizer.apply_chat_template(example["prompt"], tokenize=False)
-            example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
-        else:
-            example["prompt"] = tokenizer.apply_chat_template(example["completion"][:-1], tokenize=False)
-            example["completion"] = tokenizer.apply_chat_template([example["completion"][-1]], tokenize=False)
-        return example
-
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(format_dataset, num_proc=training_args.dataset_num_proc)
-
     # Initialize the KTO trainer
     trainer = KTOTrainer(
         model,
         ref_model,
         args=training_args,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset["test"],
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )

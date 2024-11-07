@@ -84,16 +84,15 @@ class CPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    assert not torch.equal(param, new_param)
+                    self.assertFalse(torch.equal(param, new_param))
 
-    @require_peft
     @parameterized.expand(
         [
             ("standard_preference",),
@@ -102,6 +101,7 @@ class CPOTrainerTester(unittest.TestCase):
             ("conversational_implicit_prompt_preference",),
         ]
     )
+    @require_peft
     def test_cpo_trainer_with_lora(self, config_name):
         from peft import LoraConfig
 
@@ -142,7 +142,7 @@ class CPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
@@ -150,4 +150,4 @@ class CPOTrainerTester(unittest.TestCase):
                     new_param = trainer.model.get_parameter(n)
                     # check the params have changed - ignore 0 biases
                     if param.sum() != 0:
-                        assert not torch.equal(param, new_param)
+                        self.assertFalse(torch.equal(param, new_param))

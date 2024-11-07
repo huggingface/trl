@@ -27,15 +27,14 @@ accelerate launch examples/scripts/dpo_vlm.py \
 """
 
 import torch
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
 from trl import (
     DPOConfig,
-    DPOScriptArguments,
     DPOTrainer,
     ModelConfig,
+    ScriptArguments,
     TrlParser,
     get_kbit_device_map,
     get_peft_config,
@@ -44,7 +43,7 @@ from trl import (
 
 
 if __name__ == "__main__":
-    parser = TrlParser((DPOScriptArguments, DPOConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
 
     ################
@@ -106,17 +105,6 @@ if __name__ == "__main__":
     ################
     dataset = load_dataset(script_args.dataset_name)
 
-    def process(row):
-        row["prompt"] = processor.apply_chat_template(row["prompt"], tokenize=False)
-        row["chosen"] = processor.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = processor.apply_chat_template(row["rejected"], tokenize=False)
-        return row
-
-    # Compute that only on the main process for faster data processing.
-    # see: https://github.com/huggingface/trl/pull/1255
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(process, num_proc=training_args.dataset_num_proc)
-
     ################
     # Training
     ################
@@ -125,7 +113,7 @@ if __name__ == "__main__":
         ref_model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=processor,
         peft_config=peft_config,
     )

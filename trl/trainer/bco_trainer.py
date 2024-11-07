@@ -223,17 +223,20 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
         )
 
         # add BOS, which affects both prompt and the full completion
-        if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
-            batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
-                f"{kwargs['prefix']}prompt_input_ids"
-            ]
-            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[f"{kwargs['prefix']}prompt_attention_mask"]
-            batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
-                f"{kwargs['prefix']}completion_input_ids"
-            ]
-            batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
-                f"{kwargs['prefix']}completion_attention_mask"
-            ]
+        if bos_token_id is not None:
+            if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
+                batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
+                    f"{kwargs['prefix']}prompt_input_ids"
+                ]
+                batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[
+                    f"{kwargs['prefix']}prompt_attention_mask"
+                ]
+                batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
+                    f"{kwargs['prefix']}completion_input_ids"
+                ]
+                batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
+                    f"{kwargs['prefix']}completion_attention_mask"
+                ]
         # add EOS, which affects only the full completion
         if len(all_tokens["answer_input_ids"]) == 0 or eos_token_id != all_tokens["answer_input_ids"][-1]:
             batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
@@ -563,6 +566,12 @@ class BCOTrainer(Trainer):
         # BCO parameter
         self.beta = args.beta
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
+            warnings.warn(
+                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
+                " meaning the auxiliary loss will not be used."
+            )
 
         # Underlying Distribution Matching argument
         self.embedding_func = embedding_func
@@ -1245,7 +1254,7 @@ class BCOTrainer(Trainer):
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
-            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
+            loss += self.aux_loss_coef * aux_loss
 
         return loss, metrics
 
@@ -1254,6 +1263,7 @@ class BCOTrainer(Trainer):
         model: Union[PreTrainedModel, nn.Module],
         inputs: Dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
+        num_items_in_batch=None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if not self.use_dpo_data_collator:
             warnings.warn(
@@ -1284,7 +1294,7 @@ class BCOTrainer(Trainer):
             return None
         return SequentialSampler(self.train_dataset)
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def generate_from_model_and_ref(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
@@ -1401,7 +1411,7 @@ class BCOTrainer(Trainer):
                 "prompt_attention_mask": itemgetter(*target_indicies)(random_batch["prompt_attention_mask"]),
                 "prompt": itemgetter(*target_indicies)(random_batch["prompt"]),
             }
-            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, target_batch)
+            policy_output_decoded, ref_output_decoded = self.generate_from_model_and_ref(self.model, target_batch)
 
             self.log(
                 {
