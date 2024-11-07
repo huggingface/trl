@@ -12,32 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Callable, List, Optional, Union
+from typing import List, Optional, Union
 
 import torch
-from transformers import (
-    LogitsProcessor,
-    GenerationConfig
-)
+from transformers import GenerationConfig, LogitsProcessor
+
 from ..core import set_seed
 from ..models import (
     SUPPORTED_ARCHITECTURES,
-    PreTrainedModelWrapper,
+    AutoModelForCausalLMWithValueHead,
     AutoModelForSeq2SeqLMWithValueHead,
-    AutoModelForCausalLMWithValueHead
+    PreTrainedModelWrapper,
 )
 
 
 class VASSampler:
-    def __init__(self,
-                 model: PreTrainedModelWrapper,
-                 value_model: Union[AutoModelForSeq2SeqLMWithValueHead, AutoModelForCausalLMWithValueHead],
-                 beta: float = 1.0,
-                 top_k: int = 10,
-                 value_model_batch_size: int = 1,
-                 seed: Optional[int] = None,
-                 generation_config: Optional[GenerationConfig] = None,
-                 ) -> None:
+    def __init__(
+        self,
+        model: PreTrainedModelWrapper,
+        value_model: Union[AutoModelForSeq2SeqLMWithValueHead, AutoModelForCausalLMWithValueHead],
+        beta: float = 1.0,
+        top_k: int = 10,
+        value_model_batch_size: int = 1,
+        seed: Optional[int] = None,
+        generation_config: Optional[GenerationConfig] = None,
+    ) -> None:
         """
         VASSampler is used to generate responses from a model trained with the VAS framework (see /trainers/VASTrainer.py).
         Args:
@@ -73,22 +72,21 @@ class VASSampler:
 
         self.model = model
         self.value_model = value_model
-        self.beta = beta,
+        self.beta = (beta,)
         self.top_k = top_k
         self.value_model_batch_size = value_model_batch_size
         self.gen_config = generation_config
 
         # Create a VAS logits processor
-        self.logits_processor = VASLogitsProcessor(self.value_model,
-                                                   beta=self.beta,
-                                                   top_k=self.top_k,
-                                                   value_model_batch_size=self.value_model_batch_size)
+        self.logits_processor = VASLogitsProcessor(
+            self.value_model, beta=self.beta, top_k=self.top_k, value_model_batch_size=self.value_model_batch_size
+        )
 
     def generate(
-            self,
-            tokenized_query: Union[List[int], torch.Tensor, List[torch.Tensor], List[List[int]]],
-            device: Optional[Union[str, torch.device]] = None,
-            **generation_kwargs
+        self,
+        tokenized_query: Union[List[int], torch.Tensor, List[torch.Tensor], List[List[int]]],
+        device: Optional[Union[str, torch.device]] = None,
+        **generation_kwargs,
     ) -> List[List[str]]:
         """
         Generate a response using the VAS framework.
@@ -111,7 +109,8 @@ class VASSampler:
             tokenized_query.to(device),
             logits_processor=self.logits_processor,
             generation_config=self.gen_config,
-            **generation_kwargs)
+            **generation_kwargs,
+        )
 
         return outputs
 
@@ -125,11 +124,13 @@ class VASLogitsProcessor(LogitsProcessor, torch.nn.Module):
     topk_per_device_batch_size: int, the batch suze of tokens to evaluate at once
     """
 
-    def __init__(self,
-                 value_model: Union[AutoModelForSeq2SeqLMWithValueHead, AutoModelForCausalLMWithValueHead],
-                 beta: float = 1.0,
-                 top_k: int = 10,
-                 value_model_batch_size: int = 1):
+    def __init__(
+        self,
+        value_model: Union[AutoModelForSeq2SeqLMWithValueHead, AutoModelForCausalLMWithValueHead],
+        beta: float = 1.0,
+        top_k: int = 10,
+        value_model_batch_size: int = 1,
+    ):
         """
         A logit processor that augment the output logits with Value model as per the VAS decoding scheme.
 
@@ -149,7 +150,7 @@ class VASLogitsProcessor(LogitsProcessor, torch.nn.Module):
         self.top_k = top_k
         self.value_model_batch_size = value_model_batch_size
 
-        assert self.topk > 0, 'topk must be larger than zero'
+        assert self.topk > 0, "topk must be larger than zero"
 
         self.last_input_ids = None
         self.past_key_values = None
@@ -160,9 +161,15 @@ class VASLogitsProcessor(LogitsProcessor, torch.nn.Module):
 
         orig_input_ids = input_ids
 
-        if self.last_input_ids is not None and (input_ids[0, :-1].shape == self.last_input_ids.shape) and torch.all(input_ids[0, :-1] == self.last_input_ids):
+        if (
+            self.last_input_ids is not None
+            and (input_ids[0, :-1].shape == self.last_input_ids.shape)
+            and torch.all(input_ids[0, :-1] == self.last_input_ids)
+        ):
             # if the last input ids are the same as the current input ids, we can reuse the past key values
-            _, _, _, past_key_values = self.value_model(input_ids, past_key_values=self.past_key_values, return_past_key_values=True)
+            _, _, _, past_key_values = self.value_model(
+                input_ids, past_key_values=self.past_key_values, return_past_key_values=True
+            )
         else:
             _, _, _, past_key_values = self.value_model(input_ids, return_past_key_values=True)
         self.past_key_values = past_key_values
@@ -172,16 +179,25 @@ class VASLogitsProcessor(LogitsProcessor, torch.nn.Module):
         topk_ids = torch.topk(scores, self.topk, dim=-1).indices
 
         for i in range(0, topk_ids.shape[1], self.topk_per_device_batch_size):
-            curr_topk_ids = topk_ids[:, i:i + self.topk_per_device_batch_size]
+            curr_topk_ids = topk_ids[:, i : i + self.topk_per_device_batch_size]
             curr_input_ids = orig_input_ids.unsqueeze(1).repeat(1, curr_topk_ids.shape[1], 1)
             curr_input_ids = torch.cat([curr_input_ids, curr_topk_ids.unsqueeze(-1)], dim=-1)
-            curr_input_ids = curr_input_ids.reshape((batch_size*self.topk_per_device_batch_size, -1))
+            curr_input_ids = curr_input_ids.reshape((batch_size * self.topk_per_device_batch_size, -1))
 
-            _, _, value, _ = self.value_model(curr_input_ids, past_key_values=tuple((t1.repeat(curr_topk_ids.shape[1],1, 1, 1), t2.repeat(curr_topk_ids.shape[1],1, 1, 1)) for t1, t2 in self.past_key_values), return_past_key_values=True)
-            value = value.reshape((batch_size, self.topk_per_device_batch_size, -1))[:,:,-1]
+            _, _, value, _ = self.value_model(
+                curr_input_ids,
+                past_key_values=tuple(
+                    (t1.repeat(curr_topk_ids.shape[1], 1, 1, 1), t2.repeat(curr_topk_ids.shape[1], 1, 1, 1))
+                    for t1, t2 in self.past_key_values
+                ),
+                return_past_key_values=True,
+            )
+            value = value.reshape((batch_size, self.topk_per_device_batch_size, -1))[:, :, -1]
             values = values.scatter_(1, curr_topk_ids, value)
 
-        values = values.scatter_(1, topk_ids, values.gather(1, topk_ids) - values.gather(1, topk_ids).mean(-1, keepdim=True))
+        values = values.scatter_(
+            1, topk_ids, values.gather(1, topk_ids) - values.gather(1, topk_ids).mean(-1, keepdim=True)
+        )
         augmented_outputs += self.beta * values
 
         return augmented_outputs

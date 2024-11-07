@@ -23,7 +23,6 @@ from typing import Callable, List, Optional, Union
 import datasets
 import numpy as np
 import torch
-import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration, gather_object, is_deepspeed_available
 from datasets import Dataset
@@ -37,17 +36,12 @@ from transformers import (
     PreTrainedTokenizerFast,
     is_torch_npu_available,
     is_torch_xpu_available,
-    LogitsProcessor, LogitsProcessorList
 )
 
 from ..core import (
-    WANDB_PADDING,
     PPODecorators,
-    clip_by_value,
     convert_to_scalar,
-    entropy_from_logits,
     flatten_dict,
-    logprobs_from_logits,
     masked_mean,
     masked_var,
     masked_whiten,
@@ -61,10 +55,8 @@ from ..models import (
     PreTrainedModelWrapper,
     create_reference_model,
     unwrap_model_for_generation,
-    AutoModelForSeq2SeqLMWithValueHead,
-    AutoModelForCausalLMWithValueHead
 )
-from . import AdaptiveKLController, BaseTrainer, FixedKLController, VASConfig, RunningMoments
+from . import BaseTrainer, RunningMoments, VASConfig
 
 
 if is_deepspeed_available():
@@ -511,12 +503,8 @@ class VASTrainer(BaseTrainer):
                 with unwrap_model_for_generation(self.ref_model, self.accelerator) as unwrapped_model:
                     response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
             else:
-                with unwrap_model_for_generation(
-                    self.model, self.accelerator, is_peft_model=True
-                ) as unwrapped_model:
-                    response = unwrapped_model.generate(
-                        input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
-                    )
+                with unwrap_model_for_generation(self.model, self.accelerator, is_peft_model=True) as unwrapped_model:
+                    response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
 
             if not return_prompt and not self.is_encoder_decoder:
                 response = response[:, query_tensor.shape[0] :]
@@ -901,10 +889,8 @@ class VASTrainer(BaseTrainer):
             _, _, values = model(**input_kwargs)
 
             if self.is_encoder_decoder:
-                input_ids = input_kwargs["decoder_input_ids"]
                 attention_mask = input_kwargs["decoder_attention_mask"]
             else:
-                input_ids = input_kwargs["input_ids"]
                 attention_mask = input_kwargs["attention_mask"]
 
             masks = torch.zeros_like(attention_mask)
@@ -964,9 +950,7 @@ class VASTrainer(BaseTrainer):
                 Dictionary of training statistics
         """
         self.model.train()
-        loss_v, train_stats = self.loss(
-            values, vpreds, mask, returns
-        )
+        loss_v, train_stats = self.loss(values, vpreds, mask, returns)
         loss = loss_v
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
@@ -1056,7 +1040,6 @@ class VASTrainer(BaseTrainer):
             stats (`dict`):
                 Dictionary of training step statistics
         """
-        mask = data.pop("masks")
 
         mean_scores = data["scores"].mean()  # scores is size `batch_size`
         std_scores = data["scores"].std()
@@ -1106,8 +1089,6 @@ class VASTrainer(BaseTrainer):
         rewards = self.accelerator.gather(rewards).flatten()
 
         if self.config.log_with == "wandb":
-            import wandb
-
             if any(column_to_log not in batch.keys() for column_to_log in columns_to_log):
                 raise ValueError(f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}.")
 
@@ -1213,4 +1194,3 @@ class VASTrainer(BaseTrainer):
         model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
         model.eval()
         return model
-

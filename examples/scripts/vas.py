@@ -5,18 +5,16 @@ python vas.py \
     --model_name hanseungwook/vas-tiny-llama-1.1b-hh-sft
 """
 
-import os
-import json
 from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
 from datasets import load_dataset
-from peft import LoraConfig, prepare_model_for_kbit_training, PeftModel, get_peft_model
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from tqdm import tqdm
-from transformers import AutoTokenizer, HfArgumentParser, pipeline, LogitsProcessorList, BitsAndBytesConfig, AutoModelForSequenceClassification
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
 
-from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, set_seed, VASTrainer, VASConfig
+from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, VASConfig, VASTrainer, set_seed
 
 
 tqdm.pandas()
@@ -38,18 +36,20 @@ class ScriptArguments:
     top_k: Optional[float] = field(default=0.0, metadata={"help": "The top_k for generation"})
     top_p: Optional[float] = field(default=1.0, metadata={"help": "The top_p for generation"})
 
+
 parser = HfArgumentParser((ScriptArguments, VASConfig))
 args, vas_config = parser.parse_args_into_dataclasses()
 
 trl_model_class = AutoModelForCausalLMWithValueHead if not args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
 
-def build_response_train_dataset(config, dataset_name='Anthropic/hh-rlhf'):
-    ds = load_dataset(dataset_name, split='train')
+
+def build_response_train_dataset(config, dataset_name="Anthropic/hh-rlhf"):
+    ds = load_dataset(dataset_name, split="train")
     tokenizer = AutoTokenizer.from_pretrained(config.model_name)
     tokenizer.pad_token_id = tokenizer.unk_token_id
 
     def tokenize(sample):
-        query = sample["chosen"][:sample["chosen"].rfind('Assistant:')+len('Assistant:')].replace('\n', ' ').strip()
+        query = sample["chosen"][: sample["chosen"].rfind("Assistant:") + len("Assistant:")].replace("\n", " ").strip()
         sample["query"] = tokenizer.encode(query)
         return sample
 
@@ -60,8 +60,10 @@ def build_response_train_dataset(config, dataset_name='Anthropic/hh-rlhf'):
 
 dataset = build_response_train_dataset(vas_config)
 
+
 def collator(data):
     return {key: [d[key] for d in data] for key in data[0]}
+
 
 # set seed before initializing value head for deterministic eval
 set_seed(vas_config.seed)
@@ -72,14 +74,14 @@ quantization_config = BitsAndBytesConfig(
     load_in_8bit=False,
     bnb_4bit_compute_dtype=torch.float16,
     bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type='nf4',
+    bnb_4bit_quant_type="nf4",
 )
 
 model = trl_model_class.from_pretrained(
     vas_config.model_name,
     quantization_config=quantization_config,
     trust_remote_code=args.trust_remote_code,
-    device_map='auto',
+    device_map="auto",
 )
 
 if args.use_peft:
@@ -103,13 +105,13 @@ for module in model.modules():
         module.p = 0
 
 ref_model = trl_model_class.from_pretrained(
-     vas_config.ref_model_name,
+    vas_config.ref_model_name,
     quantization_config=quantization_config,
     trust_remote_code=args.trust_remote_code,
-    device_map='auto',
+    device_map="auto",
 )
 
-tokenizer = ref_tokenizer =AutoTokenizer.from_pretrained(vas_config.model_name)
+tokenizer = ref_tokenizer = AutoTokenizer.from_pretrained(vas_config.model_name)
 
 # Some tokenizers like don't have a padding token by default, so we set one here.
 tokenizer.pad_token_id = tokenizer.unk_token_id
@@ -140,14 +142,16 @@ generation_kwargs = {
 
 for _epoch, batch in tqdm(enumerate(vas_trainer.dataloader)):
     query_tensors = batch["query"]
-    response_tensors = vas_trainer.generate(query_tensors, batch_size=args.generation_batch_size, return_prompt=False, **generation_kwargs)
+    response_tensors = vas_trainer.generate(
+        query_tensors, batch_size=args.generation_batch_size, return_prompt=False, **generation_kwargs
+    )
 
     # Compute score
     full_responses = [torch.cat([query, response]) for query, response in zip(query_tensors, response_tensors)]
     texts = tokenizer.batch_decode(full_responses, skip_special_tokens=True)
     rewards = []
     for text in texts:
-        inputs_ids = reward_tokenizer.encode(text, return_tensors='pt').to(reward_model.device)
+        inputs_ids = reward_tokenizer.encode(text, return_tensors="pt").to(reward_model.device)
         reward_outputs = reward_model(inputs_ids)
         reward = reward_outputs.logits[0]
         rewards.append(reward.squeeze())
@@ -162,4 +166,3 @@ vas_trainer.save_pretrained("/data/pulkitag/models/idanshen/trl/example")
 # query = "Human: How are you doing today? Assistant:"
 # inputs = ref_tokenizer.encode(query, return_tensors='pt').to(reward_model.device)
 # output = vas_trainer.generate(inputs, vas_generation=True, beta=3.0)
-
