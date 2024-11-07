@@ -170,8 +170,6 @@ if TYPE_CHECKING:
         PairRMJudge,
         PPOConfig,
         PPOTrainer,
-        PPOv2Config,
-        PPOv2Trainer,
         RandomPairwiseJudge,
         RandomRankJudge,
         RewardConfig,
