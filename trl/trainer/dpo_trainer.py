@@ -1093,9 +1093,9 @@ class DPOTrainer(Trainer):
             # Get the first column idx that is all zeros and remove every column after that
             empty_cols = torch.sum(attention_mask, dim=0) == 0
             first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-            input_ids = input_ids[:, : first_empty_col]
-            attention_mask = attention_mask[:, : first_empty_col]
-            loss_mask = loss_mask[:, : first_empty_col]
+            input_ids = input_ids[:, :first_empty_col]
+            attention_mask = attention_mask[:, :first_empty_col]
+            loss_mask = loss_mask[:, :first_empty_col]
 
             # Truncate right
             if self.args.max_length is not None:
@@ -1104,6 +1104,10 @@ class DPOTrainer(Trainer):
                 loss_mask = loss_mask[:, : self.args.max_length]
 
             if self.use_num_logits_to_keep:
+                # Compute num_logits_to_keep based on loss_mask pattern:
+                # [[0, 0, 0, x, x, x, x],
+                #  [0, 0, 0, x, x, x, 0]]
+                #         ^ start computing logits from here ([:, -(7-3+1):])
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
                 num_logits_to_keep = loss_mask.shape[1] - first_compute_index
                 model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
@@ -1116,6 +1120,12 @@ class DPOTrainer(Trainer):
             loss_mask = loss_mask[:, 1:].bool()
 
             if self.use_num_logits_to_keep:
+                # Align labels with logits
+                # logits:    -,  -, [x2, x3, x4, x5, x6]
+                #                     ^ --------- ^       after logits[:, :-1, :]
+                # labels:   [y0, y1, y2, y3, y4, y5, y6]
+                #                         ^ --------- ^   with num_logits_to_keep=4, [:, -4:]
+                # loss_mask: [0,  0,  0,  1,  1,  1,  1]
                 labels = labels[:, -num_logits_to_keep:]
                 loss_mask = loss_mask[:, -num_logits_to_keep:]
 
