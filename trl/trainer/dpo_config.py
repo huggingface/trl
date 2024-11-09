@@ -152,9 +152,9 @@ class DPOConfig(TrainingArguments):
         "sppo_hard",
         "aot",
         "aot_pair",
+        "discopop",
         "apo_zero",
         "apo_down",
-        "discopop",
     ] = "sigmoid"
     use_weighting: bool = False
     label_pad_token_id: int = -100
