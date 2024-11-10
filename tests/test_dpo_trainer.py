@@ -1053,6 +1053,87 @@ class DPOTrainerTester(unittest.TestCase):
             )
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
+    def test_dpo_trainer_use_num_logits_to_keep(self):
+        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                use_num_logits_to_keep=True,
+                rpo_alpha=0.5,
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            training_args.use_num_logits_to_keep = False
+            trainer2 = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            # Fake batch
+            prompt_input_ids = torch.randint(1, 1000, (2, 10))
+            chosen_input_ids = torch.randint(1, 1000, (2, 5))
+            rejected_input_ids = torch.randint(1, 1000, (2, 7))
+            prompt_attention_mask = torch.ones_like(prompt_input_ids)
+            chosen_attention_mask = torch.ones_like(chosen_input_ids)
+            rejected_attention_mask = torch.ones_like(rejected_input_ids)
+
+            batch = {
+                "prompt_input_ids": prompt_input_ids.to(model.device),
+                "chosen_input_ids": chosen_input_ids.to(model.device),
+                "rejected_input_ids": rejected_input_ids.to(model.device),
+                "prompt_attention_mask": prompt_attention_mask.to(model.device),
+                "chosen_attention_mask": chosen_attention_mask.to(model.device),
+                "rejected_attention_mask": rejected_attention_mask.to(model.device),
+            }
+
+            output = trainer.concatenated_forward(model, batch)
+            output2 = trainer2.concatenated_forward(model, batch)
+
+            np.testing.assert_allclose(output["nll_loss"].item(), output2["nll_loss"].item(), atol=1e-5)
+            np.testing.assert_allclose(
+                output["mean_chosen_logits"].item(), output2["mean_chosen_logits"].item(), atol=1e-5
+            )
+            np.testing.assert_allclose(
+                output["mean_rejected_logits"].item(), output2["mean_rejected_logits"].item(), atol=1e-5
+            )
+
+            for i in range(output["chosen_logps"].shape[0]):
+                np.testing.assert_allclose(
+                    output["chosen_logps"][i].item(), output2["chosen_logps"][i].item(), atol=1e-5
+                )
+                np.testing.assert_allclose(
+                    output["rejected_logps"][i].item(), output2["rejected_logps"][i].item(), atol=1e-5
+                )
+
+            trainer.train()
+
 
 @require_vision
 class DPOVisionTrainerTester(unittest.TestCase):

@@ -132,6 +132,11 @@ class DPOConfig(TrainingArguments):
             α parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper (v3), which controls the
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
             DPO loss. The paper recommends `rpo_alpha=1.0`.
+        use_num_logits_to_keep (`bool`, *optional*, defaults to `False`):
+            If `True`, only a specified number of logits are computed in the forward pass of CausalLM. This can be useful
+            for saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios
+            when working with very long prompts where labels are -ignored (-100).
+            [Read more](https://huggingface.co/docs/transformers/main/model_doc/llama#transformers.LlamaForCausalLM)
     """
 
     learning_rate: float = 1e-6
@@ -176,6 +181,7 @@ class DPOConfig(TrainingArguments):
     ref_model_mixup_alpha: float = 0.9
     ref_model_sync_steps: int = 64
     rpo_alpha: Optional[float] = None
+    use_num_logits_to_keep: bool = False
 
     def __post_init__(self):
         if self.max_target_length is not None:
