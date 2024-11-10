@@ -33,7 +33,6 @@ class RewardTrainerTester(unittest.TestCase):
     def setUp(self):
         self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
         self.model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
         self.model.config.pad_token_id = self.tokenizer.pad_token_id
 

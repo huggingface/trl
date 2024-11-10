@@ -53,15 +53,13 @@ python examples/scripts/rloo/rloo.py \
 
 class RLOOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.sft_model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
-        self.reward_model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
 
-        self.policy_model = AutoModelForCausalLM.from_pretrained(self.sft_model_id)
-        self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id)
-        self.policy_ref_model = AutoModelForCausalLM.from_pretrained(self.sft_model_id)
+        self.policy_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
+        self.policy_ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.sft_model_id, padding_side="left")
-        self.tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'user' %}{{ ' ' }}{% endif %}{{ message['content'] }}{% if not loop.last %}{{ '  ' }}{% endif %}{% endfor %}{{ eos_token }}"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="left")
         self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     def test_rloo_checkpoint(self):

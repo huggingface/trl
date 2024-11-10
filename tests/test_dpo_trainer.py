@@ -170,32 +170,32 @@ class DPOTrainerTester(unittest.TestCase):
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/T5ForConditionalGeneration-correct-vocab-calibrated"
+        model_id = "qgallouedec/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @parameterized.expand(
         [
-            ["qwen", "sigmoid", True],
-            ["t5", "hinge", False],
-            ["qwen", "ipo", False],
-            ["t5", "ipo", True],
-            ["qwen", "aot_pair", True],
-            ["t5", "aot_pair", False],
-            ["qwen", "aot", True],
-            ["t5", "aot", False],
-            ["qwen", "bco_pair", False],
-            ["t5", "bco_pair", True],
-            ["qwen", "sppo_hard", False],
-            ["t5", "sppo_hard", True],
-            ["qwen", "nca_pair", False],
-            ["t5", "nca_pair", True],
-            ["qwen", "robust", True],
-            ["qwen", "exo_pair", False],
-            ["t5", "exo_pair", True],
-            ["qwen", "apo_zero", True],
-            ["t5", "apo_down", False],
+            ("qwen", "sigmoid", True),
+            ("t5", "hinge", False),
+            ("qwen", "ipo", False),
+            ("t5", "ipo", True),
+            ("qwen", "aot_pair", True),
+            ("t5", "aot_pair", False),
+            ("qwen", "aot", True),
+            ("t5", "aot", False),
+            ("qwen", "bco_pair", False),
+            ("t5", "bco_pair", True),
+            ("qwen", "sppo_hard", False),
+            ("t5", "sppo_hard", True),
+            ("qwen", "nca_pair", False),
+            ("t5", "nca_pair", True),
+            ("qwen", "robust", True),
+            ("qwen", "exo_pair", False),
+            ("t5", "exo_pair", True),
+            ("qwen", "apo_zero", True),
+            ("t5", "apo_down", False),
         ]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
@@ -290,8 +290,8 @@ class DPOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            [None, "Test when rpo_alpha is set to None"],
-            [0.5, "Test when rpo_alpha is set to 0.5"],
+            (None, "Test when rpo_alpha is set to None"),
+            (0.5, "Test when rpo_alpha is set to 0.5"),
         ]
     )
     def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha, _):
@@ -663,36 +663,36 @@ class DPOTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["qwen", "sigmoid", False, False],
-            ["qwen", "sigmoid", False, True],
-            ["qwen", "sigmoid", True, False],
-            ["qwen", "sigmoid", True, True],
-            ["qwen", "ipo", False, False],
-            ["qwen", "ipo", False, True],
-            ["qwen", "ipo", True, False],
-            ["qwen", "ipo", True, True],
-            ["qwen", "aot_pair", False, False],
-            ["qwen", "aot_pair", False, True],
-            ["qwen", "aot_pair", True, False],
-            ["qwen", "aot_pair", True, True],
-            ["qwen", "aot", False, False],
-            ["qwen", "aot", False, True],
-            ["qwen", "aot", True, False],
-            ["qwen", "aot", True, True],
-            ["qwen", "bco_pair", False, False],
-            ["qwen", "bco_pair", False, True],
-            ["qwen", "bco_pair", True, False],
-            ["qwen", "bco_pair", True, True],
-            ["qwen", "robust", False, False],
-            ["qwen", "robust", False, True],
-            ["qwen", "robust", True, False],
-            ["qwen", "robust", True, True],
+            ("sigmoid", False, False),
+            ("sigmoid", False, True),
+            ("sigmoid", True, False),
+            ("sigmoid", True, True),
+            ("ipo", False, False),
+            ("ipo", False, True),
+            ("ipo", True, False),
+            ("ipo", True, True),
+            ("aot_pair", False, False),
+            ("aot_pair", False, True),
+            ("aot_pair", True, False),
+            ("aot_pair", True, True),
+            ("aot", False, False),
+            ("aot", False, True),
+            ("aot", True, False),
+            ("aot", True, True),
+            ("bco_pair", False, False),
+            ("bco_pair", False, True),
+            ("bco_pair", True, False),
+            ("bco_pair", True, True),
+            ("robust", False, False),
+            ("robust", False, True),
+            ("robust", True, False),
+            ("robust", True, True),
         ]
     )
     @require_bitsandbytes
     @require_peft
     @unittest.skip("You need a GPU with bf16 support in order to run these tests")
-    def test_dpo_lora_bf16_autocast(self, name, loss_type, pre_compute, gen_during_eval):
+    def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute, gen_during_eval):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
 
@@ -1054,7 +1054,7 @@ class DPOTrainerTester(unittest.TestCase):
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
     def test_dpo_trainer_use_num_logits_to_keep(self):
-        model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
+        model_id = "qgallouedec/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -1139,9 +1139,9 @@ class DPOTrainerTester(unittest.TestCase):
 class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
-            ["qgallouedec/tiny-Idefics2ForConditionalGeneration"],
-            ["trl-internal-testing/tiny-random-paligemma"],
-            ["trl-internal-testing/tiny-random-llava-1.5"],
+            ("qgallouedec/tiny-Idefics2ForConditionalGeneration",),
+            ("qgallouedec/tiny-PaliGemmaForConditionalGeneration",),
+            ("trl-internal-testing/tiny-random-llava-1.5",),
         ]
     )
     def test_vdpo_trainer(self, model_id):
