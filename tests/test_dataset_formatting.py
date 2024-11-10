@@ -94,7 +94,7 @@ class DatasetFormattingTestCase(unittest.TestCase):
         self.assertIsNotNone(formatting_func)
         self.assertIsInstance(formatting_func, Callable)
         formatted_text = formatting_func(dataset[0])
-        self.assertEqual(formatted_text, "<s>[INST] What is 2+2? [/INST] 4 </s>")
+        self.assertEqual(formatted_text, "<s>[INST] What is 2+2? [/INST] 4</s>")
         formatted_text = formatting_func(dataset[0:1])
         self.assertListEqual(formatted_text, ["<s>[INST] What is 2+2? [/INST] 4 </s>"])
 
