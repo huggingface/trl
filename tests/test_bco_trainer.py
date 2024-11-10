@@ -43,17 +43,17 @@ class BCOTrainerTester(unittest.TestCase):
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # get embedding model
-        model_id = "facebook/bart-base"
+        model_id = "qgallouedec/tiny-BartForCausalLM"
         self.embedding_model = AutoModel.from_pretrained(model_id)
         self.embedding_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @parameterized.expand(
         [
-            ["qwen", True, True, "standard_unpaired_preference"],
-            ["qwen", True, False, "standard_unpaired_preference"],
-            ["qwen", False, True, "standard_unpaired_preference"],
-            ["qwen", False, False, "standard_unpaired_preference"],
-            ["qwen", True, True, "conversational_unpaired_preference"],
+            ("qwen", True, True, "standard_unpaired_preference"),
+            ("qwen", True, False, "standard_unpaired_preference"),
+            ("qwen", False, True, "standard_unpaired_preference"),
+            ("qwen", False, False, "standard_unpaired_preference"),
+            ("qwen", True, True, "conversational_unpaired_preference"),
         ]
     )
     @require_sklearn
