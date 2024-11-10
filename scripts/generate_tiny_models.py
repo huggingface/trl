@@ -16,6 +16,9 @@ from huggingface_hub import ModelCard
 from transformers import (
     AutoProcessor,
     AutoTokenizer,
+    BartConfig,
+    BartForCausalLM,
+    BartTokenizerFast,
     CohereConfig,
     CohereForCausalLM,
     CohereTokenizerFast,
@@ -64,11 +67,27 @@ def push_to_hub(model, tokenizer, suffix=None):
     model_card.push_to_hub(repo_id)
 
 
+# Bart
+tokenizer = BartTokenizerFast.from_pretrained("facebook/bart-base")
+vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
+config = BartConfig(
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    d_model=16,
+    d_kv=2,
+    d_ff=64,
+    num_layers=6,
+    num_heads=8,
+    decoder_start_token_id=0,
+    is_encoder_decoder=False,
+)
+model = BartForCausalLM(config)
+push_to_hub(model, tokenizer)
+
+
 # Cohere
 tokenizer = CohereTokenizerFast.from_pretrained("CohereForAI/aya-expanse-8b")
-vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
 config = CohereConfig(
-    vocab_size=vocab_size,
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
@@ -80,9 +99,8 @@ push_to_hub(model, tokenizer)
 
 # Llama 3
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
-vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
 config = LlamaConfig(
-    vocab_size=vocab_size,
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
@@ -94,9 +112,8 @@ push_to_hub(model, tokenizer, suffix="3")
 
 # Llama 3.1
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
-vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
 config = LlamaConfig(
-    vocab_size=vocab_size,
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
@@ -108,9 +125,8 @@ push_to_hub(model, tokenizer, suffix="3.1")
 
 # Llama 3.2
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
 config = LlamaConfig(
-    vocab_size=vocab_size,
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
