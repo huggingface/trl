@@ -31,19 +31,19 @@ class CPOTrainerTester(unittest.TestCase):
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        model_id = "qgallouedec/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @parameterized.expand(
         [
-            ["qwen", "sigmoid", "standard_preference"],
-            ["t5", "hinge", "standard_implicit_prompt_preference"],
-            ["qwen", "ipo", "conversational_preference"],
-            ["t5", "ipo", "conversational_implicit_prompt_preference"],
-            ["qwen", "simpo", "standard_preference"],
-            ["t5", "simpo", "standard_implicit_prompt_preference"],
-            ["qwen", "hinge", "conversational_preference"],
+            ("qwen", "sigmoid", "standard_preference"),
+            ("t5", "hinge", "standard_implicit_prompt_preference"),
+            ("qwen", "ipo", "conversational_preference"),
+            ("t5", "ipo", "conversational_implicit_prompt_preference"),
+            ("qwen", "simpo", "standard_preference"),
+            ("t5", "simpo", "standard_implicit_prompt_preference"),
+            ("qwen", "hinge", "conversational_preference"),
         ]
     )
     def test_cpo_trainer(self, name, loss_type, config_name):

@@ -24,8 +24,8 @@ from trl.models.utils import ChatMlSpecialTokens, setup_chat_format
 
 class DatasetFormattingTestCase(unittest.TestCase):
     def setUp(self):
-        self.llama_tokenizer = AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
-        self.chatml_tokenizer = AutoTokenizer.from_pretrained("philschmid/gpt2-chatml-tokenizer")
+        self.llama_tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-MistralForCausalLM-0.1")
+        self.chatml_tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
 
     def test_get_formatting_func_from_dataset_with_chatml_messages(self):
         dataset = Dataset.from_dict(
