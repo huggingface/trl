@@ -22,6 +22,7 @@ from transformers import (
     CohereConfig,
     CohereForCausalLM,
     CohereTokenizerFast,
+    GemmaConfig,
     Idefics2Config,
     Idefics2ForConditionalGeneration,
     LlamaConfig,
@@ -29,11 +30,14 @@ from transformers import (
     LlamaTokenizerFast,
     MistralConfig,
     MistralForCausalLM,
+    PaliGemmaConfig,
+    PaliGemmaForConditionalGeneration,
     Phi3Config,
     Phi3ForCausalLM,
     Qwen2Config,
     Qwen2ForCausalLM,
     Qwen2Tokenizer,
+    SiglipVisionConfig,
     T5Config,
     T5ForConditionalGeneration,
     T5TokenizerFast,
@@ -97,6 +101,29 @@ config = CohereConfig(
 model = CohereForCausalLM(config)
 push_to_hub(model, tokenizer)
 
+
+# Idefics2
+processor = AutoProcessor.from_pretrained("HuggingFaceM4/idefics2-8b")
+config = Idefics2Config(
+    text_config=MistralConfig(
+        vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
+        hidden_size=8,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_hidden_layers=2,
+        intermediate_size=32,
+    ),
+    vision_config=Idefics2VisionConfig(
+        hidden_size=8,
+        num_attention_heads=4,
+        num_hidden_layers=2,
+        intermediate_size=32,
+    ),
+)
+model = Idefics2ForConditionalGeneration(config)
+push_to_hub(model, processor)
+
+
 # Llama 3
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
 config = LlamaConfig(
@@ -110,6 +137,7 @@ config = LlamaConfig(
 model = LlamaForCausalLM(config)
 push_to_hub(model, tokenizer, suffix="3")
 
+
 # Llama 3.1
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
 config = LlamaConfig(
@@ -122,6 +150,7 @@ config = LlamaConfig(
 )
 model = LlamaForCausalLM(config)
 push_to_hub(model, tokenizer, suffix="3.1")
+
 
 # Llama 3.2
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
@@ -150,6 +179,7 @@ config = MistralConfig(
 model = MistralForCausalLM(config)
 push_to_hub(model, tokenizer, suffix="0.1")
 
+
 # Mistral v0.2
 tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2")
 config = MistralConfig(
@@ -162,6 +192,7 @@ config = MistralConfig(
 )
 model = MistralForCausalLM(config)
 push_to_hub(model, tokenizer, suffix="0.2")
+
 
 # Mistral v0.3
 tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3")
@@ -177,6 +208,28 @@ model = MistralForCausalLM(config)
 push_to_hub(model, tokenizer, suffix="0.3")
 
 
+# PaliGemma
+processor = AutoProcessor.from_pretrained("google/paligemma-3b-pt-224")
+config = PaliGemmaConfig(
+    text_config=GemmaConfig(
+        vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
+        hidden_size=8,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_hidden_layers=2,
+        intermediate_size=32,
+    ),
+    vision_config=SiglipVisionConfig(
+        hidden_size=8,
+        num_attention_heads=4,
+        num_hidden_layers=2,
+        intermediate_size=32,
+    ),
+)
+model = PaliGemmaForConditionalGeneration(config)
+push_to_hub(model, processor)
+
+
 # Phi3
 tokenizer = LlamaTokenizerFast.from_pretrained("microsoft/Phi-3.5-mini-instruct")
 config = Phi3Config(
@@ -189,6 +242,7 @@ config = Phi3Config(
 )
 model = Phi3ForCausalLM(config)
 push_to_hub(model, tokenizer)
+
 
 # Qwen
 tokenizer = Qwen2Tokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
@@ -203,6 +257,7 @@ config = Qwen2Config(
 model = Qwen2ForCausalLM(config)
 push_to_hub(model, tokenizer)
 
+
 # T5
 tokenizer = T5TokenizerFast.from_pretrained("google/flan-t5-small")
 config = T5Config(
@@ -216,25 +271,3 @@ config = T5Config(
 )
 model = T5ForConditionalGeneration(config)
 push_to_hub(model, tokenizer)
-
-
-# Idefics2
-processor = AutoProcessor.from_pretrained("HuggingFaceM4/idefics2-8b")
-config = Idefics2Config(
-    text_config=MistralConfig(
-        vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
-        hidden_size=8,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        num_hidden_layers=2,
-        intermediate_size=32,
-    ),
-    vision_config=Idefics2VisionConfig(
-        hidden_size=8,
-        num_attention_heads=4,
-        num_hidden_layers=2,
-        intermediate_size=32,
-    ),
-)
-model = Idefics2ForConditionalGeneration(config)
-push_to_hub(model, processor)
