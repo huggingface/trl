@@ -278,7 +278,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
 
     def test_raise_error_not_causallm(self):
         # Test with a model without a LM head
-        model_id = "trl-internal-testing/tiny-random-GPT2Model"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
         # This should raise a ValueError
         with self.assertRaises(ValueError):
             pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
