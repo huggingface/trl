@@ -14,9 +14,9 @@
 
 import shutil
 
+import torch
 from accelerate import PartialState
 from datasets import load_dataset
-import torch
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -34,6 +34,7 @@ from trl import (
     get_quantization_config,
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
 
 """
 python examples/scripts/ppo/ppo_tldr.py \
@@ -77,7 +78,7 @@ if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PPOConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
-    # shutil.rmtree(training_args.output_dir, ignore_errors=True)
+    shutil.rmtree(training_args.output_dir, ignore_errors=True)
 
     ################
     # Model & Tokenizer

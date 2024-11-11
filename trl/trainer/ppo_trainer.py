@@ -67,7 +67,7 @@ from .utils import generate_model_card, peft_module_casting_to_bf16
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_wandb_available():
     import wandb
@@ -278,9 +278,7 @@ class PPOTrainer(Trainer):
 
             if self.ref_policy is None:
                 if not self.is_peft_model:
-                    raise ValueError(
-                        "No reference model and model is not a Peft model."
-                    )
+                    raise ValueError("No reference model and model is not a Peft model.")
             else:
                 self.ref_policy = prepare_deepspeed(
                     self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
@@ -288,9 +286,7 @@ class PPOTrainer(Trainer):
         else:
             if self.ref_policy is None:
                 if not self.is_peft_model:
-                    raise ValueError(
-                        "No reference model and model is not a Peft model."
-                    )
+                    raise ValueError("No reference model and model is not a Peft model.")
             else:
                 self.ref_policy = self.ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
@@ -300,7 +296,7 @@ class PPOTrainer(Trainer):
 
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
-    
+
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
