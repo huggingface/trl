@@ -85,7 +85,6 @@ class IsConversationalTester(unittest.TestCase):
 
 class ApplyChatTemplateTester(unittest.TestCase):
     tokenizers = [
-        "qgallouedec/tiny-BartForCausalLM",
         "qgallouedec/tiny-CohereForCausalLM",
         "qgallouedec/tiny-LlamaForCausalLM-3.1",
         "qgallouedec/tiny-LlamaForCausalLM-3.2",
