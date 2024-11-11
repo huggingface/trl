@@ -1056,6 +1056,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_trainer_use_num_logits_to_keep(self):
         model_id = "qgallouedec/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
 
         model = AutoModelForCausalLM.from_pretrained(model_id)
 
