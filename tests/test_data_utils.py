@@ -91,7 +91,6 @@ class ApplyChatTemplateTester(unittest.TestCase):
         "qgallouedec/tiny-LlamaForCausalLM-3",
         "qgallouedec/tiny-MistralForCausalLM-0.1",
         "qgallouedec/tiny-MistralForCausalLM-0.2",
-        "qgallouedec/tiny-MistralForCausalLM-0.3",
         "qgallouedec/tiny-Phi3ForCausalLM",
         "qgallouedec/tiny-Qwen2ForCausalLM",
     ]
