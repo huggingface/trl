@@ -154,14 +154,11 @@ class WinRateCallbackTester(unittest.TestCase):
                 processing_class=self.tokenizer,
             )
             win_rate_callback = WinRateCallback(
-                judge=self.judge,
-                trainer=trainer,
-                generation_config=self.generation_config,
-                use_soft_judge=True
+                judge=self.judge, trainer=trainer, generation_config=self.generation_config, use_soft_judge=True
             )
             trainer.add_callback(win_rate_callback)
             trainer.train()
-            
+
             # Expected values based on judge returning [0.7, 0.3] for each pair
             expected_soft_winrates = [
                 {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 0.0, "step": 0},
@@ -172,10 +169,10 @@ class WinRateCallbackTester(unittest.TestCase):
                 {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 2.5, "step": 10},
                 {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 3.0, "step": 12},
             ]
-            
+
             winrate_history = [
-                {k: h[k] for k in ["eval_soft_win_rate", "eval_hard_win_rate", "epoch", "step"]} 
-                for h in trainer.state.log_history 
+                {k: h[k] for k in ["eval_soft_win_rate", "eval_hard_win_rate", "epoch", "step"]}
+                for h in trainer.state.log_history
                 if "eval_soft_win_rate" in h
             ]
             self.assertListEqual(winrate_history, expected_soft_winrates)
