@@ -1191,6 +1191,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 remove_unused_columns=False,
+                learning_rate=0.01,  # increase learning rate to speed up test
                 report_to="none",
             )
             trainer = DPOTrainer(
