@@ -15,15 +15,30 @@
 Example usage:
 accelerate launch \
     --config_file=deepspeed_zero2.yaml \
-    train_video_llm.py \
-    --dataset_name mfarre/simplevideoshorts \
-    --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 4 \
-    --output_dir video-llm-output \
-    --bf16 \
-    --torch_dtype bfloat16 \
-    --gradient_checkpointing
+    sft_video_llm.py \
+    --dataset_name=mfarre/simplevideoshorts \
+    --video_cache_dir="/optional/path/to/cache/" \
+    --model_name_or_path=Qwen/Qwen2-VL-7B-Instruct \
+    --per_device_train_batch_size=1 \
+    --output_dir=video-llm-output \
+    --bf16=True \
+    --tf32=True \
+    --gradient_accumulation_steps=4 \
+    --num_train_epochs=4 \
+    --optim="adamw_torch_fused" \
+    --logging_steps=1 \
+    --log_level="debug" \
+    --log_level_replica="debug" \
+    --save_strategy="steps" \
+    --save_steps=300 \
+    --learning_rate=8e-5 \
+    --max_grad_norm=0.3 \
+    --warmup_ratio=0.1 \
+    --lr_scheduler_type="cosine" \
+    --report_to="wandb" \
+    --push_to_hub=False \
+    --torch_dtype=bfloat16 \
+    --gradient_checkpointing=True
 """
 
 import os
@@ -31,6 +46,7 @@ import json
 import random
 import requests
 import torch
+from dataclasses import dataclass
 from datasets import load_dataset
 from transformers import (
     AutoModelForVision2Seq,
@@ -39,14 +55,15 @@ from transformers import (
     Qwen2VLProcessor,
 )
 from trl import (
-    ModelConfig,
-    ScriptArguments,
     SFTConfig,
     SFTTrainer,
-    TrlParser,
     get_kbit_device_map,
-    get_peft_config,
 )
+from trl.commands.cli_utils import TrlParser, SFTScriptArguments
+
+from trl.trainer import ModelConfig
+from peft import LoraConfig
+
 from accelerate import Accelerator
 from qwen_vl_utils import process_vision_info
 
@@ -54,14 +71,11 @@ import wandb
 
 from typing import List, Dict, Any
 
-def get_current_device():
-    """Get the current device. For GPU we return the local process index to enable multiple GPU training."""
-    return Accelerator().local_process_index if torch.cuda.is_available() else "cpu"
-
-def download_video(url: str, folder: str = '/tmp/videos/') -> str:
+def download_video(url: str, cache_dir: str) -> str:
     """Download video if not already present locally."""
+    os.makedirs(cache_dir, exist_ok=True)  # Create cache dir if it doesn't exist
     filename = url.split("/")[-1]
-    local_path = os.path.join(folder, filename)
+    local_path = os.path.join(cache_dir, filename)
 
     if os.path.exists(local_path):
         return local_path
@@ -77,7 +91,7 @@ def download_video(url: str, folder: str = '/tmp/videos/') -> str:
     except requests.RequestException as e:
         raise Exception(f"Failed to download video: {e}")
 
-def prepare_dataset(example: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+def prepare_dataset(example: Dict[str, Any], cache_dir: str) -> Dict[str, List[Dict[str, Any]]]:
     """Prepare dataset example for training."""
     video_url = example['video_url']
     timecoded_cc = example['timecoded_cc']
@@ -102,7 +116,7 @@ Based on this information, please answer the following questions:"""
             "content": [
                 {
                     "type": "video",
-                    "video": download_video(video_url),
+                    "video": download_video(video_url, cache_dir),
                     "max_pixels": 360*420,
                     "fps": 1.0
                 },
@@ -161,16 +175,21 @@ def collate_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     inputs["labels"] = labels
     return inputs
 
+
+@dataclass
+class CustomScriptArguments(SFTScriptArguments):
+    video_cache_dir: str = "/tmp/videos/"
+
 if __name__ == "__main__":
     # Parse arguments
-    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
+    parser = TrlParser((CustomScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
     
     # Configure training args
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.remove_unused_columns = False
     training_args.dataset_kwargs = {"skip_prepare_dataset": True}
-
+    
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, split="train")
 
@@ -202,6 +221,21 @@ if __name__ == "__main__":
         model_config.model_name_or_path,
         **model_kwargs
     )
+
+    peft_config = LoraConfig(
+        task_type="CAUSAL_LM",
+        r=16,
+        lora_alpha=16,
+        lora_dropout=0.1,
+        bias="none",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    )
+
+    # Configure model modules for gradients
+    if training_args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        model.config.use_reentrant = False
+        model.enable_input_require_grads()
     
     processor = AutoProcessor.from_pretrained(
         model_config.model_name_or_path,
@@ -209,7 +243,7 @@ if __name__ == "__main__":
     )
 
     # Prepare dataset
-    prepared_dataset = [prepare_dataset(example) for example in dataset]
+    prepared_dataset = [prepare_dataset(example, script_args.video_cache_dir) for example in dataset]
 
     # Initialize wandb if specified
     if training_args.report_to == "wandb":
@@ -221,8 +255,7 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=prepared_dataset,
         data_collator=collate_fn,
-        dataset_text_field="",
-        peft_config=get_peft_config(model_config),
+        peft_config=peft_config,
         tokenizer=processor.tokenizer
     )
 
