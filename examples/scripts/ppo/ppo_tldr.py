@@ -41,7 +41,7 @@ python examples/scripts/ppo/ppo_tldr.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
     --dataset_test_split validation \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
+    --output_dir models/minimal/ppo_tldr \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
     --total_episodes 30000 \
@@ -52,7 +52,7 @@ python examples/scripts/ppo/ppo_tldr.py \
     --stop_token eos \
     --response_length 53 \
     --eval_strategy steps \
-    --eval_steps 10
+    --eval_steps 100
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
@@ -70,7 +70,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --missing_eos_penalty 1.0 \
     --stop_token eos \
     --eval_strategy steps \
-    --eval_steps 10
+    --eval_steps 100
 """
 
 
