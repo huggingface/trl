@@ -33,6 +33,7 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_apex_available
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
@@ -93,6 +94,7 @@ class NashMDTrainer(OnlineDPOTrainer):
 
     _tag_names = ["trl", "nash-md"]
 
+    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.13.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
