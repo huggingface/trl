@@ -1,168 +1,102 @@
-"""
-python vas.py \
-    --log_with=wandb
-    --ref_model_name hanseungwook/vas-llama-2-7b-hh-sft
-    --model_name hanseungwook/vas-tiny-llama-1.1b-hh-sft
-"""
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from dataclasses import dataclass, field
-from typing import Optional
+import shutil
 
-import torch
+from accelerate import PartialState
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from tqdm import tqdm
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig, HfArgumentParser
-
-from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, VASConfig, VASTrainer, set_seed
-
-
-tqdm.pandas()
-
-
-@dataclass
-class ScriptArguments:
-    use_seq2seq: bool = field(default=False, metadata={"help": "whether to use seq2seq"})
-    trust_remote_code: bool = field(default=False, metadata={"help": "Enable `trust_remote_code`"})
-
-    # LoraConfig
-    use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
-    lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
-    lora_r: Optional[int] = field(default=16, metadata={"help": "the lora r parameter"})
-
-    # Generation kwargs
-    generation_batch_size: Optional[int] = field(default=16, metadata={"help": "The batch size for generation"})
-    temperature: Optional[float] = field(default=1.0, metadata={"help": "The temperature for generation"})
-    top_k: Optional[float] = field(default=0.0, metadata={"help": "The top_k for generation"})
-    top_p: Optional[float] = field(default=1.0, metadata={"help": "The top_p for generation"})
-
-
-parser = HfArgumentParser((ScriptArguments, VASConfig))
-args, vas_config = parser.parse_args_into_dataclasses()
-
-trl_model_class = AutoModelForCausalLMWithValueHead if not args.use_seq2seq else AutoModelForSeq2SeqLMWithValueHead
-
-
-def build_response_train_dataset(config, dataset_name="Anthropic/hh-rlhf"):
-    ds = load_dataset(dataset_name, split="train")
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    tokenizer.pad_token_id = tokenizer.unk_token_id
-
-    def tokenize(sample):
-        query = sample["chosen"][: sample["chosen"].rfind("Assistant:") + len("Assistant:")].replace("\n", " ").strip()
-        sample["query"] = tokenizer.encode(query)
-        return sample
-
-    ds = ds.map(tokenize, batched=False)
-    ds.set_format(type="torch")
-    return ds
-
-
-dataset = build_response_train_dataset(vas_config)
-
-
-def collator(data):
-    return {key: [d[key] for d in data] for key in data[0]}
-
-
-# set seed before initializing value head for deterministic eval
-set_seed(vas_config.seed)
-
-# Now let's build the model, the reference model, and the tokenizer.
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=False,
-    load_in_8bit=False,
-    bnb_4bit_compute_dtype=torch.float16,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    HfArgumentParser,
 )
 
-model = trl_model_class.from_pretrained(
-    vas_config.model_name,
-    quantization_config=quantization_config,
-    trust_remote_code=args.trust_remote_code,
-    device_map="auto",
-)
+from trl import ModelConfig, VASConfig, VASTrainer, ScriptArguments
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-if args.use_peft:
-    peft_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        bias="none",
-        task_type="CAUSAL_LM",
+
+if __name__ == "__main__":
+    parser = HfArgumentParser((ScriptArguments, VASConfig, ModelConfig))
+    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
+    # remove output_dir if exists
+    shutil.rmtree(training_args.output_dir, ignore_errors=True)
+
+    ################
+    # Model & Tokenizer
+    ################
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.model_name_or_path,
+        padding_side="left",
+        trust_remote_code=model_config.trust_remote_code,
     )
-    model.pretrained_model = prepare_model_for_kbit_training(model.pretrained_model, use_gradient_checkpointing=True)
-    model.pretrained_model = get_peft_model(model.pretrained_model, peft_config)
-    model.is_peft_model = True
-
-# Initialize the value head with zeros leads to better performance
-torch.nn.init.zeros_(model.v_head.summary.weight)
-torch.nn.init.zeros_(model.v_head.summary.bias)
-
-# Disable dropout
-for module in model.modules():
-    if isinstance(module, torch.nn.Dropout):
-        module.p = 0
-
-ref_model = trl_model_class.from_pretrained(
-    vas_config.ref_model_name,
-    quantization_config=quantization_config,
-    trust_remote_code=args.trust_remote_code,
-    device_map="auto",
-)
-
-tokenizer = ref_tokenizer = AutoTokenizer.from_pretrained(vas_config.model_name)
-
-# Some tokenizers like don't have a padding token by default, so we set one here.
-tokenizer.pad_token_id = tokenizer.unk_token_id
-tokenizer.add_eos_token = True
-
-# We then build the VASTrainer, passing the model, the reference model, the tokenizer
-vas_trainer = VASTrainer(vas_config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator)
-
-device = vas_trainer.accelerator.device
-if vas_trainer.accelerator.num_processes == 1:
-    device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
-
-reward_model_name = "OpenAssistant/reward-model-deberta-v3-large-v2"
-reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_name).to(vas_trainer.accelerator.device)
-reward_model = vas_trainer.accelerator.prepare(reward_model)
-reward_model.requires_grad_(False)
-reward_tokenizer = AutoTokenizer.from_pretrained(reward_model_name)
-reward_model.eval()
-
-generation_kwargs = {
-    "top_k": args.top_k,
-    "top_p": args.top_p,
-    "temperature": args.temperature,
-    "do_sample": True,
-    "pad_token_id": tokenizer.eos_token_id,
-    "max_new_tokens": 100,
-}
-
-for _epoch, batch in tqdm(enumerate(vas_trainer.dataloader)):
-    query_tensors = batch["query"]
-    response_tensors = vas_trainer.generate(
-        query_tensors, batch_size=args.generation_batch_size, return_prompt=False, **generation_kwargs
+    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
+    value_model = AutoModelForSequenceClassification.from_pretrained(
+        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1#, torch_dtype="float16"
     )
+    value_model.config.pad_token_id = tokenizer.pad_token_id
+    reward_model = AutoModelForSequenceClassification.from_pretrained(
+        training_args.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1, torch_dtype="bfloat16", attn_implementation="flash_attention_2",
+    )
+    ref_policy = AutoModelForCausalLM.from_pretrained(
+        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code, torch_dtype="float16", attn_implementation="flash_attention_2",
+    )
+    ################
+    # Dataset
+    ################
+    dataset = load_dataset(script_args.dataset_name, split=script_args.dataset_train_split)
+    train_dataset = dataset
+    dataset_text_field = "prompt"
 
-    # Compute score
-    full_responses = [torch.cat([query, response]) for query, response in zip(query_tensors, response_tensors)]
-    texts = tokenizer.batch_decode(full_responses, skip_special_tokens=True)
-    rewards = []
-    for text in texts:
-        inputs_ids = reward_tokenizer.encode(text, return_tensors="pt").to(reward_model.device)
-        reward_outputs = reward_model(inputs_ids)
-        reward = reward_outputs.logits[0]
-        rewards.append(reward.squeeze())
+    def prepare_dataset(dataset, tokenizer):
+        """pre-tokenize the dataset before training; only collate during training"""
 
-    # Run VAS step
-    stats = vas_trainer.step(query_tensors, response_tensors, rewards)
-    vas_trainer.log_stats(stats, batch, rewards, columns_to_log=["query"])
+        def tokenize(element):
+            outputs = tokenizer(
+                element[dataset_text_field],
+                padding=False,
+            )
+            return {"input_ids": outputs["input_ids"]}
 
-vas_trainer.save_pretrained("/data/pulkitag/models/idanshen/trl/example")
+        return dataset.map(
+            tokenize,
+            batched=True,
+            remove_columns=dataset.column_names,
+            num_proc=training_args.dataset_num_proc,
+        )
 
-# Decoding example
-# query = "Human: How are you doing today? Assistant:"
-# inputs = ref_tokenizer.encode(query, return_tensors='pt').to(reward_model.device)
-# output = vas_trainer.generate(inputs, vas_generation=True, beta=3.0)
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        train_dataset = prepare_dataset(train_dataset, tokenizer)
+
+    ################
+    # Training
+    ################
+    trainer = VASTrainer(
+        config=training_args,
+        processing_class=tokenizer,
+        ref_policy=ref_policy,
+        reward_model=reward_model,
+        value_model=value_model,
+        train_dataset=train_dataset,
+    )
+    trainer.train()
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

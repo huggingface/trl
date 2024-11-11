@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,149 +11,49 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import json
+
 import os
-import sys
-import warnings
-from dataclasses import dataclass, field
-from typing import Literal, Optional
+from dataclasses import dataclass
 
-import numpy as np
-import tyro
-from typing_extensions import Annotated
-
-from ..core import flatten_dict
-from ..import_utils import is_wandb_available
-from ..trainer.utils import exact_div
-
-
-JSONDict = Annotated[Optional[dict], tyro.conf.arg(metavar="JSON", constructor=json.loads)]
+from ..trainer.utils import OnPolicyConfig
 
 
 @dataclass
-class VASConfig:
-    """
-    Configuration class for VASTrainer
+class VASConfig(OnPolicyConfig):
+    r"""
+    Configuration class for the [`VASTrainer`].
+
+    Using [`~transformers.HfArgumentParser`] we can turn this class into
+    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+    command line.
+
+    Parameters:
+        exp_name (`str`, *optional*, defaults to `os.path.basename(__file__)[:-3]`):
+            Name of this experiment.
+        reward_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
+            Path to the reward model.
+        num_ppo_epochs (`int`, *optional*, defaults to `4`):
+            Number of epochs to train.
+        whiten_rewards (`bool`, *optional*, defaults to `False`):
+            Whether to whiten the rewards.
+        kl_coef (`float`, *optional*, defaults to `0.05`):
+            KL coefficient.
+        cliprange (`float`, *optional*, defaults to `0.2`):
+            Clip range.
+        vf_coef (`float`, *optional*, defaults to `0.1`):
+            Value function coefficient.
+        cliprange_value (`float`, *optional*, defaults to `0.2`):
+            Clip range for the value function.
+        gamma (`float`, *optional*, defaults to `1.0`):
+            Discount factor.
+        lam (`float`, *optional*, defaults to `0.95`):
+            Lambda value for GAE.
     """
 
-    # common parameters
-    exp_name: str = os.path.basename(sys.argv[0])[: -len(".py")]
-    """the name of this experiment (by default is the file name without the extension name)"""
-    seed: int = 0
-    """Seed value for random generations"""
-    log_with: Optional[Literal["wandb", "tensorboard"]] = None
-    """Log with either 'wandb' or 'tensorboard', check  https://huggingface.co/docs/accelerate/usage_guides/tracking for more details"""
-    task_name: Optional[str] = None
-    """Name of task to use - used only for tracking purposes"""
-    model_name: Optional[str] = "hanseungwook/vas-tiny-llama-1.1b-hh-sft"
-    """Name of model to use - used only for tracking purposes"""
-    ref_model_name: Optional[str] = "hanseungwook/vas-llama-2-7b-hh-sft"
-    """Name of reference model to use - used only for tracking purposes"""
-    query_dataset: Optional[str] = "imdb"
-    """Name of dataset to query - used only for tracking purposes"""
-    reward_model: Optional[str] = "sentiment-analysis:lvwerra/distilbert-imdb"
-    """The reward model to use - used only for tracking purposes"""
-    remove_unused_columns: bool = False
-    """Remove unused columns from the dataset if `datasets.Dataset` is used"""
-    tracker_kwargs: JSONDict = field(default_factory=dict)
-    """Keyword arguments for the tracker (e.g. python vas.py --tracker_kwargs='{"wandb": {"entity": "my_wandb_entity", "name": "my_exp_name"}}'"""
-    accelerator_kwargs: JSONDict = field(default_factory=dict)
-    """Keyword arguments for the accelerator"""
-    project_kwargs: JSONDict = field(default_factory=dict)
-    """Keyword arguments for the accelerator project config (e.g. `logging_dir`)"""
-    tracker_project_name: str = "trl"
-    """Name of project to use for tracking"""
-    push_to_hub_if_best_kwargs: JSONDict = field(default_factory=dict)
-    """Keyword arguments for pushing model to the hub during training (e.g. repo_id)"""
-
-    # hyperparameters
-    steps: int = 20000
-    """Number of training steps"""
-    learning_rate: float = 1.41e-5
-    """Adam learning rate"""
-    gamma: float = 1.0
-    """Gamma parameter for advantage calculation"""
-    lam: float = 0.95
-    """Lambda parameter for advantage calculation"""
-    batch_size: int = 256
-    """Number of samples per optimisation step"""
-    forward_batch_size: Optional[int] = None
-    """DEPRECATED: use `mini_batch_size` instead, which does the same thing."""
-    mini_batch_size: int = 1
-    """Number of samples optimized in each mini batch"""
-    gradient_accumulation_steps: int = 256
-    """The number of gradient accumulation steps"""
-    world_size: tyro.conf.Suppress[int] = None
-    """The world size for distributed training"""
-    vas_epochs: int = 2
-    """Number of optimisation epochs per batch of samples"""
-    max_grad_norm: Optional[float] = None
-    """Maximum gradient norm for gradient clipping"""
-    optimize_cuda_cache: Optional[bool] = None
-    """DEPRECATED: use `optimize_device_cache` instead, which does the same thing."""
-    optimize_device_cache: Optional[bool] = False
-    """Optimize device cache for slightly more memory-efficient training"""
-    compare_steps: int = 1
-    """Number of steps between comparison of the current reward with the best seen so far"""
-    use_score_scaling: bool = False
-    """Use score scaling"""
-    use_score_norm: bool = False
-    """Use score normalization. Only applicable if use_score_scaling is True"""
-    score_clip: Optional[float] = None
-    """Score clipping"""
+    exp_name: str = os.path.basename(__file__)[: -len(".py")]
+    reward_model_path: str = "EleutherAI/pythia-160m"
+    num_vas_epochs: int = 4
     whiten_rewards: bool = False
-    """Whiten the rewards before compute advantages"""
-    gradient_checkpointing: bool = False
-    """Enable gradient checkpointing"""
-
-    # computed hyperparameters at runtime; we use `tyro.conf.Suppress` to hide them from the help text
-    is_encoder_decoder: Optional[tyro.conf.Suppress[bool]] = None
-    """TO BE FILLED In RUNTIME: Whether the model is an encoder-decoder model"""
-    is_peft_model: Optional[tyro.conf.Suppress[bool]] = None
-    """TO BE FILLED In RUNTIME: Whether the model is a PEFT model"""
-    backward_batch_size: tyro.conf.Suppress[int] = None
-    """TO BE FILLED In RUNTIME: Number of samples optimized in an `optimizer.step()` call"""
-    global_backward_batch_size: tyro.conf.Suppress[int] = None
-    """TO BE FILLED In RUNTIME: the effective `backward_batch_size` across all processes"""
-    global_batch_size: tyro.conf.Suppress[int] = None
-    """TO BE FILLED In RUNTIME: the effective `batch_size` across all processes"""
-
-    if optimize_cuda_cache is not None:
-        warnings.warn(
-            "The `optimize_cuda_cache` argument will be deprecated soon, please use `optimize_device_cache` instead."
-        )
-
-        if optimize_device_cache is True:
-            raise ValueError("Both `optimize_device_cache` and `optimize_cuda_cache` were provided")
-
-        optimize_device_cache = optimize_cuda_cache
-
-    def __post_init__(self):
-        if self.forward_batch_size is not None:
-            warnings.warn(
-                "Note that using `forward_batch_size` is deprecated, use `mini_batch_size` instead. By setting it you overwrite `mini_batch_size` which affects both the batch size during forward passes and also the mini batch size for VAS optimization."
-            )
-            self.mini_batch_size = self.forward_batch_size
-
-        self.backward_batch_size = self.mini_batch_size * self.gradient_accumulation_steps
-        exact_div(
-            self.batch_size,
-            self.backward_batch_size,
-            "`batch_size` must be a multiple of `mini_batch_size * gradient_accumulation_steps`",
-        )
-
-        # check if wandb is installed
-        if self.log_with == "wandb":
-            # raise error if wandb is not installed
-            if not is_wandb_available():
-                raise ImportError(
-                    "Please install wandb to use wandb logging. You can do this by running `pip install wandb`."
-                )
-
-        self.total_vas_epochs = int(np.ceil(self.steps / self.batch_size))
-
-    def to_dict(self):
-        output_dict = {}
-        for key, value in self.__dict__.items():
-            output_dict[key] = value
-        return flatten_dict(output_dict)
+    gamma: float = 1.0
+    lam: float = 0.95
+    save_safetensors: bool = False
