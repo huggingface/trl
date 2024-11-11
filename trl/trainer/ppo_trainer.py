@@ -304,10 +304,10 @@ class PPOTrainer(Trainer):
             self.model.policy
         ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
             if self.ref_adapter_name:
-                self.self.model.policy.set_adapter(self.ref_adapter_name)
+                self.model.policy.set_adapter(self.ref_adapter_name)
             yield
             if self.ref_adapter_name:
-                self.self.model.policy.set_adapter(self.model_adapter_name or "default")
+                self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         backup_model = self.model
