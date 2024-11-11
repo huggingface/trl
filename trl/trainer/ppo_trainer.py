@@ -18,6 +18,7 @@ import os
 import textwrap
 import time
 from collections import defaultdict
+from contextlib import contextmanager, nullcontext
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -44,8 +45,10 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
+from transformers.utils import is_peft_available
 
 from ..core import masked_mean, masked_whiten
+from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
     OnlineTrainerState,
@@ -60,8 +63,11 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .ppo_config import PPOConfig
-from .utils import generate_model_card
+from .utils import generate_model_card, peft_module_casting_to_bf16
 
+
+if is_peft_available():
+    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 if is_wandb_available():
     import wandb
@@ -97,7 +103,7 @@ class PPOTrainer(Trainer):
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ],
         policy: nn.Module,
-        ref_policy: nn.Module,
+        ref_policy: Optional[nn.Module],
         reward_model: nn.Module,
         train_dataset: Dataset,
         value_model: Optional[nn.Module] = None,
@@ -106,11 +112,12 @@ class PPOTrainer(Trainer):
         # less commonly used
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[List[TrainerCallback]] = None,
+        peft_config: Optional[PeftConfig] = None,
     ) -> None:
         if ref_policy is policy:
             raise ValueError(
                 "`policy` and `ref_policy` cannot be the same object. If you want `ref_policy` to be the "
-                "same as `policy`, you must mass a copy of it, or `None` if you use peft."
+                "same as `policy`, you must make a copy of it, or `None` if you use peft."
             )
 
         self.args = config
@@ -123,7 +130,32 @@ class PPOTrainer(Trainer):
         )
         self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
-        self.ref_policy = ref_policy
+        # peft support
+        if not is_peft_available() and peft_config is not None:
+            raise ValueError(
+                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
+            )
+        elif is_peft_available() and peft_config is not None:
+            # if model is a peft model and we have a peft_confg, we merge and unload it first
+            if isinstance(self.policy, PeftModel):
+                self.policy = self.policy.merge_and_unload()
+
+            # get peft model with the given config
+            self.policy = get_peft_model(self.policy, peft_config)
+            if args.bf16 and getattr(self.policy, "is_loaded_in_4bit", False):
+                peft_module_casting_to_bf16(self.policy)
+
+        self.is_peft_model = is_peft_available() and isinstance(self.policy, PeftModel)
+        self.model_adapter_name = args.model_adapter_name
+        self.ref_adapter_name = args.ref_adapter_name
+
+        if ref_policy:
+            self.ref_policy = ref_policy
+        elif self.is_peft_model:
+            self.ref_policy = None
+        else:
+            self.ref_policy = create_reference_model(self.policy)
+
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
@@ -172,12 +204,13 @@ class PPOTrainer(Trainer):
         #########
         # setup model, optimizer, and others
         #########
-        for module in [policy, ref_policy, value_model, reward_model]:
-            disable_dropout_in_model(module)
+        for module in [self.policy, self.ref_policy, self.value_model, self.reward_model]:
+            if module is not None:
+                disable_dropout_in_model(module)
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = processing_class.eos_token_id
-        self.model = PolicyAndValueWrapper(policy, value_model)
-        self.model.config = policy.config  # needed for pushing to hub
+        self.model = PolicyAndValueWrapper(self.policy, self.value_model)
+        self.model.config = self.policy.config  # needed for pushing to hub
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
@@ -242,11 +275,24 @@ class PPOTrainer(Trainer):
             self.reward_model = prepare_deepspeed(
                 self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
-            self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+
+            if self.ref_policy is None:
+                if not self.is_peft_model:
+                    raise ValueError(
+                        "No reference model and model is not a Peft model."
+                    )
+            else:
+                self.ref_policy = prepare_deepspeed(
+                    self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
         else:
-            self.ref_policy = self.ref_policy.to(self.accelerator.device)
+            if self.ref_policy is None:
+                if not self.is_peft_model:
+                    raise ValueError(
+                        "No reference model and model is not a Peft model."
+                    )
+            else:
+                self.ref_policy = self.ref_policy.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
@@ -254,6 +300,18 @@ class PPOTrainer(Trainer):
 
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
+    
+    @contextmanager
+    def null_ref_context(self):
+        """Context manager for handling null reference model (that is, peft adapter manipulation)."""
+        with self.accelerator.unwrap_model(
+            self.model.policy
+        ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
+            if self.ref_adapter_name:
+                self.self.model.policy.set_adapter(self.ref_adapter_name)
+            yield
+            if self.ref_adapter_name:
+                self.self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         backup_model = self.model
@@ -366,7 +424,11 @@ class PPOTrainer(Trainer):
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
-                    ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
+                    if ref_policy is None:
+                        with self.null_ref_context():
+                            ref_output = forward(model.policy, query_response, processing_class.pad_token_id)
+                    else:
+                        ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
                     ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
