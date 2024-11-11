@@ -256,3 +256,30 @@ That's how `make test` is implemented (without the `pip install` line)!
 
 You can specify a smaller set of tests to test only the feature
 you're working on.
+
+### Deprecation and Backward Compatibility
+
+Our approach to deprecation and backward compatibility is flexible and based on the feature’s usage and impact. Each deprecation is carefully evaluated, aiming to balance innovation with user needs.
+
+When a feature or component is marked for deprecation, its use will emit a warning message. This warning will include:
+
+- **Transition Guidance**: Instructions on how to migrate to the alternative solution or replacement.
+- **Removal Version**: The target version when the feature will be removed, providing users with a clear timeframe to transition.
+
+Example:
+   
+   ```python
+   warnings.warn(
+       "The `Trainer.foo` method is deprecated and will be removed in version 0.14.0. "
+       "Please use the `Trainer.bar` class instead.",
+       FutureWarning,
+   )
+   ```
+
+The deprecation and removal schedule is based on each feature's usage and impact, with examples at two extremes:
+
+- **Experimental or Low-Use Features**: For a feature that is experimental or has limited usage, backward compatibility may not be maintained between releases. Users should therefore anticipate potential breaking changes from one version to the next.
+
+- **Widely-Used Components**: For a feature with high usage, we aim for a more gradual transition period of approximately **5 months**, generally scheduling deprecation around **5 minor releases** after the initial warning.
+
+These examples represent the two ends of a continuum. The specific timeline for each feature will be determined individually, balancing innovation with user stability needs.

@@ -48,6 +48,7 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -104,7 +105,9 @@ def _tokenize(
     full_input_ids = [np.array(f) for f in full_input_ids]
     for full, concat in zip(full_input_ids, full_concat_input_ids):
         if len(full) != len(concat):
-            raise ValueError("Prompt input ids and answer input ids should have the same length.")
+            raise ValueError(
+                "The elements in 'full_input_ids' and 'full_concat_input_ids' must have the same pairwise length."
+            )
 
     # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
     # can be merged together when tokenizing prompt+answer. This could result
@@ -317,6 +320,7 @@ class BCOTrainer(Trainer):
 
     _tag_names = ["trl", "bco"]
 
+    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.13.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module, str] = None,

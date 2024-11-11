@@ -47,7 +47,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
-from transformers.utils import check_min_version, is_peft_available
+from transformers.utils import is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
@@ -186,7 +186,7 @@ class DPOTrainer(Trainer):
 
     _tag_names = ["trl", "dpo"]
 
-    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.14.0", raise_if_both_names=True)
+    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.16.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
@@ -530,10 +530,6 @@ class DPOTrainer(Trainer):
                 )
 
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
-
-        # num_logits_to_keep is supported since transformers v4.45.0
-        if self.use_num_logits_to_keep:
-            check_min_version("4.45.0")
 
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
