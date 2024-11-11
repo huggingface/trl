@@ -283,3 +283,18 @@ The deprecation and removal schedule is based on each feature's usage and impact
 - **Widely-Used Components**: For a feature with high usage, we aim for a more gradual transition period of approximately **5 months**, generally scheduling deprecation around **5 minor releases** after the initial warning.
 
 These examples represent the two ends of a continuum. The specific timeline for each feature will be determined individually, balancing innovation with user stability needs.
+
+### Working with Warnings
+
+When working with warnings in the codebase, please follow these principles:
+
+1. **Warnings must be actionable**
+   Every warning raised should be actionable and provide clear guidance on how to address or resolve the underlying issue. For example, a deprecation warning should include an alternative method or function that can be used.
+
+2. **Warnings should not indicate normal behavior**
+   Warnings should not be triggered for issues that do not affect functionality. They must not appear for the expected, intended operation of the software. Warnings should highlight potential problems, not reflect normal behavior.
+
+3. **Use the appropriate warning type**
+   Use the appropriate warning types (e.g., `DeprecationWarning`, `UserWarning`) for features that are being phased out or for behaviors that should be addressed in future versions.
+
+By following these guidelines, we ensure that warnings remain meaningful, actionable, and contribute to the long-term health of the project.
