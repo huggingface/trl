@@ -211,8 +211,9 @@ push_to_hub(model, tokenizer, suffix="0.3")
 # PaliGemma
 processor = AutoProcessor.from_pretrained("google/paligemma-3b-pt-224")
 # PaliGemma is not meant for chat, but we add a chat template for testing purposes
-processor.chat_template = processor.chat_template = "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '<start_of_turn>' + role + '\n' }}{% for content in message['content'] %}{% if content['type'] == 'text' %}{{ content['text'] | trim }}{% endif %}{% endfor %}{{ '<end_of_turn>\n' }}{% endfor %}{% if add_generation_prompt %}{{'<start_of_turn>model'}}{% endif %}"
+processor.chat_template = "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '<start_of_turn>' + role + '\n' }}{% for content in message['content'] %}{% if content['type'] == 'text' %}{{ content['text'] | trim }}{% endif %}{% endfor %}{{ '<end_of_turn>\n' }}{% endfor %}{% if add_generation_prompt %}{{'<start_of_turn>model'}}{% endif %}"
 config = PaliGemmaConfig(
+    projection_dim=8,
     text_config=GemmaConfig(
         vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
         hidden_size=8,
@@ -226,6 +227,7 @@ config = PaliGemmaConfig(
         num_attention_heads=4,
         num_hidden_layers=2,
         intermediate_size=32,
+        projection_dim=8,
     ),
 )
 model = PaliGemmaForConditionalGeneration(config)
