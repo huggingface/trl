@@ -679,6 +679,7 @@ def create_reference_model(
 class GeometricMixtureWrapper(GenerationMixin):
     r"""
     Geometric Mixture generation wrapper that samples from the logits of two model's geometric mixture.
+    Note that the model is set to eval mode and so set it back to train mode if necessary.
 
     Args:
         model (`PreTrainedModel`): The model to be wrapped.
