@@ -231,7 +231,8 @@ class WinRateCallback(TrainerCallback):
         shuffle_order (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the order of the completions before judging.
         use_soft_judge (`bool`, *optional*, defaults to `False`):
-            Whether to use a soft judge that returns a win probability between 0 and 1 for the first completion vs the second.
+            Whether to use a soft judge that returns a win probability between 0 and 1 for the first completion vs the
+            second.
     """
 
     def __init__(
