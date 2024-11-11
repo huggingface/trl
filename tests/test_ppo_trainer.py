@@ -26,6 +26,8 @@ python examples/scripts/ppo/ppo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10 \
     --model_name_or_path qgallouedec/tiny-Qwen2ForCausalLM \
+    --reward_model_path qgallouedec/tiny-Qwen2ForCausalLM \
+    --sft_model_path qgallouedec/tiny-Qwen2ForCausalLM \
     --missing_eos_penalty 1.0 \
     --save_strategy no \
     --stop_token eos
@@ -52,6 +54,8 @@ python examples/scripts/ppo/ppo.py \
     --gradient_accumulation_steps 1 \
     --num_train_epochs 0.003 \
     --model_name_or_path qgallouedec/tiny-Qwen2ForCausalLM \
+    --reward_model_path qgallouedec/tiny-Qwen2ForCausalLM \
+    --sft_model_path qgallouedec/tiny-Qwen2ForCausalLM \
     --missing_eos_penalty 1.0 \
     --save_strategy no \
     --stop_token eos
