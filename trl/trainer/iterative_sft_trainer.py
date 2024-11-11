@@ -33,6 +33,7 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..core import PPODecorators
 from .utils import generate_model_card
@@ -80,6 +81,7 @@ class IterativeSFTTrainer(Trainer):
 
     _tag_names = ["trl", "iterative-sft"]
 
+    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.13.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Optional[PreTrainedModel] = None,
