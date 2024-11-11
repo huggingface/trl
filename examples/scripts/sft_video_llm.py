@@ -41,35 +41,33 @@ accelerate launch \
     --gradient_checkpointing=True
 """
 
-import os
 import json
+import os
 import random
+from dataclasses import dataclass
+from typing import Any, Dict, List
+
 import requests
 import torch
-from dataclasses import dataclass
+import wandb
 from datasets import load_dataset
+from peft import LoraConfig
+from qwen_vl_utils import process_vision_info
 from transformers import (
     AutoModelForVision2Seq,
     AutoProcessor,
     BitsAndBytesConfig,
     Qwen2VLProcessor,
 )
+
 from trl import (
     SFTConfig,
     SFTTrainer,
     get_kbit_device_map,
 )
-from trl.commands.cli_utils import TrlParser, SFTScriptArguments
-
+from trl.commands.cli_utils import SFTScriptArguments, TrlParser
 from trl.trainer import ModelConfig
-from peft import LoraConfig
 
-from accelerate import Accelerator
-from qwen_vl_utils import process_vision_info
-
-import wandb
-
-from typing import List, Dict, Any
 
 def download_video(url: str, cache_dir: str) -> str:
     """Download video if not already present locally."""
@@ -83,19 +81,20 @@ def download_video(url: str, cache_dir: str) -> str:
     try:
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
-            with open(local_path, 'wb') as f:
+            with open(local_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
         return local_path
     except requests.RequestException as e:
-        raise Exception(f"Failed to download video: {e}")
+        raise Exception(f"Failed to download video: {e}") from e
+
 
 def prepare_dataset(example: Dict[str, Any], cache_dir: str) -> Dict[str, List[Dict[str, Any]]]:
     """Prepare dataset example for training."""
-    video_url = example['video_url']
-    timecoded_cc = example['timecoded_cc']
-    qa_pairs = json.loads(example['qa'])
+    video_url = example["video_url"]
+    timecoded_cc = example["timecoded_cc"]
+    qa_pairs = json.loads(example["qa"])
 
     system_message = "You are an expert in movie narrative analysis."
     base_prompt = f"""Analyze the video and consider the following timecoded subtitles:
@@ -105,73 +104,58 @@ def prepare_dataset(example: Dict[str, Any], cache_dir: str) -> Dict[str, List[D
 Based on this information, please answer the following questions:"""
 
     selected_qa = random.sample(qa_pairs, 1)[0]
-    
+
     messages = [
-        {
-            "role": "system",
-            "content": [{"type": "text", "text": system_message}]
-        },
+        {"role": "system", "content": [{"type": "text", "text": system_message}]},
         {
             "role": "user",
             "content": [
-                {
-                    "type": "video",
-                    "video": download_video(video_url, cache_dir),
-                    "max_pixels": 360*420,
-                    "fps": 1.0
-                },
-                {
-                    "type": "text",
-                    "text": f"{base_prompt}\n\nQuestion: {selected_qa['question']}"
-                }
-            ]
+                {"type": "video", "video": download_video(video_url, cache_dir), "max_pixels": 360 * 420, "fps": 1.0},
+                {"type": "text", "text": f"{base_prompt}\n\nQuestion: {selected_qa['question']}"},
+            ],
         },
-        {
-            "role": "assistant",
-            "content": [{"type": "text", "text": selected_qa['answer']}]
-        }
+        {"role": "assistant", "content": [{"type": "text", "text": selected_qa["answer"]}]},
     ]
 
     return {"messages": messages}
+
 
 def collate_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     """Collate batch of examples for training."""
     texts = []
     video_inputs = []
-    
+
     for i, example in enumerate(examples):
         try:
             video_path = next(
-                content["video"] for message in example["messages"]
+                content["video"]
+                for message in example["messages"]
                 for content in message["content"]
                 if content.get("type") == "video"
             )
             print(f"Processing video: {os.path.basename(video_path)}")
-            
+
             texts.append(processor.apply_chat_template(example["messages"], tokenize=False))
             video_input = process_vision_info(example["messages"])[1][0]
             video_inputs.append(video_input)
         except Exception as e:
-            raise ValueError(f"Failed to process example {i}: {e}")
-    
-    inputs = processor(
-        text=texts,
-        videos=video_inputs,
-        return_tensors="pt",
-        padding=True
-    )
-    
+            raise ValueError(f"Failed to process example {i}: {e}") from e
+
+    inputs = processor(text=texts, videos=video_inputs, return_tensors="pt", padding=True)
+
     labels = inputs["input_ids"].clone()
     labels[labels == processor.tokenizer.pad_token_id] = -100
-    
+
     # Handle visual tokens based on processor type
-    visual_tokens = [151652, 151653, 151656] if isinstance(processor, Qwen2VLProcessor) else [
-        processor.tokenizer.convert_tokens_to_ids(processor.image_token)
-    ]
-    
+    visual_tokens = (
+        [151652, 151653, 151656]
+        if isinstance(processor, Qwen2VLProcessor)
+        else [processor.tokenizer.convert_tokens_to_ids(processor.image_token)]
+    )
+
     for visual_token_id in visual_tokens:
         labels[labels == visual_token_id] = -100
-    
+
     inputs["labels"] = labels
     return inputs
 
@@ -180,16 +164,17 @@ def collate_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
 class CustomScriptArguments(SFTScriptArguments):
     video_cache_dir: str = "/tmp/videos/"
 
+
 if __name__ == "__main__":
     # Parse arguments
     parser = TrlParser((CustomScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_and_config()
-    
+
     # Configure training args
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.remove_unused_columns = False
     training_args.dataset_kwargs = {"skip_prepare_dataset": True}
-    
+
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, split="train")
 
@@ -205,7 +190,7 @@ if __name__ == "__main__":
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16
+        bnb_4bit_compute_dtype=torch.bfloat16,
     )
 
     # Model initialization
@@ -217,10 +202,7 @@ if __name__ == "__main__":
         quantization_config=bnb_config,
     )
 
-    model = AutoModelForVision2Seq.from_pretrained(
-        model_config.model_name_or_path,
-        **model_kwargs
-    )
+    model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
 
     peft_config = LoraConfig(
         task_type="CAUSAL_LM",
@@ -236,10 +218,9 @@ if __name__ == "__main__":
         model.gradient_checkpointing_enable()
         model.config.use_reentrant = False
         model.enable_input_require_grads()
-    
+
     processor = AutoProcessor.from_pretrained(
-        model_config.model_name_or_path,
-        trust_remote_code=model_config.trust_remote_code
+        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
     )
 
     # Prepare dataset
@@ -256,7 +237,7 @@ if __name__ == "__main__":
         train_dataset=prepared_dataset,
         data_collator=collate_fn,
         peft_config=peft_config,
-        tokenizer=processor.tokenizer
+        tokenizer=processor.tokenizer,
     )
 
     # Train model
