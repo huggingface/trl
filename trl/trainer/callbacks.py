@@ -301,9 +301,9 @@ class WinRateCallback(TrainerCallback):
         # Logging
         if self.trainer.accelerator.is_main_process:
             if self.use_soft_judge:
-                soft_win_rate = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
+                avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
                 hard_win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-                self.trainer.log({"eval_soft_win_rate": soft_win_rate, "eval_hard_win_rate": hard_win_rate})
+                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_hard_win_rate": hard_win_rate})
             else:
                 win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
                 self.trainer.log({"eval_win_rate": win_rate})
@@ -356,9 +356,9 @@ class WinRateCallback(TrainerCallback):
         # Logging
         if self.trainer.accelerator.is_main_process:
             if self.use_soft_judge:
-                soft_win_rate = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
+                avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
                 hard_win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-                self.trainer.log({"eval_soft_win_rate": soft_win_rate, "eval_hard_win_rate": hard_win_rate})
+                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_hard_win_rate": hard_win_rate})
             else:
                 win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
                 self.trainer.log({"eval_win_rate": win_rate})
