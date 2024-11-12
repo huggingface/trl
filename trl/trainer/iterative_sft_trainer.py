@@ -123,15 +123,10 @@ class IterativeSFTTrainer(Trainer):
 
         if data_collator is None:
             if self.is_encoder_decoder:
-                warnings.warn(
-                    "No data collator is provided. Using 'DataCollatorForSeq2Seq' with"
-                    "'labels_pad_token_id' set to '-100' and 'pad_to_multiple_of' set to 8."
-                )
                 self.data_collator = DataCollatorForSeq2Seq(
                     processing_class, label_pad_token_id=-100, pad_to_multiple_of=8
                 )
             else:
-                warnings.warn("No data collator is provided. Using 'DataCollatorForLanguageModeling'")
                 self.data_collator = DataCollatorForLanguageModeling(self.processing_class, mlm=False)
         else:
             self.data_collator = data_collator
@@ -293,7 +288,9 @@ class IterativeSFTTrainer(Trainer):
             raise ValueError("Step should include `input_ids` or `texts` as keyword arguments.")
         elif input_ids is not None and texts is not None:
             warnings.warn(
-                "Both 'input_ids' and 'texts' are provided. 'input_ids' will be overwritten using inputs provided by the 'texts' keyword argument."
+                "Both `input_ids` and `texts` argument are provided. `input_ids` will be ignored. "
+                "Please provide only one of the two.",
+                UserWarning,
             )
 
         if labels is None and texts_labels is None and self.is_encoder_decoder:
@@ -318,7 +315,6 @@ class IterativeSFTTrainer(Trainer):
             )["input_ids"]
 
         if labels is None:
-            warnings.warn("No labels are provided. Setting labels to input_ids")
             labels = input_ids
 
         model_inputs = self.prepare_model_inputs(input_ids, attention_mask, labels)

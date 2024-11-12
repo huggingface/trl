@@ -135,7 +135,8 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 "The pad_token_id and eos_token_id values of this tokenizer are identical. "
                 "If you are planning for multi-turn training, "
                 "it can result in the model continuously generating questions and answers without eos token. "
-                "To avoid this, set the pad_token_id to a different value."
+                "To avoid this, set the pad_token_id to a different value.",
+                UserWarning,
             )
 
         self.ignore_index = ignore_index
@@ -158,10 +159,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if response_token_ids_start_idx is None:
                     warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find response key `{self.response_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch["input_ids"][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
                 else:
@@ -185,10 +186,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(response_token_ids_idxs) == 0:
                     warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find response key `{self.response_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch["input_ids"][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
 
@@ -200,10 +201,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(human_token_ids_idxs) == 0:
                     warnings.warn(
-                        f"Could not find instruction key `{self.instruction_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find instruction key `{self.instruction_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch["input_ids"][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
 
@@ -591,13 +592,6 @@ class ConstantLengthDataset(IterableDataset):
         add_special_tokens=True,
     ):
         self.tokenizer = tokenizer
-
-        if tokenizer.eos_token_id is None:
-            warnings.warn(
-                "The passed tokenizer does not have an EOS token. We will use the passed eos_token_id instead which corresponds"
-                f" to {eos_token_id}. If this is not the correct EOS token, make sure to pass the correct eos_token_id."
-            )
-
         self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
         self.dataset = dataset
         self.seq_length = seq_length
