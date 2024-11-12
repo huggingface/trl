@@ -160,7 +160,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 if response_token_ids_start_idx is None:
                     warnings.warn(
                         f"Could not find response key `{self.response_template}` in the following instance: "
-                        f"{self.tokenizer.decode(batch["input_ids"][i])}. This instance will be ignored in loss "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
                         "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
                         UserWarning,
                     )
@@ -187,7 +187,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 if len(response_token_ids_idxs) == 0:
                     warnings.warn(
                         f"Could not find response key `{self.response_template}` in the following instance: "
-                        f"{self.tokenizer.decode(batch["input_ids"][i])}. This instance will be ignored in loss "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
                         "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
                         UserWarning,
                     )
@@ -202,7 +202,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 if len(human_token_ids_idxs) == 0:
                     warnings.warn(
                         f"Could not find instruction key `{self.instruction_template}` in the following instance: "
-                        f"{self.tokenizer.decode(batch["input_ids"][i])}. This instance will be ignored in loss "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
                         "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
                         UserWarning,
                     )
