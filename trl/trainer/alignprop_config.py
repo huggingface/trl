@@ -14,11 +14,10 @@
 
 import os
 import sys
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, Literal, Optional, Tuple
 
-from transformers import is_bitsandbytes_available, is_torchvision_available
+from transformers import is_bitsandbytes_available
 
 from ..core import flatten_dict
 
