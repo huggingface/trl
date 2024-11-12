@@ -48,7 +48,6 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -320,7 +319,6 @@ class BCOTrainer(Trainer):
 
     _tag_names = ["trl", "bco"]
 
-    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.13.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module, str] = None,
