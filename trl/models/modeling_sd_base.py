@@ -808,8 +808,9 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
         except OSError:
             if use_lora:
                 warnings.warn(
-                    "If you are aware that the pretrained model has no lora weights to it, ignore this message. "
-                    "Otherwise please check the if `pytorch_lora_weights.safetensors` exists in the model folder."
+                    "Trying to load LoRA weights but no LoRA weights found. Set `use_lora=False` or check that "
+                    "`pytorch_lora_weights.safetensors` exists in the model folder.",
+                    UserWarning,
                 )
 
         self.sd_pipeline.scheduler = DDIMScheduler.from_config(self.sd_pipeline.scheduler.config)
