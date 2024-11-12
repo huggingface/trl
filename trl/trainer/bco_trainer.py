@@ -565,8 +565,11 @@ class BCOTrainer(Trainer):
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
             warnings.warn(
-                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
-                " meaning the auxiliary loss will not be used."
+                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
+                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
+                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
+                "loss.",
+                UserWarning,
             )
 
         # Underlying Distribution Matching argument
@@ -697,7 +700,6 @@ class BCOTrainer(Trainer):
         self.running = RunningMoments(accelerator=self.accelerator)
 
         if self.embedding_func is None:
-            warnings.warn("You did not pass `embedding_func` underlying distribution matching feature is deactivated.")
             return
 
         chosen_embeddings = self._get_sample_prompt_embeddings(desirable, sample_size=self.args.prompt_sample_size)
@@ -867,16 +869,12 @@ class BCOTrainer(Trainer):
             return
         # when loading optimizer and scheduler from checkpoint, also load the running delta object.
         running_file = os.path.join(checkpoint, RUNNING_NAME)
-        if not os.path.isfile(running_file):
-            warnings.warn(f"Missing file {running_file}. Will use a new running delta value for BCO loss calculation")
-        else:
+        if os.path.isfile(running_file):
             self.running = RunningMoments.load_from_json(self.accelerator, running_file)
 
         if self.match_underlying_distribution:
             clf_file = os.path.join(checkpoint, CLF_NAME)
-            if not os.path.isfile(running_file):
-                warnings.warn(f"Missing file {clf_file}. Will use a new UDM classifier for BCO loss calculation")
-            else:
+            if os.path.isfile(running_file):
                 self.clf.set_params(**torch.load(clf_file, weights_only=True, map_location="cpu"))
 
     @contextmanager
@@ -1342,11 +1340,6 @@ class BCOTrainer(Trainer):
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
     ):
-        if not self.use_dpo_data_collator:
-            warnings.warn(
-                "prediction_step is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
         if ignore_keys is None:
             if hasattr(model, "config"):
                 ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
