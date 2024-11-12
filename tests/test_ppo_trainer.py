@@ -14,6 +14,8 @@
 import platform
 import subprocess
 
+from transformers.testing_utils import require_peft
+
 
 def test():
     command = """\
@@ -67,6 +69,7 @@ python examples/scripts/ppo/ppo.py \
     )
 
 
+@require_peft
 def test_peft_support():
     command = """\
 python examples/scripts/ppo/ppo.py \
