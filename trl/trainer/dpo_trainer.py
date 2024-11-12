@@ -186,7 +186,7 @@ class DPOTrainer(Trainer):
 
     _tag_names = ["trl", "dpo"]
 
-    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.14.0", raise_if_both_names=True)
+    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.16.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
@@ -396,6 +396,7 @@ class DPOTrainer(Trainer):
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = args.max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
+        self.use_num_logits_to_keep = args.use_num_logits_to_keep
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
@@ -529,6 +530,7 @@ class DPOTrainer(Trainer):
                 )
 
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
 
@@ -1101,9 +1103,9 @@ class DPOTrainer(Trainer):
             # Get the first column idx that is all zeros and remove every column after that
             empty_cols = torch.sum(attention_mask, dim=0) == 0
             first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-            input_ids = input_ids[:, : first_empty_col]
-            attention_mask = attention_mask[:, : first_empty_col]
-            loss_mask = loss_mask[:, : first_empty_col]
+            input_ids = input_ids[:, :first_empty_col]
+            attention_mask = attention_mask[:, :first_empty_col]
+            loss_mask = loss_mask[:, :first_empty_col]
 
             # Truncate right
             if self.args.max_length is not None:
@@ -1111,12 +1113,31 @@ class DPOTrainer(Trainer):
                 attention_mask = attention_mask[:, : self.args.max_length]
                 loss_mask = loss_mask[:, : self.args.max_length]
 
+            if self.use_num_logits_to_keep:
+                # Compute num_logits_to_keep based on loss_mask pattern:
+                # [[0, 0, 0, x, x, x, x],
+                #  [0, 0, 0, x, x, x, 0]]
+                #         ^ start computing logits from here ([:, -(7-3+1):])
+                first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
+                num_logits_to_keep = loss_mask.shape[1] - first_compute_index
+                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
+
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
 
             # Offset the logits by one to align with the labels
             logits = outputs.logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
             loss_mask = loss_mask[:, 1:].bool()
+
+            if self.use_num_logits_to_keep:
+                # Align labels with logits
+                # logits:    -,  -, [x2, x3, x4, x5, x6]
+                #                     ^ --------- ^       after logits[:, :-1, :]
+                # labels:   [y0, y1, y2, y3, y4, y5, y6]
+                #                         ^ --------- ^   with num_logits_to_keep=4, [:, -4:]
+                # loss_mask: [0,  0,  0,  1,  1,  1,  1]
+                labels = labels[:, -num_logits_to_keep:]
+                loss_mask = loss_mask[:, -num_logits_to_keep:]
 
         if logits.shape[:2] != labels.shape[:2]:
             # for llava, the returned logits include the image tokens (placed before the text tokens)

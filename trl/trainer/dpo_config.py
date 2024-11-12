@@ -136,6 +136,11 @@ class DPOConfig(TrainingArguments):
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
+        use_num_logits_to_keep (`bool`, *optional*, defaults to `False`):
+            If `True`, only a specified number of logits are computed in the forward pass of CausalLM. This can be useful
+            for saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios
+            when working with very long prompts where labels are -ignored (-100).
+            [Read more](https://huggingface.co/docs/transformers/main/model_doc/llama#transformers.LlamaForCausalLM)
     """
 
     learning_rate: float = 1e-6
@@ -182,6 +187,7 @@ class DPOConfig(TrainingArguments):
     ref_model_sync_steps: int = 64
     rpo_alpha: Optional[float] = None
     discopop_tau: float = 0.05
+    use_num_logits_to_keep: bool = False
 
     def __post_init__(self):
         if self.max_target_length is not None:
