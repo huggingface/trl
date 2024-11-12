@@ -113,4 +113,4 @@ class IterativeTrainerTester(unittest.TestCase):
             iterative_trainer.step(**inputs)
 
             for param in iterative_trainer.model.parameters():
-                assert param.grad is not None
+                self.assertIsNotNone(param.grad)

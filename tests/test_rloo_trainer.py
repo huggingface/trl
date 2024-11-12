@@ -51,38 +51,6 @@ python examples/scripts/rloo/rloo.py \
     )
 
 
-def test_rloo_reward():
-    local_batch_size = 3
-    rloo_k = 4
-    # fmt: off
-    rlhf_reward = torch.tensor([
-        1, 2, 3, # first rlhf reward for three prompts
-        2, 3, 4, # second rlhf reward for three prompts
-        5, 6, 7, # third rlhf reward for three prompts
-        8, 9, 10, # fourth rlhf reward for three prompts
-    ]).float()
-    # fmt: on
-
-    baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
-    advantages = torch.zeros_like(rlhf_reward)
-    for i in range(0, len(advantages), local_batch_size):
-        other_response_rlhf_rewards = []
-        for j in range(0, len(advantages), local_batch_size):
-            if i != j:
-                other_response_rlhf_rewards.append(rlhf_reward[j : j + local_batch_size])
-        advantages[i : i + local_batch_size] = rlhf_reward[i : i + local_batch_size] - torch.stack(
-            other_response_rlhf_rewards
-        ).mean(0)
-    assert (1 - (2 + 5 + 8) / 3 - advantages[0].item()) < 1e-6
-    assert (6 - (3 + 2 + 9) / 3 - advantages[7].item()) < 1e-6
-
-    # vectorized impl
-    rlhf_reward = rlhf_reward.reshape(rloo_k, local_batch_size)
-    baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
-    vec_advantages = rlhf_reward - baseline
-    torch.testing.assert_close(vec_advantages.flatten(), advantages)
-
-
 class RLOOTrainerTester(unittest.TestCase):
     def setUp(self):
         self.sft_model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
@@ -120,3 +88,34 @@ class RLOOTrainerTester(unittest.TestCase):
             )
 
             trainer._save_checkpoint(trainer.model, trial=None)
+
+    def test_rloo_reward(self):
+        local_batch_size = 3
+        rloo_k = 4
+        # fmt: off
+        rlhf_reward = torch.tensor([
+            1, 2, 3, # first rlhf reward for three prompts
+            2, 3, 4, # second rlhf reward for three prompts
+            5, 6, 7, # third rlhf reward for three prompts
+            8, 9, 10, # fourth rlhf reward for three prompts
+        ]).float()
+        # fmt: on
+
+        baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
+        advantages = torch.zeros_like(rlhf_reward)
+        for i in range(0, len(advantages), local_batch_size):
+            other_response_rlhf_rewards = []
+            for j in range(0, len(advantages), local_batch_size):
+                if i != j:
+                    other_response_rlhf_rewards.append(rlhf_reward[j : j + local_batch_size])
+            advantages[i : i + local_batch_size] = rlhf_reward[i : i + local_batch_size] - torch.stack(
+                other_response_rlhf_rewards
+            ).mean(0)
+        self.assertLess((1 - (2 + 5 + 8) / 3 - advantages[0].item()), 1e-6)
+        self.assertLess((6 - (3 + 2 + 9) / 3 - advantages[7].item()), 1e-6)
+
+        # vectorized impl
+        rlhf_reward = rlhf_reward.reshape(rloo_k, local_batch_size)
+        baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
+        vec_advantages = rlhf_reward - baseline
+        torch.testing.assert_close(vec_advantages.flatten(), advantages)
