@@ -114,7 +114,7 @@ class PPOTrainer(Trainer):
         # less commonly used
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[List[TrainerCallback]] = None,
-        peft_config: Optional[PeftConfig] = None,
+        peft_config: Optional["PeftConfig"] = None,
     ) -> None:
         if ref_policy is policy:
             raise ValueError(
