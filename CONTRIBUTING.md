@@ -292,7 +292,7 @@ When working with warnings in the codebase, please follow these principles:
    Every warning raised should be actionable and provide clear guidance on how to address or resolve the underlying issue. For example, a deprecation warning should include an alternative method or function that can be used.
 
 2. **Warnings should not indicate normal behavior**
-   Warnings should not be triggered for issues that do not affect functionality. They must not appear for the expected, intended operation of the software. Warnings should highlight potential problems, not reflect normal behavior.
+   Warnings should not be triggered for issues that do not affect functionality. They must not appear for the expected, intended operation of the software. Warnings should highlight potential problems, not reflect normal behavior. In other words, warnings should not be used as a substitute for logging.
 
 3. **Use the appropriate warning type**
    Use the appropriate warning types (e.g., `DeprecationWarning`, `UserWarning`) for features that are being phased out or for behaviors that should be addressed in future versions.
