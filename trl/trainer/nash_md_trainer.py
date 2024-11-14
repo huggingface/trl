@@ -184,8 +184,6 @@ class NashMDTrainer(OnlineDPOTrainer):
                     attention_mask=prompts["attention_mask"],
                     generation_config=self.generation_config,
                 )
-            # Set the model back to training mode after generation from geometric mixture
-            model.train()
 
         return model_output, mixture_output
 
