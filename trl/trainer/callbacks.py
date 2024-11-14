@@ -354,7 +354,7 @@ class WinRateCallback(TrainerCallback):
             if self.use_soft_judge:
                 avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
                 self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": win_rate})
-            else:   
+            else:
                 self.trainer.log({"eval_win_rate": win_rate})
 
             if "wandb" in args.report_to:
