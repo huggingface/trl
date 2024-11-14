@@ -134,7 +134,7 @@ class PPOTrainer(Trainer):
 
         # peft support
         if not is_peft_available() and peft_config is not None:
-            raise ValueError(
+            raise ImportError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
