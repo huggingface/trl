@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, 
 from transformers.testing_utils import require_peft, require_wandb
 from transformers.utils import is_peft_available
 
-from trl import BasePairwiseJudge, LogCompletionsCallback, WinRateCallback, MergeModelCallBack, DPOTrainer, DPOConfig
+from trl import BasePairwiseJudge, LogCompletionsCallback, WinRateCallback, MergeModelCallback, DPOTrainer, DPOConfig
 
 from trl.mergekit_utils import MergeConfig, get_last_checkpoint_path
 
@@ -246,7 +246,7 @@ class MergeModelCallbackTester(unittest.TestCase):
                 tokenizer=self.tokenizer,
             )
             config = MergeConfig("linear")
-            merge_callback = MergeModelCallBack(config, push_to_hub=False, merge_at_every_checkpoint=False)
+            merge_callback = MergeModelCallback(config, push_to_hub=False, merge_at_every_checkpoint=False)
             trainer.add_callback(merge_callback)
             trainer.train()
 
@@ -270,7 +270,7 @@ class MergeModelCallbackTester(unittest.TestCase):
                 tokenizer=self.tokenizer,
             )
             config = MergeConfig("linear")
-            merge_callback = MergeModelCallBack(config, push_to_hub=False, merge_at_every_checkpoint=True)
+            merge_callback = MergeModelCallback(config, push_to_hub=False, merge_at_every_checkpoint=True)
             trainer.add_callback(merge_callback)
             trainer.train()
 
