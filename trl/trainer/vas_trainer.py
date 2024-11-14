@@ -60,6 +60,7 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .vas_config import VASConfig
+from ..extras.vas_sampler import VASSampler
 from .utils import generate_model_card
 
 
@@ -78,12 +79,17 @@ class ValueWrapper(nn.Module):
         self.value_model = value_model
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
 
-    def forward(self, **kwargs):
+    def forward(self, input_ids, return_past_key_values=False, **kwargs):
         output = self.critic_backbone(
+            input_ids,
             **kwargs,
         )
         logits = self.value_model.score(output.hidden_states[-1])
-        return logits
+
+        if return_past_key_values:
+            return logits, output.past_key_values
+        else:
+            return logits, None
 
 
 class VASTrainer(Trainer):
@@ -100,6 +106,7 @@ class VASTrainer(Trainer):
         train_dataset: Dataset,
         value_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
+        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         # less commonly used
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -120,6 +127,7 @@ class VASTrainer(Trainer):
         self.train_dataset_len = len(train_dataset)
         self.value_model = value_model
         self.data_collator = data_collator
+        self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
         self.optimizer_cls_and_kwargs = None  # needed for transformers >= 4.47
 
@@ -219,6 +227,14 @@ class VASTrainer(Trainer):
         self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
         torch.manual_seed(self.local_seed)  # reset the local seed again
 
+        self.eval_dataloader = DataLoader(
+            self.eval_dataset,
+            batch_size=args.per_device_eval_batch_size,
+            collate_fn=DataCollatorWithPadding(self.processing_class),
+            drop_last=True,
+        )  # no need to shuffle eval dataset
+        self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
+
         if self.is_deepspeed_enabled:
             self.reward_model = prepare_deepspeed(
                 self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
@@ -235,7 +251,7 @@ class VASTrainer(Trainer):
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         backup_model = self.model
-        # self.model = self.model.policy  # save the value model TODO: make sure it saves the value properly
+        self.model = self.model.value_model  # save the value model
 
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
@@ -275,7 +291,6 @@ class VASTrainer(Trainer):
         accelerator.print("===training policy===")
         start_time = time.time()
         stats_shape = (args.num_vas_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
-        vf_loss_stats = torch.zeros(stats_shape, device=device)
         model.train()
 
         # trainer state initialization
@@ -336,11 +351,8 @@ class VASTrainer(Trainer):
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == processing_class.pad_token_id) - 1
-                    # unwrapped_value_model = accelerator.unwrap_model(model)
-                    # full_value, _, _ = get_reward(
-                    #     unwrapped_value_model, query_response, processing_class.pad_token_id, context_length
-                    # )
-                    full_value = forward(model, query_response, processing_class.pad_token_id)
+
+                    full_value, _ = forward(model, query_response, processing_class.pad_token_id)
                     value = full_value[:, context_length - 1 : -1].squeeze(-1)
                     _, score, _ = get_reward(
                         reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
@@ -418,11 +430,11 @@ class VASTrainer(Trainer):
                             mb_return = returns[micro_batch_inds]
                             mb_values = values[micro_batch_inds]
 
-                            vpred = forward(model, mb_query_responses, processing_class.pad_token_id)
+                            vpred, _ = forward(model, mb_query_responses, processing_class.pad_token_id)
                             vpred = vpred[:, context_length - 1 : -1].squeeze(-1)
-                            #vpred = torch.masked_fill(vpred, padding_mask_p1[micro_batch_inds], 0)
+                            vpred = torch.masked_fill(vpred, padding_mask_p1[micro_batch_inds], 0)
                             vf_loss = torch.square(vpred - mb_return)
-                            vf_loss = 0.5 * vf_loss.mean() #masked_mean(vf_loss, ~padding_mask_p1[micro_batch_inds])
+                            vf_loss = 0.5 * masked_mean(vf_loss, ~padding_mask_p1[micro_batch_inds])
                             loss = vf_loss
                             accelerator.backward(loss)
                             optimizer.step()
@@ -439,7 +451,6 @@ class VASTrainer(Trainer):
                 metrics = {}
                 metrics["eps"] = eps
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
-                metrics["loss/value_avg"] = self.accelerator.gather(vf_loss_stats).mean().item()
                 metrics["loss/value_loss"] = self.accelerator.gather(loss).mean().item()
                 metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
@@ -457,9 +468,9 @@ class VASTrainer(Trainer):
             torch.cuda.empty_cache()
             gc.collect()
 
-            # if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
-            #     self.generate_completions(sampling=True)
-            #     torch.cuda.empty_cache()
+            if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
+                 self.generate_completions(sampling=True)
+                 torch.cuda.empty_cache()
             del (
                 query_responses,
                 responses,
@@ -497,18 +508,20 @@ class VASTrainer(Trainer):
         )
 
         table = defaultdict(list)
-        with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+        with unwrap_model_for_generation(self.ref_policy, self.accelerator) as unwrapped_ref_policy:
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]
                 with torch.no_grad():
-                    context_length = query.shape[1]
-                    query_response, _ = batch_generation(
-                        unwrapped_model.policy,
-                        query,
-                        query.shape[0],
-                        processing_class.pad_token_id,
-                        generation_config,
+                    sampler = VASSampler(
+                        model=unwrapped_ref_policy,
+                        value_model=self.model,
+                        generation_config=generation_config,
+                        beta=args.generation_beta,
                     )
+                    context_length = query.shape[1]
+                    attention_mask = query != processing_class.pad_token_id
+                    input_ids = torch.masked_fill(query, ~attention_mask, 0)
+                    query_response = sampler.generate(input_ids, attention_mask)
                     response = query_response[:, context_length:]
                     postprocessed_response = response
                     if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0

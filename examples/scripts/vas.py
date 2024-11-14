@@ -45,7 +45,7 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     value_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1#, torch_dtype="float16"
+        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1, attn_implementation="flash_attention_2",
     )
     value_model.config.pad_token_id = tokenizer.pad_token_id
     reward_model = AutoModelForSequenceClassification.from_pretrained(
@@ -58,7 +58,9 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, split=script_args.dataset_train_split)
-    train_dataset = dataset
+    eval_samples = 20
+    train_dataset = dataset.select(range(len(dataset) - eval_samples))
+    eval_dataset = dataset.select(range(len(dataset) - eval_samples, len(dataset)))
     dataset_text_field = "prompt"
 
     def prepare_dataset(dataset, tokenizer):
@@ -82,6 +84,7 @@ if __name__ == "__main__":
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
         train_dataset = prepare_dataset(train_dataset, tokenizer)
+        eval_dataset = prepare_dataset(eval_dataset, tokenizer)
 
     ################
     # Training
@@ -93,6 +96,7 @@ if __name__ == "__main__":
         reward_model=reward_model,
         value_model=value_model,
         train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
     )
     trainer.train()
 
@@ -100,3 +104,5 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trainer.generate_completions()

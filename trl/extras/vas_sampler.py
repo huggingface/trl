@@ -60,19 +60,9 @@ class VASSampler:
         if seed is not None:
             set_seed(seed)
 
-        if not isinstance(model, (SUPPORTED_ARCHITECTURES)):
-            raise ValueError(
-                f"model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
-            )
-
-        if not isinstance(value_model, (SUPPORTED_ARCHITECTURES)):
-            raise ValueError(
-                f"value_model must be a PreTrainedModelWrapper, got {type(model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
-            )
-
         self.model = model
         self.value_model = value_model
-        self.beta = (beta,)
+        self.beta = beta
         self.top_k = top_k
         self.value_model_batch_size = value_model_batch_size
         self.gen_config = generation_config
@@ -85,6 +75,7 @@ class VASSampler:
     def generate(
         self,
         tokenized_query: Union[List[int], torch.Tensor, List[torch.Tensor], List[List[int]]],
+        attention_mask: Optional[Union[List[int], torch.Tensor, List[torch.Tensor], List[List[int]]]] = None,
         device: Optional[Union[str, torch.device]] = None,
         **generation_kwargs,
     ) -> List[List[str]]:
@@ -103,11 +94,14 @@ class VASSampler:
         Returns:
             List[List[str]]: A list of lists of generated texts
         """
+        if device is None:
+            device = tokenized_query[0].device if isinstance(tokenized_query, torch.Tensor) else "cpu"
 
         # generate the response
         outputs = self.model.generate(
             tokenized_query.to(device),
-            logits_processor=self.logits_processor,
+            attention_mask=attention_mask.to(device) if attention_mask is not None else None,
+            logits_processor=[self.logits_processor,],
             generation_config=self.gen_config,
             **generation_kwargs,
         )
@@ -121,7 +115,7 @@ class VASLogitsProcessor(LogitsProcessor, torch.nn.Module):
     value_model: AutoModelForCausalLMWithValueHead, the Value model to use
     beta: float, the beta value to use for weighting the q model
     topk: int, the number of topk to use for the Value model
-    topk_per_device_batch_size: int, the batch suze of tokens to evaluate at once
+    value_model_batch_size: int, the batch suze of tokens to evaluate at once
     """
 
     def __init__(
@@ -149,8 +143,9 @@ class VASLogitsProcessor(LogitsProcessor, torch.nn.Module):
         self.beta = beta
         self.top_k = top_k
         self.value_model_batch_size = value_model_batch_size
+        self.pad_token_id = self.value_model.value_model.config.pad_token_id
 
-        assert self.topk > 0, "topk must be larger than zero"
+        assert self.top_k > 0, "topk must be larger than zero"
 
         self.last_input_ids = None
         self.past_key_values = None
@@ -160,6 +155,8 @@ class VASLogitsProcessor(LogitsProcessor, torch.nn.Module):
         batch_size = input_ids.shape[0]
 
         orig_input_ids = input_ids
+        attention_mask = input_ids != 0
+        position_ids = attention_mask.cumsum(1) - attention_mask.long()
 
         if (
             self.last_input_ids is not None
@@ -167,32 +164,44 @@ class VASLogitsProcessor(LogitsProcessor, torch.nn.Module):
             and torch.all(input_ids[0, :-1] == self.last_input_ids)
         ):
             # if the last input ids are the same as the current input ids, we can reuse the past key values
-            _, _, _, past_key_values = self.value_model(
-                input_ids, past_key_values=self.past_key_values, return_past_key_values=True
-            )
+            _, past_key_values = self.value_model(input_ids[:, -1:],
+                                                  attention_mask=attention_mask[:, -1:],
+                                                  position_ids=position_ids[:, -1:],
+                                                  past_key_values=self.past_key_values,
+                                                  return_past_key_values=True,
+                                                  return_dict=True,
+                                                  output_hidden_states=True,)
         else:
-            _, _, _, past_key_values = self.value_model(input_ids, return_past_key_values=True)
+            _, past_key_values = self.value_model(input_ids,
+                                                  attention_mask=attention_mask,
+                                                  position_ids=position_ids,
+                                                  return_past_key_values=True,
+                                                  return_dict=True,
+                                                  output_hidden_states=True,)
         self.past_key_values = past_key_values
         self.last_input_ids = input_ids[0, :]
 
         values = torch.zeros_like(scores, device=scores.device)
-        topk_ids = torch.topk(scores, self.topk, dim=-1).indices
+        topk_ids = torch.topk(scores, self.top_k, dim=-1).indices
 
-        for i in range(0, topk_ids.shape[1], self.topk_per_device_batch_size):
-            curr_topk_ids = topk_ids[:, i : i + self.topk_per_device_batch_size]
-            curr_input_ids = orig_input_ids.unsqueeze(1).repeat(1, curr_topk_ids.shape[1], 1)
-            curr_input_ids = torch.cat([curr_input_ids, curr_topk_ids.unsqueeze(-1)], dim=-1)
-            curr_input_ids = curr_input_ids.reshape((batch_size * self.topk_per_device_batch_size, -1))
+        for i in range(0, topk_ids.shape[1], self.value_model_batch_size):
+            curr_topk_ids = topk_ids[:, i : i + self.value_model_batch_size]
+            curr_input_ids = curr_topk_ids
+            curr_input_ids = curr_input_ids.reshape((batch_size * self.value_model_batch_size, -1))
+            curr_attention_mask = curr_input_ids != 0
+            curr_position_ids = curr_attention_mask.cumsum(1) - curr_attention_mask.long()
 
-            _, _, value, _ = self.value_model(
-                curr_input_ids,
-                past_key_values=tuple(
-                    (t1.repeat(curr_topk_ids.shape[1], 1, 1, 1), t2.repeat(curr_topk_ids.shape[1], 1, 1, 1))
-                    for t1, t2 in self.past_key_values
-                ),
-                return_past_key_values=True,
-            )
-            value = value.reshape((batch_size, self.topk_per_device_batch_size, -1))[:, :, -1]
+            value, _ = self.value_model(curr_input_ids,
+                                        attention_mask=curr_attention_mask,
+                                        position_ids=curr_position_ids,
+                                        past_key_values=tuple(
+                                            (t1.repeat(curr_topk_ids.shape[1], 1, 1, 1),
+                                             t2.repeat(curr_topk_ids.shape[1], 1, 1, 1))
+                                            for t1, t2 in self.past_key_values),
+                                        return_past_key_values=True,
+                                        return_dict=True,
+                                        output_hidden_states=True,)
+            value = value.reshape((batch_size, self.value_model_batch_size, -1))[:, :, -1].to(values.dtype)
             values = values.scatter_(1, curr_topk_ids, value)
 
         values = values.scatter_(

@@ -52,8 +52,9 @@ class VASConfig(OnPolicyConfig):
 
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     reward_model_path: str = "EleutherAI/pythia-160m"
-    num_vas_epochs: int = 4
+    num_vas_epochs: int = 2
     whiten_rewards: bool = False
     gamma: float = 1.0
     lam: float = 0.95
+    generation_beta: float = 2.0
     save_safetensors: bool = False
