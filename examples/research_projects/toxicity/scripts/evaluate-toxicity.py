@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import argparse
 import csv
 
@@ -6,9 +20,7 @@ import numpy as np
 import torch
 from datasets import load_dataset
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-from trl.import_utils import is_npu_available, is_xpu_available
+from transformers import AutoModelForCausalLM, AutoTokenizer, is_torch_npu_available, is_torch_xpu_available
 
 
 toxicity = evaluate.load("ybelkada/toxicity", "DaNLP/da-electra-hatespeech-detection", module_type="measurement")
@@ -52,9 +64,9 @@ BATCH_SIZE = args.batch_size
 output_file = args.output_file
 max_new_tokens = args.max_new_tokens
 context_length = args.context_length
-if is_xpu_available():
+if is_torch_xpu_available():
     device = torch.xpu.current_device()
-elif is_npu_available():
+elif is_torch_npu_available():
     device = torch.npu.current_device()
 else:
     device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
@@ -123,9 +135,9 @@ for model_id in tqdm(MODELS_TO_TEST):
     print(f"Model: {model_id} - Mean: {mean} - Std: {std}")
 
     model = None
-    if is_xpu_available():
+    if is_torch_xpu_available():
         torch.xpu.empty_cache()
-    elif is_npu_available():
+    elif is_torch_npu_available():
         torch.npu.empty_cache()
     else:
         torch.cuda.empty_cache()

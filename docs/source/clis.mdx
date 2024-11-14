@@ -7,6 +7,7 @@ Currently supported CLIs are:
 - `trl sft`: fine-tune a LLM on a text/instruction dataset
 - `trl dpo`: fine-tune a LLM with DPO on a preference dataset 
 - `trl chat`: quickly spin up a LLM fine-tuned for chatting
+- `trl env`: get the system information
 
 ## Fine-tuning with the CLI
 
@@ -24,9 +25,7 @@ We also recommend you passing a YAML config file to configure your training prot
 model_name_or_path:
   trl-internal-testing/tiny-random-LlamaForCausalLM
 dataset_name:
-  imdb
-dataset_text_field:
-  text
+  stanfordnlp/imdb
 report_to:
   none
 learning_rate:
@@ -56,7 +55,7 @@ You can pass any of these arguments either to the CLI or the YAML file.
 Follow the basic instructions above and run `trl sft --output_dir <output_dir> <*args>`: 
 
 ```bash
-trl sft --model_name_or_path facebook/opt-125m --dataset_name imdb --output_dir opt-sft-imdb
+trl sft --model_name_or_path facebook/opt-125m --dataset_name stanfordnlp/imdb --output_dir opt-sft-imdb
 ```
 
 The SFT CLI is based on the `examples/scripts/sft.py` script.
@@ -97,23 +96,76 @@ python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity your-hf-org
 
 The chat CLI lets you quickly load the model and talk to it. Simply run the following:
 
-```bash
-trl chat --model_name_or_path  Qwen/Qwen1.5-0.5B-Chat 
-```
+<pre><code>$ trl chat --model_name_or_path Qwen/Qwen1.5-0.5B-Chat 
+<strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
+What is the best programming language?
 
-> [!TIP]
-> To use the chat CLI with the developer installation, you must run `make dev` 
->
+<strong><span style="color: blue;">&lt;Qwen/Qwen1.5-0.5B-Chat&gt;:</span></strong>
+There isn't a "best" programming language, as everyone has different style preferences, needs, and preferences. However, some people commonly use   
+languages like Python, Java, C++, and JavaScript, which are popular among developers for a variety of reasons, including readability, flexibility,  
+and scalability. Ultimately, it depends on personal preference, needs, and goals.
+</code></pre>
 
 Note that the chat interface relies on the tokenizer's [chat template](https://huggingface.co/docs/transformers/chat_templating) to format the inputs for the model. Make sure your tokenizer has a chat template defined.
 
 Besides talking to the model there are a few commands you can use:
 
-- **clear**: clears the current conversation and start a new one
-- **example {NAME}**: load example named `{NAME}` from the config and use it as the user input
-- **set {SETTING_NAME}={SETTING_VALUE};**: change the system prompt or generation settings (multiple settings are separated by a ';').
-- **reset**: same as clear but also resets the generation configs to defaults if they have been changed by **set**
-- **save {SAVE_NAME} (optional)**: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
-- **exit**: closes the interface
+- `clear`: clears the current conversation and start a new one
+- `example {NAME}`: load example named `{NAME}` from the config and use it as the user input
+- `set {SETTING_NAME}={SETTING_VALUE};`: change the system prompt or generation settings (multiple settings are separated by a `;`).
+- `reset`: same as clear but also resets the generation configs to defaults if they have been changed by `set`
+- `save` or `save {SAVE_NAME}`: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
+- `exit`: closes the interface
 
 The default examples are defined in `examples/scripts/config/default_chat_config.yaml` but you can pass your own with `--config CONFIG_FILE` where you can also specify the default generation parameters.
+
+## Getting the system information
+
+You can get the system information by running the following command:
+
+```bash
+trl env
+```
+
+This will print out the system information including the GPU information, the CUDA version, the PyTorch version, the transformers version, and the TRL version, and any optional dependencies that are installed.
+
+```txt
+Copy-paste the following information when reporting an issue:
+
+- Platform: Linux-5.15.0-1048-aws-x86_64-with-glibc2.31
+- Python version: 3.11.9
+- PyTorch version: 2.4.1
+- CUDA device: NVIDIA H100 80GB HBM3
+- Transformers version: 4.45.0.dev0
+- Accelerate version: 0.34.2
+- Accelerate config: 
+  - compute_environment: LOCAL_MACHINE
+  - distributed_type: DEEPSPEED
+  - mixed_precision: no
+  - use_cpu: False
+  - debug: False
+  - num_processes: 4
+  - machine_rank: 0
+  - num_machines: 1
+  - rdzv_backend: static
+  - same_network: True
+  - main_training_function: main
+  - enable_cpu_affinity: False
+  - deepspeed_config: {'gradient_accumulation_steps': 4, 'offload_optimizer_device': 'none', 'offload_param_device': 'none', 'zero3_init_flag': False, 'zero_stage': 2}
+  - downcast_bf16: no
+  - tpu_use_cluster: False
+  - tpu_use_sudo: False
+  - tpu_env: []
+- Datasets version: 3.0.0
+- HF Hub version: 0.24.7
+- TRL version: 0.12.0.dev0+acb4d70
+- bitsandbytes version: 0.41.1
+- DeepSpeed version: 0.15.1
+- Diffusers version: 0.30.3
+- Liger-Kernel version: 0.3.0
+- LLM-Blender version: 0.0.2
+- OpenAI version: 1.46.0
+- PEFT version: 0.12.0
+```
+
+This information are required when reporting an issue.

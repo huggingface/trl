@@ -15,13 +15,12 @@ import tempfile
 import unittest
 
 import torch
-from datasets import Dataset
+from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers.testing_utils import require_peft
 
 from trl import ORPOConfig, ORPOTrainer
-
-from .testing_utils import require_peft
 
 
 class ORPOTrainerTester(unittest.TestCase):
@@ -36,48 +35,15 @@ class ORPOTrainerTester(unittest.TestCase):
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    def _init_dummy_dataset(self):
-        # fmt: off
-        dummy_dataset_dict = {
-            "prompt": [
-                "hello",
-                "how are you",
-                "What is your name?",
-                "What is your name?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "Which is the best programming language?",
-                "[INST] How is the stock price? [/INST]",
-                "[INST] How is the stock price? [/INST] ",
-            ],
-            "chosen": [
-                "hi nice to meet you",
-                "I am fine",
-                "My name is Mary",
-                "My name is Mary",
-                "Python",
-                "Python",
-                "Python",
-                "$46 as of 10am EST",
-                "46 as of 10am EST",
-            ],
-            "rejected": [
-                "leave me alone",
-                "I am not fine",
-                "Whats it to you?",
-                "I dont have a name",
-                "Javascript",
-                "C++",
-                "Java",
-                " $46 as of 10am EST",
-                " 46 as of 10am EST",
-            ],
-        }
-        # fmt: on
-        return Dataset.from_dict(dummy_dataset_dict)
-
-    @parameterized.expand([["gpt2"], ["t5"]])
-    def test_orpo_trainer(self, name):
+    @parameterized.expand(
+        [
+            ("gpt2", "standard_preference"),
+            ("t5", "standard_implicit_prompt_preference"),
+            ("gpt2", "conversational_preference"),
+            ("t5", "conversational_implicit_prompt_preference"),
+        ]
+    )
+    def test_orpo_trainer(self, name, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = ORPOConfig(
                 output_dir=tmp_dir,
@@ -91,7 +57,7 @@ class ORPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             if name == "gpt2":
                 model = self.model
@@ -104,26 +70,34 @@ class ORPOTrainerTester(unittest.TestCase):
             trainer = ORPOTrainer(
                 model=model,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    assert not torch.equal(param, new_param)
+                    self.assertFalse(torch.equal(param, new_param))
 
+    @parameterized.expand(
+        [
+            ("standard_preference",),
+            ("standard_implicit_prompt_preference",),
+            ("conversational_preference",),
+            ("conversational_implicit_prompt_preference",),
+        ]
+    )
     @require_peft
-    def test_orpo_trainer_with_lora(self):
+    def test_orpo_trainer_with_lora(self, config_name):
         from peft import LoraConfig
 
         lora_config = LoraConfig(
@@ -147,14 +121,14 @@ class ORPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = self._init_dummy_dataset()
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
             trainer = ORPOTrainer(
                 model=self.model,
                 args=training_args,
-                tokenizer=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
             )
 
@@ -162,7 +136,7 @@ class ORPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
@@ -170,4 +144,4 @@ class ORPOTrainerTester(unittest.TestCase):
                     new_param = trainer.model.get_parameter(n)
                     # check the params have changed - ignore 0 biases
                     if param.sum() != 0:
-                        assert not torch.equal(param, new_param)
+                        self.assertFalse(torch.equal(param, new_param))

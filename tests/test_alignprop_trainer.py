@@ -16,8 +16,9 @@ import unittest
 
 import torch
 from parameterized import parameterized
+from transformers.utils import is_peft_available
 
-from trl import is_diffusers_available, is_peft_available
+from trl import is_diffusers_available
 
 from .testing_utils import require_diffusers
 
@@ -41,7 +42,7 @@ class AlignPropTrainerTester(unittest.TestCase):
     """
 
     def setUp(self):
-        alignprop_config = AlignPropConfig(
+        training_args = AlignPropConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,
             train_batch_size=2,
@@ -57,11 +58,9 @@ class AlignPropTrainerTester(unittest.TestCase):
         pipeline_without_lora = DefaultDDPOStableDiffusionPipeline(
             pretrained_model, pretrained_model_revision=pretrained_revision, use_lora=False
         )
-        self.trainer_with_lora = AlignPropTrainer(
-            alignprop_config, scorer_function, prompt_function, pipeline_with_lora
-        )
+        self.trainer_with_lora = AlignPropTrainer(training_args, scorer_function, prompt_function, pipeline_with_lora)
         self.trainer_without_lora = AlignPropTrainer(
-            alignprop_config, scorer_function, prompt_function, pipeline_without_lora
+            training_args, scorer_function, prompt_function, pipeline_without_lora
         )
 
     def tearDown(self) -> None:
@@ -71,8 +70,8 @@ class AlignPropTrainerTester(unittest.TestCase):
     def test_generate_samples(self, use_lora):
         trainer = self.trainer_with_lora if use_lora else self.trainer_without_lora
         output_pairs = trainer._generate_samples(2, with_grad=True)
-        assert len(output_pairs.keys()) == 3
-        assert len(output_pairs["images"]) == 2
+        self.assertEqual(len(output_pairs.keys()), 3)
+        self.assertEqual(len(output_pairs["images"]), 2)
 
     @parameterized.expand([True, False])
     def test_calculate_loss(self, use_lora):
@@ -82,10 +81,10 @@ class AlignPropTrainerTester(unittest.TestCase):
         images = sample["images"]
         prompts = sample["prompts"]
 
-        assert images.shape == (2, 3, 128, 128)
-        assert len(prompts) == 2
+        self.assertTupleEqual(images.shape, (2, 3, 128, 128))
+        self.assertEqual(len(prompts), 2)
 
         rewards = trainer.compute_rewards(sample)
         loss = trainer.calculate_loss(rewards)
 
-        assert torch.isfinite(loss.cpu())
+        self.assertTrue(torch.isfinite(loss.cpu()))

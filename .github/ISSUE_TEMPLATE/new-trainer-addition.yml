@@ -1,0 +1,32 @@
+name: "\U0001F31F New trainer addition"
+description: Submit a proposal/request to implement a new trainer for a post-training method 
+labels: [ "New trainer" ]
+
+body:
+  - type: textarea
+    id: description-request
+    validations:
+      required: true
+    attributes:
+      label: Method description
+      description: |
+        Put any and all important information relative to the method
+
+  - type: checkboxes
+    id: information-tasks
+    attributes:
+      label: Open source status
+      description: |
+          Please note that if the method implementation isn't available or model weights with training datasets aren't available, we are less likely to implement it in `trl`.
+      options:
+        - label: "The method implementation is available"
+        - label: "The model weights are available"
+        - label: "The training datasets are available"
+
+  - type: textarea
+    id: additional-info
+    attributes:
+      label: Provide useful links for the implementation
+      description: |
+        Please provide information regarding the implementation, the weights, and the authors.
+        Please mention the authors by @gh-username if you're aware of their usernames.

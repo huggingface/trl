@@ -14,35 +14,48 @@
 # limitations under the License.
 
 import inspect
+import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
-from functools import wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
 from datasets import Dataset
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, DataCollator, PreTrainedModel, PreTrainedTokenizerBase, Trainer
+from transformers import (
+    AutoModelForCausalLM,
+    BaseImageProcessor,
+    DataCollator,
+    FeatureExtractionMixin,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    Trainer,
+    is_wandb_available,
+)
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
-from transformers.utils import is_torch_fx_proxy
+from transformers.utils import is_peft_available, is_torch_fx_proxy
+from transformers.utils.deprecation import deprecate_kwarg
 
-from ..import_utils import is_peft_available, is_wandb_available
+from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from .cpo_config import CPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     add_bos_token_if_needed,
     add_eos_token_if_needed,
     disable_dropout_in_model,
+    generate_model_card,
     pad_to_length,
     peft_module_casting_to_bf16,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
@@ -70,8 +83,10 @@ class CPOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
         callbacks (`List[transformers.TrainerCallback]`):
@@ -89,6 +104,7 @@ class CPOTrainer(Trainer):
 
     _tag_names = ["trl", "cpo"]
 
+    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.14.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
@@ -96,7 +112,9 @@ class CPOTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
@@ -203,8 +221,8 @@ class CPOTrainer(Trainer):
             self.decoder_start_token_id = model.config.decoder_start_token_id
             self.pad_token_id = model.config.pad_token_id
 
-        if tokenizer is None:
-            raise ValueError("tokenizer must be specified to tokenize a CPO dataset.")
+        if processing_class is None:
+            raise ValueError("processing_class must be specified to tokenize a CPO dataset.")
         if args.max_length is None:
             warnings.warn(
                 "`max_length` is not set in the CPOConfig's init"
@@ -224,19 +242,19 @@ class CPOTrainer(Trainer):
         else:
             max_prompt_length = args.max_prompt_length
 
-        if args.max_target_length is None and self.is_encoder_decoder:
+        if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
-                "When using an encoder decoder architecture, you should set `max_target_length` in the CPOConfig's init"
+                "When using an encoder decoder architecture, you should set `max_completion_length` in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
             )
-            max_target_length = 128
+            max_completion_length = 128
         else:
-            max_target_length = args.max_target_length
+            max_completion_length = args.max_completion_length
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=processing_class.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
@@ -260,11 +278,11 @@ class CPOTrainer(Trainer):
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else tokenizer.pad_token_id
+        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
-        self.max_target_length = max_target_length
-        self.tokenizer = tokenizer
+        self.max_completion_length = max_completion_length
+        self.processing_class = processing_class
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
             warnings.warn(
@@ -278,6 +296,12 @@ class CPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.cpo_alpha = args.cpo_alpha
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
+            warnings.warn(
+                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
+                " meaning the auxiliary loss will not be used."
+            )
 
         if args.loss_type == "simpo":
             self.simpo_gamma = args.simpo_gamma
@@ -294,6 +318,19 @@ class CPOTrainer(Trainer):
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
+            # Extract the prompt if needed, and apply the chat template if needed
+            train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
+            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    maybe_apply_chat_template,
+                    fn_kwargs={"tokenizer": processing_class},
+                    num_proc=args.dataset_num_proc,
+                )
+
             # tokenize the dataset
             train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
             if eval_dataset is not None:
@@ -305,7 +342,7 @@ class CPOTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -330,8 +367,8 @@ class CPOTrainer(Trainer):
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
 
-        full_tokenized = self.tokenizer(prompt + answer, add_special_tokens=False)
-        prompt_input_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        full_tokenized = self.processing_class(prompt + answer, add_special_tokens=False)
+        prompt_input_ids = self.processing_class(prompt, add_special_tokens=False)["input_ids"]
 
         answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
         answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
@@ -377,11 +414,11 @@ class CPOTrainer(Trainer):
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
         in case the prompt + chosen or prompt + rejected responses is/are too long. First
-            we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
+        we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
 
         We also create the labels for the chosen/rejected responses, which are of length equal to
-            the sum of the length of the prompt and the chosen/rejected response, with
-            label_pad_token_id  for the prompt tokens.
+        the sum of the length of the prompt and the chosen/rejected response, with
+        label_pad_token_id  for the prompt tokens.
         """
         batch = {}
         prompt = feature["prompt"]
@@ -396,7 +433,7 @@ class CPOTrainer(Trainer):
 
             if not isinstance(prompt, str):
                 raise ValueError(f"prompt should be an str but got {type(prompt)}")
-            prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)
+            prompt_tokens = self.processing_class(prompt, add_special_tokens=False)
             prompt_tokens = {f"prompt_{k}": v for k, v in prompt_tokens.items()}
 
             if not isinstance(chosen, str):
@@ -432,7 +469,7 @@ class CPOTrainer(Trainer):
 
             # add BOS token to head of prompt. Avoid adding if it's already there
             prompt_tokens, chosen_tokens, rejected_tokens = add_bos_token_if_needed(
-                self.tokenizer.bos_token_id,
+                self.processing_class.bos_token_id,
                 prompt_len_input_ids,
                 prompt_tokens,
                 chosen_prompt_len_input_ids,
@@ -443,7 +480,7 @@ class CPOTrainer(Trainer):
 
             # add EOS token to end of answer. Avoid adding if it's already there
             chosen_tokens, rejected_tokens = add_eos_token_if_needed(
-                self.tokenizer.eos_token_id, chosen_tokens, rejected_tokens
+                self.processing_class.eos_token_id, chosen_tokens, rejected_tokens
             )
 
             longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
@@ -493,13 +530,13 @@ class CPOTrainer(Trainer):
                     batch[f"{k}{type_key}"] = tokens
 
         else:
-            chosen_tokens = self.tokenizer(
-                chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+            chosen_tokens = self.processing_class(
+                chosen, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
-            rejected_tokens = self.tokenizer(
-                rejected, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+            rejected_tokens = self.processing_class(
+                rejected, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
             )
-            prompt_tokens = self.tokenizer(
+            prompt_tokens = self.processing_class(
                 prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
             )
 
@@ -784,7 +821,7 @@ class CPOTrainer(Trainer):
         metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
 
         if self.aux_loss_enabled:
-            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
+            loss += self.aux_loss_coef * aux_loss
 
         return loss, metrics
 
@@ -793,6 +830,7 @@ class CPOTrainer(Trainer):
         model: Union[PreTrainedModel, nn.Module],
         inputs: Dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
+        num_items_in_batch=None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if not self.use_dpo_data_collator:
             warnings.warn(
@@ -800,9 +838,9 @@ class CPOTrainer(Trainer):
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
 
-        compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with compute_loss_context_manager():
+        with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
         # force log the metrics
@@ -812,24 +850,24 @@ class CPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def generate_from_model(self, model, batch: Dict[str, torch.LongTensor]) -> str:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
+        generate_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with generate_context_manager():
+        with generate_context_manager:
             policy_output = model.generate(
                 input_ids=batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
+                pad_token_id=self.processing_class.pad_token_id,
             )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
-        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+        policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
+        policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
         return policy_output_decoded
 
@@ -851,9 +889,9 @@ class CPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        prediction_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with torch.no_grad(), prediction_context_manager():
+        with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
 
         # force log the metrics
@@ -903,7 +941,7 @@ class CPOTrainer(Trainer):
             random_batch = self.data_collator(random_batch_dataset)
             random_batch = self._prepare_inputs(random_batch)
 
-            policy_output_decoded = self.get_batch_samples(self.model, random_batch)
+            policy_output_decoded = self.generate_from_model(self.model, random_batch)
 
             self.log(
                 {
@@ -964,12 +1002,58 @@ class CPOTrainer(Trainer):
 
         return shifted_input_ids
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "cpo" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        Creates a draft of a model card using the information available to the `Trainer`.
 
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
+        citation = textwrap.dedent("""\
+        @inproceedings{xu2024contrastive,
+            title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
+            author       = {Haoran Xu and Amr Sharaf and Yunmo Chen and Weiting Tan and Lingfeng Shen and Benjamin Van Durme and Kenton Murray and Young Jin Kim},
+            year         = 2024,
+            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
+            publisher    = {OpenReview.net},
+            url          = {https://openreview.net/forum?id=51iwkioZpn}
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="CPO",
+            trainer_citation=citation,
+            paper_title="Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation",
+            paper_id="2401.08417",
+        )
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

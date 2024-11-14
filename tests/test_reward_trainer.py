@@ -14,104 +14,96 @@
 import tempfile
 import unittest
 
-import pytest
 import torch
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction
+from transformers.testing_utils import require_peft
+from transformers.utils import is_peft_available
 
-from trl import RewardConfig, RewardTrainer
+from trl import RewardConfig, RewardTrainer, maybe_apply_chat_template
 from trl.trainer import compute_accuracy
+from trl.trainer.reward_trainer import _tokenize
 
-from .testing_utils import require_peft
+
+if is_peft_available():
+    from peft import LoraConfig, TaskType
 
 
 class RewardTrainerTester(unittest.TestCase):
+    def setUp(self):
+        self.model_id = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+        self.model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
+
     def test_accuracy_metrics(self):
         dummy_eval_predictions = EvalPrediction(torch.FloatTensor([[0.1, 0.9], [0.9, 0.1]]), torch.LongTensor([0, 0]))
         accuracy = compute_accuracy(dummy_eval_predictions)
-        assert accuracy["accuracy"] == 0.5
+        self.assertEqual(accuracy["accuracy"], 0.5)
 
-    def test_reward_trainer(self):
-        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        model = AutoModelForSequenceClassification.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.pad_token = tokenizer.eos_token
-
+    def test_preprocessing_conversational(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = RewardConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                report_to="none",
-            )
-
-            # fmt: off
-            dummy_dataset_dict = {
-                "input_ids_chosen": [
-                    torch.LongTensor([0, 1, 2]),
-                    torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 1, 2]),
-                    torch.LongTensor([1, 2]),
-                ],
-                "attention_mask_chosen": [
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
-                ],
-                "input_ids_rejected": [
-                    torch.LongTensor([0, 2]),
-                    torch.LongTensor([1, 2, 0]),
-                    torch.LongTensor([0, 2]),
-                    torch.LongTensor([1, 2, 0]),
-                ],
-                "attention_mask_rejected": [
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 0]),
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 1]),
-                ],
-            }
-            # fmt: on
-            dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
-
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
-                model=model,
-                args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
+            dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
+            dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer})
+            self.assertDictEqual(trainer.train_dataset[:], dummy_dataset[:])
 
+    def test_preprocessing_standard(self):
+        # No chat template, so we load a fresh tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
+            trainer = RewardTrainer(
+                model=self.model, args=training_args, processing_class=tokenizer, train_dataset=dummy_dataset
+            )
+            dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": tokenizer})
+            self.assertDictEqual(trainer.train_dataset[:], dummy_dataset[:])
+
+    def test_train_full(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            trainer = RewardTrainer(
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            )
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
             trainer.train()
 
-            assert trainer.state.log_history[(-1)]["train_loss"] is not None
-
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    assert not torch.equal(param, new_param)
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
-            preds = trainer.predict(dummy_dataset)
-            assert preds.predictions.shape == (4, 2)
+    def test_train_full_pretokenized(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+            dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
+            dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer})
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            trainer = RewardTrainer(
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            )
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @require_peft
-    def test_reward_trainer_peft(self):
-        from peft import LoraConfig, TaskType
-
-        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        model = AutoModelForSequenceClassification.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.pad_token = tokenizer.eos_token
-
+    def test_train_lora(self):
         peft_config = LoraConfig(
             task_type=TaskType.SEQ_CLS,
             inference_mode=False,
@@ -119,55 +111,14 @@ class RewardTrainerTester(unittest.TestCase):
             lora_alpha=32,
             lora_dropout=0.1,
         )
-
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = RewardConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=6,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=2,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                report_to="none",
-            )
-
-            # fmt: off
-            dummy_dataset_dict = {
-                "input_ids_chosen": [
-                    torch.LongTensor([0, 1, 2]),
-                    torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 1, 2]),
-                    torch.LongTensor([1, 2]),
-                ],
-                "attention_mask_chosen": [
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
-                ],
-                "input_ids_rejected": [
-                    torch.LongTensor([0, 2]),
-                    torch.LongTensor([1, 2, 0]),
-                    torch.LongTensor([0, 2]),
-                    torch.LongTensor([1, 2, 0]),
-                ],
-                "attention_mask_rejected": [
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 0]),
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 1]),
-                ],
-            }
-            # fmt: on
-            dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
-
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
-                model=model,
+                model=self.model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
                 peft_config=peft_config,
             )
             previous_trainable_params = {}
@@ -185,111 +136,68 @@ class RewardTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                assert not torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
+                self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
             # check the non trainable params have not changed
             for n, param in previous_non_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                assert torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
+                self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
-            preds = trainer.predict(dummy_dataset)
-            assert preds.predictions.shape == (4, 2)
-
-    def test_reward_trainer_assert_value_error(self):
-        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        model = AutoModelForSequenceClassification.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.pad_token = tokenizer.eos_token
-
+    @require_peft
+    def test_train_lora_pretokenized(self):
+        peft_config = LoraConfig(
+            task_type=TaskType.SEQ_CLS,
+            inference_mode=False,
+            r=8,
+            lora_alpha=32,
+            lora_dropout=0.1,
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = RewardConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=1,
-                remove_unused_columns=False,
-                report_to="none",
-            )
-
-            # fmt: off
-            dummy_dataset_dict = {
-                "input_ids_b": [
-                    torch.LongTensor([0, 1, 2]),
-                    torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 1, 2]),
-                    torch.LongTensor([1, 2]),
-                ],
-                "attention_mask_c": [
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
-                ],
-                "input_ids_f": [
-                    torch.LongTensor([0, 2]),
-                    torch.LongTensor([1, 2, 0]),
-                    torch.LongTensor([0, 2]),
-                    torch.LongTensor([1, 2, 0]),
-                ],
-                "attention_mask_g": [
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 0]),
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 1]),
-                ],
-            }
-            # fmt: on
-            dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
-
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+            dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
+            dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer})
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
-                model=model,
+                model=self.model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset,
+                peft_config=peft_config,
             )
+            previous_trainable_params = {}
+            previous_non_trainable_params = {}
 
-            with pytest.raises(ValueError):
-                trainer.train()
+            # due to a change in the way the modules to save are dealt in PEFT.
+            trainable_params_name = ["lora", "modules_to_save"]
 
-            training_args = RewardConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=1,
-                remove_unused_columns=True,
-                report_to="none",
-            )
+            # check gradients are not None
+            for n, param in trainer.model.named_parameters():
+                if any(t in n for t in trainable_params_name):
+                    previous_trainable_params[n] = param.clone()
+                else:
+                    previous_non_trainable_params[n] = param.clone()
 
-            with self.assertWarns(UserWarning):
-                trainer = RewardTrainer(
-                    model=model,
-                    args=training_args,
-                    tokenizer=tokenizer,
-                    train_dataset=dummy_dataset,
-                )
+            trainer.train()
 
-    def test_reward_trainer_margin(self):
-        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        model = AutoModelForSequenceClassification.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.pad_token = tokenizer.eos_token
+            self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
 
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
+
+            # check the non trainable params have not changed
+            for n, param in previous_non_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
+
+    def test_margin(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = RewardConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                report_to="none",
-            )
-
-            # fmt: off
             dummy_dataset_dict = {
                 "input_ids_chosen": [
                     torch.LongTensor([0, 1, 2]),
@@ -305,17 +213,12 @@ class RewardTrainerTester(unittest.TestCase):
                 ],
                 "margin": [
                     torch.FloatTensor([1.0]),
-                ]
+                ],
             }
-            # fmt: on
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
-
+            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
-                model=model,
-                args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
 
             batch = [dummy_dataset[0]]
@@ -327,62 +230,13 @@ class RewardTrainerTester(unittest.TestCase):
                 outputs["rewards_chosen"] - outputs["rewards_rejected"] - batch["margin"]
             ).mean()
 
-            assert abs(loss - l_val) < 1e-6
+            self.assertLess(abs(loss - l_val), 1e-6)
 
-    def test_reward_trainer_tags(self):
-        model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        model = AutoModelForSequenceClassification.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.pad_token = tokenizer.eos_token
-
+    def test_tags(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = RewardConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                report_to="none",
-            )
-
-            # fmt: off
-            dummy_dataset_dict = {
-                "input_ids_chosen": [
-                    torch.LongTensor([0, 1, 2]),
-                    torch.LongTensor([1, 2]),
-                    torch.LongTensor([0, 1, 2]),
-                    torch.LongTensor([1, 2]),
-                ],
-                "attention_mask_chosen": [
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
-                    torch.LongTensor([1, 1, 1]),
-                    torch.LongTensor([1, 0]),
-                ],
-                "input_ids_rejected": [
-                    torch.LongTensor([0, 2]),
-                    torch.LongTensor([1, 2, 0]),
-                    torch.LongTensor([0, 2]),
-                    torch.LongTensor([1, 2, 0]),
-                ],
-                "attention_mask_rejected": [
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 0]),
-                    torch.LongTensor([1, 1]),
-                    torch.LongTensor([1, 1, 1]),
-                ],
-            }
-            # fmt: on
-            dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
-
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = RewardTrainer(
-                model=model,
-                args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
+                model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
-
-            assert trainer.model.model_tags == trainer._tag_names
+            self.assertEqual(trainer.model.model_tags, trainer._tag_names)

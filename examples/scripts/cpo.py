@@ -17,6 +17,7 @@ In general, the optimal configuration for CPO will be similar to that of DPO:
 
 # regular:
 python examples/scripts/cpo.py \
+    --dataset_name trl-lib/ultrafeedback_binarized \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
@@ -33,6 +34,7 @@ python examples/scripts/cpo.py \
 
 # peft:
 python examples/scripts/cpo.py \
+    --dataset_name trl-lib/ultrafeedback_binarized \
     --model_name_or_path=gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
@@ -52,26 +54,16 @@ python examples/scripts/cpo.py \
     --lora_alpha=16
 """
 
-import multiprocessing
-from dataclasses import dataclass, field
-
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import CPOConfig, CPOTrainer, ModelConfig, get_peft_config
-
-
-@dataclass
-class ScriptArguments:
-    dataset: str = field(
-        default="trl-internal-testing/hh-rlhf-helpful-base-trl-style",
-        metadata={"help": "The name of the dataset to use."},
-    )
+from trl import CPOConfig, CPOTrainer, ModelConfig, ScriptArguments, get_peft_config
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, CPOConfig, ModelConfig))
-    args, cpo_args, model_config = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
 
     ################
     # Model & Tokenizer
@@ -88,38 +80,26 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    ds = load_dataset(args.dataset)
-    if cpo_args.debug:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
+    dataset = load_dataset(script_args.dataset_name)
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
-
-    def process(row):
-        row["chosen"] = tokenizer.apply_chat_template(row["chosen"], tokenize=False)
-        row["rejected"] = tokenizer.apply_chat_template(row["rejected"], tokenize=False)
-        return row
-
-    ds = ds.map(
-        process,
-        num_proc=1 if cpo_args.debug else multiprocessing.cpu_count(),
-        load_from_cache_file=False,
-    )
-    train_dataset = ds["train"]
-    eval_dataset = ds["test"]
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     ################
     # Training
     ################
     trainer = CPOTrainer(
         model,
-        args=cpo_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
+        args=training_args,
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_config),
     )
 
     # train and save the model
     trainer.train()
-    trainer.save_model(cpo_args.output_dir)
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

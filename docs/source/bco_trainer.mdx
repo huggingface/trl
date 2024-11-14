@@ -1,54 +1,15 @@
 # BCO Trainer
 
+[![](https://img.shields.io/badge/All_models-BCO-blue)](https://huggingface.co/models?other=bco,trl)
+
 TRL supports the Binary Classifier Optimization (BCO).
 The [BCO](https://huggingface.co/papers/2404.04656) authors train a binary classifier whose logit serves as a reward so that the classifier maps {prompt, chosen completion} pairs to 1 and {prompt, rejected completion} pairs to 0.
 For a full example have a look at  [`examples/scripts/bco.py`].
 
-## Expected dataset format
+## Expected dataset type
 
-The BCO trainer expects a very specific format for the dataset as it does not require pairwise preferences. Since the model will be trained to directly optimize examples that consist of a prompt, model completion, and a label to indicate whether the completion is "good" or "bad", we expect a dataset with the following columns:
-
-- `prompt`
-- `completion`
-- `label`
-
-for example:
-
-```
-bco_dataset_dict = {
-    "prompt": [
-        "Hey, hello",
-        "How are you",
-        "What is your name?",
-        "What is your name?",
-        "Which is the best programming language?",
-        "Which is the best programming language?",
-        "Which is the best programming language?",
-    ],
-    "completion": [
-        "hi nice to meet you",
-        "leave me alone",
-        "I don't have a name",
-        "My name is Mary",
-        "Python",
-        "C++",
-        "Java",
-    ],
-    "label": [
-        True,
-        False,
-        False,
-        True,
-        True,
-        False,
-        False,
-    ],
-}
-```
-
-where the `prompt` contains the context inputs, `completion` contains the corresponding responses and `label` contains the corresponding flag that indicates if the generated completion is desired (`True`) or undesired (`False`).
-A prompt can have multiple responses and this is reflected in the entries being repeated in the dictionary's value arrays. It is required that the dataset contains at least one desirable and one undesirable completion.
-
+The [`BCOTrainer`] requires an [unpaired preference dataset](dataset_formats#unpaired-preference).
+The [`BCOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Expected model format
 The BCO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
@@ -71,7 +32,7 @@ bco_trainer = BCOTrainer(
     model_ref,
     args=training_args,
     train_dataset=train_dataset,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
 )
 ```
 After this one can then call:
@@ -114,7 +75,7 @@ bco_trainer = BCOTrainer(
     model_ref,
     args=training_args,
     train_dataset=train_dataset,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     embedding_func=embedding_func,
     embedding_tokenizer=self.embedding_tokenizer,
 )

@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Fine-Tune Llama2-7b on SE paired dataset
 import os
 from dataclasses import dataclass, field
@@ -13,11 +27,12 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     HfArgumentParser,
+    is_torch_npu_available,
+    is_torch_xpu_available,
     set_seed,
 )
 
 from trl import SFTConfig, SFTTrainer
-from trl.import_utils import is_npu_available, is_xpu_available
 from trl.trainer import ConstantLengthDataset
 
 
@@ -172,7 +187,7 @@ trainer = SFTTrainer(
     peft_config=peft_config,
     max_seq_length=None,
     formatting_func=prepare_sample_text,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     args=training_args,
 )
 trainer.train()
@@ -183,9 +198,9 @@ trainer.model.save_pretrained(output_dir)
 
 # Free memory for merging weights
 del base_model
-if is_xpu_available():
+if is_torch_xpu_available():
     torch.xpu.empty_cache()
-elif is_npu_available():
+elif is_torch_npu_available():
     torch.npu.empty_cache()
 else:
     torch.cuda.empty_cache()

@@ -1,6 +1,20 @@
-import multiprocessing
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import shutil
 
+from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -9,13 +23,14 @@ from transformers import (
     HfArgumentParser,
 )
 
-from trl import ModelConfig
-from trl.trainer.ppov2_trainer import PPOv2Config, PPOv2Trainer
-from trl.trainer.utils import SIMPLE_QUERY_CHAT_TEMPLATE
+from trl import ModelConfig, PPOConfig, PPOTrainer, ScriptArguments
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 """
 python examples/scripts/ppo/ppo_tldr.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style
+    --dataset_test_split validation \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 1 \
@@ -24,13 +39,14 @@ python examples/scripts/ppo/ppo_tldr.py \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
-    --non_eos_penalty \
+    --missing_eos_penalty 1.0 \
     --stop_token eos \
-    --response_length 53 \
-    --sanity_check
+    --response_length 53
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style
+    --dataset_test_split validation \
     --output_dir models/minimal/ppo_tldr \
     --learning_rate 3e-6 \
     --per_device_train_batch_size 16 \
@@ -40,16 +56,16 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
-    --non_eos_penalty \
-    --stop_token eos \
+    --missing_eos_penalty 1.0 \
+    --stop_token eos
 """
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((PPOv2Config, ModelConfig))
-    config, model_config = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ScriptArguments, PPOConfig, ModelConfig))
+    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
-    shutil.rmtree(config.output_dir, ignore_errors=True)
+    shutil.rmtree(training_args.output_dir, ignore_errors=True)
 
     ################
     # Model & Tokenizer
@@ -61,28 +77,25 @@ if __name__ == "__main__":
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_QUERY_CHAT_TEMPLATE
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     value_model = AutoModelForSequenceClassification.from_pretrained(
-        config.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
+        training_args.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
     )
     reward_model = AutoModelForSequenceClassification.from_pretrained(
-        config.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
+        training_args.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
     )
     ref_policy = AutoModelForCausalLM.from_pretrained(
-        config.sft_model_path, trust_remote_code=model_config.trust_remote_code
+        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code
     )
     policy = AutoModelForCausalLM.from_pretrained(
-        config.sft_model_path, trust_remote_code=model_config.trust_remote_code
+        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code
     )
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
-    if config.sanity_check:
-        for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].select(range(1000))
-    train_dataset = raw_datasets["train"]
-    eval_dataset = raw_datasets["validation"]
+    dataset = load_dataset(script_args.dataset_name)
+    train_dataset = dataset[script_args.dataset_train_split]
+    eval_dataset = dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None
 
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
@@ -98,22 +111,27 @@ if __name__ == "__main__":
         return dataset.map(
             tokenize,
             remove_columns=dataset.column_names,
-            num_proc=1 if config.sanity_check else multiprocessing.cpu_count(),
-            load_from_cache_file=not config.sanity_check,
+            num_proc=training_args.dataset_num_proc,
         )
 
-    train_dataset = prepare_dataset(train_dataset, tokenizer)
-    eval_dataset = prepare_dataset(eval_dataset, tokenizer)
-    # filtering
-    train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 512)
-    eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512)
+    # Compute that only on the main process for faster data processing.
+    # see: https://github.com/huggingface/trl/pull/1255
+    with PartialState().local_main_process_first():
+        train_dataset = prepare_dataset(train_dataset, tokenizer)
+        if eval_dataset is not None:
+            eval_dataset = prepare_dataset(eval_dataset, tokenizer)
+        # filtering
+        train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=training_args.dataset_num_proc)
+        if eval_dataset is not None:
+            eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=training_args.dataset_num_proc)
+
     assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
     ################
     # Training
     ################
-    trainer = PPOv2Trainer(
-        config=config,
-        tokenizer=tokenizer,
+    trainer = PPOTrainer(
+        config=training_args,
+        processing_class=tokenizer,
         policy=policy,
         ref_policy=ref_policy,
         reward_model=reward_model,
@@ -122,7 +140,10 @@ if __name__ == "__main__":
         eval_dataset=eval_dataset,
     )
     trainer.train()
-    trainer.save_model(config.output_dir)
-    if config.push_to_hub:
-        trainer.push_to_hub()
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
     trainer.generate_completions()

@@ -13,9 +13,8 @@
 # limitations under the License.
 import torch
 import torch.nn as nn
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, is_torch_npu_available, is_torch_xpu_available
 
-from ..import_utils import is_npu_available, is_xpu_available
 from .modeling_base import PreTrainedModelWrapper
 
 
@@ -71,8 +70,8 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         - **transformers_parent_class** (`transformers.PreTrainedModel`) -- The parent class of the wrapped model. This
             should be set to `transformers.AutoModelForCausalLM` for this class.
         - **lm_head_namings** (`tuple`) -- A tuple of strings that are used to identify the language model head of the
-            wrapped model. This is set to `("lm_head", "embed_out")` for this class but can be changed for other models
-            in the future
+            wrapped model. This is set to `("lm_head", "embed_out", "output_layer")` for this class but can be changed
+            for other models in the future
         - **supported_args** (`tuple`) -- A tuple of strings that are used to identify the arguments that are supported
             by the `ValueHead` class. Currently, the supported args are:
             - **summary_dropout_prob** (`float`, `optional`, defaults to `None`) -- The dropout probability for the
@@ -84,11 +83,10 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 - **`None`** -- Initializes the weights of the `ValueHead` with a random distribution. This is the default
                     strategy.
                 - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.
-
     """
 
     transformers_parent_class = AutoModelForCausalLM
-    lm_head_namings = ["lm_head", "embed_out"]
+    lm_head_namings = ["lm_head", "embed_out", "output_layer"]
     supported_args = (
         "summary_dropout_prob",
         "v_head_initializer_range",
@@ -252,9 +250,9 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
 
             first_device = list(set(self.pretrained_model.hf_device_map.values()))[0]
             if isinstance(first_device, int):
-                if is_npu_available():
+                if is_torch_npu_available():
                     first_device = f"npu:{first_device}"
-                elif is_xpu_available():
+                elif is_torch_xpu_available():
                     first_device = f"xpu:{first_device}"
                 else:
                     first_device = f"cuda:{first_device}"

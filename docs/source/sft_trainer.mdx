@@ -1,9 +1,11 @@
 # Supervised Fine-tuning Trainer
 
+[![](https://img.shields.io/badge/All_models-SFT-blue)](https://huggingface.co/models?other=sft,trl)
+
 Supervised fine-tuning (or SFT for short) is a crucial step in RLHF. In TRL we provide an easy-to-use API to create your SFT models and train them with few lines of code on your dataset.
 
 Check out a complete flexible example at [`examples/scripts/sft.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft.py).
-Experimental support for Vision Language Models is also included in the example [`examples/scripts/vsft_llava.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/vsft_llava.py).
+Experimental support for Vision Language Models is also included in the example [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_vlm.py).
 
 ## Quickstart
 
@@ -14,17 +16,16 @@ The following code-snippet takes care of all the data pre-processing and trainin
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
 
-dataset = load_dataset("imdb", split="train")
+dataset = load_dataset("stanfordnlp/imdb", split="train")
 
-sft_config = SFTConfig(
-    dataset_text_field="text",
+training_args = SFTConfig(
     max_seq_length=512,
     output_dir="/tmp",
 )
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
 )
 trainer.train()
 ```
@@ -37,16 +38,16 @@ from transformers import AutoModelForCausalLM
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
 
-dataset = load_dataset("imdb", split="train")
+dataset = load_dataset("stanfordnlp/imdb", split="train")
 
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
 
-sft_config = SFTConfig(output_dir="/tmp")
+training_args = SFTConfig(output_dir="/tmp")
 
 trainer = SFTTrainer(
     model,
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
 )
 
 trainer.train()
@@ -110,10 +111,7 @@ collator = DataCollatorForCompletionOnlyLM(instruction_template=instruction_temp
 
 trainer = SFTTrainer(
     model,
-    args=SFTConfig(
-        output_dir="/tmp",
-        dataset_text_field = "text",
-    ),
+    args=SFTConfig(output_dir="/tmp"),
     train_dataset=dataset,
     data_collator=collator,
 )
@@ -220,10 +218,10 @@ dataset = load_dataset("philschmid/dolly-15k-oai-style", split="train")
 
 ...
 
-sft_config = SFTConfig(packing=True)
+training_args = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
-    args=sft_config,
+    args=training_args,
     train_dataset=dataset,
 )
 ```
@@ -256,7 +254,7 @@ def formatting_prompts_func(example):
 
 trainer = SFTTrainer(
     model,
-    args=sft_config,
+    args=training_args,
     train_dataset=dataset,
     formatting_func=formatting_prompts_func,
 )
@@ -271,12 +269,12 @@ To properly format your input make sure to process all the examples by looping o
 
 ```python
 ...
-sft_config = SFTConfig(packing=True, dataset_text_field="text",)
+training_args = SFTConfig(packing=True)
 
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config
+    args=training_args
 )
 
 trainer.train()
@@ -294,11 +292,11 @@ def formatting_func(example):
     text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
     return text
 
-sft_config = SFTConfig(packing=True)
+training_args = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
     formatting_func=formatting_func
 )
 
@@ -315,7 +313,7 @@ model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m", torch_dtype=to
 
 ...
 
-sft_config = SFTConfig(
+training_args = SFTConfig(
     model_init_kwargs={
         "torch_dtype": "bfloat16",
     },
@@ -324,7 +322,7 @@ sft_config = SFTConfig(
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
 )
 
 trainer.train()
@@ -340,7 +338,7 @@ from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig
 
-dataset = load_dataset("imdb", split="train")
+dataset = load_dataset("stanfordnlp/imdb", split="train")
 
 peft_config = LoraConfig(
     r=16,
@@ -508,15 +506,15 @@ To use it in `SFTTrainer` simply pass `neftune_noise_alpha` when creating your `
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
 
-dataset = load_dataset("imdb", split="train")
+dataset = load_dataset("stanfordnlp/imdb", split="train")
 
-sft_config = SFTConfig(
+training_args = SFTConfig(
     neftune_noise_alpha=5,
 )
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
-    args=sft_config,
+    args=training_args,
 )
 trainer.train()
 ```
@@ -578,21 +576,44 @@ model = FastLanguageModel.get_peft_model(
     random_state=3407,
 )
 
-args = SFTConfig(
-    output_dir="./output",
-    max_seq_length=max_seq_length,
-    dataset_text_field="text",
-)
+training_args = SFTConfig(output_dir="./output", max_seq_length=max_seq_length)
 
 trainer = SFTTrainer(
     model=model,
-    args=args,
+    args=training_args,
     train_dataset=dataset,
 )
 trainer.train()
 ```
 
 The saved model is fully compatible with Hugging Face's transformers library. Learn more about unsloth in their [official repository](https://github.com/unslothai/unsloth).
+
+## Liger-Kernel: Increase 20% throughput and reduces 60% memory for multi-GPU training
+
+[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduces memory usage by 60%. That way, we can **4x** our context length, as described in the benchmark below. They have implemented Hugging Face Compatible `RMSNorm`, `RoPE`, `SwiGLU`, `CrossEntropy`, `FusedLinearCrossEntropy`, and more to come. The kernel works out of the box with [Flash Attention](https://github.com/Dao-AILab/flash-attention), [PyTorch FSDP](https://pytorch.org/tutorials/intermediate/FSDP_tutorial.html), and [Microsoft DeepSpeed](https://github.com/microsoft/DeepSpeed).
+
+With great memory reduction, you can potentially turn off cpu_offloading or gradient checkpointing to further boost the performance. 
+
+| Speed Up                 | Memory Reduction        |
+|--------------------------|-------------------------|
+| ![Speed up](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-tps.png) | ![Memory](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-memory.png) |
+
+
+1. To use Liger-Kernel in `SFTTrainer`, first install by 
+
+```bash
+pip install liger-kernel
+```
+
+2. Once installed, set `use_liger` in [`SFTConfig`]. No other changes are needed!
+
+```python
+training_args = SFTConfig(
+  use_liger=True
+)
+```
+
+To learn more about Liger-Kernel, visit their [official repository](https://github.com/linkedin/Liger-Kernel/).
 
 ## Best practices
 
@@ -623,7 +644,7 @@ You may experience some issues with GPTQ Quantization after completing training.
 
 ## Extending `SFTTrainer` for Vision Language Models
 
-`SFTTrainer` does not inherently support vision-language data. However, we provide a guide on how to tweak the trainer to support vision-language data. Specifically, you need to use a custom data collator that is compatible with vision-language data. This guide outlines the steps to make these adjustments. For a concrete example, refer to the script [`examples/scripts/vsft_llava.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/vsft_llava.py) which demonstrates how to fine-tune the LLaVA 1.5 model on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset.
+`SFTTrainer` does not inherently support vision-language data. However, we provide a guide on how to tweak the trainer to support vision-language data. Specifically, you need to use a custom data collator that is compatible with vision-language data. This guide outlines the steps to make these adjustments. For a concrete example, refer to the script [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_vlm.py) which demonstrates how to fine-tune the LLaVA 1.5 model on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset.
 
 ### Preparing the Data
 
@@ -712,23 +733,22 @@ print(collated_data.keys())  # dict_keys(['input_ids', 'attention_mask', 'pixel_
 
 ### Training the vision-language model
 
-Now that we have prepared the data and defined the collator, we can proceed with training the model. To ensure that the data is not processed as text-only, we need to set a couple of arguments in the `SFTConfig`, specifically `dataset_text_field` and `remove_unused_columns`. We also need to set `skip_prepare_dataset` to `True` to avoid the default processing of the dataset. Below is an example of how to set up the `SFTTrainer`.
+Now that we have prepared the data and defined the collator, we can proceed with training the model. To ensure that the data is not processed as text-only, we need to set a couple of arguments in the `SFTConfig`, specifically `remove_unused_columns` and `skip_prepare_dataset` to `True` to avoid the default processing of the dataset. Below is an example of how to set up the `SFTTrainer`.
 
 ```python
-args.dataset_text_field = ""  # needs a dummy field
-args.remove_unused_columns = False
-args.dataset_kwargs = {"skip_prepare_dataset": True}
+training_args.remove_unused_columns = False
+training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
 trainer = SFTTrainer(
     model=model,
-    args=args,
+    args=training_args,
     data_collator=collate_fn,
     train_dataset=train_dataset,
-    tokenizer=processor.tokenizer,
+    processing_class=processor.tokenizer,
 )
 ```
 
-A full example of training LLaVa 1.5 on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset can be found in the script [`examples/scripts/vsft_llava.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/vsft_llava.py).
+A full example of training LLaVa 1.5 on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset can be found in the script [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_vlm.py).
 
 - [Experiment tracking](https://wandb.ai/huggingface/trl/runs/2b2c5l7s)
 - [Trained model](https://huggingface.co/HuggingFaceH4/sft-llava-1.5-7b-hf)

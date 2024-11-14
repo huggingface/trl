@@ -1,5 +1,7 @@
 # RLOO Trainer
 
+[![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
+
 TRL supports training LLMs with REINFORCE Leave-One-Out (RLOO). The idea is that instead of using a value function, RLOO generates K completions for each prompt. For each completion, RLOO uses the mean scores from the other K-1 completions as a baseline to calculate the advantage. RLOO also models the entire completion as a single action, where as PPO models each token as an action. Note that REINFORCE / A2C is a special case of PPO, when the number of PPO epochs is 1 and the number of mini-batches is 1, which is how we implement RLOO in TRL.
 
 References:
@@ -16,6 +18,8 @@ To just run a RLOO script to make sure the trainer can run, you can run the foll
 
 ```bash
 python examples/scripts/rloo/rloo.py \
+    --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --output_dir models/minimal/rloo \
     --per_device_train_batch_size 64 \
@@ -23,7 +27,7 @@ python examples/scripts/rloo/rloo.py \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-14m \
     --reward_model_path EleutherAI/pythia-14m \
-    --non_eos_penalty
+    --missing_eos_penalty 1.0
 ```
 
 
@@ -57,7 +61,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 * Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try undertand why this is happening and try to fix it.
 * Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
 * Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
-* Usage TIP: We recommend to use the "EOS trick" via `--non_eos_penalty --stop_token eos`, which replaces the score of completions that do not end with an EOS token with a static scalar penalty `--penalty_reward_value`. This can help the model learn to generate more coherent completions.
+* Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which subtracts a static scalar penalty from the score of completions that do not end with an EOS token. This can help the model learn to generate more coherent completions.
 
 
 ## What is my model doing exactly?
@@ -208,8 +212,9 @@ To validate the RLOO implementation works, we ran experiment on the 1B model. He
 
 ```
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    examples/scripts/rloo/rloo_tldr.py \
     --output_dir models/minimal/rloo_tldr \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_test_split validation \
     --num_ppo_epochs 2 \
     --num_mini_batches 2 \
     --learning_rate 3e-6 \
@@ -220,7 +225,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
-    --non_eos_penalty \
+    --missing_eos_penalty 1.0 \
     --stop_token eos \
     --kl_coef 0.03
 ```
@@ -263,3 +268,12 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --output-filename benchmark/trl/pr-1540/rloo \
     --scan-history
 ```
+
+
+## RLOOTrainer
+
+[[autodoc]] RLOOTrainer
+
+## RLOOConfig
+
+[[autodoc]] RLOOConfig

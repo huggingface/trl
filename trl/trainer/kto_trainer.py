@@ -13,17 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import inspect
+import os
 import random
+import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
-from functools import wraps
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
@@ -32,24 +34,30 @@ from datasets import Dataset, concatenate_datasets
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
+    is_wandb_available,
 )
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
+from transformers.utils import is_peft_available
+from transformers.utils.deprecation import deprecate_kwarg
 
-from ..import_utils import is_peft_available, is_wandb_available
+from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .kto_config import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
+    generate_model_card,
     pad_to_length,
     peft_module_casting_to_bf16,
-    trl_sanitze_kwargs_for_tagging,
 )
 
 
@@ -70,9 +78,13 @@ RUNNING_NAME = "running.pt"
 
 
 def _get_kl_dataset(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
-    """Creates mismatched pairs of prompts and completions for the KL dataset by reversing the order of completions."""
-    batch["answer_input_ids"] = batch["answer_input_ids"][::-1]
-    batch["answer_attention_mask"] = batch["answer_attention_mask"][::-1]
+    """
+    Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions.
+    For best results, the mismatched outputs y' used to estimate the KL term for a batch should be the same set as the matched
+    outputs y used to estimate the rewards in that batch, just paired with different x.
+    """
+    batch["answer_input_ids"] = [batch["answer_input_ids"][-1]] + batch["answer_input_ids"][:-1]
+    batch["answer_attention_mask"] = [batch["answer_attention_mask"][-1]] + batch["answer_attention_mask"][:-1]
     return batch
 
 
@@ -98,7 +110,9 @@ def _tokenize(
     full_input_ids = [np.array(f) for f in full_input_ids]
     for full, concat in zip(full_input_ids, full_concat_input_ids):
         if len(full) != len(concat):
-            raise ValueError("Prompt input ids and answer input ids should have the same length.")
+            raise ValueError(
+                "The elements in 'full_input_ids' and 'full_concat_input_ids' must have the same pairwise length."
+            )
 
     # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
     # can be merged together when tokenizing prompt+answer. This could result
@@ -137,11 +151,11 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
 
     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
     in case the prompt + completion responses is/are too long. First
-        we truncate the prompt; if we're still too long, we truncate the completion.
+    we truncate the prompt; if we're still too long, we truncate the completion.
 
     We also create the labels for the completion responses, which are of length equal to
-        the sum of the length of the prompt and the completion response, with
-        label_pad_token_id  for the prompt tokens.
+    the sum of the length of the prompt and the completion response, with
+    label_pad_token_id  for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -176,9 +190,9 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
         max_length = kwargs["max_length"]
         bos_token_id = kwargs["tokenizer"].bos_token_id
         eos_token_id = kwargs["tokenizer"].eos_token_id
-        if bos_token_id != all_tokens["prompt_input_ids"][0]:
+        if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
             max_length -= 1
-        if eos_token_id != all_tokens["answer_input_ids"][-1]:
+        if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
             max_length -= 1
 
         # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
@@ -207,17 +221,20 @@ def _process_tokens(example: Dict[str, Any], model: "PreTrainedModel" = None, **
         )
 
         # add BOS, which affects both prompt and the full completion
-        if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
-            batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
-                f"{kwargs['prefix']}prompt_input_ids"
-            ]
-            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[f"{kwargs['prefix']}prompt_attention_mask"]
-            batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
-                f"{kwargs['prefix']}completion_input_ids"
-            ]
-            batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
-                f"{kwargs['prefix']}completion_attention_mask"
-            ]
+        if bos_token_id is not None:
+            if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
+                batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
+                    f"{kwargs['prefix']}prompt_input_ids"
+                ]
+                batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[
+                    f"{kwargs['prefix']}prompt_attention_mask"
+                ]
+                batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
+                    f"{kwargs['prefix']}completion_input_ids"
+                ]
+                batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
+                    f"{kwargs['prefix']}completion_attention_mask"
+                ]
         # add EOS, which affects only the full completion
         if len(all_tokens["answer_input_ids"]) == 0 or eos_token_id != all_tokens["answer_input_ids"][-1]:
             batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
@@ -268,8 +285,10 @@ class KTOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
         data_collator (`transformers.DataCollator`, *optional*, defaults to `None`):
             The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
@@ -296,6 +315,7 @@ class KTOTrainer(Trainer):
 
     _tag_names = ["trl", "kto"]
 
+    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.14.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module, str] = None,
@@ -303,7 +323,9 @@ class KTOTrainer(Trainer):
         args: KTOConfig = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         data_collator: Optional[DataCollator] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -314,8 +336,14 @@ class KTOTrainer(Trainer):
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
     ):
-        if type(args) == TrainingArguments:
+        if type(args) is TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
+
+        if not isinstance(model, str) and ref_model is model:
+            raise ValueError(
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+            )
 
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
@@ -450,9 +478,9 @@ class KTOTrainer(Trainer):
         else:
             self.ref_model = create_reference_model(model)
 
-        if tokenizer is None:
+        if processing_class is None:
             raise ValueError(
-                "max_length or a tokenizer must be specified when using the default DPODataCollatorWithPadding"
+                "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
             )
         if args.max_length is None:
             warnings.warn(
@@ -487,7 +515,7 @@ class KTOTrainer(Trainer):
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
-                pad_token_id=tokenizer.pad_token_id,
+                pad_token_id=processing_class.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
                 is_encoder_decoder=self.is_encoder_decoder,
             )
@@ -505,20 +533,26 @@ class KTOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
-        # disable dropout in the model and reference model
-        disable_dropout_in_model(model)
-        if self.ref_model is not None:
-            disable_dropout_in_model(self.ref_model)
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
+        self.loss_type = args.loss_type
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else tokenizer.pad_token_id
+        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
-        self.tokenizer = tokenizer
+        self.processing_class = processing_class
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
+
+        # Not all losses require a KL calculation
+        self.calculate_KL = True
+        if self.loss_type in ["apo_zero_unpaired"]:
+            self.calculate_KL = False
 
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
@@ -533,88 +567,82 @@ class KTOTrainer(Trainer):
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
+            warnings.warn(
+                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
+                " meaning the auxiliary loss will not be used."
+            )
 
+        # Compute that only on the main process for faster data processing.
+        # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
-            # Shuffle the datasets
-            train_dataset = train_dataset.shuffle(seed=args.data_seed)
+            # Extract the prompt if needed
+            train_dataset = train_dataset.map(
+                maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from train dataset"
+            )
+            # Unpair the dataset if needed
+            train_dataset = maybe_unpair_preference_dataset(
+                train_dataset, args.dataset_num_proc, desc="Unpairing train dataset"
+            )
+            # Apply the chat template if needed
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template,
+                fn_kwargs={"tokenizer": processing_class},
+                num_proc=args.dataset_num_proc,
+                desc="Applying chat template to train dataset",
+            )
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.shuffle(seed=args.data_seed)
+                eval_dataset = eval_dataset.map(
+                    maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from eval dataset"
+                )
+                eval_dataset = maybe_unpair_preference_dataset(
+                    eval_dataset, args.dataset_num_proc, desc="Unpairing eval dataset"
+                )
+                eval_dataset = eval_dataset.map(
+                    maybe_apply_chat_template,
+                    fn_kwargs={"tokenizer": processing_class},
+                    num_proc=args.dataset_num_proc,
+                    desc="Applying chat template to eval dataset",
+                )
+
             # Tokenize and prepare the training datasets
             train_dataset = train_dataset.map(
                 _tokenize,
-                fn_kwargs={"tokenizer": self.tokenizer},
                 batched=True,
+                fn_kwargs={"tokenizer": self.processing_class},
+                num_proc=args.dataset_num_proc,
                 desc="Tokenizing train dataset",
             )
 
-            # Get KL datasets
-            total_batch_size = (
-                max(torch.cuda.device_count(), 1) * args.per_device_train_batch_size * args.gradient_accumulation_steps
-            )
-            if total_batch_size <= 1:
-                raise ValueError(
-                    "Batch size is 1 (too small). KTO will not work properly because the KL term will be equivalent to the implied reward."
-                )
-            # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
-            # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-            train_kl_dataset = train_dataset.map(
-                _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting KL train dataset"
-            )
-
-            # Prepare the datasets
             fn_kwargs = {
                 "prefix": "",
                 "is_encoder_decoder": self.is_encoder_decoder,
-                "tokenizer": self.tokenizer,
+                "tokenizer": self.processing_class,
                 "max_length": self.max_length,
                 "truncation_mode": self.truncation_mode,
                 "label_pad_token_id": self.label_pad_token_id,
                 "max_prompt_length": self.max_prompt_length,
                 "max_completion_length": self.max_completion_length,
             }
+
             train_dataset = train_dataset.map(
                 _process_tokens,
                 fn_kwargs=fn_kwargs,
                 num_proc=args.dataset_num_proc,
                 desc="Processing tokenized train dataset",
             )
-            fn_kwargs["prefix"] = "KL_"
-            train_kl_dataset = train_kl_dataset.map(
-                _process_tokens,
-                fn_kwargs=fn_kwargs,
-                num_proc=args.dataset_num_proc,
-                remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
-                desc="Processing tokenized train KL dataset",
-            )
 
-            # merge the datasets
-            train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
-
+            # Tokenize and prepare the eval datasets
             if eval_dataset is not None:
-                # Tokenize
                 eval_dataset = eval_dataset.map(
                     _tokenize,
-                    fn_kwargs={"tokenizer": self.tokenizer},
+                    fn_kwargs={"tokenizer": self.processing_class},
                     batched=True,
+                    num_proc=args.dataset_num_proc,
                     desc="Tokenizing eval dataset",
                 )
 
-                # Get KL dataset
-                eval_kl_dataset = eval_dataset.map(
-                    _get_kl_dataset, batched=True, batch_size=total_batch_size, desc="Extracting eval KL dataset"
-                )
-
-                # Process
-                fn_kwargs = {
-                    "prefix": "",
-                    "is_encoder_decoder": self.is_encoder_decoder,
-                    "tokenizer": self.tokenizer,
-                    "max_length": self.max_length,
-                    "truncation_mode": self.truncation_mode,
-                    "label_pad_token_id": self.label_pad_token_id,
-                    "max_prompt_length": self.max_prompt_length,
-                    "max_completion_length": self.max_completion_length,
-                }
                 eval_dataset = eval_dataset.map(
                     _process_tokens,
                     fn_kwargs=fn_kwargs,
@@ -622,18 +650,57 @@ class KTOTrainer(Trainer):
                     desc="Processing tokenized eval dataset",
                 )
 
+            # Get KL datasets if needed
+            if self.calculate_KL:
+                if args.per_device_train_batch_size <= 1:
+                    raise ValueError(
+                        "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
+                    )
+
+                # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
+                # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
+                train_kl_dataset = train_dataset.map(
+                    _get_kl_dataset,
+                    batched=True,
+                    batch_size=args.per_device_train_batch_size,
+                    num_proc=args.dataset_num_proc,
+                    desc="Extracting KL train dataset",
+                )
+
                 fn_kwargs["prefix"] = "KL_"
-                eval_kl_dataset = eval_kl_dataset.map(
+                train_kl_dataset = train_kl_dataset.map(
                     _process_tokens,
                     fn_kwargs=fn_kwargs,
                     num_proc=args.dataset_num_proc,
-                    remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
-                    desc="Processing tokenized eval KL dataset",
+                    remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
+                    desc="Processing tokenized train KL dataset",
                 )
 
                 # merge the datasets
-                eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
+                train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
 
+                if eval_dataset is not None:
+                    # Get KL dataset
+                    eval_kl_dataset = eval_dataset.map(
+                        _get_kl_dataset,
+                        batched=True,
+                        batch_size=args.per_device_train_batch_size,
+                        num_proc=args.dataset_num_proc,
+                        desc="Extracting eval KL dataset",
+                    )
+
+                    eval_kl_dataset = eval_kl_dataset.map(
+                        _process_tokens,
+                        fn_kwargs=fn_kwargs,
+                        num_proc=args.dataset_num_proc,
+                        remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
+                        desc="Processing tokenized eval KL dataset",
+                    )
+
+                    # merge the datasets
+                    eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
+
+            # calculate dataset desirability balance
             num_desirable = max(sum(train_dataset["label"]), 1)
             num_undesirable = max(len(train_dataset["label"]) - num_desirable, 1)  # "label" is binary
 
@@ -664,7 +731,7 @@ class KTOTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -769,15 +836,18 @@ class KTOTrainer(Trainer):
                 reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
                 reference_completion_logps.append(reference_completion_logp.cpu())
 
-                reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                reference_KL_logps.append(reference_KL_logp.cpu())
+                if self.calculate_KL:
+                    reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
+                    reference_KL_logps.append(reference_KL_logp.cpu())
 
             self.train_dataset = self.train_dataset.add_column(
                 name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
             )
-            self.train_dataset = self.train_dataset.add_column(
-                name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
-            )
+
+            if self.calculate_KL:
+                self.train_dataset = self.train_dataset.add_column(
+                    name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
+                )
 
             self._precomputed_train_ref_log_probs = True
 
@@ -819,15 +889,17 @@ class KTOTrainer(Trainer):
                 reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
                 reference_completion_logps.append(reference_completion_logp.cpu())
 
-                reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                reference_KL_logps.append(reference_KL_logp.cpu())
+                if self.calculate_KL:
+                    reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
+                    reference_KL_logps.append(reference_KL_logp.cpu())
 
             eval_dataset = eval_dataset.add_column(
                 name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
             )
-            eval_dataset = eval_dataset.add_column(
-                name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
-            )
+            if self.calculate_KL:
+                eval_dataset = eval_dataset.add_column(
+                    name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
+                )
 
             # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
             if self.eval_dataset is not None:
@@ -849,22 +921,24 @@ class KTOTrainer(Trainer):
                             labels=padded_batch["completion_labels"],
                         ).logits
 
-                        KL_logits = self.model(
-                            padded_batch["KL_prompt_input_ids"],
-                            attention_mask=padded_batch["KL_prompt_attention_mask"],
-                            decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
-                            labels=padded_batch["KL_completion_labels"],
-                        ).logits
+                        if self.calculate_KL:
+                            KL_logits = self.model(
+                                padded_batch["KL_prompt_input_ids"],
+                                attention_mask=padded_batch["KL_prompt_attention_mask"],
+                                decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
+                                labels=padded_batch["KL_completion_labels"],
+                            ).logits
                     else:
                         completion_logits = self.model(
                             padded_batch["completion_input_ids"],
                             attention_mask=padded_batch["completion_attention_mask"],
                         ).logits
 
-                        KL_logits = self.model(
-                            padded_batch["KL_completion_input_ids"],
-                            attention_mask=padded_batch["KL_completion_attention_mask"],
-                        ).logits
+                        if self.calculate_KL:
+                            KL_logits = self.model(
+                                padded_batch["KL_completion_input_ids"],
+                                attention_mask=padded_batch["KL_completion_attention_mask"],
+                            ).logits
             else:
                 if self.is_encoder_decoder:
                     completion_logits = self.ref_model(
@@ -874,21 +948,23 @@ class KTOTrainer(Trainer):
                         labels=padded_batch["completion_labels"],
                     ).logits
 
-                    KL_logits = self.ref_model(
-                        padded_batch["KL_prompt_input_ids"],
-                        attention_mask=padded_batch["KL_prompt_attention_mask"],
-                        decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
-                        labels=padded_batch["KL_completion_labels"],
-                    ).logits
+                    if self.calculate_KL:
+                        KL_logits = self.ref_model(
+                            padded_batch["KL_prompt_input_ids"],
+                            attention_mask=padded_batch["KL_prompt_attention_mask"],
+                            decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
+                            labels=padded_batch["KL_completion_labels"],
+                        ).logits
                 else:
                     completion_logits = self.ref_model(
                         padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
                     ).logits
 
-                    KL_logits = self.ref_model(
-                        padded_batch["KL_completion_input_ids"],
-                        attention_mask=padded_batch["KL_completion_attention_mask"],
-                    ).logits
+                    if self.calculate_KL:
+                        KL_logits = self.ref_model(
+                            padded_batch["KL_completion_input_ids"],
+                            attention_mask=padded_batch["KL_completion_attention_mask"],
+                        ).logits
 
         completion_logps = self.get_batch_logps(
             completion_logits,
@@ -898,13 +974,16 @@ class KTOTrainer(Trainer):
             label_pad_token_id=self.label_pad_token_id,
         )
 
-        KL_logps = self.get_batch_logps(
-            KL_logits,
-            padded_batch["KL_completion_labels"],
-            average_log_prob=False,
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-        )
+        if self.calculate_KL:
+            KL_logps = self.get_batch_logps(
+                KL_logits,
+                padded_batch["KL_completion_labels"],
+                average_log_prob=False,
+                is_encoder_decoder=self.is_encoder_decoder,
+                label_pad_token_id=self.label_pad_token_id,
+            )
+        else:
+            KL_logps = None
 
         return completion_logps, KL_logps
 
@@ -951,32 +1030,35 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        KL_logps = None
-        KL_model_kwargs = (
-            {
-                "input_ids": batch["KL_prompt_input_ids"],
-                "attention_mask": batch["KL_prompt_attention_mask"],
-                "labels": batch["KL_completion_labels"],
-                "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
-            }
-            if self.is_encoder_decoder
-            else {
-                "input_ids": batch["KL_completion_input_ids"],
-                "attention_mask": batch["KL_completion_attention_mask"],
-            }
-        )
-        with torch.no_grad():
-            KL_logits = model(
-                **KL_model_kwargs,
-            ).logits
+        if self.calculate_KL:
+            KL_logps = None
+            KL_model_kwargs = (
+                {
+                    "input_ids": batch["KL_prompt_input_ids"],
+                    "attention_mask": batch["KL_prompt_attention_mask"],
+                    "labels": batch["KL_completion_labels"],
+                    "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
+                }
+                if self.is_encoder_decoder
+                else {
+                    "input_ids": batch["KL_completion_input_ids"],
+                    "attention_mask": batch["KL_completion_attention_mask"],
+                }
+            )
+            with torch.no_grad():
+                KL_logits = model(
+                    **KL_model_kwargs,
+                ).logits
 
-        KL_logps = self.get_batch_logps(
-            KL_logits,
-            batch["KL_completion_labels"],
-            average_log_prob=False,
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-        )
+            KL_logps = self.get_batch_logps(
+                KL_logits,
+                batch["KL_completion_labels"],
+                average_log_prob=False,
+                is_encoder_decoder=self.is_encoder_decoder,
+                label_pad_token_id=self.label_pad_token_id,
+            )
+        else:
+            KL_logps = None
 
         model_kwargs = (
             {
@@ -1049,21 +1131,40 @@ class KTOTrainer(Trainer):
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
             The KL tensor contains the detached KL divergence estimate between the policy and reference models.
         """
-        kl = (policy_KL_logps - reference_KL_logps).mean().detach()
-        kl = self.accelerator.gather(kl).mean().clamp(min=0)
+        if self.calculate_KL:
+            kl = (policy_KL_logps - reference_KL_logps).mean().detach()
+            kl = self.accelerator.gather(kl).mean().clamp(min=0)
+        else:
+            kl = torch.zeros(1).to(policy_chosen_logps.device)
 
+        # Chosen losses
         if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
             chosen_logratios = policy_chosen_logps - reference_chosen_logps
-            chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
+
+            if self.loss_type == "kto":
+                # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
+                chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
+            elif self.loss_type == "apo_zero_unpaired":
+                # Unpaired variant of Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
+                # Use this loss when you believe the chosen outputs are better than your model's default output
+                chosen_losses = 1 - F.sigmoid(self.beta * chosen_logratios)
+
             chosen_rewards = self.beta * chosen_logratios.detach()
+
         else:
             # lists can't be empty -- if they are, then accelerate.gather will hang
             chosen_losses = torch.Tensor([]).to(self.accelerator.device)
             chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
 
+        # Rejected losses
         if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
             rejected_logratios = policy_rejected_logps - reference_rejected_logps
-            rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
+
+            if self.loss_type == "kto":
+                rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
+            elif self.loss_type == "apo_zero_unpaired":
+                rejected_losses = F.sigmoid(self.beta * rejected_logratios)
+
             rejected_rewards = self.beta * rejected_logratios.detach()
         else:
             # lists can't be empty -- if they are, then accelerate.gather will hang
@@ -1104,7 +1205,10 @@ class KTOTrainer(Trainer):
 
             reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
             reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]
-            reference_KL_logps = batch["reference_KL_logps"]
+            if self.calculate_KL:
+                reference_KL_logps = batch["reference_KL_logps"]
+            else:
+                reference_KL_logps = None
         else:
             with torch.no_grad():
                 if self.ref_model is None:
@@ -1144,18 +1248,18 @@ class KTOTrainer(Trainer):
         if all_num_chosen > 0:
             metrics["rewards/chosen_sum"] = self.accelerator.gather(chosen_rewards.nansum()).nansum().item()
             metrics["logps/chosen_sum"] = self.accelerator.gather(policy_chosen_logps.nansum()).nansum().item()
-            metrics["logits/chosen"] = self.accelerator.gather(policy_chosen_logits.nansum()).nanmean().item()
+            metrics["logits/chosen_sum"] = self.accelerator.gather(policy_chosen_logits.nansum()).nansum().item()
             metrics["count/chosen"] = all_num_chosen
 
         if all_num_rejected > 0:
             metrics["rewards/rejected_sum"] = self.accelerator.gather(rejected_rewards.nansum()).nansum().item()
             metrics["logps/rejected_sum"] = self.accelerator.gather(policy_rejected_logps.nansum()).nansum().item()
-            metrics["logits/rejected"] = self.accelerator.gather(policy_rejected_logits.nansum()).nanmean().item()
+            metrics["logits/rejected_sum"] = self.accelerator.gather(policy_rejected_logits.nansum()).nansum().item()
             metrics["count/rejected"] = all_num_rejected
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
-            loss += getattr(model.config, "router_aux_loss_coef", 0.0) * aux_loss
+            loss += self.aux_loss_coef * aux_loss
 
         return loss, metrics
 
@@ -1164,15 +1268,16 @@ class KTOTrainer(Trainer):
         model: Union[PreTrainedModel, nn.Module],
         inputs: Dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
+        num_items_in_batch=None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if not self.use_dpo_data_collator:
             warnings.warn(
                 "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
                 "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
             )
-        compute_loss_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
+        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with compute_loss_context_manager():
+        with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
@@ -1194,20 +1299,20 @@ class KTOTrainer(Trainer):
             return None
         return SequentialSampler(self.train_dataset)
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def generate_from_model_and_ref(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
+        generate_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
-        with generate_context_manager():
+        with generate_context_manager:
             policy_output = model.generate(
                 input_ids=batch["prompt_input_ids"],
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
+                pad_token_id=self.processing_class.pad_token_id,
             )
 
             # if reference_output in batch use that otherwise use the reference model
@@ -1221,7 +1326,7 @@ class KTOTrainer(Trainer):
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
                             do_sample=True,
-                            pad_token_id=self.tokenizer.pad_token_id,
+                            pad_token_id=self.processing_class.pad_token_id,
                         )
                 else:
                     reference_output = self.ref_model.generate(
@@ -1229,14 +1334,14 @@ class KTOTrainer(Trainer):
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
-                        pad_token_id=self.tokenizer.pad_token_id,
+                        pad_token_id=self.processing_class.pad_token_id,
                     )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.tokenizer.pad_token_id)
-        policy_output_decoded = self.tokenizer.batch_decode(policy_output, skip_special_tokens=True)
+        policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
+        policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        reference_output = pad_to_length(reference_output, self.max_length, self.tokenizer.pad_token_id)
-        reference_output_decoded = self.tokenizer.batch_decode(reference_output, skip_special_tokens=True)
+        reference_output = pad_to_length(reference_output, self.max_length, self.processing_class.pad_token_id)
+        reference_output_decoded = self.processing_class.batch_decode(reference_output, skip_special_tokens=True)
 
         return policy_output_decoded, reference_output_decoded
 
@@ -1258,8 +1363,8 @@ class KTOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = torch.cuda.amp.autocast if self._peft_has_been_casted_to_bf16 else nullcontext
-        with torch.no_grad(), prediction_context_manager():
+        prediction_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs)
 
         # force log the metrics
@@ -1274,8 +1379,9 @@ class KTOTrainer(Trainer):
             "eval_logits/chosen": metrics["logits/chosen"],
             "eval_logits/rejected": metrics["logits/rejected"],
         }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
+        logits = torch.tensor(
+            [v for k, v in logits_dict.items() if k not in ignore_keys], device=self.accelerator.device
+        )
         labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
@@ -1312,7 +1418,7 @@ class KTOTrainer(Trainer):
                 "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indicies],
                 "prompt": itemgetter(*target_indicies)(random_batch["prompt"]),
             }
-            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, target_batch)
+            policy_output_decoded, ref_output_decoded = self.generate_from_model_and_ref(self.model, target_batch)
 
             self.log(
                 {
@@ -1352,14 +1458,14 @@ class KTOTrainer(Trainer):
         for split in ["chosen", "rejected"]:
             if f"count/{split}" in self._stored_metrics[train_eval]:
                 count_sum = torch.Tensor(self._stored_metrics[train_eval][f"count/{split}"]).sum().item()
-                logs[f"{prefix}rewards/{split}"] = (
-                    torch.Tensor(self._stored_metrics[train_eval][f"rewards/{split}_sum"]).sum().item() / count_sum
-                )
-                logs[f"{prefix}logps/{split}"] = (
-                    torch.Tensor(self._stored_metrics[train_eval][f"logps/{split}_sum"]).sum().item() / count_sum
-                )
-                for key in [f"count/{split}", f"rewards/{split}_sum", f"logps/{split}_sum"]:
-                    del self._stored_metrics[train_eval][key]
+                for metric in ["rewards", "logps", "logits"]:
+                    logs[f"{prefix}{metric}/{split}"] = (
+                        torch.Tensor(self._stored_metrics[train_eval][f"{metric}/{split}_sum"]).sum().item()
+                        / count_sum
+                    )
+                    # delete obsolete metric
+                    del self._stored_metrics[train_eval][f"{metric}/{split}_sum"]
+                del self._stored_metrics[train_eval][f"count/{split}"]
         # calculate reward margin
         if f"{prefix}rewards/chosen" in logs and f"{prefix}rewards/rejected" in logs:
             logs[f"{prefix}rewards/margins"] = logs[f"{prefix}rewards/chosen"] - logs[f"{prefix}rewards/rejected"]
@@ -1369,12 +1475,57 @@ class KTOTrainer(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs)
 
-    @wraps(Trainer.push_to_hub)
-    def push_to_hub(self, commit_message: Optional[str] = "End of training", blocking: bool = True, **kwargs) -> str:
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, List[str], None] = None,
+    ):
         """
-        Overwrite the `push_to_hub` method in order to force-add the tag "kto" when pushing the
-        model on the Hub. Please refer to `~transformers.Trainer.push_to_hub` for more details.
-        """
-        kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
+        Creates a draft of a model card using the information available to the `Trainer`.
 
-        return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+        Args:
+            model_name (`str`, *optional*, defaults to `None`):
+                The name of the model.
+            dataset_name (`str`, *optional*, defaults to `None`):
+                The name of the dataset used for training.
+            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
+        citation = textwrap.dedent("""\
+        @article{ethayarajh2024kto,
+            title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
+            author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
+            year         = 2024,
+            eprint       = {arXiv:2402.01306},
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            trainer_name="KTO",
+            trainer_citation=citation,
+            paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",
+            paper_id="2402.01306",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))

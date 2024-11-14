@@ -13,9 +13,10 @@ extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 
 [tool.ruff.lint.per-file-ignores]
 # Allow prints in auxiliary scripts
-"benchmark/**.py" = ["T201"]
 "examples/**.py" = ["T201"]
 "scripts/**.py" = ["T201"]
+# Ignore import violations in all `__init__.py` files.
+"__init__.py" = ["F401"]
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2

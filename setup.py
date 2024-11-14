@@ -1,4 +1,18 @@
-""" trl is an open library for RL with transformer models.
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""trl is an open library for RL with transformer models.
 
 Note:
 
@@ -53,38 +67,32 @@ To create the package for pypi.
 8. Change the version in __init__.py and setup.py to X.X.X+1.dev0 (e.g. VERSION=1.18.3 -> 1.18.4.dev0).
    Then push the change with a message 'set dev version'
 """
+
 import os
 
 from setuptools import find_packages, setup
 
 
-__version__ = "0.9.6.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.13.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
-    "torch>=1.4.0",
-    "transformers>=4.31.0",
-    "numpy>=1.18.2,<2.0.0",
-    "accelerate",
-    "datasets",
-    "tyro>=0.5.11",
+    "accelerate>=0.34.0",
+    "datasets>=2.21.0",
+    "rich",  # rich shouldn't be a required package for trl, we should remove it from here
+    "transformers>=4.46.0",
 ]
 EXTRAS = {
-    "test": [
-        "parameterized",
-        "peft>=0.8.0",
-        "pytest",
-        "pytest-xdist",
-        "pytest-cov",
-        "pytest-xdist",
-        "scikit-learn",
-        "Pillow",
-    ],
-    "peft": ["peft>=0.8.0"],
+    # Windows support is partially supported with DeepSpeed https://github.com/microsoft/DeepSpeed/tree/master#windows
+    "deepspeed": ["deepspeed>=0.14.4; sys_platform != 'win32'"],
     "diffusers": ["diffusers>=0.18.0"],
-    "deepspeed": ["deepspeed>=0.9.5"],
-    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
-    "quantization": ["bitsandbytes<=0.41.1"],
-    "llm_judge": ["openai>=1.23.2", "huggingface_hub>=0.22.2", "llm-blender>=0.0.2"],
+    # liger-kernel depends on triton, which is only available on Linux https://github.com/triton-lang/triton#compatibility
+    "liger": ["liger-kernel>=0.4.0; sys_platform != 'win32'"],
+    "llm_judge": ["openai>=1.23.2", "llm-blender>=0.0.2"],
+    "peft": ["peft>=0.8.0"],
+    "quantization": ["bitsandbytes"],
+    "scikit": ["scikit-learn"],
+    "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
+    "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
@@ -105,21 +113,21 @@ try:
             "Natural Language :: English",
             "Operating System :: OS Independent",
             "Programming Language :: Python :: 3",
-            "Programming Language :: Python :: 3.7",
-            "Programming Language :: Python :: 3.8",
             "Programming Language :: Python :: 3.9",
             "Programming Language :: Python :: 3.10",
+            "Programming Language :: Python :: 3.11",
+            "Programming Language :: Python :: 3.12",
         ],
         url="https://github.com/huggingface/trl",
         entry_points={
             "console_scripts": ["trl=trl.commands.cli:main"],
         },
         include_package_data=True,
-        package_data={"trl": ["commands/scripts/config/*", "commands/scripts/*"]},
+        package_data={"trl": ["commands/scripts/config/*", "commands/scripts/*", "templates/*.md"]},
         packages=find_packages(exclude={"tests"}),
         install_requires=REQUIRED_PKGS,
         extras_require=EXTRAS,
-        python_requires=">=3.7",
+        python_requires=">=3.9",
         long_description=open("README.md", encoding="utf-8").read(),
         long_description_content_type="text/markdown",
         zip_safe=False,

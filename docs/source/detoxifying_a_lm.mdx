@@ -58,13 +58,13 @@ And its `continuation` value:
 
 We want to increase the chance for the model to generate toxic prompts so we get more learning signal. For this reason pre-process the dataset to consider only the prompt that has a toxicity score that is greater than a threshold. We can do this in a few lines of code:
 ```python
-ds = load_dataset("allenai/real-toxicity-prompts", split="train")
+train_dataset = load_dataset("allenai/real-toxicity-prompts", split="train")
 
 def filter_fn(sample):
     toxicity = sample["prompt"]["toxicity"]
     return toxicity is not None and toxicity > 0.3
 
-ds = ds.filter(filter_fn, batched=False)
+train_dataset = train_dataset.filter(filter_fn, batched=False)
 ```
 
 ### Reward function
@@ -98,19 +98,15 @@ model = AutoModelForCausalLM.from_pretrained("EleutherAI/gpt-j-6B", torch_dtype=
 
 and the optimizer will take care of computing the gradients in `bfloat16` precision. Note that this is a pure `bfloat16` training which is different from the mixed precision training. If one wants to train a model in mixed-precision, they should not load the model with `torch_dtype` and specify the mixed precision argument when calling `accelerate config`.
 
-- Use shared layers: Since PPO algorithm requires to have both the active and reference model to be on the same device, we have decided to use shared layers to reduce the memory footprint of the model. This can be achieved by just speifying `num_shared_layers` argument when creating a `PPOTrainer`:
+- Use shared layers: Since PPO algorithm requires to have both the active and reference model to be on the same device, we have decided to use shared layers to reduce the memory footprint of the model. This can be achieved by specifying `num_shared_layers` argument when calling the `create_reference_model()` function. For example, if you want to share the first 6 layers of the model, you can do it like this:
 
 <div style="text-align: center">
 <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-shared-layers.png">
 </div>
 
 ```python
-ppo_trainer = PPOTrainer(
-    model=model,
-    tokenizer=tokenizer,
-    num_shared_layers=4,
-    ...
-)
+ref_policy = create_reference_model(model, num_shared_layers=6)
+trainer = PPOTrainer(..., ref_policy=ref_policy)
 ```
 
 In the example above this means that the model have the 4 first layers frozen (i.e. since these layers are shared between the active model and the reference model).

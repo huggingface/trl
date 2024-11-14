@@ -21,10 +21,11 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.testing_utils import require_bitsandbytes, require_peft, require_torch_accelerator, torch_device
+from transformers.utils import is_peft_available
 
-from trl import DPOConfig, DPOTrainer, is_peft_available
+from trl import DPOConfig, DPOTrainer
 
-from ..testing_utils import require_bitsandbytes, require_peft, require_torch_gpu
 from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST
 
 
@@ -32,10 +33,10 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-@require_torch_gpu
+@require_torch_accelerator
 class DPOTrainerSlowTester(unittest.TestCase):
     def setUp(self):
-        self.dataset = load_dataset("trl-internal-testing/mlabonne-chatml-dpo-pairs-copy", split="train[:10%]")
+        self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         self.peft_config = LoraConfig(
             lora_alpha=16,
             lora_dropout=0.1,
@@ -47,7 +48,10 @@ class DPOTrainerSlowTester(unittest.TestCase):
 
     def tearDown(self):
         gc.collect()
-        torch.cuda.empty_cache()
+        if torch_device == "cpu":
+            torch.cuda.empty_cache()
+        elif torch_device == "xpu":
+            torch.xpu.empty_cache()
         gc.collect()
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS)))
@@ -81,9 +85,9 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=self.dataset,
-                eval_dataset=self.dataset,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                processing_class=tokenizer,
             )
 
             # train the model
@@ -138,14 +142,14 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=self.dataset,
-                eval_dataset=self.dataset,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                processing_class=tokenizer,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
-            assert trainer.ref_model is None
+            self.assertIsInstance(trainer.model, PeftModel)
+            self.assertIsNone(trainer.ref_model)
 
             # train the model
             trainer.train()
@@ -202,14 +206,14 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
-                train_dataset=self.dataset,
-                eval_dataset=self.dataset,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                processing_class=tokenizer,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
-            assert trainer.ref_model is None
+            self.assertIsInstance(trainer.model, PeftModel)
+            self.assertIsNone(trainer.ref_model)
 
             # train the model
             trainer.train()

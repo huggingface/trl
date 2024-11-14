@@ -1,12 +1,14 @@
 - sections:
   - local: index
     title: TRL
-  - local: quickstart
-    title: Quickstart
   - local: installation
     title: Installation
+  - local: quickstart
+    title: Quickstart
   - local: clis
     title: Get started with Command Line Interfaces (CLIs)
+  - local: dataset_formats
+    title: Dataset Formats
   - local: how_to_train
     title: PPO Training FAQ
   - local: use_model
@@ -17,44 +19,50 @@
     title: Understanding Logs
   title: Get started
 - sections:
+  - sections: # Sort alphabetically
+    - local: alignprop_trainer
+      title: AlignProp
+    - local: bco_trainer
+      title: BCO
+    - local: cpo_trainer
+      title: CPO
+    - local: ddpo_trainer
+      title: DDPO
+    - local: dpo_trainer
+      title: DPO
+    - local: online_dpo_trainer
+      title: Online DPO
+    - local: gkd_trainer
+      title: GKD
+    - local: kto_trainer
+      title: KTO
+    - local: nash_md_trainer
+      title: Nash-MD
+    - local: orpo_trainer
+      title: ORPO
+    - local: ppo_trainer
+      title: PPO
+    - local: reward_trainer
+      title: Reward
+    - local: rloo_trainer
+      title: RLOO
+    - local: sft_trainer
+      title: SFT
+    - local: iterative_sft_trainer
+      title: Iterative SFT
+    - local: xpo_trainer
+      title: XPO
+    title: Trainers
   - local: models
     title: Model Classes
-  - local: trainer
-    title: Trainer Classes
-  - local: reward_trainer
-    title: Reward Model Training
-  - local: sft_trainer
-    title: Supervised Fine-Tuning
-  - local: ppo_trainer
-    title: PPO Trainer
-  - local: ppov2_trainer
-    title: PPOv2 Trainer
-  - local: rloo_trainer
-    title: RLOO Trainer
-  - local: online_dpo_trainer
-    title: Online DPO Trainer
   - local: best_of_n
     title: Best of N Sampling
-  - local: dpo_trainer
-    title: DPO Trainer
-  - local: kto_trainer
-    title: KTO Trainer
-  - local: bco_trainer
-    title: BCO Trainer
-  - local: cpo_trainer
-    title: CPO Trainer
-  - local: ddpo_trainer
-    title: Denoising Diffusion Policy Optimization
-  - local: alignprop_trainer
-    title: AlignProp Trainer
-  - local: orpo_trainer
-    title: ORPO Trainer
-  - local: iterative_sft_trainer
-    title: Iterative Supervised Fine-Tuning
-  - local: callbacks
-    title: Callback Classes
   - local: judges
-    title: Judge Classes
+    title: Judges
+  - local: callbacks
+    title: Callbacks
+  - local: data_utils
+    title: Data Utilities
   - local: text_environments
     title: Text Environments
   title: API

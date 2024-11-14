@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import itertools
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,7 +27,6 @@ SUPPORTED_ARCHITECTURES = (
     AutoModelForCausalLMWithValueHead,
     AutoModelForSeq2SeqLMWithValueHead,
 )
-
 
 if is_deepspeed_available():
     import deepspeed
@@ -71,15 +84,24 @@ def setup_chat_format(
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
+    If the model already has a chat template, this will throw an error. If you want to overwrite it, please set `tokenizer.chat_template` to `None`.
+
     Args:
-      model (`~transformers.PreTrainedModel`): The model to be modified.
-      tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
-      format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
-      resize_to_multiple_of (`Optional[int]`): Number to resize the embedding layer to. Defaults to None.
+        model (`~transformers.PreTrainedModel`): The model to be modified.
+        tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
+        format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
+        resize_to_multiple_of (`Optional[int]`): Number to resize the embedding layer to. Defaults to None.
+
     Returns:
-      model (`~transformers.PreTrainedModel`): The modified model.
-      tokenizer (`~transformers.PreTrainedTokenizer`): The modified tokenizer.
+        model (`~transformers.PreTrainedModel`): The modified model.
+        tokenizer (`~transformers.PreTrainedTokenizer`): The modified tokenizer.
     """
+    # check if model already had a chat template
+    if tokenizer.chat_template is not None:
+        raise ValueError(
+            "Chat template is already added to the tokenizer. If you want to overwrite it, please set it to None"
+        )
+
     # check if format available and retrieve
     if format not in FORMAT_MAPPING:
         raise ValueError(f"Format {format} not available. Please use one of {FORMAT_MAPPING.keys()}")

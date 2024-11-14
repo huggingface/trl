@@ -17,10 +17,11 @@ Run the KTO training script with the commands below. In general, the optimal con
 
 # Full training:
 python examples/scripts/kto.py \
+    --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
-    --learning_rate 1e-5 \
+    --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -33,10 +34,11 @@ python examples/scripts/kto.py \
 
 # QLoRA:
 python examples/scripts/kto.py \
+    --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
-    --learning_rate 1e-4 \
+    --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
     --logging_steps 10 \
@@ -53,27 +55,22 @@ python examples/scripts/kto.py \
     --lora_alpha=16
 """
 
-from dataclasses import dataclass
-
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import KTOConfig, KTOTrainer, ModelConfig, get_peft_config, setup_chat_format
-
-
-# Define and parse arguments.
-@dataclass
-class ScriptArguments:
-    """
-    The arguments for the KTO training script.
-    """
-
-    dataset_name: str = "trl-lib/kto-mix-14k"
+from trl import (
+    KTOConfig,
+    KTOTrainer,
+    ModelConfig,
+    ScriptArguments,
+    get_peft_config,
+    setup_chat_format,
+)
 
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, KTOConfig, ModelConfig))
-    script_args, kto_args, model_args = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
@@ -96,26 +93,21 @@ if __name__ == "__main__":
     # Load the dataset
     dataset = load_dataset(script_args.dataset_name)
 
-    # Apply chat template
-    def format_dataset(example):
-        example["prompt"] = tokenizer.apply_chat_template(example["prompt"], tokenize=False)
-        example["completion"] = tokenizer.apply_chat_template(example["completion"], tokenize=False)
-        return example
-
-    formatted_dataset = dataset.map(format_dataset)
-
     # Initialize the KTO trainer
-    kto_trainer = KTOTrainer(
+    trainer = KTOTrainer(
         model,
         ref_model,
-        args=kto_args,
-        train_dataset=formatted_dataset["train"],
-        eval_dataset=formatted_dataset["test"],
-        tokenizer=tokenizer,
+        args=training_args,
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
     # Train and push the model to the Hub
-    kto_trainer.train()
-    kto_trainer.save_model(kto_args.output_dir)
-    kto_trainer.push_to_hub()
+    trainer.train()
+
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)

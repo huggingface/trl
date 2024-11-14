@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,86 +12,60 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-# regular:
+# Full training
 python examples/scripts/sft.py \
-    --model_name_or_path="facebook/opt-350m" \
-    --dataset_text_field="text" \
-    --report_to="wandb" \
-    --learning_rate=1.41e-5 \
-    --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
-    --output_dir="sft_openassistant-guanaco" \
-    --logging_steps=1 \
-    --num_train_epochs=3 \
-    --max_steps=-1 \
-    --push_to_hub \
-    --gradient_checkpointing
-
-# peft:
-python examples/scripts/sft.py \
-    --model_name_or_path="facebook/opt-350m" \
-    --dataset_text_field="text" \
-    --report_to="wandb" \
-    --learning_rate=1.41e-5 \
-    --per_device_train_batch_size=64 \
-    --gradient_accumulation_steps=16 \
-    --output_dir="sft_openassistant-guanaco" \
-    --logging_steps=1 \
-    --num_train_epochs=3 \
-    --max_steps=-1 \
-    --push_to_hub \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --learning_rate 2.0e-5 \
+    --num_train_epochs 1 \
+    --packing \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 100 \
+    --output_dir Qwen2-0.5B-SFT \
+    --push_to_hub
+
+# LoRA
+python examples/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --learning_rate 2.0e-4 \
+    --num_train_epochs 1 \
+    --packing \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 100 \
     --use_peft \
-    --lora_r=64 \
-    --lora_alpha=16
+    --lora_r 32 \
+    --lora_alpha 16 \
+    --output_dir Qwen2-0.5B-SFT \
+    --push_to_hub
 """
 
-import logging
-import os
-from contextlib import nullcontext
-
-from trl.commands.cli_utils import init_zero_verbose, SFTScriptArguments, TrlParser
-from trl.env_utils import strtobool
-
-TRL_USE_RICH = strtobool(os.getenv("TRL_USE_RICH", "0"))
-
-if TRL_USE_RICH:
-    init_zero_verbose()
-    FORMAT = "%(message)s"
-
-    from rich.console import Console
-    from rich.logging import RichHandler
-
-import torch
 from datasets import load_dataset
-
-from tqdm.rich import tqdm
 from transformers import AutoTokenizer
 
 from trl import (
     ModelConfig,
-    RichProgressCallback,
+    ScriptArguments,
     SFTConfig,
     SFTTrainer,
+    TrlParser,
+    get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    get_kbit_device_map,
 )
-
-tqdm.pandas()
-
-if TRL_USE_RICH:
-    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.INFO)
 
 
 if __name__ == "__main__":
-    parser = TrlParser((SFTScriptArguments, SFTConfig, ModelConfig))
-    args, training_args, model_config = parser.parse_args_and_config()
-
-    # Force use our print callback
-    if TRL_USE_RICH:
-        training_args.disable_tqdm = True
-        console = Console()
+    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
+    script_args, training_args, model_config = parser.parse_args_and_config()
 
     ################
     # Model init kwargs & Tokenizer
@@ -116,36 +89,23 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset(args.dataset_name)
-
-    train_dataset = raw_datasets[args.dataset_train_split]
-    eval_dataset = raw_datasets[args.dataset_test_split]
-
-    ################
-    # Optional rich context managers
-    ###############
-    init_context = nullcontext() if not TRL_USE_RICH else console.status("[bold green]Initializing the SFTTrainer...")
-    save_context = (
-        nullcontext()
-        if not TRL_USE_RICH
-        else console.status(f"[bold green]Training completed! Saving the model to {training_args.output_dir}")
-    )
+    dataset = load_dataset(script_args.dataset_name)
 
     ################
     # Training
     ################
-    with init_context:
-        trainer = SFTTrainer(
-            model=model_config.model_name_or_path,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
-            peft_config=get_peft_config(model_config),
-            callbacks=[RichProgressCallback] if TRL_USE_RICH else None,
-        )
+    trainer = SFTTrainer(
+        model=model_config.model_name_or_path,
+        args=training_args,
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        processing_class=tokenizer,
+        peft_config=get_peft_config(model_config),
+    )
 
     trainer.train()
 
-    with save_context:
-        trainer.save_model(training_args.output_dir)
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)
