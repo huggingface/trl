@@ -289,23 +289,20 @@ class WinRateCallback(TrainerCallback):
             if self.use_soft_judge:
                 ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
                 winner_indices = [0 if score > 0.5 else 1 for score in ref_win_probs]
-                prompts = gather_object(prompts)
-                completions = gather_object(completions)
                 ref_win_probs = gather_object(ref_win_probs)
             else:
                 winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
-                prompts = gather_object(prompts)
-                completions = gather_object(completions)
-                winner_indices = gather_object(winner_indices)
+            winner_indices = gather_object(winner_indices)
+            prompts = gather_object(prompts)
+            completions = gather_object(completions)
 
         # Logging
         if self.trainer.accelerator.is_main_process:
+            win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
             if self.use_soft_judge:
                 avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
-                hard_win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": hard_win_rate})
+                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": win_rate})
             else:
-                win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
                 self.trainer.log({"eval_win_rate": win_rate})
 
             if "wandb" in args.report_to:
@@ -344,23 +341,20 @@ class WinRateCallback(TrainerCallback):
             if self.use_soft_judge:
                 ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
                 winner_indices = [0 if score > 0.5 else 1 for score in ref_win_probs]
-                prompts = gather_object(prompts)
-                completions = gather_object(completions)
                 ref_win_probs = gather_object(ref_win_probs)
             else:
                 winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
-                prompts = gather_object(prompts)
-                completions = gather_object(completions)
-                winner_indices = gather_object(winner_indices)
+            prompts = gather_object(prompts)
+            completions = gather_object(completions)
+            winner_indices = gather_object(winner_indices)
 
         # Logging
         if self.trainer.accelerator.is_main_process:
+            win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
             if self.use_soft_judge:
                 avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
-                hard_win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": hard_win_rate})
-            else:
-                win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
+                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": win_rate})
+            else:   
                 self.trainer.log({"eval_win_rate": win_rate})
 
             if "wandb" in args.report_to:
