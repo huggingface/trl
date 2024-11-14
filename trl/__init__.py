@@ -88,10 +88,11 @@ _import_structure = {
         "SFTConfig",
         "SFTTrainer",
         "WinRateCallback",
+        "MergeModelCallBack",
         "XPOConfig",
         "XPOTrainer",
     ],
-    "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback","MergeModelCallBack"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
     "utils": ["ScriptArguments"],
 }
@@ -177,10 +178,11 @@ if TYPE_CHECKING:
         SFTConfig,
         SFTTrainer,
         WinRateCallback,
+        MergeModelCallBack,
         XPOConfig,
         XPOTrainer,
     )
-    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
+    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback, MergeModelCallBack
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
     from .utils import ScriptArguments
 
