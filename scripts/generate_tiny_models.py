@@ -21,13 +21,13 @@ from transformers import (
     BartTokenizerFast,
     CohereConfig,
     CohereForCausalLM,
-    CohereTokenizerFast,
     GemmaConfig,
+    GPT2Config,
+    GPT2LMHeadModel,
     Idefics2Config,
     Idefics2ForConditionalGeneration,
     LlamaConfig,
     LlamaForCausalLM,
-    LlamaTokenizerFast,
     MistralConfig,
     MistralForCausalLM,
     PaliGemmaConfig,
@@ -36,11 +36,9 @@ from transformers import (
     Phi3ForCausalLM,
     Qwen2Config,
     Qwen2ForCausalLM,
-    Qwen2Tokenizer,
     SiglipVisionConfig,
     T5Config,
     T5ForConditionalGeneration,
-    T5TokenizerFast,
 )
 from transformers.models.idefics2.configuration_idefics2 import Idefics2VisionConfig
 
@@ -71,6 +69,49 @@ def push_to_hub(model, tokenizer, suffix=None):
     model_card.push_to_hub(repo_id)
 
 
+for model_id, config_class, model_class, suffix in [
+    ("CohereForAI/aya-expanse-8b", CohereConfig, CohereForCausalLM, None),
+    ("meta-llama/Meta-Llama-3-8B-Instruct", LlamaConfig, LlamaForCausalLM, "3"),
+    ("meta-llama/Llama-3.1-8B-Instruct", LlamaConfig, LlamaForCausalLM, "3.1"),
+    ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForCausalLM, "3.2"),
+    ("mistralai/Mistral-7B-Instruct-v0.1", MistralConfig, MistralForCausalLM, "0.1"),
+    ("mistralai/Mistral-7B-Instruct-v0.2", MistralConfig, MistralForCausalLM, "0.2"),
+    ("mistralai/Mistral-7B-Instruct-v0.3", MistralConfig, MistralForCausalLM, "0.3"),
+    ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, None),
+    ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, "2.5"),
+    ("tiiuae/falcon-40b", FalconConfig, FalconForCausalLM, None),
+    ("bigcode/starcoder", Starcoder2Config, Starcoder2ForCausalLM, None),
+    ("openai-community/gpt2", GPT2Config, GPT2LMHeadModel, None),
+]:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    config = config_class(
+        vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        hidden_size=8,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_hidden_layers=2,
+        intermediate_size=32,
+    )
+    model = model_class(config)
+    push_to_hub(model, tokenizer, suffix)
+
+for model_id, config_class, model_class, suffix in [
+    ("google/flan-t5-small", T5Config, T5ForConditionalGeneration, None),
+]:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    config = config_class(
+        vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        d_model=16,
+        d_kv=2,
+        d_ff=64,
+        num_layers=6,
+        num_heads=8,
+        decoder_start_token_id=0,
+    )
+    model = model_class(config)
+    push_to_hub(model, tokenizer, suffix)
+
+
 # Bart
 tokenizer = BartTokenizerFast.from_pretrained("facebook/bart-base")
 vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
@@ -86,21 +127,6 @@ config = BartConfig(
 )
 model = BartForCausalLM(config)
 push_to_hub(model, tokenizer)
-
-
-# Cohere
-tokenizer = CohereTokenizerFast.from_pretrained("CohereForAI/aya-expanse-8b")
-config = CohereConfig(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
-    num_hidden_layers=2,
-    intermediate_size=32,
-)
-model = CohereForCausalLM(config)
-push_to_hub(model, tokenizer)
-
 
 # Idefics2
 processor = AutoProcessor.from_pretrained("HuggingFaceM4/idefics2-8b")
@@ -122,90 +148,6 @@ config = Idefics2Config(
 )
 model = Idefics2ForConditionalGeneration(config)
 push_to_hub(model, processor)
-
-
-# Llama 3
-tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
-config = LlamaConfig(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
-    num_hidden_layers=2,
-    intermediate_size=32,
-)
-model = LlamaForCausalLM(config)
-push_to_hub(model, tokenizer, suffix="3")
-
-
-# Llama 3.1
-tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
-config = LlamaConfig(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
-    num_hidden_layers=2,
-    intermediate_size=32,
-)
-model = LlamaForCausalLM(config)
-push_to_hub(model, tokenizer, suffix="3.1")
-
-
-# Llama 3.2
-tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-config = LlamaConfig(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
-    num_hidden_layers=2,
-    intermediate_size=32,
-)
-model = LlamaForCausalLM(config)
-push_to_hub(model, tokenizer, suffix="3.2")
-
-
-# Mistral v0.1
-tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.1")
-config = MistralConfig(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
-    num_hidden_layers=2,
-    intermediate_size=32,
-)
-model = MistralForCausalLM(config)
-push_to_hub(model, tokenizer, suffix="0.1")
-
-
-# Mistral v0.2
-tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2")
-config = MistralConfig(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
-    num_hidden_layers=2,
-    intermediate_size=32,
-)
-model = MistralForCausalLM(config)
-push_to_hub(model, tokenizer, suffix="0.2")
-
-
-# Mistral v0.3
-tokenizer = LlamaTokenizerFast.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3")
-config = MistralConfig(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
-    num_hidden_layers=2,
-    intermediate_size=32,
-)
-model = MistralForCausalLM(config)
-push_to_hub(model, tokenizer, suffix="0.3")
 
 
 # PaliGemma
@@ -232,46 +174,3 @@ config = PaliGemmaConfig(
 )
 model = PaliGemmaForConditionalGeneration(config)
 push_to_hub(model, processor)
-
-
-# Phi3
-tokenizer = LlamaTokenizerFast.from_pretrained("microsoft/Phi-3.5-mini-instruct")
-config = Phi3Config(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
-    num_hidden_layers=2,
-    intermediate_size=32,
-)
-model = Phi3ForCausalLM(config)
-push_to_hub(model, tokenizer)
-
-
-# Qwen
-tokenizer = Qwen2Tokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
-config = Qwen2Config(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
-    num_hidden_layers=2,
-    intermediate_size=32,
-)
-model = Qwen2ForCausalLM(config)
-push_to_hub(model, tokenizer)
-
-
-# T5
-tokenizer = T5TokenizerFast.from_pretrained("google/flan-t5-small")
-config = T5Config(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    d_model=16,
-    d_kv=2,
-    d_ff=64,
-    num_layers=6,
-    num_heads=8,
-    decoder_start_token_id=0,
-)
-model = T5ForConditionalGeneration(config)
-push_to_hub(model, tokenizer)
