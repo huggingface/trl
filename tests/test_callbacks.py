@@ -161,19 +161,19 @@ class WinRateCallbackTester(unittest.TestCase):
 
             # Expected values based on judge returning [0.7, 0.3] for each pair
             expected_soft_winrates = [
-                {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 0.0, "step": 0},
-                {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 0.5, "step": 2},
-                {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 1.0, "step": 4},
-                {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 1.5, "step": 6},
-                {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 2.0, "step": 8},
-                {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 2.5, "step": 10},
-                {"eval_soft_win_rate": 0.5, "eval_hard_win_rate": 0.5, "epoch": 3.0, "step": 12},
+                {"eval_avg_win_prob": 0.5, "eval_win_rate": 0.5, "epoch": 0.0, "step": 0},
+                {"eval_avg_win_prob": 0.5, "eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
+                {"eval_avg_win_prob": 0.5, "eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
+                {"eval_avg_win_prob": 0.5, "eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
+                {"eval_avg_win_prob": 0.5, "eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
+                {"eval_avg_win_prob": 0.5, "eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
+                {"eval_avg_win_prob": 0.5, "eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
             ]
 
             winrate_history = [
-                {k: h[k] for k in ["eval_soft_win_rate", "eval_hard_win_rate", "epoch", "step"]}
+                {k: h[k] for k in ["eval_avg_win_prob", "eval_win_rate", "epoch", "step"]}
                 for h in trainer.state.log_history
-                if "eval_soft_win_rate" in h
+                if "eval_avg_win_prob" in h
             ]
             self.assertListEqual(winrate_history, expected_soft_winrates)
 
