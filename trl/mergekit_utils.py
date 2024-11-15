@@ -20,9 +20,9 @@ def upload_model_to_hf(folder_path : str, repo_id: str):
     )
 
 class MergeConfig:
-    def __init__(self, method: str):
+    def __init__(self, method: str = "linear"):
         self.method = method
-        self.policy_model_path = None  # To be set by the callback, not the user
+        self.policy_model_path = None  
         self.target_model_path = None  
 
         # Initialize relevant parameters based on the method
