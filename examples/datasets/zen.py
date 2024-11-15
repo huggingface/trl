@@ -329,7 +329,7 @@ def main(test_size, push_to_hub, repo_id):
             "Namespaces are one",
             "Although practicality sometimes beats purity,",
         ],
-        "completion":[
+        "completions":[
             [", let me think...", " ugly."],
             [", of course,", " implicit.", " because clarity matters."],
             ["... let's keep it basic,", " complex."],
