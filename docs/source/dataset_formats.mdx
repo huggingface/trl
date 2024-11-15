@@ -78,11 +78,11 @@ This guide provides an overview of the dataset formats and types supported by ea
     </td>
   </tr>
   </tr>
-    <td>Stepwise unpaired preference</td>
+    <td>Stepwise / process supervision</td>
     <td>
       <pre><code>{"prompt": "Blue light",
- "completions": [" scatters more in the atmosphere,", " so the sky is green."],
- "labels": [True, False]}</code></pre>
+ "completions": ["Let's compare their decimal values.\n", "The fractional part of 9.8 is 0.8, while the fractional part of 9.11 is 0.11.\n", "Since 0.11 is greater than 0.8, the number 9.11 is larger than 9.8."],
+ "labels": [True, True, False]}</code></pre>
     </td>
     <td>
       <pre><code>{"prompt": [{"role": "user", "content": "What color is the sky?"}],
