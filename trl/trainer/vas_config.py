@@ -58,3 +58,4 @@ class VASConfig(OnPolicyConfig):
     lam: float = 0.95
     generation_beta: float = 2.0
     save_safetensors: bool = False
+    num_sample_generations: int = 0

@@ -452,7 +452,7 @@ class VASTrainer(Trainer):
                 metrics["eps"] = eps
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
                 metrics["loss/value_loss"] = self.accelerator.gather(loss).mean().item()
-                metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
+                metrics["num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
                 self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
