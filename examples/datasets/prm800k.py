@@ -38,7 +38,7 @@ class ScriptArguments:
     dataset_num_proc: Optional[int] = None
 
 
-def func(example):
+def process_example(example):
     outputs = []
     prompt = example["question"]["problem"]
 
@@ -76,15 +76,17 @@ def func(example):
     outputs.append({"prompt": prompt, "completions": previous_completions, "labels": previous_labels})
     return outputs
 
-def ffunc(examples):
+
+def process_batch(examples):
     outputs = []
     batch_size = len(examples["label"])
     for idx in range(batch_size):
         example = {k: v[idx] for k, v in examples.items()}
-        outputs.extend(func(example))
+        outputs.extend(process_example(example))
     # list of dict to dict of list
     outputs = {k: [v[k] for v in outputs] for k in outputs[0]}
     return outputs
+
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -97,10 +99,18 @@ if __name__ == "__main__":
     dataset = load_dataset("json", data_files=data_files)
 
     dataset = dataset.map(
-        ffunc,
+        process_batch,
         batched=True,
         batch_size=10,
-        remove_columns=["labeler", "timestamp", "generation", "is_quality_control_question", "is_initial_screening_question", "question", "label"],
+        remove_columns=[
+            "labeler",
+            "timestamp",
+            "generation",
+            "is_quality_control_question",
+            "is_initial_screening_question",
+            "question",
+            "label",
+        ],
         num_proc=script_args.dataset_num_proc,
     )
 
