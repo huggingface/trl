@@ -103,8 +103,8 @@ class VASTrainer(Trainer):
         ],
         ref_policy: nn.Module,
         reward_model: nn.Module,
+        value_model: nn.Module,
         train_dataset: Dataset,
-        value_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         # less commonly used
