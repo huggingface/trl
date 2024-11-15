@@ -240,13 +240,13 @@ unpaired_preference_example = {"prompt": [{"role": "user", "content": "What colo
                                "label": True}
 ```
 
-#### Stepwise unpaired preference
+#### Stepwise / process supervision
 
-A stepwise unpaired preference dataset is similar to an [unpaired preference](#unpaired-preference) dataset but includes multiple steps of completions, each with its own label. This structure is useful for tasks that need detailed, step-by-step labeling, such as reasoning tasks. By evaluating each step separately and providing targeted labels, this approach helps identify precisely where the reasoning is correct and where errors occur, allowing for targeted feedback on each part of the reasoning process.
+A stepwise or process supervision dataset is similar to an [unpaired preference](#unpaired-preference) dataset but includes multiple steps of completions, each with its own label. This structure is useful for tasks that need detailed, step-by-step labeling, such as reasoning tasks. By evaluating each step separately and providing targeted labels, this approach helps identify precisely where the reasoning is correct and where errors occur, allowing for targeted feedback on each part of the reasoning process.
 
 ```python
 # Standard format
-stepwise_unpaired_preference_example = {
+stepwise_example = {
     "prompt": "Blue light",
     "completions": [" scatters more in the atmosphere,", " so the sky is green."],
     "labels": [True, False]
