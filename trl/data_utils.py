@@ -60,49 +60,6 @@ def is_conversational(example: Dict[str, Any]) -> bool:
     return False
 
 
-def _merge_same_role_messages(messages):
-    """
-    Merge messages that share the same role into a single message.
-
-    Args:
-        messages (List[Dict[str, str]]): List of messages, where each message is a dictionary with keys "role" and
-            "content".
-
-    Returns:
-        List[Dict[str, str]]: List of messages with the same role merged into a single message.
-
-    Example:
-
-        ```python
-        >>> messages = [
-        ...     {"role": "user", "content": "What color is the sky?"},
-        ...     {"role": "assistant", "content": "Let me think..."},
-        ...     {"role": "assistant", "content": "It is blue."}
-        ... ]
-        >>> _merge_same_role_messages(messages)
-        [{'role': 'user', 'content': 'What color is the sky?'},
-         {'role': 'assistant', 'content': 'Let me think...\nIt is blue.'}]
-        ```
-    """
-    if not messages:
-        return []
-
-    merged_messages = [messages[0]]  # Initialize with the first message
-
-    for i in range(1, len(messages)):
-        current_message = messages[i]
-        previous_message = merged_messages[-1]
-
-        if current_message["role"] == previous_message["role"]:
-            # Merge the content of the current message into the previous one
-            previous_message["content"] += "\n" + current_message["content"]
-        else:
-            # Add the current message to the merged list if the roles are different
-            merged_messages.append(current_message)
-
-    return merged_messages
-
-
 def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: PreTrainedTokenizer) -> Dict[str, str]:
     r"""
     Apply a chat template to a conversational example.
@@ -119,14 +76,8 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
         {"prompt", "chosen", "rejected"},  # preference
         {"chosen", "rejected"},  # preference with implicit prompt
         {"prompt", "completion", "label"},  # unpaired preference
-        {"prompt", "completion", "labels"},  # [Name to find]
     ]:
         raise KeyError(f"Invalid keys in the example: {example_keys}")
-
-    # Merge neighbors messages that share the same role
-    for key in ["messages", "prompt", "chosen", "rejected", "completion"]:
-        if key in example:
-            example[key] = _merge_same_role_messages(example[key])
 
     # Apply the chat template to the whole conversation
     if "messages" in example:
@@ -204,7 +155,6 @@ def maybe_apply_chat_template(
                 - Preference dataset: `"prompt"`, `"chosen"`, and `"rejected"`.
                 - Preference dataset with implicit prompt: `"chosen"` and `"rejected"`.
                 - Unpaired preference dataset: `"prompt"`, `"completion"`, and `"label"`.
-                - [Name to find]: `"prompt"`, `"completion"`, and `"labels"`.
 
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
             messages, where each message is a dictionary with keys `"role"` and `"content"`.
