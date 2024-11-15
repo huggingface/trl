@@ -53,16 +53,6 @@ class MergeConfig:
     def create_merge_config_linear(self) -> MergeConfiguration:
         """
         Creates a merge configuration for a linear merge of two models with specified weights.
-        
-        Args:
-            policy_model_path (str): Path to the policy model.
-            target_model_path (str): Path to the target model.
-            policy_model_weight (float, optional): Weight for the policy model. Defaults to 0.5.
-            target_model_weight (float, optional): Weight for the target model. Defaults to 0.5.
-            dtype (str, optional): Data type for the merge. Defaults to 'float16'.
-        
-        Returns:
-            MergeConfiguration: A MergeConfiguration object with the provided settings.
         """
         # Create the merge configuration dictionary
         merge_config_dict = {
@@ -83,19 +73,6 @@ class MergeConfig:
 
         """
         Creates a merge configuration for a TIES merge of two models, with specified weights and densities.
-        
-        Args:
-            policy_model_path (str): Path to the policy model (the one being merged with target).
-            target_model_path (str): Path to the target base model.
-            policy_model_weight (float, optional): Weight for the policy model. Defaults to 1.0.
-            policy_model_density (list, optional): Density values for TIES merge of policy model. Defaults to [1.0, 0.7, 0.1].
-            target_model_weight (float, optional): Weight for the target model. Defaults to 1.0.
-            target_model_density (list, optional): Density values for TIES merge of target model. Defaults to [1.0].
-            normalize (float, optional): Normalization parameter. Defaults to 1.0.
-            dtype (str, optional): Data type for the merge. Defaults to 'float16'.
-        
-        Returns:
-            MergeConfiguration: A MergeConfiguration object with the provided settings.
         """
         # Create the TIES merge configuration dictionary
         merge_config_dict = {
@@ -158,19 +135,6 @@ class MergeConfig:
         
         """
         Creates a merge configuration for a DARE TIES merge of two models, with specified weights and densities.
-        
-        Args:
-            policy_model_path (str): Path to the policy model (the one being merged with target).
-            target_model_path (str): Path to the target base model.
-            policy_model_weight (float, optional): Weight for the policy model. Defaults to 1.0.
-            policy_model_density (list, optional): Density values for DARE TIES merge of policy model. Defaults to [1.0, 0.7, 0.1].
-            target_model_weight (float, optional): Weight for the target model. Defaults to 1.0.
-            target_model_density (list, optional): Density values for DARE TIES merge of target model. Defaults to [1.0].
-            normalize (float, optional): Normalization parameter. Defaults to 1.0.
-            dtype (str, optional): Data type for the merge. Defaults to 'float16'.
-        
-        Returns:
-            MergeConfiguration: A MergeConfiguration object with the provided settings.
         """
         # Create the DARE TIES merge configuration dictionary
         merge_config_dict = {
@@ -232,15 +196,6 @@ class MergeConfig:
     def create_merge_config_slerp(self) -> MergeConfiguration:
         """
         Creates a merge configuration for a SLERP merge of a model with a base model.
-        
-        Args:
-            model_path (str): Path to the model to be merged.
-            base_model_path (str): Path to the base model.
-            t_values (list, optional): List of ConditionalParameter values for SLERP. Defaults to None.
-            dtype (str, optional): Data type for the merge. Defaults to 'float16'.
-        
-        Returns:
-            MergeConfiguration: A MergeConfiguration object with the provided settings.
         """
         
         # Create the SLERP merge configuration dictionary
