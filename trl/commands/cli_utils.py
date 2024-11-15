@@ -25,8 +25,6 @@ from dataclasses import dataclass, field
 import yaml
 from transformers import HfArgumentParser
 
-from ..utils import ScriptArguments
-
 
 logger = logging.getLogger(__name__)
 
@@ -79,33 +77,6 @@ def init_zero_verbose():
 
     # Add the custom warning handler - we need to do that before importing anything to make sure the loggers work well
     warnings.showwarning = warning_handler
-
-
-@dataclass
-class SFTScriptArguments(ScriptArguments):
-    def __post_init__(self):
-        logger.warning(
-            "`SFTScriptArguments` is deprecated, and will be removed in v0.13. Please use "
-            "`ScriptArguments` instead."
-        )
-
-
-@dataclass
-class RewardScriptArguments(ScriptArguments):
-    def __post_init__(self):
-        logger.warning(
-            "`RewardScriptArguments` is deprecated, and will be removed in v0.13. Please use "
-            "`ScriptArguments` instead."
-        )
-
-
-@dataclass
-class DPOScriptArguments(ScriptArguments):
-    def __post_init__(self):
-        logger.warning(
-            "`DPOScriptArguments` is deprecated, and will be removed in v0.13. Please use "
-            "`ScriptArguments` instead."
-        )
 
 
 @dataclass

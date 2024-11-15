@@ -73,11 +73,11 @@ import os
 from setuptools import find_packages, setup
 
 
-__version__ = "0.12.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.13.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
-    "accelerate",
-    "datasets",
+    "accelerate>=0.34.0",
+    "datasets>=2.21.0",
     "rich",  # rich shouldn't be a required package for trl, we should remove it from here
     "transformers>=4.46.0",
 ]
@@ -86,7 +86,7 @@ EXTRAS = {
     "deepspeed": ["deepspeed>=0.14.4; sys_platform != 'win32'"],
     "diffusers": ["diffusers>=0.18.0"],
     # liger-kernel depends on triton, which is only available on Linux https://github.com/triton-lang/triton#compatibility
-    "liger": ["liger-kernel>=0.2.1; sys_platform != 'win32'"],
+    "liger": ["liger-kernel>=0.4.0; sys_platform != 'win32'"],
     "llm_judge": ["openai>=1.23.2", "llm-blender>=0.0.2"],
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],
