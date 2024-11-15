@@ -81,8 +81,11 @@ This guide provides an overview of the dataset formats and types supported by ea
     <td>Stepwise supervision</td>
     <td>
       <pre><code>{"prompt": "Which number is larger, 9.8 or 9.11?",
- "completions": ["The fractional part of 9.8 is 0.8, while the fractional part of 9.11 is 0.11.", "Since 0.11 is greater than 0.8, the number 9.11 is larger than 9.8."],
- "labels": [True, False]}</code></pre>
+ "completions": ["The fractional part of 9.8 is 0.8.", 
+                 "The fractional part of 9.11 is 0.11.",
+                 "0.11 is greater than 0.8.",
+                 "Hence, 9.11 > 9.8."],
+ "labels": [True, True, False, False]}</code></pre>
     </td>
     <td></td>
   </tr>
