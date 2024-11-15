@@ -24,7 +24,8 @@ from transformers.utils import is_peft_available
 
 from trl import BasePairwiseJudge, LogCompletionsCallback, WinRateCallback, MergeModelCallback, DPOTrainer, DPOConfig
 
-from trl.mergekit_utils import MergeConfig, get_last_checkpoint_path
+from trl.mergekit_utils import MergeConfig
+from transformers.trainer_utils import get_last_checkpoint
 
 
 if is_peft_available():
@@ -250,7 +251,7 @@ class MergeModelCallbackTester(unittest.TestCase):
             trainer.add_callback(merge_callback)
             trainer.train()
 
-            last_checkpoint = get_last_checkpoint_path(tmp_dir)
+            last_checkpoint = get_last_checkpoint(tmp_dir)
             merged_path = os.path.join(last_checkpoint, "merged")
             self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
 

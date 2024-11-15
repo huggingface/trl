@@ -7,39 +7,6 @@ from mergekit.merge import MergeOptions, run_merge
 
 from huggingface_hub import HfApi
 
-
-def get_last_checkpoint_path(output_dir):
-    """
-    Get the path to the most recent checkpoint in the output_dir.
-    
-    Args:
-        output_dir (str): The directory where the checkpoints are saved.
-    
-    Returns:
-        str: The path to the most recent checkpoint, or None if no checkpoint exists.
-    """
-    # Ensure the output directory exists
-    if not os.path.exists(output_dir):
-        print(f"Output directory '{output_dir}' does not exist.")
-        return None
-    
-    # Get all subdirectories in the output directory
-    checkpoints = [
-        os.path.join(output_dir, d) for d in os.listdir(output_dir)
-        if os.path.isdir(os.path.join(output_dir, d)) and "checkpoint" in d
-    ]
-    
-    # If no checkpoints are found
-    if not checkpoints:
-        print("No checkpoints found.")
-        return None
-    
-    # Sort checkpoints by their last modification time
-    last_checkpoint = max(checkpoints, key=os.path.getmtime)
-    
-    return last_checkpoint
-
-
 def upload_model_to_hf(folder_path : str, repo_id: str):
     api = HfApi()
     # Create the repository if it doesn't exist

@@ -39,7 +39,8 @@ from ..data_utils import maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 
-from ..mergekit_utils import Merge,upload_model_to_hf,get_last_checkpoint_path
+from ..mergekit_utils import Merge,upload_model_to_hf
+from transformers.trainer_utils import get_last_checkpoint
 
 if is_deepspeed_available():
     import deepspeed
@@ -458,7 +459,7 @@ class MergeModelCallback(TrainerCallback):
     
     def on_save(self, args, state, control, model=None, **kwargs):
         if self.merge_at_every_checkpoint:
-            policy_model_path = get_last_checkpoint_path(args.output_dir)
+            policy_model_path = get_last_checkpoint(args.output_dir)
             reference_model_path = model.config._name_or_path
             self.merge_config.policy_model_path = policy_model_path
             if not self.merge_config.target_model_path:
@@ -474,7 +475,7 @@ class MergeModelCallback(TrainerCallback):
                 
     def on_train_end(self, args, state, control, model=None, **kwargs):
         if not self.merge_at_every_checkpoint:
-            policy_model_path = get_last_checkpoint_path(args.output_dir)
+            policy_model_path = get_last_checkpoint(args.output_dir)
             reference_model_path = model.config._name_or_path
             self.merge_config.policy_model_path = policy_model_path
             if not self.merge_config.target_model_path:
