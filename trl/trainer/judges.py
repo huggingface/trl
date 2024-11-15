@@ -472,7 +472,7 @@ class AllTrueJudge(BaseBinaryJudge):
         for binary_judgments in zip(*all_binary_judgments):
             # Check that all values are in {0, 1, -1}
             if any(binary_judgment not in {0, 1, -1} for binary_judgment in binary_judgments):
-                raise ValueError(f"Invalid binary judgment: {binary_judgments}, expected values in {0, 1, -1}")
+                raise ValueError(f"Invalid binary judgment: {binary_judgments}, expected values in {{0, 1, -1}}.")
 
             # Unify the decision
             if -1 in binary_judgments:
