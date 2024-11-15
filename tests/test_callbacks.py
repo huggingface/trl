@@ -159,7 +159,7 @@ class WinRateCallbackTester(unittest.TestCase):
             trainer.add_callback(win_rate_callback)
             trainer.train()
 
-            # Expected values based on judge returning [0.7, 0.3] for each pair
+            # Expected values based on judge returning [0.3, 0.9] for each pair
             expected_soft_winrates = [
                 {"eval_avg_win_prob": 0.6, "eval_win_rate": 0.5, "epoch": 0.0, "step": 0},
                 {"eval_avg_win_prob": 0.6, "eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
