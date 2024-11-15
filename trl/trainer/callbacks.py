@@ -292,9 +292,9 @@ class WinRateCallback(TrainerCallback):
                 ref_win_probs = gather_object(ref_win_probs)
             else:
                 winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
-            winner_indices = gather_object(winner_indices)
             prompts = gather_object(prompts)
             completions = gather_object(completions)
+            winner_indices = gather_object(winner_indices)
 
         # Logging
         if self.trainer.accelerator.is_main_process:
