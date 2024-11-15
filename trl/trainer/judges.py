@@ -180,7 +180,7 @@ class RandomBinaryJudge(BaseBinaryJudge):
     """
 
     def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [random.choice([0, 1]) for _ in range(len(prompts))]
+        return [random.choice([0, 1, -1]) for _ in range(len(prompts))]
 
 
 class RandomRankJudge(BaseRankJudge):
@@ -437,8 +437,17 @@ class AllTrueJudge(BaseBinaryJudge):
         all_binary_judgments = [
             judge.judge(prompts, completions, gold_completions, shuffle_order) for judge in self.judges
         ]
+        output = []
+        for binary_judgments in zip(*all_binary_judgments):
+            # Check that all values are in {0, 1, -1}
+            if any(binary_judgment not in {0, 1, -1} for binary_judgment in binary_judgments):
+                raise ValueError(f"Invalid binary judgment: {binary_judgments}, expected values in {0, 1, -1}")
 
-        return [
-            True if all(all_binary_judgment == 1 for all_binary_judgment in binary_judgments) else False
-            for binary_judgments in zip(*all_binary_judgments)
-        ]
+            # Unify the decision
+            if -1 in binary_judgments:
+                output.append(-1)
+            elif all(binary_judgment == 1 for binary_judgment in binary_judgments):
+                output.append(1)
+            else:
+                output.append(0)
+        return output
