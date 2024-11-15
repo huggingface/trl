@@ -3,13 +3,13 @@
 [![](https://img.shields.io/badge/All_models-VAS-blue)](https://huggingface.co/models?other=vas,trl)
 
 ## Overview
-value Augmented Sampling (VAS) is an inference-time algorithm, introduced in the paper [Value Augmented Sampling for Language Model Alignment and Personalization][https://arxiv.org/abs/2405.06639] by [Seungwook Han][https://huggingface.co/hanseungwook], Idan Shenfeld, Akash Srivastava, Yoon Kim, and Pulkit Agrawal. At a high level, VAS is a method to improve the quality of language model generations by leveraging a value model to guide the sampling process. The value model is trained to predict the quality of the generated text, and the sampling process is modified to prefer samples that are predicted to be of higher quality.
+value Augmented Sampling (VAS) is an inference-time algorithm, introduced in the paper [Value Augmented Sampling for Language Model Alignment and Personalization](https://arxiv.org/abs/2405.06639) by [Seungwook Han](https://huggingface.co/hanseungwook), Idan Shenfeld, Akash Srivastava, Yoon Kim, and Pulkit Agrawal. At a high level, VAS is a method to improve the quality of language model generations by leveraging a value model to guide the sampling process. The value model is trained to predict the quality of the generated text, and the sampling process is modified to prefer samples that are predicted to be of higher quality.
 
 This approach allows VAS to optimize for arbitrary reward functions without requiring modifications to the language model's weights. This is in contrast to traditional reinforcement learning methods, which require training the language model with a reward function as part of the training process.
 
 ## Quick start
 
-This example demonstrates how to train a model using the online DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and as a [reward][https://huggingface.co/trl-lib/Qwen2-0.5B-Reward]. We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+This example demonstrates how to train a model using the online DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and as a [reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward). We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
