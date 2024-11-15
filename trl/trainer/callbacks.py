@@ -39,7 +39,7 @@ from ..data_utils import maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 
-from ..mergekit_utils import Merge,upload_model_to_hf
+from ..mergekit_utils import merge_models,upload_model_to_hf
 from transformers.trainer_utils import get_last_checkpoint
 
 if is_deepspeed_available():
@@ -466,7 +466,7 @@ class MergeModelCallback(TrainerCallback):
                 self.merge_config.target_model_path = reference_model_path
             output_path = f"{policy_model_path}/merged"
             
-            Merge(self.merge_config.create(),output_path)
+            merge_models(self.merge_config.create(),output_path)
 
             if self.push_to_hub:
                 last_checkpoint = policy_model_path.split('/')[-1]
@@ -483,7 +483,7 @@ class MergeModelCallback(TrainerCallback):
            
             output_path = f"{policy_model_path}/merged"
         
-            Merge(self.merge_config.create(),output_path)
+            merge_models(self.merge_config.create(),output_path)
             
             if self.push_to_hub:
                 repo_name =  f"{args.logging_dir.split('/')[-1]}_merged"
