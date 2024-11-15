@@ -434,7 +434,7 @@ class MergeModelCallback(TrainerCallback):
     """
     A [`~transformers.TrainerCallback`] that merges the policy model (the model being trained) with another model based on a merge configuration.
 
-    ## Usage
+    Usage:
     ```python
     pip install trl[mergekit]
 
