@@ -43,13 +43,13 @@ class TestJudges(unittest.TestCase):
         return prompts, completions
 
     def test_all_true_judge(self):
-        moj = AllTrueJudge(judges=[RandomBinaryJudge(), RandomBinaryJudge()])
+        judge = AllTrueJudge(judges=[RandomBinaryJudge(), RandomBinaryJudge()])
         prompts, completions = self._get_prompts_and_single_completions()
-        judgements = moj.judge(prompts=prompts, completions=completions)
+        judgements = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(judgements), 2)
-        self.assertTrue(all(judgement in {True, False} for judgement in judgements))
+        self.assertTrue(all(judgement in {0, 1, -1} for judgement in judgements))
 
-    def test_random_constraint_judge(self):
+    def test_random_binary_judge(self):
         judge = RandomBinaryJudge()
         prompts, completions = self._get_prompts_and_single_completions()
         judgements = judge.judge(prompts=prompts, completions=completions)
