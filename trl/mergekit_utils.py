@@ -40,7 +40,7 @@ def get_last_checkpoint_path(output_dir):
     return last_checkpoint
 
 
-def upload_model_to_hf(folder_path, repo_id):
+def upload_model_to_hf(folder_path : str, repo_id: str):
     api = HfApi()
     # Create the repository if it doesn't exist
     repo = api.create_repo(repo_id, repo_type="model")
