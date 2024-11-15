@@ -33,6 +33,9 @@ class MergeConfig:
             - `"ties"`: Combines two models using the TIES method with density parameters.
             - `"dare_ties"`: A variant of TIES for domain adaptation.
             - `"slerp"`: Combines models using spherical linear interpolation.
+    Note:
+        For more details about the merge methods and how they are implemented, see the
+        [MergeKit GitHub repository](https://github.com/arcee-ai/mergekit?tab=readme-ov-file#merge-methods).
 
     Attributes:
         method (`str`): The merge method to use.
