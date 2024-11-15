@@ -30,11 +30,13 @@ if is_peft_available():
 
 
 class HalfPairwiseJudge(BasePairwiseJudge):
-    """Naive pairwise judge that always returns [1, 0]"""
+    """Naive pairwise judge that always returns [1, 0] for two prompts"""
 
-    def judge(self, prompts, completions, shuffle_order=True):
+    def judge(self, prompts, completions, shuffle_order=True, return_scores=False):
         # just check that the batch size is 2
         assert len(prompts) == 2
+        if return_scores:
+            return [0.3, 0.9]
         return [1, 0]
 
 
@@ -131,6 +133,49 @@ class WinRateCallbackTester(unittest.TestCase):
             trainer.train()
             winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
             self.assertListEqual(winrate_history, self.expected_winrates)
+
+    def test_soft_judge(self):
+        """Test that the soft judge functionality works correctly"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                eval_steps=2,  # evaluate every 2 steps
+                per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
+                per_device_eval_batch_size=2,
+                report_to="none",
+            )
+            trainer = TrainerWithRefModel(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=training_args,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                processing_class=self.tokenizer,
+            )
+            win_rate_callback = WinRateCallback(
+                judge=self.judge, trainer=trainer, generation_config=self.generation_config, use_soft_judge=True
+            )
+            trainer.add_callback(win_rate_callback)
+            trainer.train()
+
+            # Expected values based on judge returning [0.3, 0.9] for each pair
+            expected_soft_winrates = [
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 0.0, "step": 0},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
+            ]
+
+            winrate_history = [
+                {k: h[k] for k in ["eval_avg_win_prob", "eval_win_rate", "epoch", "step"]}
+                for h in trainer.state.log_history
+                if "eval_avg_win_prob" in h
+            ]
+            self.assertListEqual(winrate_history, expected_soft_winrates)
 
     @require_peft
     def test_lora(self):
