@@ -36,7 +36,7 @@ class HalfPairwiseJudge(BasePairwiseJudge):
         # just check that the batch size is 2
         assert len(prompts) == 2
         if return_scores:
-            return [0.3, 0.7]
+            return [0.3, 0.9]
         return [1, 0]
 
 
