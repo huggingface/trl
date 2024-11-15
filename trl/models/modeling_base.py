@@ -31,8 +31,6 @@ from safetensors.torch import load_file as safe_load_file
 from transformers import GenerationMixin, PreTrainedModel, is_torch_npu_available, is_torch_xpu_available
 from transformers.utils import is_peft_available
 
-from ..import_utils import is_transformers_greater_than
-
 
 if is_peft_available():
     from peft import (
@@ -45,10 +43,9 @@ if is_peft_available():
         prepare_model_for_kbit_training,
     )
 
-if is_transformers_greater_than("4.33.0"):
-    from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-else:
-    from transformers.deepspeed import is_deepspeed_zero3_enabled
+
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
+
 
 LAYER_PATTERNS = [
     "transformer.h.{layer}",
