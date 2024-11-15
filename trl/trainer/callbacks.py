@@ -445,7 +445,7 @@ class MergeModelCallback(TrainerCallback):
     trainer.add_callback(callback)
     ```
 
-    ## Args
+    Args:
     - `merge_config`: `MergeConfig` used for the merging process.
     - `merge_at_every_checkpoint` =: `bool`, optional, default=`False`. Merges the model at every checkpoint instead of just at the end.
     - `push_to_hub`: `bool`, optional, default=`False`. Pushes the merged model to Hugging Face hub.
