@@ -432,7 +432,7 @@ class LogCompletionsCallback(WandbCallback):
         # Save the last logged step, so we don't log the same completions multiple times
         self._last_logged_step = state.global_step
 class MergeModelCallback(TrainerCallback):
-    """
+    r"""
     A [`~transformers.TrainerCallback`] that merges the policy model (the model being trained) with another model based on a merge configuration.
 
     Usage:
@@ -441,9 +441,10 @@ class MergeModelCallback(TrainerCallback):
 
     trainer = DPOTrainer(...)
     from trl.mergekit_utils import MergeConfig
+    from trl import MergeModelCallback
     config = MergeConfig("ties")
     merge_callback = MergeModelCallback(config)
-    trainer.add_callback(callback)
+    trainer.add_callback(merge_callback)
     ```
 
     Args:
