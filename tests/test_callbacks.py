@@ -20,12 +20,11 @@ import unittest
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 from transformers.testing_utils import require_peft, require_wandb
+from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
-from trl import BasePairwiseJudge, LogCompletionsCallback, WinRateCallback, MergeModelCallback, DPOTrainer, DPOConfig
-
+from trl import BasePairwiseJudge, DPOConfig, DPOTrainer, LogCompletionsCallback, MergeModelCallback, WinRateCallback
 from trl.mergekit_utils import MergeConfig
-from transformers.trainer_utils import get_last_checkpoint
 
 
 if is_peft_available():
@@ -225,6 +224,7 @@ class LogCompletionsCallbackTester(unittest.TestCase):
             # Check that the prompt is in the log
             self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
 
+
 class MergeModelCallbackTester(unittest.TestCase):
     def setUp(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
@@ -275,11 +275,12 @@ class MergeModelCallbackTester(unittest.TestCase):
             trainer.add_callback(merge_callback)
             trainer.train()
 
-            checkpoints = sorted([
-                os.path.join(tmp_dir, cp) for cp in os.listdir(tmp_dir)
-                if cp.startswith("checkpoint-")
-            ])
-            
+            checkpoints = sorted(
+                [os.path.join(tmp_dir, cp) for cp in os.listdir(tmp_dir) if cp.startswith("checkpoint-")]
+            )
+
             for checkpoint in checkpoints:
                 merged_path = os.path.join(checkpoint, "merged")
-                self.assertTrue(os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}.")
+                self.assertTrue(
+                    os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}."
+                )
