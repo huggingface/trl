@@ -161,13 +161,13 @@ class WinRateCallbackTester(unittest.TestCase):
 
             # Expected values based on judge returning [0.3, 0.9] for each pair
             expected_soft_winrates = [
-                {"eval_avg_win_prob": 0.6, "eval_win_rate": 0.5, "epoch": 0.0, "step": 0},
-                {"eval_avg_win_prob": 0.6, "eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
-                {"eval_avg_win_prob": 0.6, "eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
-                {"eval_avg_win_prob": 0.6, "eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
-                {"eval_avg_win_prob": 0.6, "eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
-                {"eval_avg_win_prob": 0.6, "eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
-                {"eval_avg_win_prob": 0.6, "eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 0.0, "step": 0},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
             ]
 
             winrate_history = [
