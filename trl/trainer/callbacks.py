@@ -463,7 +463,7 @@ class MergeModelCallback(TrainerCallback):
             self.merge_config.policy_model_path = policy_model_path
             if not self.merge_config.target_model_path:
                 self.merge_config.target_model_path = reference_model_path
-            output_path = policy_model_path+"/merged"
+            output_path = f"{policy_model_path}/merged"
             
             Merge(self.merge_config.create(),output_path)
 
@@ -480,7 +480,7 @@ class MergeModelCallback(TrainerCallback):
             if not self.merge_config.target_model_path:
                 self.merge_config.target_model_path = reference_model_path
            
-            output_path = policy_model_path+"/merged"
+            output_path = f"{policy_model_path}/merged"
         
             Merge(self.merge_config.create(),output_path)
             

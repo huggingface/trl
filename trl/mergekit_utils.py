@@ -81,7 +81,7 @@ class MergeConfig:
             self.t_values = 0.5
             self.dtype = 'float16'
         else:
-            raise ValueError(f"Unknown merge method: {method}")
+            raise ValueError(f"Unsupported merge method: {method}")
     
     def create_merge_config_linear(self) -> MergeConfiguration:
         """
@@ -112,7 +112,7 @@ class MergeConfig:
         
         return merge_config
 
-    def create_merge_config_ties(self):
+    def create_merge_config_ties(self) -> MergeConfiguration:
 
         """
         Creates a merge configuration for a TIES merge of two models, with specified weights and densities.
@@ -187,7 +187,7 @@ class MergeConfig:
         
         return merge_config
 
-    def create_merge_config_dare_ties(self):
+    def create_merge_config_dare_ties(self) -> MergeConfiguration:
         
         """
         Creates a merge configuration for a DARE TIES merge of two models, with specified weights and densities.
@@ -262,7 +262,7 @@ class MergeConfig:
         
         return merge_config
 
-    def create_merge_config_slerp(self):
+    def create_merge_config_slerp(self) -> MergeConfiguration:
         """
         Creates a merge configuration for a SLERP merge of a model with a base model.
         
@@ -317,7 +317,7 @@ class MergeConfig:
         return merge_config
 
     
-    def create(self):
+    def create(self) -> MergeConfiguration:
         if self.method == 'linear':
             return self.create_merge_config_linear()
         elif self.method == 'ties':
@@ -327,7 +327,7 @@ class MergeConfig:
         elif self.method == 'slerp':
             return self.create_merge_config_slerp()
 
-def Merge(config,out_path):
+def merge_models(config : MergeConfig, out_path : str):
     """
     Merge two models using mergekit 
 
