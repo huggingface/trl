@@ -83,7 +83,7 @@ class MergeConfig:
         else:
             raise ValueError(f"Unknown merge method: {method}")
     
-    def create_merge_config_linear(self):
+    def create_merge_config_linear(self) -> MergeConfiguration:
         """
         Creates a merge configuration for a linear merge of two models with specified weights.
         
