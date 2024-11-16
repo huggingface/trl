@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,12 +40,14 @@ class MergeConfig:
 
     Args:
         method (`str`, *optional*, defaults to `"linear"`):
-            The merge method to use. Supported methods include:
+            Merge method to use. Supported methods include:
+
             - `"linear"`: Linearly combines two models with specified weights.
             - `"ties"`: Combines two models using the TIES method with density parameters.
             - `"dare_ties"`: A variant of TIES for domain adaptation.
             - `"slerp"`: Combines models using spherical linear interpolation.
     Note:
+
         For more details about the merge methods and how they are implemented, see the
         [MergeKit GitHub repository](https://github.com/arcee-ai/mergekit?tab=readme-ov-file#merge-methods).
 
@@ -55,27 +57,11 @@ class MergeConfig:
         target_model_path (`Optional[str]`): Path to the target model.
         policy_model_weight (`float`): Weight for the policy model (for `linear` and `ties` methods).
         target_model_weight (`float`): Weight for the target model (for `linear` and `ties` methods).
-        policy_model_density (`Optional[List[float]]`): Density parameters for the policy model (for `ties` and `dare_ties`).
-        target_model_density (`Optional[List[float]]`): Density parameters for the target model (for `ties` and `dare_ties`).
+        policy_model_density (`List[float]`): Density parameters for the policy model (for `ties` and `dare_ties`).
+        target_model_density (`List[float]`): Density parameters for the target model (for `ties` and `dare_ties`).
         normalize (`Optional[float]`): Normalization factor for the TIES method.
         t_values (`Optional[float]`): Interpolation factor for the SLERP method.
         dtype (`str`): Data type to use for merging, e.g., `"float16"`.
-
-    Methods:
-        create_merge_config_linear() -> MergeConfiguration:
-            Creates a merge configuration for the `linear` merge method.
-
-        create_merge_config_ties() -> MergeConfiguration:
-            Creates a merge configuration for the `ties` merge method.
-
-        create_merge_config_dare_ties() -> MergeConfiguration:
-            Creates a merge configuration for the `dare_ties` merge method.
-
-        create_merge_config_slerp() -> MergeConfiguration:
-            Creates a merge configuration for the `slerp` merge method.
-
-        create() -> MergeConfiguration:
-            Generates the appropriate merge configuration based on the specified method.
     """
 
     def __init__(self, method: str = "linear"):
