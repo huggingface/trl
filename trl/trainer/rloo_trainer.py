@@ -303,7 +303,6 @@ class RLOOTrainer(Trainer):
                 queries = data["input_ids"].to(device)
                 queries = queries.repeat(args.rloo_k, 1)
                 context_length = queries.shape[1]
-                query_responses = []
                 responses = []
                 postprocessed_responses = []
                 logprobs = []
