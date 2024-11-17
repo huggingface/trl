@@ -232,55 +232,53 @@ class MergeModelCallbackTester(unittest.TestCase):
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
     def test_last_checkpoint(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=tmp_dir,
-                num_train_epochs=1,
-                report_to="none",
-                save_strategy="steps",
-                save_steps=1,
-            )
-            trainer = DPOTrainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.dataset,
-                tokenizer=self.tokenizer,
-            )
-            config = MergeConfig("linear")
-            merge_callback = MergeModelCallback(config, push_to_hub=False, merge_at_every_checkpoint=False)
-            trainer.add_callback(merge_callback)
-            trainer.train()
+        output_dir = "dir_last_checkpoint"
+        training_args = DPOConfig(
+            output_dir=output_dir,
+            num_train_epochs=1,
+            report_to="none",
+            save_strategy="steps",
+            save_steps=1,
+        )
+        trainer = DPOTrainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset,
+            tokenizer=self.tokenizer,
+        )
+        config = MergeConfig("linear")
+        merge_callback = MergeModelCallback(config, push_to_hub=False, merge_at_every_checkpoint=False)
+        trainer.add_callback(merge_callback)
+        trainer.train()
 
-            last_checkpoint = get_last_checkpoint(tmp_dir)
-            merged_path = os.path.join(last_checkpoint, "merged")
-            self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
+        last_checkpoint = get_last_checkpoint(output_dir)
+        merged_path = os.path.join(last_checkpoint, "merged")
+        self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
 
     def test_every_checkpoint(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=tmp_dir,
-                num_train_epochs=1,
-                report_to="none",
-                save_strategy="steps",
-                save_steps=1,
-            )
-            trainer = DPOTrainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.dataset,
-                tokenizer=self.tokenizer,
-            )
-            config = MergeConfig("linear")
-            merge_callback = MergeModelCallback(config, push_to_hub=False, merge_at_every_checkpoint=True)
-            trainer.add_callback(merge_callback)
-            trainer.train()
+        output_dir = "dir_every_checkpoint"
+        training_args = DPOConfig(
+            output_dir=output_dir,
+            num_train_epochs=1,
+            report_to="none",
+            save_strategy="steps",
+            save_steps=1,
+        )
+        trainer = DPOTrainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset,
+            tokenizer=self.tokenizer,
+        )
+        config = MergeConfig("linear")
+        merge_callback = MergeModelCallback(config, push_to_hub=False, merge_at_every_checkpoint=True)
+        trainer.add_callback(merge_callback)
+        trainer.train()
 
-            checkpoints = sorted(
-                [os.path.join(tmp_dir, cp) for cp in os.listdir(tmp_dir) if cp.startswith("checkpoint-")]
-            )
+        checkpoints = sorted(
+            [os.path.join(output_dir, cp) for cp in os.listdir(output_dir) if cp.startswith("checkpoint-")]
+        )
 
-            for checkpoint in checkpoints:
-                merged_path = os.path.join(checkpoint, "merged")
-                self.assertTrue(
-                    os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}."
-                )
+        for checkpoint in checkpoints:
+            merged_path = os.path.join(checkpoint, "merged")
+            self.assertTrue(os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}.")
