@@ -61,5 +61,8 @@ class RandomPairwiseJudge(BasePairwiseJudge):
     Random pairwise judge, for testing purposes.
     """
 
-    def judge(self, prompts, completions, shuffle_order=True):
-        return [random.randint(0, len(completion) - 1) for completion in completions]
+    def judge(self, prompts, completions, shuffle_order=True, return_scores=False):
+        if not return_scores:
+            return [random.randint(0, len(completion) - 1) for completion in completions]
+        else:
+            return [random.random() for _ in range(len(prompts))]
