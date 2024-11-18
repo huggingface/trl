@@ -1021,7 +1021,7 @@ class DPOTrainer(Trainer):
             losses_chosen = F.sigmoid(self.beta * chosen_logratios)
             losses_rejected = 1 - F.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
             losses = losses_chosen + losses_rejected
-            
+
         elif self.loss_type == "discopop":
             # Eqn (5) of the DiscoPOP paper (https://huggingface.co/papers/2406.08414)
             # This loss was discovered with LLM discovery

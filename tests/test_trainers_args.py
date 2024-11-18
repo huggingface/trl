@@ -163,7 +163,7 @@ class TrainerArgTester(unittest.TestCase):
                 ref_model_mixup_alpha=0.5,
                 ref_model_sync_steps=32,
                 rpo_alpha=0.5,
-                discopop_tau=0.1
+                discopop_tau=0.1,
             )
             trainer = DPOTrainer(
                 model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
