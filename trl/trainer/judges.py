@@ -14,7 +14,6 @@
 
 import concurrent.futures
 import logging
-import random
 from abc import ABC, abstractmethod
 from typing import List, Optional, Union
 
@@ -181,34 +180,6 @@ class BaseBinaryJudge(BaseJudge):
             In such cases, the caller should handle these invalid indices appropriately, possibly by implementing fallback logic or error handling.
         """
         raise NotImplementedError("Judge subclasses must implement the `judge` method.")
-
-
-class RandomBinaryJudge(BaseBinaryJudge):
-    """
-    Random binary judge, for testing purposes.
-    """
-
-    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
-        return [random.choice([0, 1, -1]) for _ in range(len(prompts))]
-
-
-class RandomRankJudge(BaseRankJudge):
-    """
-    Random rank, for testing purposes.
-    """
-
-    def judge(self, prompts, completions, shuffle_order=True):
-        num_completions = [len(completions[i]) for i in range(len(prompts))]
-        return [random.sample(range(n), n) for n in num_completions]
-
-
-class RandomPairwiseJudge(BasePairwiseJudge):
-    """
-    Random pairwise judge, for testing purposes.
-    """
-
-    def judge(self, prompts, completions, shuffle_order=True):
-        return [random.randint(0, len(completion) - 1) for completion in completions]
 
 
 class PairRMJudge(BasePairwiseJudge):

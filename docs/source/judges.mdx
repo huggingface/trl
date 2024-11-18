@@ -11,7 +11,7 @@ TRL provides judges to easily compare two completions.
 Make sure to have installed the required dependencies by running:
 
 ```bash
-pip install trl[llm_judge]
+pip install trl[judges]
 ```
 
 ## Using the provided judges
@@ -52,46 +52,38 @@ judge.judge(
 )  # Outputs: [0, 1]
 ```
 
-## AllTrueJudge
+## Provided judges
 
-[[autodoc]] AllTrueJudge
-
-## BaseJudge
-
-[[autodoc]] BaseJudge
-
-## BaseBinaryJudge
-
-[[autodoc]] BaseBinaryJudge
-
-## BaseRankJudge
-
-[[autodoc]] BaseRankJudge
-
-## BasePairwiseJudge
-
-[[autodoc]] BasePairwiseJudge
-
-## RandomBinaryJudge
-
-[[autodoc]] RandomBinaryJudge
-
-## RandomRankJudge
-
-[[autodoc]] RandomRankJudge
-
-## RandomPairwiseJudge
-
-[[autodoc]] RandomPairwiseJudge
-
-## PairRMJudge
+### PairRMJudge
 
 [[autodoc]] PairRMJudge
 
-## HfPairwiseJudge
+### HfPairwiseJudge
 
 [[autodoc]] HfPairwiseJudge
 
-## OpenAIPairwiseJudge
+### OpenAIPairwiseJudge
 
 [[autodoc]] OpenAIPairwiseJudge
+
+### AllTrueJudge
+
+[[autodoc]] AllTrueJudge
+
+## Base classes
+
+### BaseJudge
+
+[[autodoc]] BaseJudge
+
+### BaseBinaryJudge
+
+[[autodoc]] BaseBinaryJudge
+
+### BaseRankJudge
+
+[[autodoc]] BaseRankJudge
+
+### BasePairwiseJudge
+
+[[autodoc]] BasePairwiseJudge
