@@ -55,6 +55,7 @@ class TestJudges(unittest.TestCase):
                 return PairRMJudge()
             except ValueError:
                 time.sleep(5)
+        raise ValueError("Failed to load PairRMJudge")
 
     @require_llm_blender
     def test_pair_rm_judge(self):
