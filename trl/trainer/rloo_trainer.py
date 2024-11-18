@@ -95,6 +95,10 @@ class RLOOTrainer(Trainer):
                 "same as `policy`, you must mass a copy of it, or `None` if you use peft."
             )
 
+        # Define the collator if not provided
+        if data_collator is None:
+            data_collator = DataCollatorWithPadding(self.processing_class)
+
         self.args = config
         args = config
         self.processing_class = processing_class
@@ -195,14 +199,11 @@ class RLOOTrainer(Trainer):
         #########
         ### setup dataloader
         #########
-        if data_collator is None:
-            data_collator = DataCollatorWithPadding(self.processing_class)
-
         self.dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.local_dataloader_batch_size,
             shuffle=True,
-            collate_fn=data_collator,
+            collate_fn=self.data_collator,
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
@@ -214,7 +215,7 @@ class RLOOTrainer(Trainer):
         self.eval_dataloader = DataLoader(
             self.eval_dataset,
             batch_size=args.per_device_eval_batch_size,
-            collate_fn=data_collator,
+            collate_fn=self.data_collator,
             drop_last=True,
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
