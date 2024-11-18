@@ -20,8 +20,10 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer, RandomPairwiseJudge, is_llm_blender_available
+from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
+from .testing_utils import RandomPairwiseJudge
 
 
 if is_peft_available():

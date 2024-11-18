@@ -15,16 +15,9 @@
 import time
 import unittest
 
-from trl import (
-    AllTrueJudge,
-    HfPairwiseJudge,
-    PairRMJudge,
-    RandomBinaryJudge,
-    RandomPairwiseJudge,
-    RandomRankJudge,
-)
+from trl import AllTrueJudge, HfPairwiseJudge, PairRMJudge
 
-from .testing_utils import require_llm_blender
+from .testing_utils import RandomBinaryJudge, require_llm_blender
 
 
 class TestJudges(unittest.TestCase):
@@ -45,28 +38,6 @@ class TestJudges(unittest.TestCase):
         self.assertEqual(len(judgements), 2)
         self.assertTrue(all(judgement in {0, 1, -1} for judgement in judgements))
 
-    def test_random_binary_judge(self):
-        judge = RandomBinaryJudge()
-        prompts, completions = self._get_prompts_and_single_completions()
-        judgements = judge.judge(prompts=prompts, completions=completions)
-        self.assertEqual(len(judgements), 2)
-        self.assertTrue(all(judgement in {0, 1, -1} for judgement in judgements))
-
-    def test_random_pairwise_judge(self):
-        judge = RandomPairwiseJudge()
-        prompts, completions = self._get_prompts_and_pairwise_completions()
-        ranks = judge.judge(prompts=prompts, completions=completions)
-        self.assertEqual(len(ranks), 2)
-        self.assertTrue(all(isinstance(rank, int) for rank in ranks))
-
-    def test_random_rank_judge(self):
-        judge = RandomRankJudge()
-        prompts, completions = self._get_prompts_and_pairwise_completions()
-        ranks = judge.judge(prompts=prompts, completions=completions)
-        self.assertEqual(len(ranks), 2)
-        self.assertTrue(all(isinstance(rank, list) for rank in ranks))
-        self.assertTrue(all(all(isinstance(rank, int) for rank in ranks) for ranks in ranks))
-
     @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
     def test_hugging_face_judge(self):
         judge = HfPairwiseJudge()
@@ -84,6 +55,7 @@ class TestJudges(unittest.TestCase):
                 return PairRMJudge()
             except ValueError:
                 time.sleep(5)
+        raise ValueError("Failed to load PairRMJudge")
 
     @require_llm_blender
     def test_pair_rm_judge(self):
