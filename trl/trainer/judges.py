@@ -144,6 +144,54 @@ class BasePairwiseJudge(BaseJudge):
         raise NotImplementedError("Judge subclasses must implement the `judge` method.")
 
 
+class BaseBinaryJudge(BaseJudge):
+    """
+    Base class for binary judges.
+    """
+
+    @abstractmethod
+    def judge(
+        self,
+        prompts: List[str],
+        completions: List[str],
+        gold_completions: Optional[List[str]] = None,
+        shuffle_order: bool = True,
+    ) -> List[int]:
+        """
+        Judge the completion for a given prompt. Used to assess if a completion satisfies a constraint.
+
+        This base class should be used to implement binary evaluations as done in section 4.1.4 of the
+        [CGPO paper](https://huggingface.co/papers/2409.20370).
+        It is relevant for assessing whether or not a prompt completion pair satisfies a specific contraint.
+
+        Args:
+            prompts (`List[str]`): List of prompts.
+            completions (`List[str]`): List of completions.
+            gold_completions (`List[str]`, `optional`): List of gold completions if it exists.
+            shuffle_order (`bool`): Whether to shuffle the order of the completions to avoid positional bias.
+
+        Returns:
+            List[int]: A list of binary labels:
+                - 1 indicates that the completion satisfies the evaluated constraint.
+                - 0 indicates that the completion does not satisfy the evaluated constraint.
+
+        Note:
+            If the judge returns -1 for any prompt, it indicates that the inner process used to compute the preference has failed.
+            For instance, this could occur if the underlying language model or rule based contraint returned an invalid answer.
+            In such cases, the caller should handle these invalid indices appropriately, possibly by implementing fallback logic or error handling.
+        """
+        raise NotImplementedError("Judge subclasses must implement the `judge` method.")
+
+
+class RandomBinaryJudge(BaseBinaryJudge):
+    """
+    Random binary judge, for testing purposes.
+    """
+
+    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
+        return [random.choice([0, 1, -1]) for _ in range(len(prompts))]
+
+
 class RandomRankJudge(BaseRankJudge):
     """
     Random rank, for testing purposes.
@@ -392,3 +440,47 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
 
         # Return the ranks
         return ranks
+
+
+class AllTrueJudge(BaseBinaryJudge):
+    """
+    Unify the decision of multiple [`BaseBinaryJudge`] instances.
+
+    Returns `1` only if all inner binary judges return `1`. If any judge returns `0`, it returns `0`.
+    If any judge returns `-1`, indicating a failure in its process, this judge will also return `-1`.
+
+    Implements the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370).
+
+    Args:
+    judges (`List[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
+    """
+
+    def __init__(self, judges: List[BaseBinaryJudge]):
+        self.judges = judges
+
+    def judge(
+        self,
+        prompts: List[str],
+        completions: List[str],
+        gold_completions: Optional[List[str]] = None,
+        shuffle_order: bool = True,
+    ) -> List[int]:
+        all_binary_judgments = [
+            judge.judge(prompts, completions, gold_completions, shuffle_order) for judge in self.judges
+        ]
+        output = []
+        for binary_judgments in zip(*all_binary_judgments):
+            # Check that all values are in {0, 1, -1}
+            if any(binary_judgment not in {0, 1, -1} for binary_judgment in binary_judgments):
+                raise ValueError(
+                    f"Invalid binary judgment: {binary_judgments}, expected list of values in {{0, 1, -1}}."
+                )
+
+            # Unify the decision
+            if -1 in binary_judgments:
+                output.append(-1)
+            elif all(binary_judgment == 1 for binary_judgment in binary_judgments):
+                output.append(1)
+            else:
+                output.append(0)
+        return output
