@@ -95,7 +95,6 @@ class RLOOTrainer(Trainer):
                 "same as `policy`, you must mass a copy of it, or `None` if you use peft."
             )
 
-
         self.args = config
         args = config
         self.processing_class = processing_class
