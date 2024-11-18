@@ -307,6 +307,74 @@ def main(test_size, push_to_hub, repo_id):
     if push_to_hub:
         standard_unpaired_preference_dataset.push_to_hub(repo_id, config_name="standard_unpaired_preference")
 
+    standard_step_dataset = Dataset.from_dict({
+        "prompt": [
+            "Beautiful is better than",
+            "Explicit is better than",
+            "Simple is better than",
+            "Complex is better than",
+            "Flat is better than",
+            "Sparse is better than",
+            "Readability counts",
+            "Special cases aren't special enough",
+            "Although practicality beats",
+            "Errors should never pass",
+            "In the face of ambiguity, refuse",
+            "There should be one-- and preferably only one --",
+            "Although that way may not be",
+            "Now is better than",
+            "Never is often better than",
+            "If the implementation is hard to explain, it's",
+            "If the implementation is easy to explain, it",
+            "Namespaces are one",
+            "Although practicality sometimes beats purity,",
+        ],
+        "completions":[
+            [", let me think...", " ugly."],
+            [", of course,", " implicit.", " because clarity matters."],
+            ["... let's keep it basic,", " complex."],
+            [" when needed,", " complicated."],
+            [" in terms of structure,", " nested."],
+            ["... especially for readability."],
+            [" especially when others read it."],
+            [", unless...", " they follow the rules."],
+            [" some theoretical elegance,", " purity."],
+            [" silently,", " unless explicitly silenced."],
+            [" the temptation to guess."],
+            [" way to do it,"," but sometimes it's not obvious.", " especially when there's more than one possibility."],
+            [" clear at first,", " it will eventually emerge."],
+            [" later."],
+            [" problematic fixes."],
+            [" likely because it's too complicated."],
+            [" might be a good design."],
+            [" of those great ideas,", " that solve many problems."],
+            [" the code should still aim for balance."],
+        ],
+        "label": [
+            [False, True],
+            [False, True, False],
+            [False, True],
+            [True, True],
+            [True, False],
+            [True],
+            [False],
+            [True, False],
+            [False, False],
+            [False, False],
+            [True],
+            [True, True, False],
+            [True, True],
+            [False],
+            [True], [False],
+            [False],
+            [True, True],
+            [False]
+        ]
+    })
+    standard_step_dataset = standard_step_dataset.train_test_split(test_size=test_size)
+    if push_to_hub:
+        standard_step_dataset.push_to_hub(repo_id, config_name="standard_step")
+
     conversational_language_modeling_dataset = Dataset.from_dict({
         "messages": [
             [{"role": "user", "content": "What is better than ugly?"}, {"role": "assistant", "content": "Beautiful."},],
