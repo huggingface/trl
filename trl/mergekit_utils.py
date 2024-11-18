@@ -14,8 +14,13 @@
 
 import torch
 from huggingface_hub import HfApi
-from mergekit.config import MergeConfiguration
-from mergekit.merge import MergeOptions, run_merge
+
+from trl.import_utils import is_mergekit_available
+
+
+if is_mergekit_available():
+    from mergekit.config import MergeConfiguration
+    from mergekit.merge import MergeOptions, run_merge
 
 
 def upload_model_to_hf(folder_path: str, repo_id: str):
@@ -46,6 +51,7 @@ class MergeConfig:
             - `"ties"`: Combines two models using the TIES method with density parameters.
             - `"dare_ties"`: A variant of TIES for domain adaptation.
             - `"slerp"`: Combines models using spherical linear interpolation.
+
     Note:
 
         For more details about the merge methods and how they are implemented, see the
@@ -94,7 +100,7 @@ class MergeConfig:
         else:
             raise ValueError(f"Unsupported merge method: {method}")
 
-    def create_merge_config_linear(self) -> MergeConfiguration:
+    def create_merge_config_linear(self) -> "MergeConfiguration":
         """
         Creates a merge configuration for a linear merge of two models with specified weights.
         """
@@ -113,7 +119,7 @@ class MergeConfig:
 
         return merge_config
 
-    def create_merge_config_ties(self) -> MergeConfiguration:
+    def create_merge_config_ties(self) -> "MergeConfiguration":
         """
         Creates a merge configuration for a TIES merge of two models, with specified weights and densities.
         """
@@ -157,7 +163,7 @@ class MergeConfig:
 
         return merge_config
 
-    def create_merge_config_dare_ties(self) -> MergeConfiguration:
+    def create_merge_config_dare_ties(self) -> "MergeConfiguration":
         """
         Creates a merge configuration for a DARE TIES merge of two models, with specified weights and densities.
         """
@@ -201,7 +207,7 @@ class MergeConfig:
 
         return merge_config
 
-    def create_merge_config_slerp(self) -> MergeConfiguration:
+    def create_merge_config_slerp(self) -> "MergeConfiguration":
         """
         Creates a merge configuration for a SLERP merge of a model with a base model.
         """
@@ -240,7 +246,7 @@ class MergeConfig:
 
         return merge_config
 
-    def create(self) -> MergeConfiguration:
+    def create(self) -> "MergeConfiguration":
         if self.method == "linear":
             return self.create_merge_config_linear()
         elif self.method == "ties":
@@ -256,8 +262,8 @@ def merge_models(config: MergeConfig, out_path: str):
     Merge two models using mergekit
 
     Args:
-        config (MergeConfig): The merge configuration.
-        out_path (str): The output path for the merged model.
+        config (`MergeConfig`): The merge configuration.
+        out_path (`str`): The output path for the merged model.
     """
     run_merge(
         config,
