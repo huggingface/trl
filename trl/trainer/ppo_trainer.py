@@ -115,14 +115,15 @@ class PPOTrainer(Trainer):
                 "same as `policy`, you must mass a copy of it, or `None` if you use peft."
             )
 
-        # Define the collator if not provided
-        if data_collator is None:
-            data_collator = DataCollatorWithPadding(self.processing_class)
 
         self.args = config
         args = config
         self.processing_class = processing_class
         self.policy = policy
+
+        # Define the collator if not provided
+        if data_collator is None:
+            data_collator = DataCollatorWithPadding(self.processing_class)
 
         self.policy.generation_config.eos_token_id = (
             None  # disable `pad_token_id` and `eos_token_id` because we just want to
