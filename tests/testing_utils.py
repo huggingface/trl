@@ -11,11 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import random
 import unittest
 
 from transformers import is_sklearn_available, is_wandb_available
 
-from trl import is_diffusers_available, is_llm_blender_available
+from trl import BaseBinaryJudge, BasePairwiseJudge, is_diffusers_available, is_llm_blender_available
 
 
 def require_diffusers(test_case):
@@ -44,3 +45,24 @@ def require_llm_blender(test_case):
     Decorator marking a test that requires llm-blender. Skips the test if llm-blender is not available.
     """
     return unittest.skipUnless(is_llm_blender_available(), "test requires llm-blender")(test_case)
+
+
+class RandomBinaryJudge(BaseBinaryJudge):
+    """
+    Random binary judge, for testing purposes.
+    """
+
+    def judge(self, prompts, completions, gold_completions=None, shuffle_order=True):
+        return [random.choice([0, 1, -1]) for _ in range(len(prompts))]
+
+
+class RandomPairwiseJudge(BasePairwiseJudge):
+    """
+    Random pairwise judge, for testing purposes.
+    """
+
+    def judge(self, prompts, completions, shuffle_order=True, return_scores=False):
+        if not return_scores:
+            return [random.randint(0, len(completion) - 1) for completion in completions]
+        else:
+            return [random.random() for _ in range(len(prompts))]
