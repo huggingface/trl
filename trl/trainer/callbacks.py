@@ -36,13 +36,16 @@ from transformers.integrations import WandbCallback
 from transformers.trainer_utils import get_last_checkpoint, has_length
 
 from ..data_utils import maybe_apply_chat_template
-from ..mergekit_utils import merge_models, upload_model_to_hf
+from ..import_utils import is_mergekit_available
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 
 
 if is_deepspeed_available():
     import deepspeed
+
+if is_mergekit_available():
+    from ..mergekit_utils import merge_models, upload_model_to_hf
 
 
 def _generate_completions(

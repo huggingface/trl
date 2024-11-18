@@ -23,12 +23,16 @@ from transformers.testing_utils import require_peft, require_wandb
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
+from tests.testing_utils import require_mergekit
 from trl import BasePairwiseJudge, DPOConfig, DPOTrainer, LogCompletionsCallback, MergeModelCallback, WinRateCallback
-from trl.mergekit_utils import MergeConfig
+from trl.import_utils import is_mergekit_available
 
 
 if is_peft_available():
     from peft import LoraConfig
+
+if is_mergekit_available():
+    from trl.mergekit_utils import MergeConfig
 
 
 class HalfPairwiseJudge(BasePairwiseJudge):
@@ -225,6 +229,7 @@ class LogCompletionsCallbackTester(unittest.TestCase):
             self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
 
 
+@require_mergekit
 class MergeModelCallbackTester(unittest.TestCase):
     def setUp(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
