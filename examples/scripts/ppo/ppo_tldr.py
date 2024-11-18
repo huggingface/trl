@@ -14,6 +14,7 @@
 
 import shutil
 
+import torch
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
@@ -23,16 +24,24 @@ from transformers import (
     HfArgumentParser,
 )
 
-from trl import ModelConfig, PPOConfig, PPOTrainer, ScriptArguments
+from trl import (
+    ModelConfig,
+    PPOConfig,
+    PPOTrainer,
+    ScriptArguments,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
+)
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 """
 python examples/scripts/ppo/ppo_tldr.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
     --dataset_test_split validation \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
+    --output_dir models/minimal/ppo_tldr \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
     --total_episodes 30000 \
@@ -41,11 +50,13 @@ python examples/scripts/ppo/ppo_tldr.py \
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --missing_eos_penalty 1.0 \
     --stop_token eos \
-    --response_length 53
+    --response_length 53 \
+    --eval_strategy steps \
+    --eval_steps 100
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/ppo/ppo_tldr.py \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
     --dataset_test_split validation \
     --output_dir models/minimal/ppo_tldr \
     --learning_rate 3e-6 \
@@ -57,7 +68,9 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
     --local_rollout_forward_batch_size 16 \
     --missing_eos_penalty 1.0 \
-    --stop_token eos
+    --stop_token eos \
+    --eval_strategy steps \
+    --eval_steps 100
 """
 
 
@@ -70,6 +83,20 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
+    torch_dtype = (
+        model_config.torch_dtype
+        if model_config.torch_dtype in ["auto", None]
+        else getattr(torch, model_config.torch_dtype)
+    )
+    quantization_config = get_quantization_config(model_config)
+    model_kwargs = dict(
+        revision=model_config.model_revision,
+        attn_implementation=model_config.attn_implementation,
+        torch_dtype=torch_dtype,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        quantization_config=quantization_config,
+    )
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_config.model_name_or_path,
         padding_side="left",
@@ -84,18 +111,24 @@ if __name__ == "__main__":
     reward_model = AutoModelForSequenceClassification.from_pretrained(
         training_args.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
     )
-    ref_policy = AutoModelForCausalLM.from_pretrained(
-        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code
-    )
     policy = AutoModelForCausalLM.from_pretrained(
         training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code
     )
+
+    peft_config = get_peft_config(model_config)
+    if peft_config is None:
+        ref_policy = AutoModelForCausalLM.from_pretrained(
+            training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code
+        )
+    else:
+        ref_policy = None
+
     ################
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name)
     train_dataset = dataset[script_args.dataset_train_split]
-    eval_dataset = dataset[script_args.dataset_test_split]
+    eval_dataset = dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None
 
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
@@ -118,10 +151,12 @@ if __name__ == "__main__":
     # see: https://github.com/huggingface/trl/pull/1255
     with PartialState().local_main_process_first():
         train_dataset = prepare_dataset(train_dataset, tokenizer)
-        eval_dataset = prepare_dataset(eval_dataset, tokenizer)
+        if eval_dataset is not None:
+            eval_dataset = prepare_dataset(eval_dataset, tokenizer)
         # filtering
         train_dataset = train_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=training_args.dataset_num_proc)
-        eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=training_args.dataset_num_proc)
+        if eval_dataset is not None:
+            eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= 512, num_proc=training_args.dataset_num_proc)
 
     assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
     ################
@@ -136,6 +171,7 @@ if __name__ == "__main__":
         value_model=value_model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        peft_config=peft_config,
     )
     trainer.train()
 

@@ -35,6 +35,7 @@ from transformers import (
 from transformers.integrations import WandbCallback
 from transformers.trainer_utils import has_length
 
+from ..data_utils import maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 
@@ -229,6 +230,9 @@ class WinRateCallback(TrainerCallback):
             in the evaluation dataset.
         shuffle_order (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the order of the completions before judging.
+        use_soft_judge (`bool`, *optional*, defaults to `False`):
+            Whether to use a soft judge that returns a win probability between 0 and 1 for the first completion vs the
+            second.
     """
 
     def __init__(
@@ -238,12 +242,14 @@ class WinRateCallback(TrainerCallback):
         generation_config: Optional[GenerationConfig] = None,
         num_prompts: Optional[int] = None,
         shuffle_order: bool = True,
+        use_soft_judge: bool = False,
     ):
         self.judge = judge
         self.trainer = trainer
         self.shuffle_order = shuffle_order
         self.generation_config = generation_config
         self.ref_completions = []
+        self.use_soft_judge = use_soft_judge
 
         if self.trainer.eval_dataset is None:
             raise ValueError("Trainer must have an evaluation dataset to use the WinRateCallback.")
@@ -255,7 +261,7 @@ class WinRateCallback(TrainerCallback):
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         # When the trainer is initialized, we generate completions for the reference model.
-        tokenizer = kwargs["tokenizer"]
+        tokenizer = kwargs["processing_class"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         # Use the reference model if available, otherwise use the initial model
@@ -280,7 +286,12 @@ class WinRateCallback(TrainerCallback):
             )
             # Compute initial win rate as a reference point
             completions = list(zip(self.ref_completions, self.ref_completions))
-            winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
+            if self.use_soft_judge:
+                ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
+                winner_indices = [0 if score > 0.5 else 1 for score in ref_win_probs]
+                ref_win_probs = gather_object(ref_win_probs)
+            else:
+                winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
             prompts = gather_object(prompts)
             completions = gather_object(completions)
             winner_indices = gather_object(winner_indices)
@@ -288,7 +299,11 @@ class WinRateCallback(TrainerCallback):
         # Logging
         if self.trainer.accelerator.is_main_process:
             win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-            self.trainer.log({"eval_win_rate": win_rate})
+            if self.use_soft_judge:
+                avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
+                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": win_rate})
+            else:
+                self.trainer.log({"eval_win_rate": win_rate})
 
             if "wandb" in args.report_to:
                 import wandb
@@ -307,7 +322,7 @@ class WinRateCallback(TrainerCallback):
         # At every evaluation step, we generate completions for the model and compare them with the reference
         # completions that have been generated at the beginning of training. We then compute the win rate and log it to
         # the trainer.
-        tokenizer = kwargs["tokenizer"]
+        tokenizer = kwargs["processing_class"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
@@ -322,7 +337,13 @@ class WinRateCallback(TrainerCallback):
             )
 
             completions = list(zip(self.ref_completions, completions))
-            winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
+
+            if self.use_soft_judge:
+                ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
+                winner_indices = [0 if score > 0.5 else 1 for score in ref_win_probs]
+                ref_win_probs = gather_object(ref_win_probs)
+            else:
+                winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
             prompts = gather_object(prompts)
             completions = gather_object(completions)
             winner_indices = gather_object(winner_indices)
@@ -330,7 +351,11 @@ class WinRateCallback(TrainerCallback):
         # Logging
         if self.trainer.accelerator.is_main_process:
             win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-            self.trainer.log({"eval_win_rate": win_rate})
+            if self.use_soft_judge:
+                avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
+                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": win_rate})
+            else:
+                self.trainer.log({"eval_win_rate": win_rate})
 
             if "wandb" in args.report_to:
                 import wandb
@@ -363,9 +388,9 @@ class LogCompletionsCallback(WandbCallback):
             column containing the prompts for generating completions.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_prompts (`int`, *optional*):
+        num_prompts (`int` or `None`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in the evaluation dataset.
-        freq (`int`, *optional*):
+        freq (`int` or `None`, *optional*):
             The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
 
@@ -373,8 +398,8 @@ class LogCompletionsCallback(WandbCallback):
         self,
         trainer: Trainer,
         generation_config: Optional[GenerationConfig] = None,
-        num_prompts: int = None,
-        freq: int = None,
+        num_prompts: Optional[int] = None,
+        freq: Optional[int] = None,
     ):
         super().__init__()
         self.trainer = trainer
@@ -401,11 +426,12 @@ class LogCompletionsCallback(WandbCallback):
         if state.global_step % freq != 0:
             return
 
-        tokenizer = kwargs["tokenizer"]
+        tokenizer = kwargs["processing_class"]
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
         with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
+            prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
             completions = _generate_completions(
                 prompts,
                 model=model,
