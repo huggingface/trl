@@ -212,8 +212,8 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     @unittest.skipIf(not is_llm_blender_available(), "llm-blender is not available")
+    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training_with_judge(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
