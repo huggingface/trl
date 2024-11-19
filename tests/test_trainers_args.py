@@ -170,6 +170,7 @@ class TrainerArgTester(unittest.TestCase):
                 ref_model_mixup_alpha=0.5,
                 ref_model_sync_steps=32,
                 rpo_alpha=0.5,
+                discopop_tau=0.1,
             )
             trainer = DPOTrainer(
                 model=model_id,
@@ -204,6 +205,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.ref_model_mixup_alpha, 0.5)
             self.assertEqual(trainer.args.ref_model_sync_steps, 32)
             self.assertEqual(trainer.args.rpo_alpha, 0.5)
+            self.assertEqual(trainer.args.discopop_tau, 0.1)
 
     def test_kto(self):
         model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
