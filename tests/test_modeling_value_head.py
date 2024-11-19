@@ -24,38 +24,28 @@ from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValu
 
 
 ALL_CAUSAL_LM_MODELS = [
-    "trl-internal-testing/tiny-random-CodeGenForCausalLM",
-    "trl-internal-testing/tiny-random-GPTJForCausalLM",
-    "trl-internal-testing/tiny-random-GPTNeoForCausalLM",
-    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM",
-    "trl-internal-testing/tiny-random-OPTForCausalLM",
-    "trl-internal-testing/tiny-random-BloomForCausalLM",
-    "trl-internal-testing/tiny-random-GPT2LMHeadModel",
-    "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
-    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors-sharded",
-    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors",
-    "trl-internal-testing/tiny-random-LlamaForCausalLM",
+    "qgallouedec/tiny-BloomForCausalLM",
+    "qgallouedec/tiny-CohereForCausalLM",
+    "qgallouedec/tiny-DbrxForCausalLM",
+    "qgallouedec/tiny-FalconMambaForCausalLM",
+    "qgallouedec/tiny-Gemma2ForCausalLM",
+    "qgallouedec/tiny-GemmaForCausalLM",
+    "qgallouedec/tiny-GPT2LMHeadModel",
+    "qgallouedec/tiny-GPTNeoXForCausalLM",
+    "qgallouedec/tiny-LlamaForCausalLM-3.1",
+    "qgallouedec/tiny-LlamaForCausalLM-3.2",
+    "qgallouedec/tiny-LlamaForCausalLM-3",
+    "qgallouedec/tiny-MistralForCausalLM-0.1",
+    "qgallouedec/tiny-MistralForCausalLM-0.2",
+    "qgallouedec/tiny-MistralForCausalLM-0.3",
+    "qgallouedec/tiny-OPTForCausalLM",
+    "qgallouedec/tiny-Phi3ForCausalLM",
+    "qgallouedec/tiny-Qwen2ForCausalLM-2.5",
 ]
 
 ALL_SEQ2SEQ_MODELS = [
-    "trl-internal-testing/tiny-random-BartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
-    "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",
-    "trl-internal-testing/tiny-random-LEDForConditionalGeneration",
-    "trl-internal-testing/tiny-random-LongT5ForConditionalGeneration",
-    "trl-internal-testing/tiny-random-M2M100ForConditionalGeneration",
-    "trl-internal-testing/tiny-random-MarianMTModel",
-    "trl-internal-testing/tiny-random-MBartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-MT5ForConditionalGeneration",
-    "trl-internal-testing/tiny-random-MvpForConditionalGeneration",
-    "trl-internal-testing/tiny-random-PegasusForConditionalGeneration",
-    "trl-internal-testing/tiny-random-PegasusXForConditionalGeneration",
-    "trl-internal-testing/tiny-random-PLBartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-ProphetNetForConditionalGeneration",
-    "trl-internal-testing/tiny-random-SwitchTransformersForConditionalGeneration",
-    "trl-internal-testing/tiny-random-T5ForConditionalGeneration",
+    "qgallouedec/tiny-T5ForConditionalGeneration",
+    "qgallouedec/tiny-BartModel",
 ]
 
 
@@ -405,7 +395,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
     def test_raise_error_not_causallm(self):
         # Test with a model without a LM head
-        model_id = "trl-internal-testing/tiny-random-T5Model"
+        model_id = "qgallouedec/tiny-T5ForConditionalGeneration"
         # This should raise a ValueError
         with self.assertRaises(ValueError):
             pretrained_model = AutoModel.from_pretrained(model_id)
@@ -442,10 +432,6 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
             lm_head_namings = self.trl_model_class.lm_head_namings
 
-            if model_name == "trl-internal-testing/tiny-random-FSMTForConditionalGeneration":
-                # skip the test for FSMT as it does not support mixed-prec
-                continue
-
             self.assertTrue(
                 any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
             )
@@ -462,9 +448,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
 class ReferenceModelTest(unittest.TestCase):
     def setUp(self):
-        self.model = AutoModelForCausalLMWithValueHead.from_pretrained(
-            "trl-internal-testing/tiny-random-GPT2LMHeadModel"
-        )
+        self.model = AutoModelForCausalLMWithValueHead.from_pretrained("qgallouedec/tiny-GPT2LMHeadModel")
         self.test_input = torch.tensor([[0, 1, 2, 3]])
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)
         self.layer_format = "pretrained_model.transformer.h.{layer}.attn.c_attn.weight"

@@ -85,14 +85,25 @@ class IsConversationalTester(unittest.TestCase):
 
 class ApplyChatTemplateTester(unittest.TestCase):
     tokenizers = [
+        "qgallouedec/tiny-BartModel",
+        "qgallouedec/tiny-BloomForCausalLM",
         "qgallouedec/tiny-CohereForCausalLM",
+        "qgallouedec/tiny-DbrxForCausalLM",
+        "qgallouedec/tiny-FalconMambaForCausalLM",
+        "qgallouedec/tiny-Gemma2ForCausalLM",
+        "qgallouedec/tiny-GemmaForCausalLM",
+        "qgallouedec/tiny-GPT2LMHeadModel",
+        "qgallouedec/tiny-GPTNeoXForCausalLM",
         "qgallouedec/tiny-LlamaForCausalLM-3.1",
         "qgallouedec/tiny-LlamaForCausalLM-3.2",
         "qgallouedec/tiny-LlamaForCausalLM-3",
         "qgallouedec/tiny-MistralForCausalLM-0.1",
         "qgallouedec/tiny-MistralForCausalLM-0.2",
+        "qgallouedec/tiny-MistralForCausalLM-0.3",
+        "qgallouedec/tiny-OPTForCausalLM",
         "qgallouedec/tiny-Phi3ForCausalLM",
-        "qgallouedec/tiny-Qwen2ForCausalLM",
+        "qgallouedec/tiny-Qwen2ForCausalLM-2.5",
+        "qgallouedec/tiny-T5ForConditionalGeneration",
     ]
 
     conversational_examples = [
