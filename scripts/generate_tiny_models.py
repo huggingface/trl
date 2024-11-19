@@ -17,19 +17,31 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     BartConfig,
-    BartForCausalLM,
-    BartTokenizerFast,
+    BartModel,
+    BloomConfig,
+    BloomForCausalLM,
     CohereConfig,
     CohereForCausalLM,
+    DbrxConfig,
+    DbrxForCausalLM,
+    FalconMambaConfig,
+    FalconMambaForCausalLM,
+    Gemma2Config,
+    Gemma2ForCausalLM,
     GemmaConfig,
+    GemmaForCausalLM,
     GPT2Config,
     GPT2LMHeadModel,
+    GPTNeoXConfig,
+    GPTNeoXForCausalLM,
     Idefics2Config,
     Idefics2ForConditionalGeneration,
     LlamaConfig,
     LlamaForCausalLM,
     MistralConfig,
     MistralForCausalLM,
+    OPTConfig,
+    OPTForCausalLM,
     PaliGemmaConfig,
     PaliGemmaForConditionalGeneration,
     Phi3Config,
@@ -69,19 +81,25 @@ def push_to_hub(model, tokenizer, suffix=None):
     model_card.push_to_hub(repo_id)
 
 
+# Decoder models
 for model_id, config_class, model_class, suffix in [
+    ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),
     ("CohereForAI/aya-expanse-8b", CohereConfig, CohereForCausalLM, None),
+    ("databricks/dbrx-instruct", DbrxConfig, DbrxForCausalLM, None),
+    ("tiiuae/falcon-7b-instruct", FalconMambaConfig, FalconMambaForCausalLM, None),
+    ("google/gemma-2-2b-it", Gemma2Config, Gemma2ForCausalLM, None),
+    ("google/gemma-7b-it", GemmaConfig, GemmaForCausalLM, None),
+    ("openai-community/gpt2", GPT2Config, GPT2LMHeadModel, None),
+    ("EleutherAI/pythia-14m", GPTNeoXConfig, GPTNeoXForCausalLM, None),
     ("meta-llama/Meta-Llama-3-8B-Instruct", LlamaConfig, LlamaForCausalLM, "3"),
     ("meta-llama/Llama-3.1-8B-Instruct", LlamaConfig, LlamaForCausalLM, "3.1"),
     ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForCausalLM, "3.2"),
     ("mistralai/Mistral-7B-Instruct-v0.1", MistralConfig, MistralForCausalLM, "0.1"),
     ("mistralai/Mistral-7B-Instruct-v0.2", MistralConfig, MistralForCausalLM, "0.2"),
     ("mistralai/Mistral-7B-Instruct-v0.3", MistralConfig, MistralForCausalLM, "0.3"),
+    ("facebook/opt-1.3b", OPTConfig, OPTForCausalLM, None),
     ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, None),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, "2.5"),
-    ("tiiuae/falcon-40b", FalconConfig, FalconForCausalLM, None),
-    ("bigcode/starcoder", Starcoder2Config, Starcoder2ForCausalLM, None),
-    ("openai-community/gpt2", GPT2Config, GPT2LMHeadModel, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
@@ -95,38 +113,30 @@ for model_id, config_class, model_class, suffix in [
     model = model_class(config)
     push_to_hub(model, tokenizer, suffix)
 
+
+# Encoder-decoder models
 for model_id, config_class, model_class, suffix in [
     ("google/flan-t5-small", T5Config, T5ForConditionalGeneration, None),
+    ("facebook/bart-base", BartConfig, BartModel, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
         vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
         d_model=16,
+        encoder_layers=2,
+        decoder_layers=2,
         d_kv=2,
         d_ff=64,
         num_layers=6,
         num_heads=8,
         decoder_start_token_id=0,
+        is_encoder_decoder=True,
     )
     model = model_class(config)
     push_to_hub(model, tokenizer, suffix)
 
 
-# Bart
-tokenizer = BartTokenizerFast.from_pretrained("facebook/bart-base")
-vocab_size = tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys())
-config = BartConfig(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-    d_model=16,
-    d_kv=2,
-    d_ff=64,
-    num_layers=6,
-    num_heads=8,
-    decoder_start_token_id=0,
-    is_encoder_decoder=False,
-)
-model = BartForCausalLM(config)
-push_to_hub(model, tokenizer)
+# Vision Language Models
 
 # Idefics2
 processor = AutoProcessor.from_pretrained("HuggingFaceM4/idefics2-8b")
