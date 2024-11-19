@@ -655,15 +655,18 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertEqual(result_text, "I have not been masked correctly.")
 
     def test_data_collator_completion_lm_without_padding(self):
-        os.environ["CUDA_VISIBLE_DEVICES"]="0"
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
         model_id = "trl-internal-testing/tiny-random-LlamaForCausalLM"
         torch_dtype = getattr(torch, "bfloat16", None)
-        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, attn_implementation="flash_attention_2")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, torch_dtype=torch_dtype, attn_implementation="flash_attention_2"
+        )
         tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
 
-        formatted_dataset = lambda example: {
-            "output": f"### prompt:\n{example['prompt'].strip()}\n\n### completion:\n{example['completion'].strip()}{tokenizer.eos_token}"
-        }
+        def formatted_dataset(example):
+            return {
+                "output": f"### prompt:\n{example['prompt'].strip()}\n\n### completion:\n{example['completion'].strip()}{tokenizer.eos_token}"
+            }
 
         train_dataset = self.standard_prompt_completion_dataset["train"].map(formatted_dataset)
 
@@ -682,7 +685,7 @@ class SFTTrainerTester(unittest.TestCase):
                 dataset_text_field="output",
                 torch_compile=True,
                 torch_compile_backend="inductor",
-                torch_compile_mode="default"
+                torch_compile_mode="default",
             )
 
             trainer = SFTTrainer(
