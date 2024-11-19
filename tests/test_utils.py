@@ -123,7 +123,7 @@ class TestGetPEFTConfig(unittest.TestCase):
 
 class TestDecodeAndStripPadding(unittest.TestCase):
     def setUp(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
+        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
 
     def test_example_with_padding(self):
         inputs = self.tokenizer(["Hello world", "Hello"], padding=True, return_tensors="pt")
@@ -182,7 +182,7 @@ class TestGenerateModelCard(unittest.TestCase):
 class TestDataCollatorForChatML(unittest.TestCase):
     def setUp(self):
         # Initialize the tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
+        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -256,7 +256,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
 class TestBatchGeneration(unittest.TestCase):
     def setUp(self):
         # Initialize the tokenizer
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 

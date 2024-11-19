@@ -31,7 +31,7 @@ if is_peft_available():
 
 class TestNashMDTrainer(unittest.TestCase):
     def setUp(self):
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id, num_labels=1)

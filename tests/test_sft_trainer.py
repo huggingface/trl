@@ -58,7 +58,7 @@ class SFTTrainerTester(unittest.TestCase):
     r""" """
 
     def setUp(self):
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token

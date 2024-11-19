@@ -56,9 +56,9 @@ class TrainerWithRefModel(Trainer):
 
 class WinRateCallbackTester(unittest.TestCase):
     def setUp(self):
-        self.model = AutoModelForCausalLM.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
-        self.ref_model = AutoModelForCausalLM.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
-        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
+        self.model = AutoModelForCausalLM.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
+        self.ref_model = AutoModelForCausalLM.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
+        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer.pad_token = self.tokenizer.eos_token
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         dataset["train"] = dataset["train"].select(range(8))
@@ -215,8 +215,8 @@ class WinRateCallbackTester(unittest.TestCase):
 @require_wandb
 class LogCompletionsCallbackTester(unittest.TestCase):
     def setUp(self):
-        self.model = AutoModelForCausalLM.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
-        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM")
+        self.model = AutoModelForCausalLM.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
+        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer.pad_token = self.tokenizer.eos_token
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         dataset["train"] = dataset["train"].select(range(8))

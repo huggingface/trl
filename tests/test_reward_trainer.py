@@ -31,7 +31,7 @@ if is_peft_available():
 
 class RewardTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
         self.model.config.pad_token_id = self.tokenizer.pad_token_id

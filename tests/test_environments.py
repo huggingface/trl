@@ -96,7 +96,7 @@ class TextHistoryTest(unittest.TestCase):
 class TextEnvironmentTester(unittest.TestCase):
     def setUp(self):
         # model_id
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
 
         # get models and tokenizer
         self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)

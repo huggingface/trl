@@ -163,7 +163,7 @@ class TestTokenizeRow(unittest.TestCase):
 
 class DPOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -614,7 +614,7 @@ class DPOTrainerTester(unittest.TestCase):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
 
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         lora_config = LoraConfig(
@@ -748,7 +748,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_lora_tags(self):
         from peft import LoraConfig
 
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         lora_config = LoraConfig(
@@ -793,7 +793,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_peft
     def test_dpo_tags(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
@@ -969,7 +969,7 @@ class DPOTrainerTester(unittest.TestCase):
             )
 
     def test_dpo_loss_alpha_div_f(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
@@ -1012,7 +1012,7 @@ class DPOTrainerTester(unittest.TestCase):
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
     def test_dpo_loss_js_div_f(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
