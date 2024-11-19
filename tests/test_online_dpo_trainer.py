@@ -20,7 +20,8 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer
+from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 from .testing_utils import RandomPairwiseJudge
 
@@ -35,6 +36,8 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id, num_labels=1)
+        self.reward_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
+        self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.reward_tokenizer = self.tokenizer
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -210,6 +213,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @unittest.skipIf(not is_llm_blender_available(), "llm-blender is not available")
     def test_training_with_judge(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
