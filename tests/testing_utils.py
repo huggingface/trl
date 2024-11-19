@@ -19,8 +19,8 @@ from transformers import is_bitsandbytes_available, is_sklearn_available, is_wan
 from trl import BaseBinaryJudge, BasePairwiseJudge, is_diffusers_available, is_llm_blender_available
 
 
-# transformers.testing_utils contain a require_bitsandbytes function, but relies on pytest markers that we don't use
-# in our test suite. So we need to implement our own version of this function.
+# transformers.testing_utils contains a require_bitsandbytes function, but relies on pytest markers which we don't use
+# in our test suite. We therefore need to implement our own version of this function.
 def require_bitsandbytes(test_case):
     """
     Decorator marking a test that requires bitsandbytes. Skips the test if bitsandbytes is not available.
