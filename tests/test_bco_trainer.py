@@ -30,7 +30,7 @@ from .testing_utils import require_no_wandb, require_sklearn
 
 class BCOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM"
+        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)

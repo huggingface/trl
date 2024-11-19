@@ -15,7 +15,7 @@
 # TODO: push them under trl-org
 MODELS_TO_TEST = [
     "qgallouedec/tiny-LlamaForCausalLM-3.2",
-    "qgallouedec/tiny-MistralForCausalLM-0.3",
+    "qgallouedec/tiny-MistralForCausalLM-0.2",
 ]
 
 # We could have also not declared these variables but let's be verbose

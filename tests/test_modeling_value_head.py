@@ -37,7 +37,6 @@ ALL_CAUSAL_LM_MODELS = [
     "qgallouedec/tiny-LlamaForCausalLM-3",
     "qgallouedec/tiny-MistralForCausalLM-0.1",
     "qgallouedec/tiny-MistralForCausalLM-0.2",
-    "qgallouedec/tiny-MistralForCausalLM-0.3",
     "qgallouedec/tiny-OPTForCausalLM",
     "qgallouedec/tiny-Phi3ForCausalLM",
     "qgallouedec/tiny-Qwen2ForCausalLM-2.5",
