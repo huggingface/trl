@@ -96,7 +96,7 @@ class DatasetFormattingTestCase(unittest.TestCase):
         formatted_text = formatting_func(dataset[0])
         self.assertEqual(formatted_text, "<s> [INST] What is 2+2? [/INST] 4</s>")
         formatted_text = formatting_func(dataset[0:1])
-        self.assertListEqual(formatted_text, ["<s>[INST] What is 2+2? [/INST] 4 </s>"])
+        self.assertListEqual(formatted_text, ["<s> [INST] What is 2+2? [/INST] 4</s>"])
 
     def test_get_formatting_func_from_dataset_from_hub(self):
         ds_1 = load_dataset("philschmid/trl-test-instruction", split="train")
