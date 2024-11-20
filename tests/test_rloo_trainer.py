@@ -71,7 +71,7 @@ class RLOOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_text = {"content": "Hello World!", "role": "user"}
+            dummy_text = [{"content": "Hello World!", "role": "user"}]
             dummy_data = self.tokenizer.apply_chat_template(dummy_text)
             dummy_dataset = Dataset.from_dict({"input_ids": dummy_data})
 
