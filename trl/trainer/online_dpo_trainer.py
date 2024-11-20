@@ -587,8 +587,8 @@ class OnlineDPOTrainer(Trainer):
 
         return loss.detach() / self.args.gradient_accumulation_steps
 
-    # Same as Trainer.evaluate but log our metrics
-    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval):
+    # Same as Trainer._maybe_log_save_evaluate but log our metrics
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time):
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
             logs: Dict[str, float] = {}
 
@@ -612,7 +612,7 @@ class OnlineDPOTrainer(Trainer):
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
 
-            self.log(logs)
+            self.log(logs, start_time)
 
         metrics = None
         if self.control.should_evaluate:
