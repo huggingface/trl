@@ -40,6 +40,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
         self.reward_model_id = "qgallouedec/tiny-LlamaForCausalLM-3.2"
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id, num_labels=1)
+        self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
         self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
 
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
