@@ -15,36 +15,33 @@
 import time
 import unittest
 
-from trl import HfPairwiseJudge, PairRMJudge, RandomPairwiseJudge, RandomRankJudge
+from trl import AllTrueJudge, HfPairwiseJudge, PairRMJudge
 
-from .testing_utils import require_llm_blender
+from .testing_utils import RandomBinaryJudge, require_llm_blender
 
 
 class TestJudges(unittest.TestCase):
-    def _get_prompts_and_completions(self):
+    def _get_prompts_and_pairwise_completions(self):
         prompts = ["The capital of France is", "The biggest planet in the solar system is"]
         completions = [["Paris", "Marseille"], ["Saturn", "Jupiter"]]
         return prompts, completions
 
-    def test_random_pairwise_judge(self):
-        judge = RandomPairwiseJudge()
-        prompts, completions = self._get_prompts_and_completions()
-        ranks = judge.judge(prompts=prompts, completions=completions)
-        self.assertEqual(len(ranks), 2)
-        self.assertTrue(all(isinstance(rank, int) for rank in ranks))
+    def _get_prompts_and_single_completions(self):
+        prompts = ["What's the capital of France?", "What's the color of the sky?"]
+        completions = ["Marseille", "blue"]
+        return prompts, completions
 
-    def test_random_rank_judge(self):
-        judge = RandomRankJudge()
-        prompts, completions = self._get_prompts_and_completions()
-        ranks = judge.judge(prompts=prompts, completions=completions)
-        self.assertEqual(len(ranks), 2)
-        self.assertTrue(all(isinstance(rank, list) for rank in ranks))
-        self.assertTrue(all(all(isinstance(rank, int) for rank in ranks) for ranks in ranks))
+    def test_all_true_judge(self):
+        judge = AllTrueJudge(judges=[RandomBinaryJudge(), RandomBinaryJudge()])
+        prompts, completions = self._get_prompts_and_single_completions()
+        judgements = judge.judge(prompts=prompts, completions=completions)
+        self.assertEqual(len(judgements), 2)
+        self.assertTrue(all(judgement in {0, 1, -1} for judgement in judgements))
 
     @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
     def test_hugging_face_judge(self):
         judge = HfPairwiseJudge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
@@ -58,11 +55,12 @@ class TestJudges(unittest.TestCase):
                 return PairRMJudge()
             except ValueError:
                 time.sleep(5)
+        raise ValueError("Failed to load PairRMJudge")
 
     @require_llm_blender
     def test_pair_rm_judge(self):
         judge = self.load_pair_rm_judge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
@@ -71,7 +69,7 @@ class TestJudges(unittest.TestCase):
     @require_llm_blender
     def test_pair_rm_judge_return_scores(self):
         judge = self.load_pair_rm_judge()
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         probs = judge.judge(prompts=prompts, completions=completions, return_scores=True)
         self.assertEqual(len(probs), 2)
         self.assertTrue(all(isinstance(prob, float) for prob in probs))
