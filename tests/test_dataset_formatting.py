@@ -73,7 +73,7 @@ class DatasetFormattingTestCase(unittest.TestCase):
         formatting_func = get_formatting_func_from_dataset(dataset, self.llama_tokenizer)
         self.assertIsInstance(formatting_func, Callable)
         formatted_text = formatting_func(dataset[0])
-        expected = "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you?</s>"
+        expected = "<s> You are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you?</s>"
         self.assertEqual(formatted_text, expected)
         formatted_text = formatting_func(dataset[0:1])
         self.assertListEqual(formatted_text, [expected])
