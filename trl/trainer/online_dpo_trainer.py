@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 import os
 import textwrap
 import warnings
@@ -26,6 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+import transformers
 from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
@@ -614,7 +614,7 @@ class OnlineDPOTrainer(Trainer):
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
 
-            if "start_time" in inspect.signature(self.log).parameters:  # transformers>=4.47
+            if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
                 self.log(logs, start_time)
             else:  # transformers<=4.46
                 self.log(logs)
