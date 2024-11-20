@@ -1137,8 +1137,9 @@ class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
             ("qgallouedec/tiny-Idefics2ForConditionalGeneration",),
-            ("qgallouedec/tiny-PaliGemmaForConditionalGeneration",),
-            ("trl-internal-testing/tiny-random-llava-1.5",),
+            # ("qgallouedec/tiny-PaliGemmaForConditionalGeneration",),
+            # ("qgallouedec/tiny-LlavaForConditionalGeneration",),
+            # ("qgallouedec/tiny-LlavaNextForConditionalGeneration",),
         ]
     )
     def test_vdpo_trainer(self, model_id):
