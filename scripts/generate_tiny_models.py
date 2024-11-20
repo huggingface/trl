@@ -151,11 +151,14 @@ for model_id, config_class, text_config_class, vision_config_class, model_class 
 # fmt: on
     processor = AutoProcessor.from_pretrained(model_id)
     kwargs = {}
-    if model_id == "google/paligemma-3b-pt-224":
+    if config_class == PaliGemmaConfig:
         kwargs["projection_dim"] = 8
     vision_kwargs = {}
-    if model_id in ["llava-hf/llava-1.5-7b-hf", "llava-hf/llava-v1.6-mistral-7b-hf", "google/paligemma-3b-pt-224"]:
+    if vision_config_class in [CLIPVisionConfig, SiglipVisionConfig]:
         vision_kwargs["projection_dim"] = 8
+    if vision_config_class == CLIPVisionConfig:
+        vision_kwargs["image_size"] = 336
+        vision_kwargs["patch_size"] = 14
     config = config_class(
         text_config=text_config_class(
             vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),

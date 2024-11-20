@@ -1138,7 +1138,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
         [
             ("qgallouedec/tiny-Idefics2ForConditionalGeneration",),
             # ("qgallouedec/tiny-PaliGemmaForConditionalGeneration",),
-            # ("qgallouedec/tiny-LlavaForConditionalGeneration",),
+            ("qgallouedec/tiny-LlavaForConditionalGeneration",),
             # ("qgallouedec/tiny-LlavaNextForConditionalGeneration",),
         ]
     )
@@ -1211,8 +1211,8 @@ class DPOVisionTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
-                    if model_id == "trl-internal-testing/tiny-random-llava-1.5" and (
-                        n.startswith("vision_tower.vision_model.encoder.layers.3")
+                    if model_id == "qgallouedec/tiny-LlavaForConditionalGeneration" and (
+                        n.startswith("vision_tower.vision_model.encoder.layers.1")
                         or n == "vision_tower.vision_model.post_layernorm.weight"
                     ):
                         # For some reason, these params are not updated. This is probably not related to TRL, but to
