@@ -21,6 +21,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 from transformers.testing_utils import require_peft
 
 from trl import CPOConfig, CPOTrainer
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 class CPOTrainerTester(unittest.TestCase):
@@ -34,6 +35,7 @@ class CPOTrainerTester(unittest.TestCase):
         model_id = "qgallouedec/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     @parameterized.expand(
         [
