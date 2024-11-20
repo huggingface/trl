@@ -43,7 +43,7 @@ class BCOTrainerTester(unittest.TestCase):
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # get embedding model
-        model_id = "qgallouedec/tiny-BartForCausalLM"
+        model_id = "qgallouedec/tiny-BartModel"
         self.embedding_model = AutoModel.from_pretrained(model_id)
         self.embedding_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
