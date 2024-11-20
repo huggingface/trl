@@ -20,6 +20,7 @@ from transformers import (
     BartModel,
     BloomConfig,
     BloomForCausalLM,
+    CLIPVisionConfig,
     CohereConfig,
     CohereForCausalLM,
     DbrxConfig,
@@ -38,6 +39,10 @@ from transformers import (
     Idefics2ForConditionalGeneration,
     LlamaConfig,
     LlamaForCausalLM,
+    LlavaConfig,
+    LlavaForConditionalGeneration,
+    LlavaNextConfig,
+    LlavaNextForConditionalGeneration,
     MistralConfig,
     MistralForCausalLM,
     OPTConfig,
@@ -96,7 +101,6 @@ for model_id, config_class, model_class, suffix in [
     ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForCausalLM, "3.2"),
     ("mistralai/Mistral-7B-Instruct-v0.1", MistralConfig, MistralForCausalLM, "0.1"),
     ("mistralai/Mistral-7B-Instruct-v0.2", MistralConfig, MistralForCausalLM, "0.2"),
-    ("mistralai/Mistral-7B-Instruct-v0.3", MistralConfig, MistralForCausalLM, "0.3"),
     ("facebook/opt-1.3b", OPTConfig, OPTForCausalLM, None),
     ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, None),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, "2.5"),
@@ -137,50 +141,38 @@ for model_id, config_class, model_class, suffix in [
 
 
 # Vision Language Models
-
-# Idefics2
-processor = AutoProcessor.from_pretrained("HuggingFaceM4/idefics2-8b")
-config = Idefics2Config(
-    text_config=MistralConfig(
-        vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
-        hidden_size=8,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        num_hidden_layers=2,
-        intermediate_size=32,
-    ),
-    vision_config=Idefics2VisionConfig(
-        hidden_size=8,
-        num_attention_heads=4,
-        num_hidden_layers=2,
-        intermediate_size=32,
-    ),
-)
-model = Idefics2ForConditionalGeneration(config)
-push_to_hub(model, processor)
-
-
-# PaliGemma
-processor = AutoProcessor.from_pretrained("google/paligemma-3b-pt-224")
-# PaliGemma is not meant for chat, but we add a chat template for testing purposes
-processor.chat_template = "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '<start_of_turn>' + role + '\n' }}{% for content in message['content'] %}{% if content['type'] == 'text' %}{{ content['text'] | trim }}{% endif %}{% endfor %}{{ '<end_of_turn>\n' }}{% endfor %}{% if add_generation_prompt %}{{'<start_of_turn>model'}}{% endif %}"
-config = PaliGemmaConfig(
-    projection_dim=8,
-    text_config=GemmaConfig(
-        vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
-        hidden_size=8,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        num_hidden_layers=2,
-        intermediate_size=32,
-    ),
-    vision_config=SiglipVisionConfig(
-        hidden_size=8,
-        num_attention_heads=4,
-        num_hidden_layers=2,
-        intermediate_size=32,
-        projection_dim=8,
-    ),
-)
-model = PaliGemmaForConditionalGeneration(config)
-push_to_hub(model, processor)
+# fmt: off
+for model_id, config_class, text_config_class, vision_config_class, model_class in [
+    ("HuggingFaceM4/idefics2-8b", Idefics2Config, MistralConfig, Idefics2VisionConfig, Idefics2ForConditionalGeneration),
+    ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlamaConfig, CLIPVisionConfig, LlavaForConditionalGeneration),
+    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, MistralConfig, CLIPVisionConfig, LlavaNextForConditionalGeneration),
+    ("google/paligemma-3b-pt-224", PaliGemmaConfig, GemmaConfig, SiglipVisionConfig, PaliGemmaForConditionalGeneration),
+]:
+# fmt: on
+    processor = AutoProcessor.from_pretrained(model_id)
+    kwargs = {}
+    if model_id == "google/paligemma-3b-pt-224":
+        kwargs["projection_dim"] = 8
+    vision_kwargs = {}
+    if model_id in ["llava-hf/llava-1.5-7b-hf", "llava-hf/llava-v1.6-mistral-7b-hf", "google/paligemma-3b-pt-224"]:
+        vision_kwargs["projection_dim"] = 8
+    config = config_class(
+        text_config=text_config_class(
+            vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
+            hidden_size=8,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            num_hidden_layers=2,
+            intermediate_size=32,
+        ),
+        vision_config=vision_config_class(
+            hidden_size=8,
+            num_attention_heads=4,
+            num_hidden_layers=2,
+            intermediate_size=32,
+            **vision_kwargs,
+        ),
+        **kwargs,
+    )
+    model = model_class(config)
+    push_to_hub(model, processor)
