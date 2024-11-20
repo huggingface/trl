@@ -454,25 +454,25 @@ class ReferenceModelTest(unittest.TestCase):
 
     def test_independent_reference(self):
         layer_0 = self.layer_format.format(layer=0)
-        layer_5 = self.layer_format.format(layer=4)
+        layer_1 = self.layer_format.format(layer=1)
 
         ref_model = create_reference_model(self.model)
 
         first_layer_before = self.model.get_parameter(layer_0).data.clone()
-        last_layer_before = self.model.get_parameter(layer_5).data.clone()
+        last_layer_before = self.model.get_parameter(layer_1).data.clone()  # the model only has 2 layers
 
         first_ref_layer_before = ref_model.get_parameter(layer_0).data.clone()
-        last_ref_layer_before = ref_model.get_parameter(layer_5).data.clone()
+        last_ref_layer_before = ref_model.get_parameter(layer_1).data.clone()
 
         output = self.model(input_ids=self.test_input, labels=self.test_input)
         output[1].backward()
         self.optimizer.step()
 
         first_layer_after = self.model.get_parameter(layer_0).data.clone()
-        last_layer_after = self.model.get_parameter(layer_5).data.clone()
+        last_layer_after = self.model.get_parameter(layer_1).data.clone()
 
         first_ref_layer_after = ref_model.get_parameter(layer_0).data.clone()
-        last_ref_layer_after = ref_model.get_parameter(layer_5).data.clone()
+        last_ref_layer_after = ref_model.get_parameter(layer_1).data.clone()
 
         # before optimization ref and model are identical
         self.assertTrue((first_layer_before == first_ref_layer_before).all())
