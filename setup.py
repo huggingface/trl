@@ -121,9 +121,8 @@ setup(
     include_package_data=True,
     package_data={
         "trl": ["commands/scripts/config/*", "commands/scripts/*", "templates/*.md"],
-        "": ["examples/*"],
     },
-    packages=find_packages(exclude={"tests", "examples"}),
+    packages=find_packages(exclude={"tests", "tests.slow"}),
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
     python_requires=">=3.9",
