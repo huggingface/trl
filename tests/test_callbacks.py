@@ -299,6 +299,8 @@ class MergeModelCallbackTester(unittest.TestCase):
             trainer.train()
             last_checkpoint = get_last_checkpoint(tmp_dir)
             merged_path = os.path.join(last_checkpoint, "merged")
+            import warnings
+            warnings.warn(f"merged_path: {merged_path}")
             self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
 
     def test_every_checkpoint(self):
