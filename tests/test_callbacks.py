@@ -302,6 +302,7 @@ class MergeModelCallbackTester(unittest.TestCase):
             import warnings
             warnings.warn(f"merged_path: {merged_path}")
             self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
+            pass
 
     def test_every_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
