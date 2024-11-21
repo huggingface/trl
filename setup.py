@@ -124,7 +124,10 @@ try:
             "console_scripts": ["trl=trl.cli:main"],
         },
         include_package_data=True,
-        package_data={"trl": ["commands/scripts/config/*", "commands/scripts/*", "templates/*.md", "examples/*"]},
+        package_data={
+            "trl": ["commands/scripts/config/*", "commands/scripts/*", "templates/*.md", "examples/*"],
+            "": ["examples/*"],
+        },
         packages=find_packages(exclude={"tests", "examples"}),
         install_requires=REQUIRED_PKGS,
         extras_require=EXTRAS,
