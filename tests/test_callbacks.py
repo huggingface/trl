@@ -283,8 +283,8 @@ class LogCompletionsCallbackTester(unittest.TestCase):
 )
 class MergeModelCallbackTester(unittest.TestCase):
     def setUp(self):
-        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
+        self.model = AutoModelForCausalLM.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
+        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
     def test_callback(self):
