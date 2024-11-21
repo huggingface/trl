@@ -63,10 +63,7 @@ from trl import (
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
-if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_and_config()
-
+def main(script_args, training_args, model_config):
     ################
     # Model & Tokenizer
     ###################
@@ -136,3 +133,9 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+
+if __name__ == "__main__":
+    parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
+    script_args, training_args, model_config = parser.parse_args_and_config()
+    main(script_args, training_args, model_config)
