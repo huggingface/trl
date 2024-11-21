@@ -57,7 +57,7 @@ def _generate_completions(
     batch_size: int = 1,
 ) -> List[str]:
     """
-    Generates completions for a list of pre-formatted prompts.
+    Generates completions for a list of pre-formatted prompts from the given model.
 
     Args:
         prompts (List[str]): A list of input prompts for which completions are to be generated.
@@ -72,7 +72,6 @@ def _generate_completions(
     """
     completions = []
     with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
-        unwrapped_model.eval()
         for idx in range(0, len(prompts), batch_size):
             batch = prompts[idx : idx + batch_size]
             tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
@@ -85,7 +84,6 @@ def _generate_completions(
                 generation = generation[len(prompt) :]
                 completion = tokenizer.decode(generation, skip_special_tokens=True)
                 completions.append(completion)
-        unwrapped_model.train()
     return completions
 
 
@@ -234,6 +232,9 @@ class WinRateCallback(TrainerCallback):
             in the evaluation dataset.
         shuffle_order (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the order of the completions before judging.
+        use_soft_judge (`bool`, *optional*, defaults to `False`):
+            Whether to use a soft judge that returns a win probability between 0 and 1 for the first completion vs the
+            second.
     """
 
     def __init__(
@@ -243,12 +244,14 @@ class WinRateCallback(TrainerCallback):
         generation_config: Optional[GenerationConfig] = None,
         num_prompts: Optional[int] = None,
         shuffle_order: bool = True,
+        use_soft_judge: bool = False,
     ):
         self.judge = judge
         self.trainer = trainer
         self.shuffle_order = shuffle_order
         self.generation_config = generation_config
         self.ref_completions = []
+        self.use_soft_judge = use_soft_judge
 
         if self.trainer.eval_dataset is None:
             raise ValueError("Trainer must have an evaluation dataset to use the WinRateCallback.")
@@ -285,7 +288,12 @@ class WinRateCallback(TrainerCallback):
             )
             # Compute initial win rate as a reference point
             completions = list(zip(self.ref_completions, self.ref_completions))
-            winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
+            if self.use_soft_judge:
+                ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
+                winner_indices = [0 if score > 0.5 else 1 for score in ref_win_probs]
+                ref_win_probs = gather_object(ref_win_probs)
+            else:
+                winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
             prompts = gather_object(prompts)
             completions = gather_object(completions)
             winner_indices = gather_object(winner_indices)
@@ -293,7 +301,11 @@ class WinRateCallback(TrainerCallback):
         # Logging
         if self.trainer.accelerator.is_main_process:
             win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-            self.trainer.log({"eval_win_rate": win_rate})
+            if self.use_soft_judge:
+                avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
+                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": win_rate})
+            else:
+                self.trainer.log({"eval_win_rate": win_rate})
 
             if "wandb" in args.report_to:
                 import wandb
@@ -327,7 +339,13 @@ class WinRateCallback(TrainerCallback):
             )
 
             completions = list(zip(self.ref_completions, completions))
-            winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
+
+            if self.use_soft_judge:
+                ref_win_probs = self.judge.judge(prompts, completions, self.shuffle_order, return_scores=True)
+                winner_indices = [0 if score > 0.5 else 1 for score in ref_win_probs]
+                ref_win_probs = gather_object(ref_win_probs)
+            else:
+                winner_indices = self.judge.judge(prompts, completions, self.shuffle_order)
             prompts = gather_object(prompts)
             completions = gather_object(completions)
             winner_indices = gather_object(winner_indices)
@@ -335,7 +353,11 @@ class WinRateCallback(TrainerCallback):
         # Logging
         if self.trainer.accelerator.is_main_process:
             win_rate = sum(winner_idx == 1 for winner_idx in winner_indices) / len(winner_indices)
-            self.trainer.log({"eval_win_rate": win_rate})
+            if self.use_soft_judge:
+                avg_win_prob = 1.0 - sum(ref_win_probs) / len(ref_win_probs)
+                self.trainer.log({"eval_avg_win_prob": avg_win_prob, "eval_win_rate": win_rate})
+            else:
+                self.trainer.log({"eval_win_rate": win_rate})
 
             if "wandb" in args.report_to:
                 import wandb

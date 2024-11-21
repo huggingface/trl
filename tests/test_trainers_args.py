@@ -163,6 +163,7 @@ class TrainerArgTester(unittest.TestCase):
                 ref_model_mixup_alpha=0.5,
                 ref_model_sync_steps=32,
                 rpo_alpha=0.5,
+                discopop_tau=0.1,
             )
             trainer = DPOTrainer(
                 model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
@@ -193,6 +194,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.ref_model_mixup_alpha, 0.5)
             self.assertEqual(trainer.args.ref_model_sync_steps, 32)
             self.assertEqual(trainer.args.rpo_alpha, 0.5)
+            self.assertEqual(trainer.args.discopop_tau, 0.1)
 
     def test_kto(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")

@@ -694,9 +694,9 @@ class GeometricMixtureWrapper(GenerationMixin):
     def __init__(self, model, ref_model, generation_config, mixture_coef=0.5, device=None):
         super().__init__()
 
-        self.model = model.eval()
+        self.model = model
         self.config = model.config
-        self.ref_model = ref_model.eval()
+        self.ref_model = ref_model
         self.generation_config = generation_config
         self.mixture_coef = mixture_coef
         self.device = device
@@ -704,7 +704,7 @@ class GeometricMixtureWrapper(GenerationMixin):
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def forward(self, *args, **kwargs):
         model_outputs = self.model(*args, **kwargs)
         model_logits = model_outputs.logits
