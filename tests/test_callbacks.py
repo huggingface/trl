@@ -14,15 +14,19 @@
 
 import json
 import os
+import sys
 import tempfile
 import unittest
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 from transformers.testing_utils import require_peft, require_wandb
+from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
-from trl import BasePairwiseJudge, LogCompletionsCallback, WinRateCallback
+from tests.testing_utils import require_mergekit
+from trl import BasePairwiseJudge, DPOConfig, DPOTrainer, LogCompletionsCallback, MergeModelCallback, WinRateCallback
+from trl.mergekit_utils import MergeConfig
 
 
 if is_peft_available():
@@ -266,3 +270,72 @@ class LogCompletionsCallbackTester(unittest.TestCase):
 
             # Check that the prompt is in the log
             self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
+
+
+# On Windows, temporary directory cleanup fails when using the MergeModelCallback.
+# This is not an issue with the functionality of the code itself, but it can cause the test to fail
+# due to unhandled cleanup errors. Python 3.10 introduces the `ignore_cleanup_errors` argument to
+# mitigate this. As a result, this test is skipped for Python versions below 3.10.
+@require_mergekit
+@unittest.skipIf(
+    sys.version_info < (3, 10),
+    "Test fails on Python versions lower than 3.10, but its only related to cleanup errors with temp dir.",
+)
+class MergeModelCallbackTester(unittest.TestCase):
+    def setUp(self):
+        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
+        self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+    def test_callback(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                num_train_epochs=1,
+                report_to="none",
+                save_strategy="steps",
+                save_steps=1,
+            )
+            config = MergeConfig()
+            merge_callback = MergeModelCallback(config)
+            trainer = DPOTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dataset,
+                tokenizer=self.tokenizer,
+                callbacks=[merge_callback],
+            )
+            trainer.train()
+            last_checkpoint = get_last_checkpoint(tmp_dir)
+            merged_path = os.path.join(last_checkpoint, "merged")
+            self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
+
+    def test_every_checkpoint(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                num_train_epochs=1,
+                report_to="none",
+                save_strategy="steps",
+                save_steps=1,
+            )
+            config = MergeConfig()
+            merge_callback = MergeModelCallback(config, merge_at_every_checkpoint=True)
+            trainer = DPOTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dataset,
+                tokenizer=self.tokenizer,
+                callbacks=[merge_callback],
+            )
+            trainer.train()
+
+            checkpoints = sorted(
+                [os.path.join(tmp_dir, cp) for cp in os.listdir(tmp_dir) if cp.startswith("checkpoint-")]
+            )
+
+            for checkpoint in checkpoints:
+                merged_path = os.path.join(checkpoint, "merged")
+                self.assertTrue(
+                    os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}."
+                )
