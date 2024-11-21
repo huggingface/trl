@@ -25,7 +25,7 @@ from transformers.testing_utils import require_peft
 from trl import BCOConfig, BCOTrainer
 from trl.trainer.bco_trainer import _process_tokens, _tokenize
 
-from .testing_utils import require_no_wandb
+from .testing_utils import require_no_wandb, require_sklearn
 
 
 class BCOTrainerTester(unittest.TestCase):
@@ -56,6 +56,7 @@ class BCOTrainerTester(unittest.TestCase):
             ["gpt2", True, True, "conversational_unpaired_preference"],
         ]
     )
+    @require_sklearn
     def test_bco_trainer(self, name, pre_compute, eval_dataset, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -64,7 +65,7 @@ class BCOTrainerTester(unittest.TestCase):
                 max_steps=3,
                 gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                eval_strategy="steps",
+                eval_strategy="steps" if eval_dataset else "no",
                 beta=0.1,
                 precompute_ref_log_probs=pre_compute,
                 report_to="none",
@@ -85,7 +86,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=ref_model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"] if eval_dataset else None,
             )
@@ -103,6 +104,7 @@ class BCOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
+    @require_sklearn
     def test_bco_trainer_with_ref_model_is_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -119,10 +121,11 @@ class BCOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=self.model,  # ref_model can't be the same as model
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                 )
 
+    @require_sklearn
     def test_tokenize_and_process_tokens(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -142,7 +145,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=self.ref_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -185,6 +188,7 @@ class BCOTrainerTester(unittest.TestCase):
                 processed_dataset["completion_labels"][0], [-100, -100, -100, 318, 1365, 621, 8253, 13, 50256]
             )
 
+    @require_sklearn
     def test_bco_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -204,7 +208,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -222,6 +226,7 @@ class BCOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
+    @require_sklearn
     def test_bco_trainer_udm(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
@@ -249,7 +254,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 embedding_func=embedding_func,
@@ -269,6 +274,7 @@ class BCOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
+    @require_sklearn
     @require_peft
     def test_bco_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
@@ -299,7 +305,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -319,6 +325,7 @@ class BCOTrainerTester(unittest.TestCase):
                     if param.sum() != 0:
                         self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
+    @require_sklearn
     @require_no_wandb
     def test_bco_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -345,11 +352,12 @@ class BCOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=None,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
 
+    @require_sklearn
     @require_peft
     def test_bco_lora_save(self):
         from peft import LoraConfig, get_peft_model
@@ -385,7 +393,7 @@ class BCOTrainerTester(unittest.TestCase):
                 model=model_peft,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,

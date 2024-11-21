@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, Dict, List, Optional, TypeVar
+from typing import Any, Dict, List, Optional, Sequence, TypeVar
 
 from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizer
@@ -27,7 +27,7 @@ def is_conversational(example: Dict[str, Any]) -> bool:
     Args:
         example (`Dict[str, Any]`):
             A single data entry of a dataset. The example can have different keys depending on the
-            dataset format.
+            dataset type.
 
     Returns:
         `bool`: `True` if the data is in a conversational format, `False` otherwise.
@@ -147,7 +147,7 @@ def maybe_apply_chat_template(
     Args:
         example (`Dict[str, List[Dict[str, str]]`):
             Dictionary representing a single data entry of a conversational dataset. Each data entry can have different
-            keys depending on the dataset format. The supported dataset formats are:
+            keys depending on the dataset type. The supported dataset types are:
 
                 - Language modeling dataset: `"messages"`.
                 - Prompt-only dataset: `"prompt"`.
@@ -199,7 +199,9 @@ def _unpair_row(examples: List[Dict[str, List[Dict[str, str]]]]) -> List[Dict[st
     return new_rows
 
 
-def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = None) -> DatasetType:
+def unpair_preference_dataset(
+    dataset: DatasetType, num_proc: Optional[int] = None, desc: Optional[str] = None
+) -> DatasetType:
     r"""
     Unpair a preference dataset.
 
@@ -209,6 +211,8 @@ def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = No
             `"prompt"`.
         num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        desc (`str` or `None`, *optional*, defaults to `None`):
+            Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
         `Dataset`: The unpaired preference dataset.
@@ -233,10 +237,12 @@ def unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = No
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], num_proc=num_proc)
+    return dataset.map(_unpair_row, batched=True, remove_columns=["chosen", "rejected"], num_proc=num_proc, desc=desc)
 
 
-def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int] = None) -> DatasetType:
+def maybe_unpair_preference_dataset(
+    dataset: DatasetType, num_proc: Optional[int] = None, desc: Optional[str] = None
+) -> DatasetType:
     r"""
     Unpair a preference dataset if it is paired.
 
@@ -246,6 +252,8 @@ def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int
             `"prompt"`.
         num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        desc (`str` or `None`, *optional*, defaults to `None`):
+            Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
         `Dataset` or `DatasetDict`: The unpaired preference dataset if it was paired, otherwise the original dataset.
@@ -275,12 +283,12 @@ def maybe_unpair_preference_dataset(dataset: DatasetType, num_proc: Optional[int
     else:
         column_names = dataset.column_names
     if "chosen" in column_names and "rejected" in column_names:
-        return unpair_preference_dataset(dataset, num_proc=num_proc)
+        return unpair_preference_dataset(dataset, num_proc=num_proc, desc=desc)
     else:
         return dataset
 
 
-def extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
+def extract_prompt(example: Dict[str, Sequence]) -> Dict[str, Sequence]:
     r"""
     Extracts the shared prompt from a preference data example, where the prompt is implicit within both
     the chosen and rejected completions.
@@ -288,7 +296,9 @@ def extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
     For more details, see [`maybe_extract_prompt`].
     """
     for idx in range(min(len(example["chosen"]), len(example["rejected"]))):
-        if example["chosen"][idx]["content"] != example["rejected"][idx]["content"]:
+        if example["chosen"][idx] != example["rejected"][idx]:
+            if example["chosen"][idx - 1] == " ":  # remove space before the prompt
+                idx -= 1
             break
     return {
         "prompt": example["chosen"][:idx],
@@ -303,7 +313,6 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
     the chosen and rejected completions.
 
     If the example already contains a `"prompt"` key, the function returns the example as is. Else, the function
-
     identifies the longest common sequence (prefix) of conversation turns between the "chosen" and "rejected"
     completions and extracts this as the prompt. It then removes this prompt from the respective "chosen" and
     "rejected" completions.
@@ -311,7 +320,7 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
     Args:
         example (`Dict[str, List]`):
             A dictionary representing a single data entry in the preference dataset. It must contain the keys
-            `"chosen"` and `"rejected"`, where each value is a list.
+            `"chosen"` and `"rejected"`, where each value is either conversational or standard (`str`).
 
     Returns:
         `Dict[str, List]`: A dictionary containing:
@@ -379,7 +388,12 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
     #  "chosen": [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}],
     #  "rejected": [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is green."}]}
     # That's why we check if the prompt is also conversational before deciding not to extract it.
-    if "prompt" in example and is_conversational({"prompt": example["prompt"]}):
+    if "chosen" not in example or "rejected" not in example:  # not a preference example
         return example
-    else:
-        return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
+    if "prompt" in example:
+        # Both conversational or both non-conversational
+        chosen_conv = is_conversational({"chosen": example["chosen"]})
+        prompt_conv = is_conversational({"prompt": example["prompt"]})
+        if (chosen_conv and prompt_conv) or (not chosen_conv and not prompt_conv):
+            return example
+    return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})

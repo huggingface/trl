@@ -22,7 +22,7 @@ from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import (
-    require_bitsandbytes,
+    require_liger_kernel,
     require_peft,
     require_torch_accelerator,
     require_torch_multi_accelerator,
@@ -32,7 +32,7 @@ from transformers.utils import is_peft_available
 from trl import SFTConfig, SFTTrainer
 from trl.models.utils import setup_chat_format
 
-from ..testing_utils import require_liger_kernel
+from ..testing_utils import require_bitsandbytes
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 
 
@@ -45,7 +45,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
     def setUp(self):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
         self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
-        self.dataset_text_field = "text"
         self.max_seq_length = 128
         self.peft_config = LoraConfig(
             lora_alpha=16,
@@ -74,7 +73,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
             )
 
@@ -101,7 +99,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
             )
 
@@ -111,7 +108,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -136,7 +133,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 max_steps=10,
                 fp16=True,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
             )
 
@@ -146,13 +142,13 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
+            self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
 
@@ -173,7 +169,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 max_steps=10,
                 fp16=True,  # this is sufficient to enable amp
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
             )
 
@@ -183,7 +178,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -206,7 +201,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
@@ -219,7 +213,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -243,7 +237,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
@@ -256,13 +249,13 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
+            self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
 
@@ -287,7 +280,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
@@ -300,7 +292,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -325,7 +317,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
@@ -340,13 +331,13 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
+            self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
 
@@ -384,12 +375,12 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=train_dataset,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
+            self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
 
@@ -410,7 +401,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=2,
                 packing=packing,
-                dataset_text_field=self.dataset_text_field,
                 max_seq_length=self.max_seq_length,
                 use_liger=True,
             )

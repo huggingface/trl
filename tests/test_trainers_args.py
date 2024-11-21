@@ -42,8 +42,11 @@ from trl import (
     XPOTrainer,
 )
 
+from .testing_utils import require_sklearn
+
 
 class TrainerArgTester(unittest.TestCase):
+    @require_sklearn
     def test_bco(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
@@ -68,7 +71,7 @@ class TrainerArgTester(unittest.TestCase):
                 max_density_ratio=20.0,
             )
             trainer = BCOTrainer(
-                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
@@ -110,7 +113,7 @@ class TrainerArgTester(unittest.TestCase):
                 model_init_kwargs={"trust_remote_code": True},
                 dataset_num_proc=4,
             )
-            trainer = CPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = CPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer)
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
@@ -156,13 +159,14 @@ class TrainerArgTester(unittest.TestCase):
                 force_use_ref_model=True,
                 f_divergence_type="js_divergence",
                 f_alpha_divergence_coef=0.5,
-                sync_ref_model=True,
+                # sync_ref_model=True, # cannot be True when precompute_ref_log_probs=True. Don't test this.
                 ref_model_mixup_alpha=0.5,
                 ref_model_sync_steps=32,
                 rpo_alpha=0.5,
+                discopop_tau=0.1,
             )
             trainer = DPOTrainer(
-                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
             )
             self.assertEqual(trainer.args.beta, 0.5)
             self.assertEqual(trainer.args.label_smoothing, 0.5)
@@ -186,10 +190,11 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.force_use_ref_model, True)
             self.assertEqual(trainer.args.f_divergence_type, "js_divergence")
             self.assertEqual(trainer.args.f_alpha_divergence_coef, 0.5)
-            self.assertEqual(trainer.args.sync_ref_model, True)
+            # self.assertEqual(trainer.args.sync_ref_model, True)
             self.assertEqual(trainer.args.ref_model_mixup_alpha, 0.5)
             self.assertEqual(trainer.args.ref_model_sync_steps, 32)
             self.assertEqual(trainer.args.rpo_alpha, 0.5)
+            self.assertEqual(trainer.args.discopop_tau, 0.1)
 
     def test_kto(self):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -214,7 +219,7 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
             )
             trainer = KTOTrainer(
-                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer
+                model="gpt2", ref_model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
@@ -246,7 +251,7 @@ class TrainerArgTester(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
             trainer = NashMDTrainer(
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
@@ -272,12 +277,13 @@ class TrainerArgTester(unittest.TestCase):
             reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
             tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
             trainer = OnlineDPOTrainer(
-                args=training_args,
-                tokenizer=tokenizer,
                 model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
+                args=training_args,
                 train_dataset=dataset,
+                processing_class=tokenizer,
+                reward_processing_class=tokenizer,
             )
             self.assertEqual(trainer.args.max_new_tokens, 42)
             self.assertEqual(trainer.args.temperature, 0.5)
@@ -306,7 +312,7 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
             )
 
-            trainer = ORPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, tokenizer=tokenizer)
+            trainer = ORPOTrainer(model="gpt2", args=training_args, train_dataset=dataset, processing_class=tokenizer)
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
@@ -329,7 +335,7 @@ class TrainerArgTester(unittest.TestCase):
                 model=model,
                 args=training_args,
                 train_dataset=dataset,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.dataset_num_proc, 4)
@@ -380,7 +386,7 @@ class TrainerArgTester(unittest.TestCase):
             tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
             trainer = XPOTrainer(
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 model=model,
                 ref_model=ref_model,
                 reward_model=reward_model,
