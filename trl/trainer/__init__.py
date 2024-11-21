@@ -26,10 +26,10 @@ _import_structure = {
     "bco_trainer": ["BCOTrainer"],
     "callbacks": [
         "LogCompletionsCallback",
+        "MergeModelCallback",
         "RichProgressCallback",
         "SyncRefModelCallback",
         "WinRateCallback",
-        "MergeModelCallback",
     ],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],

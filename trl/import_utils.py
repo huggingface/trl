@@ -24,9 +24,9 @@ from transformers.utils.import_utils import _is_package_available
 _deepspeed_available = _is_package_available("deepspeed")
 _diffusers_available = _is_package_available("diffusers")
 _llm_blender_available = _is_package_available("llm_blender")
+_mergekit_available = _is_package_available("mergekit")
 _rich_available = _is_package_available("rich")
 _unsloth_available = _is_package_available("unsloth")
-_mergekit_available = _is_package_available("mergekit")
 
 
 def is_deepspeed_available() -> bool:
@@ -41,16 +41,16 @@ def is_llm_blender_available() -> bool:
     return _llm_blender_available
 
 
+def is_mergekit_available() -> bool:
+    return _mergekit_available
+
+
 def is_rich_available() -> bool:
     return _rich_available
 
 
 def is_unsloth_available() -> bool:
     return _unsloth_available
-
-
-def is_mergekit_available() -> bool:
-    return _mergekit_available
 
 
 class _LazyModule(ModuleType):
