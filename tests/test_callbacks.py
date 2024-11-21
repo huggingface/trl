@@ -279,7 +279,7 @@ class MergeModelCallbackTester(unittest.TestCase):
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
     def test_callback(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 num_train_epochs=1,
@@ -305,7 +305,7 @@ class MergeModelCallbackTester(unittest.TestCase):
             pass
 
     def test_every_checkpoint(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 num_train_epochs=1,
