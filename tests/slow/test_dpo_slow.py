@@ -21,11 +21,12 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers.testing_utils import require_bitsandbytes, require_peft, require_torch_accelerator, torch_device
+from transformers.testing_utils import require_peft, require_torch_accelerator, torch_device
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
 
+from ..testing_utils import require_bitsandbytes
 from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST
 
 
@@ -148,8 +149,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
-            assert trainer.ref_model is None
+            self.assertIsInstance(trainer.model, PeftModel)
+            self.assertIsNone(trainer.ref_model)
 
             # train the model
             trainer.train()
@@ -212,8 +213,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
-            assert trainer.ref_model is None
+            self.assertIsInstance(trainer.model, PeftModel)
+            self.assertIsNone(trainer.ref_model)
 
             # train the model
             trainer.train()

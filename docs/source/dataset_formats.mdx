@@ -77,6 +77,18 @@ This guide provides an overview of the dataset formats and types supported by ea
  "label": False}</code></pre>
     </td>
   </tr>
+  </tr>
+    <td>Stepwise supervision</td>
+    <td>
+      <pre><code>{"prompt": "Which number is larger, 9.8 or 9.11?",
+ "completions": ["The fractional part of 9.8 is 0.8.", 
+                 "The fractional part of 9.11 is 0.11.",
+                 "0.11 is greater than 0.8.",
+                 "Hence, 9.11 > 9.8."],
+ "labels": [True, True, False, False]}</code></pre>
+    </td>
+    <td></td>
+  </tr>
 </table>
 
 ### Formats
@@ -87,9 +99,11 @@ The standard dataset format typically consists of plain text strings. The column
 
 ```python
 # Language modeling
-example = {"text": "The sky is blue."}
+language_modeling_example = {"text": "The sky is blue."}
 # Preference
-example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
+preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}
+# Unpaired preference
+unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "label": True}
 ```
 
 #### Conversational
@@ -104,18 +118,17 @@ messages = [
 ]
 ```
 
-Just like standard datasets, the columns in conversational datasets vary depending on the task. For instance, a preference dataset would include columns like `"chosen"` and `"rejected"` to compare responses:
+Just like standard datasets, the columns in conversational datasets vary depending on the task. Below are examples of conversational dataset formats for different tasks:
 
 ```python
-example = {
-    "chosen": [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is blue."},
-    ],
-    "rejected": [
-        {"role": "user", "content": "What color is the sky?"},
-        {"role": "assistant", "content": "It is green."},
-    ],
+# Prompt-completion
+prompt_completion_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                             "completion": [{"role": "assistant", "content": "It is blue."}]}
+# Preference
+preference_example = {
+    "prompt": [{"role": "user", "content": "What color is the sky?"}],
+    "chosen": [{"role": "assistant", "content": "It is blue."}],
+    "rejected": [{"role": "assistant", "content": "It is green."}],
 }
 ```
 
@@ -128,7 +141,13 @@ Conversational datasets are useful for training chat models, but must be convert
 A language modeling dataset consists of a column `"text"` (or `"messages"` for conversational datasets) containing a full sequence of text.
 
 ```python
+# Standard format
 language_modeling_example = {"text": "The sky is blue."}
+# Conversational format
+language_modeling_example = {"messages": [
+    {"role": "user", "content": "What color is the sky?"},
+    {"role": "assistant", "content": "It is blue."}
+]}
 ```
 
 #### Prompt-only
@@ -136,7 +155,10 @@ language_modeling_example = {"text": "The sky is blue."}
 In a prompt-only dataset, only the initial prompt (the question or partial sentence) is provided under the key `"prompt"`. The training typically involves generating the completion based on this prompt, where the model learns to continue or complete the given input.
 
 ```python
+# Standard format
 prompt_only_example = {"prompt": "The sky is"}
+# Conversational format
+prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
 ```
 
 <Tip>
@@ -170,7 +192,11 @@ apply_chat_template(lm_example, tokenizer)
 A prompt-completion dataset includes a `"prompt"` and a `"completion"`.
 
 ```python
+# Standard format
 prompt_completion_example = {"prompt": "The sky is", "completion": " blue."}
+# Conversational format
+prompt_completion_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                             "completion": [{"role": "assistant", "content": "It is blue."}]}
 ```
 
 #### Preference
@@ -179,10 +205,22 @@ A preference dataset is used for tasks where the model is trained to choose betw
 Some dataset may not include the `"prompt"` column, in which case the prompt is implicit and directly included in the `"chosen"` and `"rejected"` completions. We recommend using explicit prompts whenever possible.
 
 ```python
-# explicit prompt
-preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}  # recommended
-# implicit prompt
+# Standard format
+## Explicit prompt (recommended)
+preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}
+# Implicit prompt
 preference_example = {"chosen": "The sky is blue.", "rejected": "The sky is green."}
+
+# Conversational format
+## Explicit prompt (recommended)
+preference_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                      "chosen": [{"role": "assistant", "content": "It is blue."}],
+                      "rejected": [{"role": "assistant", "content": "It is green."}]}
+## Implicit prompt
+preference_example = {"chosen": [{"role": "user", "content": "What color is the sky?"},
+                                 {"role": "assistant", "content": "It is blue."}],
+                      "rejected": [{"role": "user", "content": "What color is the sky?"},
+                                   {"role": "assistant", "content": "It is green."}]}
 ```
 
 Some preference datasets can be found with [the tag `dpo` on Hugging Face Hub](https://huggingface.co/datasets?other=dpo). You can also explore the [librarian-bots' DPO Collections](https://huggingface.co/collections/librarian-bots/direct-preference-optimization-datasets-66964b12835f46289b6ef2fc) to identify preference datasets.
@@ -192,7 +230,24 @@ Some preference datasets can be found with [the tag `dpo` on Hugging Face Hub](h
 An unpaired preference dataset is similar to a preference dataset but instead of having `"chosen"` and `"rejected"` completions for the same prompt, it includes a single `"completion"` and a `"label"` indicating whether the completion is preferred or not.
 
 ```python
+# Standard format
 unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "label": True}
+# Conversational format
+unpaired_preference_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                               "completion": [{"role": "assistant", "content": "It is blue."}],
+                               "label": True}
+```
+
+#### Stepwise supervision
+
+A stepwise (or process) supervision dataset is similar to an [unpaired preference](#unpaired-preference) dataset but includes multiple steps of completions, each with its own label. This structure is useful for tasks that need detailed, step-by-step labeling, such as reasoning tasks. By evaluating each step separately and providing targeted labels, this approach helps identify precisely where the reasoning is correct and where errors occur, allowing for targeted feedback on each part of the reasoning process.
+
+```python
+stepwise_example = {
+    "prompt": "Which number is larger, 9.8 or 9.11?",
+    "completions": ["The fractional part of 9.8 is 0.8, while the fractional part of 9.11 is 0.11.", "Since 0.11 is greater than 0.8, the number 9.11 is larger than 9.8."],
+    "labels": [True, False]
+}
 ```
 
 ## Which dataset type to use?
@@ -224,12 +279,12 @@ For more information on how to work with conversational datasets, refer to the [
 
 ## Working with conversational datasets in TRL
 
-Conversational datasets are increasingly common, especially for training chat models. However, TRL trainers (except [`SFTTrainer`]) don't support conversational datasets in their raw format. These datasets must first be converted into a standard format.
+Conversational datasets are increasingly common, especially for training chat models. However, some TRL trainers don't support conversational datasets in their raw format. (For more information, see [issue #2071](https://github.com/huggingface/trl/issues/2071).) These datasets must first be converted into a standard format.
 Fortunately, TRL offers tools to easily handle this conversion, which are detailed below.
 
 ### Converting a conversational dataset into a standard dataset
 
-TRL trainers do not support conversational datasets in their raw format. To use them, you need to convert them into a standard dataset format using a chat template. This template is provided by the tokenizer of the model you use.
+To convert a conversational dataset into a standard dataset, you need to _apply a chat template_ to the dataset. A chat template is a predefined structure that typically includes placeholders for user and assistant messages. This template is provided by the tokenizer of the model you use.
 
 For detailed instructions on using chat templating, refer to the [Chat templating section in the `transformers` documentation](https://huggingface.co/docs/transformers/en/chat_templating).
 
@@ -338,14 +393,15 @@ This section provides example code to help you convert between different dataset
 
 For simplicity, some of the examples below do not follow this recommendation and use the standard format. However, the conversions can be applied directly to the conversational format without modification.
 
-| From \ To                       | Language modeling                                                       | Prompt-completion                                                       | Prompt-only                                                       | Preference with implicit prompt                           | Preference                                                | Unpaired preference                                                       |
-| ------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Language modeling               | N/A                                                                     | N/A                                                                     | N/A                                                               | N/A                                                       | N/A                                                       | N/A                                                                       |
-| Prompt-completion               | [🔗](#from-prompt-completion-to-language-modeling-dataset)               | N/A                                                                     | [🔗](#from-prompt-completion-to-prompt-only-dataset)               | N/A                                                       | N/A                                                       | N/A                                                                       |
-| Prompt-only                     | N/A                                                                     | N/A                                                                     | N/A                                                               | N/A                                                       | N/A                                                       | N/A                                                                       |
-| Preference with implicit prompt | [🔗](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A                                                       | [🔗](#from-implicit-to-explicit-prompt-preference-dataset) | [🔗](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) |
-| Preference                      | [🔗](#from-preference-to-language-modeling-dataset)                      | [🔗](#from-preference-to-prompt-completion-dataset)                      | [🔗](#from-preference-to-prompt-only-dataset)                      | [🔗](#from-explicit-to-implicit-prompt-preference-dataset) | N/A                                                       | [🔗](#from-preference-to-unpaired-preference-dataset)                      |
-| Unpaired preference             | [🔗](#from-unpaired-preference-to-language-modeling-dataset)             | [🔗](#from-unpaired-preference-to-prompt-completion-dataset)             | [🔗](#from-unpaired-preference-to-prompt-only-dataset)             | N/A                                                       | N/A                                                       | N/A                                                                       |
+| From \ To                       | Language modeling                                                       | Prompt-completion                                                       | Prompt-only                                                       | Preference with implicit prompt                           | Preference                                                | Unpaired preference                                                       | Stepwise supervision |
+| ------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------- |
+| Language modeling               | N/A                                                                     | N/A                                                                     | N/A                                                               | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
+| Prompt-completion               | [🔗](#from-prompt-completion-to-language-modeling-dataset)               | N/A                                                                     | [🔗](#from-prompt-completion-to-prompt-only-dataset)               | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
+| Prompt-only                     | N/A                                                                     | N/A                                                                     | N/A                                                               | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
+| Preference with implicit prompt | [🔗](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A                                                       | [🔗](#from-implicit-to-explicit-prompt-preference-dataset) | [🔗](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) | N/A                  |
+| Preference                      | [🔗](#from-preference-to-language-modeling-dataset)                      | [🔗](#from-preference-to-prompt-completion-dataset)                      | [🔗](#from-preference-to-prompt-only-dataset)                      | [🔗](#from-explicit-to-implicit-prompt-preference-dataset) | N/A                                                       | [🔗](#from-preference-to-unpaired-preference-dataset)                      | N/A                  |
+| Unpaired preference             | [🔗](#from-unpaired-preference-to-language-modeling-dataset)             | [🔗](#from-unpaired-preference-to-prompt-completion-dataset)             | [🔗](#from-unpaired-preference-to-prompt-only-dataset)             | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
+| Stepwise supervision            | [🔗](#from-stepwise-supervision-to-language-modeling-dataset)            | [🔗](#from-stepwise-supervision-to-prompt-completion-dataset)            | [🔗](#from-stepwise-supervision-to-prompt-only-dataset)            | N/A                                                       | N/A                                                       | [🔗](#from-stepwise-supervision-to-unpaired-preference-dataset)            | N/A                  |
 
 ### From prompt-completion to language modeling dataset
 
@@ -718,6 +774,107 @@ dataset = dataset.remove_columns(["completion", "label"])
 ```python
 >>> dataset[0]
 {'prompt': 'The sky is'}
+```
+
+### From stepwise supervision to language modeling dataset
+
+To convert a stepwise supervision dataset into a language modeling dataset, concatenate the prompt and the completions into the `"text"` column.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["Blue light", "Water"],
+    "completions": [[" scatters more in the atmosphere,", " so the sky is green."],
+                   [" forms a less dense structure in ice,", " which causes it to expand when it freezes."]],
+    "labels": [[True, False], [True, True]],
+})
+
+def concatenate_prompt_completions(example):
+    completion = "".join(example["completions"])
+    return {"text": example["prompt"] + completion}
+
+dataset = dataset.map(concatenate_prompt_completions, remove_columns=["prompt", "completions", "labels"])
+```
+
+```python
+>>> dataset[0]
+{'text': 'Blue light scatters more in the atmosphere, so the sky is green.'}
+```
+
+### From stepwise supervision to prompt completion dataset
+
+To convert a stepwise supervision dataset into a prompt-completion dataset, join the completions and remove the labels.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["Blue light", "Water"],
+    "completions": [[" scatters more in the atmosphere,", " so the sky is green."],
+                   [" forms a less dense structure in ice,", " which causes it to expand when it freezes."]],
+    "labels": [[True, False], [True, True]],
+})
+
+def join_completions(example):
+    completion = "".join(example["completions"])
+    return {"completion": completion}
+
+dataset = dataset.map(join_completions, remove_columns=["completions", "labels"])
+```
+
+```python
+>>> dataset[0]
+{'prompt': 'Blue light', 'completion': ' scatters more in the atmosphere, so the sky is green.'}
+```
+
+### From stepwise supervision to prompt only dataset
+
+To convert a stepwise supervision dataset into a prompt-only dataset, remove the completions and the labels.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["Blue light", "Water"],
+    "completions": [[" scatters more in the atmosphere,", " so the sky is green."],
+                   [" forms a less dense structure in ice,", " which causes it to expand when it freezes."]],
+    "labels": [[True, False], [True, True]],
+})
+
+dataset = dataset.remove_columns(["completions", "labels"])
+```
+
+```python
+>>> dataset[0]
+{'prompt': 'Blue light'}
+```
+
+### From stepwise supervision to unpaired preference dataset
+
+To convert a stepwise supervision dataset into an unpaired preference dataset, join the completions and merge the labels.
+
+The method for merging the labels depends on the specific task. In this example, we use the logical AND operation. This means that if the step labels indicate the correctness of individual steps, the resulting label will reflect the correctness of the entire sequence.
+
+```python
+from datasets import Dataset
+
+dataset = Dataset.from_dict({
+    "prompt": ["Blue light", "Water"],
+    "completions": [[" scatters more in the atmosphere,", " so the sky is green."],
+                   [" forms a less dense structure in ice,", " which causes it to expand when it freezes."]],
+    "labels": [[True, False], [True, True]],
+})
+
+def merge_completions_and_labels(example):
+    return {"prompt": example["prompt"], "completion": "".join(example["completions"]), "label": all(example["labels"])}
+
+dataset = dataset.map(merge_completions_and_labels, remove_columns=["completions", "labels"])
+```
+
+```python
+>>> dataset[0]
+{'prompt': 'Blue light', 'completion': ' scatters more in the atmosphere, so the sky is green.', 'label': False}
 ```
 
 ## Vision datasets
