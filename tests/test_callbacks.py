@@ -25,14 +25,11 @@ from transformers.utils import is_peft_available
 
 from tests.testing_utils import require_mergekit
 from trl import BasePairwiseJudge, DPOConfig, DPOTrainer, LogCompletionsCallback, MergeModelCallback, WinRateCallback
-from trl.import_utils import is_mergekit_available
+from trl.mergekit_utils import MergeConfig
 
 
 if is_peft_available():
     from peft import LoraConfig
-
-if is_mergekit_available():
-    from trl.mergekit_utils import MergeConfig
 
 
 class HalfPairwiseJudge(BasePairwiseJudge):
@@ -281,7 +278,7 @@ class MergeModelCallbackTester(unittest.TestCase):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-    def test_last_checkpoint(self):
+    def test_callback(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
@@ -290,8 +287,8 @@ class MergeModelCallbackTester(unittest.TestCase):
                 save_strategy="steps",
                 save_steps=1,
             )
-            config = MergeConfig("linear")
-            merge_callback = MergeModelCallback(config, push_to_hub=False, merge_at_every_checkpoint=False)
+            config = MergeConfig()
+            merge_callback = MergeModelCallback(config)
             trainer = DPOTrainer(
                 model=self.model,
                 args=training_args,
@@ -305,29 +302,31 @@ class MergeModelCallbackTester(unittest.TestCase):
             self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
 
     def test_every_checkpoint(self):
-        output_dir = "dir_every_checkpoint"
-        training_args = DPOConfig(
-            output_dir=output_dir,
-            num_train_epochs=1,
-            report_to="none",
-            save_strategy="steps",
-            save_steps=1,
-        )
-        trainer = DPOTrainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=self.dataset,
-            tokenizer=self.tokenizer,
-        )
-        config = MergeConfig("linear")
-        merge_callback = MergeModelCallback(config, push_to_hub=False, merge_at_every_checkpoint=True)
-        trainer.add_callback(merge_callback)
-        trainer.train()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                num_train_epochs=1,
+                report_to="none",
+                save_strategy="steps",
+                save_steps=1,
+            )
+            config = MergeConfig()
+            merge_callback = MergeModelCallback(config, merge_at_every_checkpoint=True)
+            trainer = DPOTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dataset,
+                tokenizer=self.tokenizer,
+                callbacks=[merge_callback],
+            )
+            trainer.train()
 
-        checkpoints = sorted(
-            [os.path.join(output_dir, cp) for cp in os.listdir(output_dir) if cp.startswith("checkpoint-")]
-        )
+            checkpoints = sorted(
+                [os.path.join(tmp_dir, cp) for cp in os.listdir(tmp_dir) if cp.startswith("checkpoint-")]
+            )
 
-        for checkpoint in checkpoints:
-            merged_path = os.path.join(checkpoint, "merged")
-            self.assertTrue(os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}.")
+            for checkpoint in checkpoints:
+                merged_path = os.path.join(checkpoint, "merged")
+                self.assertTrue(
+                    os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}."
+                )
