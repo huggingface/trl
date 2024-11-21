@@ -14,6 +14,7 @@
 
 import json
 import os
+import sys
 import tempfile
 import unittest
 
@@ -271,7 +272,15 @@ class LogCompletionsCallbackTester(unittest.TestCase):
             self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
 
 
+# On Windows, temporary directory cleanup fails when using the MergeModelCallback.
+# This is not an issue with the functionality of the code itself, but it can cause the test to fail
+# due to unhandled cleanup errors. Python 3.10 introduces the `ignore_cleanup_errors` argument to
+# mitigate this. As a result, this test is skipped for Python versions below 3.10.
 @require_mergekit
+@unittest.skipIf(
+    sys.version_info < (3, 10),
+    "Test fails on Python versions lower than 3.10, but its only related to cleanup errors with temp dir.",
+)
 class MergeModelCallbackTester(unittest.TestCase):
     def setUp(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
@@ -299,10 +308,7 @@ class MergeModelCallbackTester(unittest.TestCase):
             trainer.train()
             last_checkpoint = get_last_checkpoint(tmp_dir)
             merged_path = os.path.join(last_checkpoint, "merged")
-            import warnings
-            warnings.warn(f"merged_path: {merged_path}")
             self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
-            pass
 
     def test_every_checkpoint(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
