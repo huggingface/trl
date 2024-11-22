@@ -123,6 +123,71 @@ class TestGKDTrainer(unittest.TestCase):
         self.assertEqual(new_input_ids.shape, new_attention_mask.shape)
         self.assertEqual(new_labels.shape, new_attention_mask.shape)
 
+    def test_uld_loss_basic(self):
+        # Setup simple test case
+        student_logits = torch.tensor([[[0.1, 0.9], [0.7, 0.3]]])  # shape: (1, 2, 2)
+        teacher_logits = torch.tensor([[[0.9, 0.1], [0.3, 0.7]]])  # shape: (1, 2, 2)
+        student_labels = torch.tensor([[1, 0]])  # shape: (1, 2)
+        teacher_labels = torch.tensor([[1, 0]])  # shape: (1, 2)
+
+        # Add a small perturbation to student logits
+        student_logits += 0.1
+
+        loss = GKDTrainer.uld_loss(student_logits, teacher_logits, student_labels, teacher_labels)
+        self.assertGreater(loss.item(), 0)  # Loss should be positive
+
+    def test_uld_loss_identical_distributions(self):
+        # When distributions are identical, loss should be close to zero
+        logits = torch.tensor([[[0.1, 0.9], [0.7, 0.3]]])
+        labels = torch.tensor([[1, 0]])
+
+        loss = GKDTrainer.uld_loss(logits, logits, labels, labels)
+        self.assertAlmostEqual(loss.item(), 0, places=5)
+
+    def test_uld_loss_with_padding(self):
+        # Test with padding tokens (-100 in labels)
+        student_logits = torch.tensor([[[0.1, 0.9], [0.7, 0.3], [0.5, 0.5]]])
+        teacher_logits = torch.tensor([[[0.9, 0.1], [0.3, 0.7], [0.5, 0.5]]])
+        student_labels = torch.tensor([[1, 0, -100]])  # Last token is padding
+        teacher_labels = torch.tensor([[1, 0, -100]])  # Last token is padding
+
+        # Add a small perturbation to ensure non-zero loss
+        student_logits += 0.1
+
+        loss = GKDTrainer.uld_loss(student_logits, teacher_logits, student_labels, teacher_labels)
+        self.assertGreater(loss.item(), 0)
+
+    def test_uld_loss_different_vocab_sizes(self):
+        # Test with different vocabulary sizes between student and teacher
+        student_logits = torch.tensor([[[0.1, 0.9, 0.0]]])  # vocab_size = 3
+        teacher_logits = torch.tensor([[[0.8, 0.1, 0.1]]])  # vocab_size = 3
+        student_labels = torch.tensor([[1]])
+        teacher_labels = torch.tensor([[1]])
+
+        loss = GKDTrainer.uld_loss(student_logits, teacher_logits, student_labels, teacher_labels)
+        self.assertGreater(loss.item(), 0)
+
+    def test_uld_loss_reduction_methods(self):
+        student_logits = torch.tensor([[[0.1, 0.9], [0.7, 0.3]]])
+        teacher_logits = torch.tensor([[[0.9, 0.1], [0.3, 0.7]]])
+        student_labels = torch.tensor([[1, 0]])
+        teacher_labels = torch.tensor([[1, 0]])
+
+        # Add a small perturbation to ensure non-zero loss
+        student_logits += 0.1
+
+        # Test different reduction methods
+        loss_sum = GKDTrainer.uld_loss(student_logits, teacher_logits, student_labels, teacher_labels, reduction="sum")
+        loss_mean = GKDTrainer.uld_loss(
+            student_logits, teacher_logits, student_labels, teacher_labels, reduction="mean"
+        )
+        loss_batchmean = GKDTrainer.uld_loss(
+            student_logits, teacher_logits, student_labels, teacher_labels, reduction="batchmean"
+        )
+
+        self.assertNotEqual(loss_sum.item(), loss_mean.item())
+        self.assertNotEqual(loss_sum.item(), loss_batchmean.item())
+
 
 class TestGeneralizedJSDLoss(unittest.TestCase):
     def setUp(self):

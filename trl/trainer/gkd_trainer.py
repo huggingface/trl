@@ -270,7 +270,7 @@ class GKDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return wasserstein_distance.sum() / (wasserstein_distance.size(0) * wasserstein_distance.size(1))
+            return wasserstein_distance.sum() / wasserstein_distance.size(0)
         elif reduction == "sum":
             return wasserstein_distance.sum()
         elif reduction == "mean":
