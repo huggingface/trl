@@ -14,9 +14,19 @@
 import random
 import unittest
 
-from transformers import is_sklearn_available, is_wandb_available
+from transformers import is_bitsandbytes_available, is_sklearn_available, is_wandb_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge, is_diffusers_available, is_llm_blender_available
+from trl.import_utils import is_mergekit_available
+
+
+# transformers.testing_utils contains a require_bitsandbytes function, but relies on pytest markers which we don't use
+# in our test suite. We therefore need to implement our own version of this function.
+def require_bitsandbytes(test_case):
+    """
+    Decorator marking a test that requires bitsandbytes. Skips the test if bitsandbytes is not available.
+    """
+    return unittest.skipUnless(is_bitsandbytes_available(), "test requires bitsandbytes")(test_case)
 
 
 def require_diffusers(test_case):
@@ -24,6 +34,20 @@ def require_diffusers(test_case):
     Decorator marking a test that requires diffusers. Skips the test if diffusers is not available.
     """
     return unittest.skipUnless(is_diffusers_available(), "test requires diffusers")(test_case)
+
+
+def require_llm_blender(test_case):
+    """
+    Decorator marking a test that requires llm-blender. Skips the test if llm-blender is not available.
+    """
+    return unittest.skipUnless(is_llm_blender_available(), "test requires llm-blender")(test_case)
+
+
+def require_mergekit(test_case):
+    """
+    Decorator marking a test that requires mergekit. Skips the test if mergekit is not available.
+    """
+    return unittest.skipUnless(is_mergekit_available(), "test requires mergekit")(test_case)
 
 
 def require_no_wandb(test_case):
@@ -38,13 +62,6 @@ def require_sklearn(test_case):
     Decorator marking a test that requires sklearn. Skips the test if sklearn is not available.
     """
     return unittest.skipUnless(is_sklearn_available(), "test requires sklearn")(test_case)
-
-
-def require_llm_blender(test_case):
-    """
-    Decorator marking a test that requires llm-blender. Skips the test if llm-blender is not available.
-    """
-    return unittest.skipUnless(is_llm_blender_available(), "test requires llm-blender")(test_case)
 
 
 class RandomBinaryJudge(BaseBinaryJudge):
