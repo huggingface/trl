@@ -29,16 +29,11 @@ from transformers import (
     PreTrainedTokenizerBase,
     is_vision_available,
 )
-from transformers.testing_utils import (
-    require_bitsandbytes,
-    require_peft,
-    require_torch_gpu_if_bnb_not_multi_backend_enabled,
-    require_vision,
-)
+from transformers.testing_utils import require_peft, require_torch_gpu_if_bnb_not_multi_backend_enabled, require_vision
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
-from .testing_utils import require_no_wandb
+from .testing_utils import require_bitsandbytes, require_no_wandb
 
 
 if is_vision_available():
@@ -196,6 +191,7 @@ class DPOTrainerTester(unittest.TestCase):
             ["t5", "exo_pair", True],
             ["gpt2", "apo_zero", True],
             ["t5", "apo_down", False],
+            ["gpt2", "discopop", False],
         ]
     )
     def test_dpo_trainer(self, name, loss_type, pre_compute):
