@@ -1,0 +1,1 @@
+# This file has been moved to https://github.com/huggingface/trl/blob/main/trl/scripts/dpo.py
