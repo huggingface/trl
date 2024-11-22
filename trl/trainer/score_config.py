@@ -33,16 +33,16 @@ class SCoREConfig(OnlineDPOConfig):
     )
 
     correction_instruction: str = field(
-        default="The previous response may contain errors. Please review and correct any mistakes.",
+        default="Your previous response may have been incorrect. Please provide a corrected response.",
         metadata={"help": "Instruction for self-correction in the second attempt"},
     )
 
     first_attempt_prefix: str = field(
-        default="First attempt: ", metadata={"help": "Prefix for the first attempt in the second attempt prompt"}
+        default="Previous response: ", metadata={"help": "Prefix for the first attempt in the second attempt prompt"}
     )
 
     second_attempt_prefix: str = field(
-        default="Improved response: ", metadata={"help": "Prefix for the second attempt in the model output"}
+        default="Corrected response: ", metadata={"help": "Prefix for the second attempt in the model output"}
     )
 
     def __post_init__(self):

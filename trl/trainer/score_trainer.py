@@ -59,8 +59,17 @@ class SCoRETrainer(OnlineDPOTrainer):
     def _prepare_second_attempt_prompt(self, prompts, first_attempt):
         context_length = prompts["input_ids"].shape[1]
         first_completion = first_attempt[:, context_length:]
+
+        # Format the correction instruction with appropriate roles
+        correction_prompt = (
+            f"<|assistant|>{self.args.first_attempt_prefix}"
+            f"{self.tokenizer.decode(first_completion[0], skip_special_tokens=True)}</s>"
+            f"<|user|>{self.args.correction_instruction}</s>"
+            f"<|assistant|>{self.args.second_attempt_prefix}"
+        )
+
         correction_instruction = (
-            self.tokenizer.encode(self.args.correction_instruction, return_tensors="pt", add_special_tokens=False)
+            self.tokenizer.encode(correction_prompt, return_tensors="pt", add_special_tokens=False)
             .repeat(prompts["input_ids"].shape[0], 1)
             .to(first_attempt.device)
         )
@@ -145,6 +154,15 @@ class SCoRETrainer(OnlineDPOTrainer):
         # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
         batch_size = len(next(iter(inputs.values())))
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
+
+        # Add system message to each input
+        for input_dict in inputs:
+            input_dict["messages"] = [
+                {"role": "system", "content": self.args.system_message},
+                {"role": "user", "content": input_dict["prompt"]},
+                {"role": "assistant", "content": input_dict["completion"]},
+            ]
+
         inputs = [maybe_apply_chat_template(x, self.tokenizer) for x in inputs]
         inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.tokenizer) for x in inputs]
         inputs = self.data_collator(inputs)

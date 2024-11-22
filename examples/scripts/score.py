@@ -54,7 +54,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+from trl.trainer.utils import SCORE_CHAT_TEMPLATE
 
 
 if __name__ == "__main__":
@@ -95,7 +95,7 @@ if __name__ == "__main__":
         **model_kwargs,
     )
     if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
+        tokenizer.chat_template = SCORE_CHAT_TEMPLATE
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 

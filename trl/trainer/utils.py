@@ -961,6 +961,29 @@ SIMPLE_SFT_CHAT_TEMPLATE = "{% for message in messages %}{{' ' + message['conten
 
 SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitalize() + ': ' + message['content'] + '\n\n'}}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
 
+SCORE_CHAT_TEMPLATE = """
+{% if messages[0]['role'] == 'system' %}
+{% set loop_messages = messages[1:] %}
+{% set system_message = messages[0]['content'] %}
+{% else %}
+{% set loop_messages = messages %}
+{% set system_message = '' %}
+{% endif %}
+{% if system_message != '' %}
+<|system|>{{ system_message }}</s>
+{% endif %}
+{% for message in loop_messages %}
+{% if message['role'] == 'user' %}
+<|user|>{{ message['content'] }}</s>
+{% elif message['role'] == 'assistant' %}
+<|assistant|>{{ message['content'] }}</s>
+{% endif %}
+{% endfor %}
+{% if add_generation_prompt %}
+<|assistant|>
+{% endif %}
+""".strip()
+
 
 @dataclass
 class OnlineTrainerState(TrainerState):
