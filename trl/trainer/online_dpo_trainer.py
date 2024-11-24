@@ -25,6 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+import transformers
 from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
@@ -246,6 +247,14 @@ class OnlineDPOTrainer(Trainer):
             do_sample=True,
             use_cache=False if args.gradient_checkpointing else True,
         )
+
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
+        # the "input_ids" key. As a result, the trainer issues the warning: "Could not estimate the number of tokens
+        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
+        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
+        # that the warning has already been issued.
+        model.warnings_issued["estimate_tokens"] = True
 
         super().__init__(
             model=model,
@@ -587,8 +596,9 @@ class OnlineDPOTrainer(Trainer):
 
         return loss.detach() / self.args.gradient_accumulation_steps
 
-    # Same as Trainer.evaluate but log our metrics
-    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval):
+    # Same as Trainer._maybe_log_save_evaluate but log our metrics
+    # start_time defaults to None to allow compatibility with transformers<=4.46
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None):
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
             logs: Dict[str, float] = {}
 
@@ -612,7 +622,10 @@ class OnlineDPOTrainer(Trainer):
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
 
-            self.log(logs)
+            if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+                self.log(logs, start_time)
+            else:  # transformers<=4.46
+                self.log(logs)
 
         metrics = None
         if self.control.should_evaluate:

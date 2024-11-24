@@ -20,9 +20,9 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import NashMDConfig, NashMDTrainer, PairRMJudge
+from trl import NashMDConfig, NashMDTrainer
 
-from .testing_utils import require_llm_blender
+from .testing_utils import RandomPairwiseJudge, require_llm_blender
 
 
 if is_peft_available():
@@ -174,7 +174,7 @@ class TestNashMDTrainer(unittest.TestCase):
                 report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
-            judge = PairRMJudge()
+            judge = RandomPairwiseJudge()
 
             trainer = NashMDTrainer(
                 model=self.model,

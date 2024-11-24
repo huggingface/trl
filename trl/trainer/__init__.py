@@ -24,7 +24,13 @@ _import_structure = {
     "base": ["BaseTrainer"],
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
-    "callbacks": ["LogCompletionsCallback", "RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
+    "callbacks": [
+        "LogCompletionsCallback",
+        "MergeModelCallback",
+        "RichProgressCallback",
+        "SyncRefModelCallback",
+        "WinRateCallback",
+    ],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
     "ddpo_config": ["DDPOConfig"],
@@ -34,14 +40,14 @@ _import_structure = {
     "gkd_trainer": ["GKDTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
+        "AllTrueJudge",
         "BaseJudge",
+        "BaseBinaryJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
         "PairRMJudge",
-        "RandomPairwiseJudge",
-        "RandomRankJudge",
     ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
@@ -90,7 +96,13 @@ if TYPE_CHECKING:
     from .base import BaseTrainer
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
-    from .callbacks import LogCompletionsCallback, RichProgressCallback, SyncRefModelCallback, WinRateCallback
+    from .callbacks import (
+        LogCompletionsCallback,
+        MergeModelCallback,
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+    )
     from .cpo_config import CPOConfig
     from .cpo_trainer import CPOTrainer
     from .ddpo_config import DDPOConfig
@@ -100,14 +112,14 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .judges import (
+        AllTrueJudge,
+        BaseBinaryJudge,
         BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
         PairRMJudge,
-        RandomPairwiseJudge,
-        RandomRankJudge,
     )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
@@ -120,8 +132,6 @@ if TYPE_CHECKING:
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
-    from .ppov2_config import PPOv2Config
-    from .ppov2_trainer import PPOv2Trainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
     from .rloo_config import RLOOConfig
