@@ -31,13 +31,13 @@ model = AutoModelForTokenClassification.from_pretrained("Qwen/Qwen2-0.5B-Instruc
 train_dataset = Dataset.from_dict(
     {
         "prompt": [
-            "Hi, how are you?",
+            "Which number has a larger absolute value, -13.1 or 7.0?",
         ],
         "completions": [
-            [", let me think...", "I'm great thanks."]
+            ["The absolute value of -13.1 is 13.1.","The absolute value of 7.0 is 7.0", "7.0 is larger than 13.1.", "Hence, in absolute value, 7.0 is larger than -13.1."]
         ]
         "labels": [
-            [False, True]
+            [True, True, False, False]
         ]
         * NUM_DUMMY_SAMPLES
     }
@@ -45,13 +45,13 @@ train_dataset = Dataset.from_dict(
 eval_dataset = Dataset.from_dict(
     {
         "prompt": [
-            "What colour is the sky?",
+            "Is 19 divisible by 6?",
         ],
         "completion": [
-            ["Hmm,", "great question...", "The sky is blue."]
+            ["Dividing 19 by 6 gives a remainder of 1.", "A number is divisible by another number if the division results in no remainder.", "Hence, 19 is not divisible by 6."]
         ]
         "labels": [
-            [False, False, True]
+            [True, True, True]
         ]
         * NUM_DUMMY_SAMPLES
     }
