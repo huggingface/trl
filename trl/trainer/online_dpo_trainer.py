@@ -248,6 +248,14 @@ class OnlineDPOTrainer(Trainer):
             use_cache=False if args.gradient_checkpointing else True,
         )
 
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
+        # the "input_ids" key. As a result, the trainer issues the warning: "Could not estimate the number of tokens
+        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
+        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
+        # that the warning has already been issued.
+        model.warnings_issued["estimate_tokens"] = True
+
         super().__init__(
             model=model,
             args=args,

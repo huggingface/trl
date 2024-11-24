@@ -581,6 +581,15 @@ class BCOTrainer(Trainer):
         self.embedding_func = embedding_func
         self.embedding_tokenizer = embedding_tokenizer
 
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in BCO, the sampled data does not include the
+        # "input_ids" key. Instead, the available keys are "prompt_input_ids" and "completion_input_ids". As a result,
+        # the trainer issues the warning: "Could not estimate the number of tokens of the input, floating-point
+        # operations will not be computed." To suppress this warning, we set the "estimate_tokens" key in the model's
+        # "warnings_issued" dictionary to True. This acts as a flag to indicate that the warning has already been
+        # issued.
+        model.warnings_issued["estimate_tokens"] = True
+
         with PartialState().local_main_process_first():
             # Apply the chat template if needed
             train_dataset = train_dataset.map(
