@@ -274,10 +274,10 @@ class StepwiseRewardTrainer(Trainer):
         citation = textwrap.dedent(
             """\
         @article{uesato2022solving,
-        title={Solving math word problems with process-and outcome-based feedback},
-        author={Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
-        journal={arXiv preprint arXiv:2211.14275},
-        year={2022}
+	title        = {Solving Math Word Problems With Process- and Outcome-Based Feedback},
+	author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
+	year         = 2022,
+	journal      = {arXiv preprint arXiv:2211.14275}
         }"""
         )
 
