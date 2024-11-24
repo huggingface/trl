@@ -14,15 +14,19 @@
 
 import json
 import os
+import sys
 import tempfile
 import unittest
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 from transformers.testing_utils import require_peft, require_wandb
+from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
-from trl import BasePairwiseJudge, LogCompletionsCallback, WinRateCallback
+from tests.testing_utils import require_mergekit
+from trl import BasePairwiseJudge, DPOConfig, DPOTrainer, LogCompletionsCallback, MergeModelCallback, WinRateCallback
+from trl.mergekit_utils import MergeConfig
 
 
 if is_peft_available():
@@ -30,11 +34,13 @@ if is_peft_available():
 
 
 class HalfPairwiseJudge(BasePairwiseJudge):
-    """Naive pairwise judge that always returns [1, 0]"""
+    """Naive pairwise judge that always returns [1, 0] for two prompts"""
 
-    def judge(self, prompts, completions, shuffle_order=True):
+    def judge(self, prompts, completions, shuffle_order=True, return_scores=False):
         # just check that the batch size is 2
         assert len(prompts) == 2
+        if return_scores:
+            return [0.3, 0.9]
         return [1, 0]
 
 
@@ -132,6 +138,49 @@ class WinRateCallbackTester(unittest.TestCase):
             winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
             self.assertListEqual(winrate_history, self.expected_winrates)
 
+    def test_soft_judge(self):
+        """Test that the soft judge functionality works correctly"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                eval_steps=2,  # evaluate every 2 steps
+                per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
+                per_device_eval_batch_size=2,
+                report_to="none",
+            )
+            trainer = TrainerWithRefModel(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=training_args,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                processing_class=self.tokenizer,
+            )
+            win_rate_callback = WinRateCallback(
+                judge=self.judge, trainer=trainer, generation_config=self.generation_config, use_soft_judge=True
+            )
+            trainer.add_callback(win_rate_callback)
+            trainer.train()
+
+            # Expected values based on judge returning [0.3, 0.9] for each pair
+            expected_soft_winrates = [
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 0.0, "step": 0},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 0.5, "step": 2},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 1.0, "step": 4},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 1.5, "step": 6},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 2.0, "step": 8},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 2.5, "step": 10},
+                {"eval_avg_win_prob": 0.4, "eval_win_rate": 0.5, "epoch": 3.0, "step": 12},
+            ]
+
+            winrate_history = [
+                {k: h[k] for k in ["eval_avg_win_prob", "eval_win_rate", "epoch", "step"]}
+                for h in trainer.state.log_history
+                if "eval_avg_win_prob" in h
+            ]
+            self.assertListEqual(winrate_history, expected_soft_winrates)
+
     @require_peft
     def test_lora(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -221,3 +270,72 @@ class LogCompletionsCallbackTester(unittest.TestCase):
 
             # Check that the prompt is in the log
             self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
+
+
+# On Windows, temporary directory cleanup fails when using the MergeModelCallback.
+# This is not an issue with the functionality of the code itself, but it can cause the test to fail
+# due to unhandled cleanup errors. Python 3.10 introduces the `ignore_cleanup_errors` argument to
+# mitigate this. As a result, this test is skipped for Python versions below 3.10.
+@require_mergekit
+@unittest.skipIf(
+    sys.version_info < (3, 10),
+    "Test fails on Python versions lower than 3.10, but its only related to cleanup errors with temp dir.",
+)
+class MergeModelCallbackTester(unittest.TestCase):
+    def setUp(self):
+        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-random-LlamaForCausalLM")
+        self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+    def test_callback(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                num_train_epochs=1,
+                report_to="none",
+                save_strategy="steps",
+                save_steps=1,
+            )
+            config = MergeConfig()
+            merge_callback = MergeModelCallback(config)
+            trainer = DPOTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dataset,
+                tokenizer=self.tokenizer,
+                callbacks=[merge_callback],
+            )
+            trainer.train()
+            last_checkpoint = get_last_checkpoint(tmp_dir)
+            merged_path = os.path.join(last_checkpoint, "merged")
+            self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
+
+    def test_every_checkpoint(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                num_train_epochs=1,
+                report_to="none",
+                save_strategy="steps",
+                save_steps=1,
+            )
+            config = MergeConfig()
+            merge_callback = MergeModelCallback(config, merge_at_every_checkpoint=True)
+            trainer = DPOTrainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dataset,
+                tokenizer=self.tokenizer,
+                callbacks=[merge_callback],
+            )
+            trainer.train()
+
+            checkpoints = sorted(
+                [os.path.join(tmp_dir, cp) for cp in os.listdir(tmp_dir) if cp.startswith("checkpoint-")]
+            )
+
+            for checkpoint in checkpoints:
+                merged_path = os.path.join(checkpoint, "merged")
+                self.assertTrue(
+                    os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}."
+                )

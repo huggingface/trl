@@ -79,7 +79,7 @@ def extract_dialogue(example: str) -> List[Dict[str, str]]:
         prompt.append({"role": role, "content": content})
 
     # Remove the prompt from the chosen and rejected dialogues
-    chosen = [{"role": "assitant", "content": chosen_line}]
+    chosen = [{"role": "assistant", "content": chosen_line}]
     rejected = [{"role": "assistant", "content": rejected_line}]
 
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}

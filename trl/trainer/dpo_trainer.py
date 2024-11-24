@@ -28,9 +28,11 @@ import torch
 import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset
+from packaging import version
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -1007,10 +1009,24 @@ class DPOTrainer(Trainer):
             losses_rejected = 1 - F.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
             losses = losses_chosen + losses_rejected
 
+        elif self.loss_type == "discopop":
+            # Eqn (5) of the DiscoPOP paper (https://huggingface.co/papers/2406.08414)
+            # This loss was discovered with LLM discovery
+            logratios = chosen_logps - rejected_logps
+            ref_logratios = ref_chosen_logps - ref_rejected_logps
+            logits = logratios - ref_logratios
+            logits = logits * self.beta
+            # Modulate the mixing coefficient based on the log ratio magnitudes
+            log_ratio_modulation = torch.sigmoid(logits / self.args.discopop_tau)
+            logistic_component = -F.logsigmoid(logits)
+            exp_component = torch.exp(-logits)
+            # Blend between logistic and exponential component based on log ratio modulation
+            losses = logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
+
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'apo_zero', 'apo_down']"
+                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', 'apo_down']"
             )
 
         chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
@@ -1361,13 +1377,15 @@ class DPOTrainer(Trainer):
 
         return initial_output
 
-    def log(self, logs: Dict[str, float]) -> None:
+    def log(self, logs: Dict[str, float], start_time: Optional[float] = None) -> None:
         """
         Log `logs` on the various objects watching training, including stored metrics.
 
         Args:
             logs (`Dict[str, float]`):
                 The values to log.
+            start_time (`float` or `None`, *optional*, defaults to `None`):
+                Start time of the training.
         """
         # logs either has 'loss' or 'eval_loss'
         train_eval = "train" if "loss" in logs else "eval"
@@ -1375,7 +1393,11 @@ class DPOTrainer(Trainer):
         for key, metrics in self._stored_metrics[train_eval].items():
             logs[key] = torch.tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]
-        return super().log(logs)
+
+        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+            return super().log(logs, start_time)
+        else:  # transformers<=4.46
+            return super().log(logs)
 
     def create_model_card(
         self,
