@@ -14,7 +14,7 @@ This post-training method was contributed by [Gaetan Lopez](https://github.com/g
 
 The [`StepwiseRewardTrainer`] is a wrapper around the [`Trainer`] class. It needs two parameters to be set via the [`StepwiseRewardConfig`] namely:
 * `max_length`: controls the maximum length of the sequences where a sequence is composed of the prompt and the concatenation of each completion steps.
-* `step_separator`: indicate the separator used to separate each step of the reasoning process. By default, it is set to `"n"`.
+* `step_separator`: indicates the separator used to separate each step of the reasoning process. By default, it is set to `"\n"`.
 
 The basic API is as follows:
 
