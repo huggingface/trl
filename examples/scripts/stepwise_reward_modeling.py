@@ -86,7 +86,7 @@ if __name__ == "__main__":
         model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
     )
     model = AutoModelForTokenClassification.from_pretrained(
-        model_config.model_name_or_path, num_labels=3, trust_remote_code=model_config.trust_remote_code, **model_kwargs
+        model_config.model_name_or_path, num_labels=2, trust_remote_code=model_config.trust_remote_code, **model_kwargs
     )
     # Align padding tokens between tokenizer and model
     model.config.pad_token_id = tokenizer.pad_token_id
