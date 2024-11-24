@@ -209,6 +209,15 @@ class RewardTrainer(Trainer):
         else:
             self.use_reward_data_collator = False
 
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in Reward, the sampled data does not include the
+        # "input_ids" key. Instead, the available keys are "input_ids_chosen" and "input_ids_rejected". As a result,
+        # the trainer issues the warning: "Could not estimate the number of tokens of the input, floating-point
+        # operations will not be computed." To suppress this warning, we set the "estimate_tokens" key in the model's
+        # "warnings_issued" dictionary to True. This acts as a flag to indicate that the warning has already been
+        # issued.
+        model.warnings_issued["estimate_tokens"] = True
+
         if "input_ids_chosen" not in train_dataset.column_names:
             with PartialState().local_main_process_first():
                 fn_kwargs = {"tokenizer": processing_class}
