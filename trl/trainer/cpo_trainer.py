@@ -27,8 +27,10 @@ import torch
 import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState
 from datasets import Dataset
+from packaging import version
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -314,6 +316,15 @@ class CPOTrainer(Trainer):
                 )
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
+
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in CPO, the sampled data does not include the
+        # "input_ids" key. Instead, the available keys are "prompt_input_ids", "chosen_input_ids", and
+        # "rejected_input_ids". As a result, the trainer issues the warning: "Could not estimate the number of tokens
+        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
+        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
+        # that the warning has already been issued.
+        model.warnings_issued["estimate_tokens"] = True
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
@@ -963,13 +974,15 @@ class CPOTrainer(Trainer):
 
         return initial_output
 
-    def log(self, logs: Dict[str, float]) -> None:
+    def log(self, logs: Dict[str, float], start_time: Optional[float] = None) -> None:
         """
         Log `logs` on the various objects watching training, including stored metrics.
 
         Args:
             logs (`Dict[str, float]`):
                 The values to log.
+            start_time (`float` or `None`, *optional*, defaults to `None`):
+                Start time of the training.
         """
         # logs either has 'loss' or 'eval_loss'
         train_eval = "train" if "loss" in logs else "eval"
@@ -977,7 +990,11 @@ class CPOTrainer(Trainer):
         for key, metrics in self._stored_metrics[train_eval].items():
             logs[key] = torch.tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]
-        return super().log(logs)
+
+        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+            return super().log(logs, start_time)
+        else:  # transformers<=4.46
+            return super().log(logs)
 
     def _shift_right(self, input_ids):
         if self.decoder_start_token_id is None:

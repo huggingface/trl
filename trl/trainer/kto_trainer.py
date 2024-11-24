@@ -28,9 +28,11 @@ import torch
 import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset, concatenate_datasets
+from packaging import version
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoModelForCausalLM,
@@ -573,6 +575,15 @@ class KTOTrainer(Trainer):
                 "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
                 " meaning the auxiliary loss will not be used."
             )
+
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in KTO, the sampled data does not include the
+        # "input_ids" key. Instead, the available keys are "prompt_input_ids" and "completion_input_ids". As a result,
+        # the trainer issues the warning: "Could not estimate the number of tokens of the input, floating-point
+        # operations will not be computed." To suppress this warning, we set the "estimate_tokens" key in the model's
+        # "warnings_issued" dictionary to True. This acts as a flag to indicate that the warning has already been
+        # issued.
+        model.warnings_issued["estimate_tokens"] = True
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
@@ -1442,13 +1453,15 @@ class KTOTrainer(Trainer):
 
         return initial_output
 
-    def log(self, logs: Dict[str, float]) -> None:
+    def log(self, logs: Dict[str, float], start_time: Optional[float] = None) -> None:
         """
         Log `logs` on the various objects watching training, including stored metrics.
 
         Args:
             logs (`Dict[str, float]`):
                 The values to log.
+            start_time (`float` or `None`, *optional*, defaults to `None`):
+                Start time of the training.
         """
         # logs either has 'loss' or 'eval_loss'
         train_eval = "train" if "loss" in logs else "eval"
@@ -1473,7 +1486,11 @@ class KTOTrainer(Trainer):
         for key, metrics in self._stored_metrics[train_eval].items():
             logs[f"{prefix}{key}"] = torch.Tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]
-        return super().log(logs)
+
+        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+            return super().log(logs, start_time)
+        else:  # transformers<=4.46
+            return super().log(logs)
 
     def create_model_card(
         self,
