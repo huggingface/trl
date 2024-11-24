@@ -50,7 +50,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
         accuracy = compute_accuracy(dummy_eval_predictions)
         self.assertEqual(accuracy["accuracy"], 0.5)
 
-    @parameterized.expand(["conversational_stepwise_preference", "standard_stepwise_preference"])
+    @parameterized.expand(["conversational_step", "standard_step"])
     def test_preprocessing(self, dataset_type):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", dataset_type, split="train")
@@ -71,7 +71,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
 
     def test_train_full(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_preference", split="train")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_step", split="train")
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
@@ -89,7 +89,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
 
     def test_train_full_pretokenized(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_preference", split="train")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_step", split="train")
             dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
             dummy_dataset = dummy_dataset.map(
                 _tokenize,
@@ -121,7 +121,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
             lora_dropout=0.1,
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_preference", split="train")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_step", split="train")
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
                 model=self.model,
@@ -159,7 +159,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
 
     def test_tags(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_preference", split="train")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_step", split="train")
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
