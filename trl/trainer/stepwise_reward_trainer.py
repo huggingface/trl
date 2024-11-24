@@ -152,8 +152,6 @@ class StepwiseRewardTrainer(Trainer):
             peft_config (`Dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        if type(args) is not StepwiseRewardConfig:
-            raise ValueError(f"args should be an instance of `StepwiseRewardConfig` but got {type(args)}")
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -276,10 +274,10 @@ class StepwiseRewardTrainer(Trainer):
         citation = textwrap.dedent(
             """\
         @article{uesato2022solving,
-        title={Solving math word problems with process-and outcome-based feedback},
-        author={Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
-        journal={arXiv preprint arXiv:2211.14275},
-        year={2022}
+	title        = {Solving Math Word Problems With Process- and Outcome-Based Feedback},
+	author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
+	year         = 2022,
+	journal      = {arXiv preprint arXiv:2211.14275}
         }"""
         )
 
