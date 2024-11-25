@@ -59,7 +59,7 @@ def _tokenize(
 
     post_step_tokens = tokenizer.encode(step_separator, add_special_tokens=False)
 
-    for prompt, steps, labels in zip(batch["prompt"], batch["completion"], batch["labels"]):
+    for prompt, steps, labels in zip(batch["prompt"], batch["completions"], batch["labels"]):
         if isinstance(steps, str):
             steps = steps.strip().split(step_separator)
 
@@ -77,6 +77,10 @@ def _tokenize(
         token_level_labels.extend([-100] * len(input_ids))
 
         for i, (step, label) in enumerate(zip(steps, labels)):
+            if step_separator in step:
+                raise ValueError(
+                    "The `step_separator` you provided is present in one of the steps. Choose a `step_separator` that does not appear within the steps."
+                )
             tokenized_step = tokenizer.encode(step, add_special_tokens=False)
             step_labels = [-100] * len(tokenized_step)
             step_labels[-1] = int(label)

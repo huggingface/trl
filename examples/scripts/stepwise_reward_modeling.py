@@ -52,6 +52,7 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer, HfArgum
 
 from trl import (
     ModelConfig,
+    ScriptArguments,
     StepwiseRewardConfig,
     StepwiseRewardTrainer,
     get_kbit_device_map,
@@ -59,11 +60,10 @@ from trl import (
     get_quantization_config,
     setup_chat_format,
 )
-from trl.commands.cli_utils import RewardScriptArguments
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((RewardScriptArguments, StepwiseRewardConfig, ModelConfig))
+    parser = HfArgumentParser((ScriptArguments, StepwiseRewardConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_into_dataclasses()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
