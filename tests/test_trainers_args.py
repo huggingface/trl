@@ -48,7 +48,7 @@ from .testing_utils import require_sklearn
 class TrainerArgTester(unittest.TestCase):
     @require_sklearn
     def test_bco(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -96,7 +96,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.max_density_ratio, 20.0)
 
     def test_cpo(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -138,7 +138,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.dataset_num_proc, 4)
 
     def test_dpo(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -208,7 +208,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.discopop_tau, 0.1)
 
     def test_kto(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -255,7 +255,7 @@ class TrainerArgTester(unittest.TestCase):
 
     @parameterized.expand([(False,), (True,)])
     def test_nash_md(self, mixtures_coef_list):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -278,7 +278,7 @@ class TrainerArgTester(unittest.TestCase):
 
     @parameterized.expand([(False,), (True,)])
     def test_online_dpo(self, beta_list):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -311,7 +311,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.dataset_num_proc, 4)
 
     def test_orpo(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -341,7 +341,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.label_pad_token_id, -99)
 
     def test_reward(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -363,7 +363,7 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.center_rewards_coefficient, 0.1)
 
     def test_sft(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -396,7 +396,7 @@ class TrainerArgTester(unittest.TestCase):
 
     @parameterized.expand([(False,), (True,)])
     def test_xpo(self, alpha_list):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)

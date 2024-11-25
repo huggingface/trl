@@ -31,13 +31,13 @@ if is_peft_available():
 
 class TestOnlineDPOTrainer(unittest.TestCase):
     def setUp(self):
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.reward_model_id = "qgallouedec/tiny-LlamaForCausalLM-3.2"
+        self.reward_model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id, num_labels=1)
         self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
         self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token

@@ -64,7 +64,7 @@ from transformers import (
 from transformers.models.idefics2.configuration_idefics2 import Idefics2VisionConfig
 
 
-ORGANIZATION = "qgallouedec"
+ORGANIZATION = "trl-internal-testing"
 
 MODEL_CARD = """
 ---

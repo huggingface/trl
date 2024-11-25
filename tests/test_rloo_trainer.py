@@ -33,9 +33,9 @@ python examples/scripts/rloo/rloo.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10 \
-    --model_name_or_path qgallouedec/tiny-Qwen2ForCausalLM-2.5 \
-    --sft_model_path qgallouedec/tiny-Qwen2ForCausalLM-2.5 \
-    --reward_model_path qgallouedec/tiny-Qwen2ForCausalLM-2.5 \
+    --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 \
+    --sft_model_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 \
+    --reward_model_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 \
     --missing_eos_penalty 1.0 \
     --save_strategy no \
     --stop_token eos
@@ -53,7 +53,7 @@ python examples/scripts/rloo/rloo.py \
 
 class RLOOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
         self.policy_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id)

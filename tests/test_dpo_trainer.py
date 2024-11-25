@@ -158,14 +158,14 @@ class TestTokenizeRow(unittest.TestCase):
 
 class DPOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "qgallouedec/tiny-T5ForConditionalGeneration"
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -609,7 +609,7 @@ class DPOTrainerTester(unittest.TestCase):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
 
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         lora_config = LoraConfig(
@@ -743,7 +743,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_lora_tags(self):
         from peft import LoraConfig
 
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         lora_config = LoraConfig(
@@ -788,7 +788,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_peft
     def test_dpo_tags(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
@@ -964,7 +964,7 @@ class DPOTrainerTester(unittest.TestCase):
             )
 
     def test_dpo_loss_alpha_div_f(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
@@ -1007,7 +1007,7 @@ class DPOTrainerTester(unittest.TestCase):
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
     def test_dpo_loss_js_div_f(self):
-        model_id = "qgallouedec/tiny-Qwen2ForCausalLM-2.5"
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         # lora model
@@ -1050,7 +1050,7 @@ class DPOTrainerTester(unittest.TestCase):
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
     def test_dpo_trainer_use_num_logits_to_keep(self):
-        model_id = "qgallouedec/tiny-LlamaForCausalLM-3.2"
+        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -1136,10 +1136,10 @@ class DPOTrainerTester(unittest.TestCase):
 class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
-            ("qgallouedec/tiny-Idefics2ForConditionalGeneration",),
-            # ("qgallouedec/tiny-PaliGemmaForConditionalGeneration",),
-            ("qgallouedec/tiny-LlavaForConditionalGeneration",),
-            # ("qgallouedec/tiny-LlavaNextForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),
+            # ("trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",),
+            ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
+            # ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
         ]
     )
     def test_vdpo_trainer(self, model_id):
@@ -1211,7 +1211,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
-                    if model_id == "qgallouedec/tiny-LlavaForConditionalGeneration" and (
+                    if model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and (
                         n.startswith("vision_tower.vision_model.encoder.layers.1")
                         or n == "vision_tower.vision_model.post_layernorm.weight"
                     ):

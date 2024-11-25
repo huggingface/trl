@@ -24,8 +24,8 @@ from trl.models.utils import ChatMlSpecialTokens, setup_chat_format
 
 class DatasetFormattingTestCase(unittest.TestCase):
     def setUp(self):
-        self.llama_tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-MistralForCausalLM-0.1")
-        self.chatml_tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
+        self.llama_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-MistralForCausalLM-0.1")
+        self.chatml_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
     def test_get_formatting_func_from_dataset_with_chatml_messages(self):
         dataset = Dataset.from_dict(
@@ -117,8 +117,8 @@ class DatasetFormattingTestCase(unittest.TestCase):
 
 class SetupChatFormatTestCase(unittest.TestCase):
     def setUp(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
-        self.model = AutoModelForCausalLM.from_pretrained("qgallouedec/tiny-Qwen2ForCausalLM-2.5")
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         # remove built-in chat_template to simulate a model having no chat_template
         self.tokenizer.chat_template = None
 

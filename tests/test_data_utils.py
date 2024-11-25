@@ -85,18 +85,18 @@ class IsConversationalTester(unittest.TestCase):
 
 class ApplyChatTemplateTester(unittest.TestCase):
     tokenizers = [
-        "qgallouedec/tiny-CohereForCausalLM",
-        "qgallouedec/tiny-DbrxForCausalLM",
-        "qgallouedec/tiny-FalconMambaForCausalLM",
-        "qgallouedec/tiny-Gemma2ForCausalLM",
-        "qgallouedec/tiny-GemmaForCausalLM",
-        "qgallouedec/tiny-LlamaForCausalLM-3.1",
-        "qgallouedec/tiny-LlamaForCausalLM-3.2",
-        "qgallouedec/tiny-LlamaForCausalLM-3",
-        "qgallouedec/tiny-MistralForCausalLM-0.1",
-        "qgallouedec/tiny-MistralForCausalLM-0.2",
-        "qgallouedec/tiny-Phi3ForCausalLM",
-        "qgallouedec/tiny-Qwen2ForCausalLM-2.5",
+        "trl-internal-testing/tiny-CohereForCausalLM",
+        "trl-internal-testing/tiny-DbrxForCausalLM",
+        "trl-internal-testing/tiny-FalconMambaForCausalLM",
+        "trl-internal-testing/tiny-Gemma2ForCausalLM",
+        "trl-internal-testing/tiny-GemmaForCausalLM",
+        "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+        "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+        "trl-internal-testing/tiny-LlamaForCausalLM-3",
+        "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+        "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        "trl-internal-testing/tiny-Phi3ForCausalLM",
+        "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     ]
 
     conversational_examples = [
