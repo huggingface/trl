@@ -298,7 +298,7 @@ Warnings play a critical role in guiding users toward resolving potential issues
 - **Correct → No warning**:  
    If the operation is fully valid and expected, no message should be issued. The system is working as intended, so no warning is necessary.  
 
-- **Correct but Deserves attention → No warning, possibly a log message**:
+- **Correct but deserves attention → No warning, possibly a log message**:
    When an operation is correct but uncommon or requires special attention, providing an informational message can be helpful. This keeps users informed without implying any issue. If available, use the logger to output this message. Example:  
 
    ```python
