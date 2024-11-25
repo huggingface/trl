@@ -51,20 +51,21 @@ from transformers.utils.deprecation import deprecate_kwarg
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
-from ..trainer.utils import (
+from .ppo_config import PPOConfig
+from .utils import (
     OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
     exact_div,
     first_true_indices,
     forward,
+    generate_model_card,
     get_reward,
+    peft_module_casting_to_bf16,
     prepare_deepspeed,
     print_rich_table,
     truncate_response,
 )
-from .ppo_config import PPOConfig
-from .utils import generate_model_card, peft_module_casting_to_bf16
 
 
 if is_peft_available():
@@ -97,10 +98,11 @@ class PolicyAndValueWrapper(nn.Module):
 class PPOTrainer(Trainer):
     _tag_names = ["trl", "ppo"]
 
+    @deprecate_kwarg("config", new_name="args", version="0.15.0", raise_if_both_names=True)
     @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.15.0", raise_if_both_names=True)
     def __init__(
         self,
-        config: PPOConfig,
+        args: PPOConfig,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ],
@@ -122,8 +124,7 @@ class PPOTrainer(Trainer):
                 "same as `policy`, you must make a copy of it, or `None` if you use peft."
             )
 
-        self.args = config
-        args = config
+        self.args = args
         self.processing_class = processing_class
         self.policy = policy
 
