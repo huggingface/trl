@@ -205,6 +205,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
             ignore_index=self.ignore_index,
         )
 
+    # See https://github.com/huggingface/trl/pull/2287#discussion_r1856594421
     @unittest.skip("This test must be updated.")
     def test_data_collator_for_chatml(self):
         # Process the data
