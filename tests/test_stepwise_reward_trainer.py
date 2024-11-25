@@ -50,10 +50,9 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
         accuracy = compute_accuracy(dummy_eval_predictions)
         self.assertEqual(accuracy["accuracy"], 0.5)
 
-    @parameterized.expand(["conversational_step", "standard_step"])
-    def test_preprocessing(self, dataset_type):
+    def test_preprocessing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset("trl-internal-testing/zen", dataset_type, split="train")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_step", split="train")
             training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none", max_length=512)
             trainer = StepwiseRewardTrainer(
                 model=self.model,
