@@ -27,9 +27,10 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 class TestGKDTrainer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        cls.tokenizer = AutoTokenizer.from_pretrained(model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
-        cls.model = AutoModelForCausalLM.from_pretrained("gpt2")
+        cls.model = AutoModelForCausalLM.from_pretrained(model_id)
         cls.generation_config = GenerationConfig(
             max_new_tokens=20,
             num_return_sequences=1,
@@ -201,7 +202,7 @@ class TestGeneralizedJSDLoss(unittest.TestCase):
 
 class GKDTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)

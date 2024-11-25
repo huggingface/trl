@@ -359,7 +359,11 @@ class SFTTrainer(Trainer):
                     UserWarning,
                 )
 
-            return dataset
+            def formatting_func(x):
+                return x["input_ids"]
+
+            if not packing:
+                return dataset
 
         # check if torch dataset / dataloader and do nothing
         # see https://github.com/huggingface/trl/pull/1468 for why datasets.IterableDataset needs a separate check

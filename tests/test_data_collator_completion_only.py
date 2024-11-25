@@ -22,7 +22,7 @@ from trl import DataCollatorForCompletionOnlyLM
 class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
     def test_data_collator_finds_response_template_llama2_tokenizer(self):
         # this should ideally be tested with meta-llama/Llama-2-7b-hf
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.instruction = """### System: You are a helpful assistant.
 
 ### User: How much is 2+2?
@@ -83,7 +83,7 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         self.assertEqual(collator_text, expected_text)
 
     def test_data_collator_handling_of_long_sequences(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.instruction = """### System: You are a helpful assistant.
 
 ### User: How much is 2+2? I'm asking because I'm not sure. And I'm not sure because I'm not good at math.
@@ -106,7 +106,7 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         self.assertTrue(result, "Not all values in the tensor are -100.")
 
     def test_padding_free(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/dummy-GPT2-correct-vocab")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
             tokenizer.pad_token_id = tokenizer.eos_token_id
