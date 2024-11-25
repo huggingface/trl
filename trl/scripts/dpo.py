@@ -46,6 +46,8 @@ python examples/scripts/dpo.py \
     --lora_alpha 16
 """
 
+import argparse
+
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -135,7 +137,18 @@ def main(script_args, training_args, model_config):
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
 
+def make_parser(subparsers: argparse._SubParsersAction = None):
+    if subparsers is not None:
+        parser = subparsers.add_parser("dpo", help="Run the DPO training script")
+    else:
+        parser = parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
+
+    if subparsers is not None:
+        parser.set_defaults(func=main)
+    return parser
+
+
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
+    parser = make_parser()
     script_args, training_args, model_config = parser.parse_args_and_config()
     main(script_args, training_args, model_config)
