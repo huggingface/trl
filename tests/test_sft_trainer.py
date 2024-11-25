@@ -62,7 +62,7 @@ class SFTTrainerTester(unittest.TestCase):
     r""" """
 
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -1146,7 +1146,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 21)
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
             self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
     def test_sft_trainer_eval_packing(self):
@@ -1171,8 +1171,8 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 21)
-            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 2)
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
+            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 5)  # w/ this dataset, we end up with 5 seqs
 
     def test_sft_trainer_no_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1265,9 +1265,9 @@ class SFTTrainerTester(unittest.TestCase):
                 report_to="none",
             )
             tiny_llava = LlavaForConditionalGeneration.from_pretrained(
-                "trl-internal-testing/tiny-random-LlavaForConditionalGeneration"
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration"
             )
-            processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
+            processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlavaForConditionalGeneration")
 
             processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 
