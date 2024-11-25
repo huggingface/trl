@@ -152,7 +152,7 @@ if __name__ == "__main__":
     # Training
     ################
     trainer = PPOTrainer(
-        config=training_args,
+        args=training_args,
         processing_class=tokenizer,
         model=policy,
         ref_model=ref_policy,

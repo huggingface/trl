@@ -154,7 +154,7 @@ ppo_config = PPOConfig(
     optimize_cuda_cache=True,
 )
 
-ppo_trainer = PPOTrainer(config=ppo_config, model=model, tokenizer=tokenizer, dataset=ds)
+ppo_trainer = PPOTrainer(args=ppo_config, model=model, tokenizer=tokenizer, dataset=ds)
 test_dataloader = ppo_trainer.accelerator.prepare(test_dataloader)
 
 # text env
