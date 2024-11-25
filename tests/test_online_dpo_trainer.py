@@ -21,7 +21,6 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 from .testing_utils import RandomPairwiseJudge
 
@@ -32,15 +31,16 @@ if is_peft_available():
 
 class TestOnlineDPOTrainer(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        self.reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
-        self.reward_tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
-        self.reward_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
-        self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.reward_model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+        self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id, num_labels=1)
+        self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
+        self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
 
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training(self, config_name):

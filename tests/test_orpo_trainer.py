@@ -21,25 +21,27 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 from transformers.testing_utils import require_peft
 
 from trl import ORPOConfig, ORPOTrainer
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 class ORPOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     @parameterized.expand(
         [
-            ("gpt2", "standard_preference"),
+            ("qwen", "standard_preference"),
             ("t5", "standard_implicit_prompt_preference"),
-            ("gpt2", "conversational_preference"),
+            ("qwen", "conversational_preference"),
             ("t5", "conversational_implicit_prompt_preference"),
         ]
     )
@@ -59,7 +61,7 @@ class ORPOTrainerTester(unittest.TestCase):
 
             dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            if name == "gpt2":
+            if name == "qwen":
                 model = self.model
                 tokenizer = self.tokenizer
             elif name == "t5":
