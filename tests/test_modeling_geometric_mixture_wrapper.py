@@ -21,9 +21,10 @@ from trl.models.modeling_base import GeometricMixtureWrapper, create_reference_m
 
 class TestGeometricMixtureWrapper(unittest.TestCase):
     def setUp(self):
-        self.model = AutoModelForCausalLM.from_pretrained("gpt2")
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.model = AutoModelForCausalLM.from_pretrained(model_id)
         self.ref_model = create_reference_model(self.model)
-        self.generation_config = GenerationConfig.from_pretrained("gpt2")
+        self.generation_config = GenerationConfig.from_pretrained(model_id)
         self.mixture_coef = 0.5
         self.wrapper = GeometricMixtureWrapper(
             self.model, self.ref_model, self.generation_config, mixture_coef=self.mixture_coef

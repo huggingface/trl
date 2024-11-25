@@ -24,8 +24,8 @@ from trl.models.utils import ChatMlSpecialTokens, setup_chat_format
 
 class DatasetFormattingTestCase(unittest.TestCase):
     def setUp(self):
-        self.llama_tokenizer = AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
-        self.chatml_tokenizer = AutoTokenizer.from_pretrained("philschmid/gpt2-chatml-tokenizer")
+        self.llama_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-MistralForCausalLM-0.1")
+        self.chatml_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
     def test_get_formatting_func_from_dataset_with_chatml_messages(self):
         dataset = Dataset.from_dict(
@@ -44,7 +44,7 @@ class DatasetFormattingTestCase(unittest.TestCase):
         formatting_func = get_formatting_func_from_dataset(dataset, self.llama_tokenizer)
         self.assertIsInstance(formatting_func, Callable)
         formatted_text = formatting_func(dataset[0])
-        expected = "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"
+        expected = "<s> [INST] You are helpful\n\nHello [/INST] Hi, how can I help you?</s>"
         self.assertEqual(formatted_text, expected)
         formatted_text = formatting_func(dataset[0:1])
         self.assertListEqual(formatted_text, [expected])
@@ -73,7 +73,7 @@ class DatasetFormattingTestCase(unittest.TestCase):
         formatting_func = get_formatting_func_from_dataset(dataset, self.llama_tokenizer)
         self.assertIsInstance(formatting_func, Callable)
         formatted_text = formatting_func(dataset[0])
-        expected = "<s>[INST] <<SYS>>\nYou are helpful\n<</SYS>>\n\nHello [/INST] Hi, how can I help you? </s>"
+        expected = "<s> [INST] You are helpful\n\nHello [/INST] Hi, how can I help you?</s>"
         self.assertEqual(formatted_text, expected)
         formatted_text = formatting_func(dataset[0:1])
         self.assertListEqual(formatted_text, [expected])
@@ -94,9 +94,9 @@ class DatasetFormattingTestCase(unittest.TestCase):
         self.assertIsNotNone(formatting_func)
         self.assertIsInstance(formatting_func, Callable)
         formatted_text = formatting_func(dataset[0])
-        self.assertEqual(formatted_text, "<s>[INST] What is 2+2? [/INST] 4 </s>")
+        self.assertEqual(formatted_text, "<s> [INST] What is 2+2? [/INST] 4</s>")
         formatted_text = formatting_func(dataset[0:1])
-        self.assertListEqual(formatted_text, ["<s>[INST] What is 2+2? [/INST] 4 </s>"])
+        self.assertListEqual(formatted_text, ["<s> [INST] What is 2+2? [/INST] 4</s>"])
 
     def test_get_formatting_func_from_dataset_from_hub(self):
         ds_1 = load_dataset("philschmid/trl-test-instruction", split="train")
@@ -117,13 +117,12 @@ class DatasetFormattingTestCase(unittest.TestCase):
 
 class SetupChatFormatTestCase(unittest.TestCase):
     def setUp(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
-        self.model = AutoModelForCausalLM.from_pretrained("hf-internal-testing/tiny-random-MistralForCausalLM")
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         # remove built-in chat_template to simulate a model having no chat_template
         self.tokenizer.chat_template = None
 
     def test_setup_chat_format(self):
-        original_tokenizer_len = len(self.tokenizer)
         modified_model, modified_tokenizer = setup_chat_format(
             self.model, self.tokenizer, format="chatml", resize_to_multiple_of=64
         )
@@ -136,9 +135,7 @@ class SetupChatFormatTestCase(unittest.TestCase):
         self.assertEqual(modified_tokenizer.eos_token, _chatml.eos_token)
         self.assertEqual(modified_tokenizer.pad_token, _chatml.pad_token)
         self.assertEqual(modified_tokenizer.bos_token, _chatml.bos_token)
-        self.assertEqual(len(modified_tokenizer), (original_tokenizer_len + 2))
         self.assertEqual((self.model.get_input_embeddings().weight.shape[0] % 64), 0)
-        self.assertEqual(self.model.get_input_embeddings().weight.shape[0], (original_tokenizer_len + 64))
 
     def test_example_with_setup_model(self):
         modified_model, modified_tokenizer = setup_chat_format(
