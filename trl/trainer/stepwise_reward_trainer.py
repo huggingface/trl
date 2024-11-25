@@ -202,9 +202,6 @@ class StepwiseRewardTrainer(Trainer):
                     "step_separator": args.step_separator,
                 }
                 train_dataset = train_dataset.map(
-                    maybe_apply_chat_template, fn_kwargs=chat_template_kwargs, num_proc=args.dataset_num_proc
-                )
-                train_dataset = train_dataset.map(
                     _tokenize,
                     batched=True,
                     fn_kwargs=tokenize_kwargs,
@@ -212,9 +209,6 @@ class StepwiseRewardTrainer(Trainer):
                 )
 
                 if eval_dataset is not None:
-                    eval_dataset = eval_dataset.map(
-                        maybe_apply_chat_template, fn_kwargs=chat_template_kwargs, num_proc=args.dataset_num_proc
-                    )
                     eval_dataset = eval_dataset.map(
                         _tokenize,
                         batched=True,
