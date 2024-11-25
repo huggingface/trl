@@ -159,8 +159,8 @@ class TestGKDTrainer(unittest.TestCase):
 
     def test_uld_loss_different_vocab_sizes(self):
         # Test with different vocabulary sizes between student and teacher
-        student_logits = torch.tensor([[[0.1, 0.9, 0.0]]])  # vocab_size = 3
-        teacher_logits = torch.tensor([[[0.8, 0.1, 0.1]]])  # vocab_size = 3
+        student_logits = torch.tensor([[[0.1, 0.9]]])  # vocab_size = 2
+        teacher_logits = torch.tensor([[[0.8, 0.1, 0.1, 0.2]]])  # vocab_size = 4
         student_labels = torch.tensor([[1]])
         teacher_labels = torch.tensor([[1]])
 
