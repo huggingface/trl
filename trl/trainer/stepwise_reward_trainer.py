@@ -64,7 +64,7 @@ def _tokenize(
             steps = steps.strip().split(step_separator)
 
         if len(steps) != len(labels):
-            raise ValueError("`labels` and `completion` should have the same length.")
+            raise ValueError("`labels` and `completions` should have the same length.")
         input_ids = []
         token_level_labels = []
         
