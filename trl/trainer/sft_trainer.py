@@ -367,7 +367,11 @@ class SFTTrainer(Trainer):
                     "You passed a dataset that is already processed (contains an `input_ids` field) together with a valid formatting function. Therefore `formatting_func` will be ignored."
                 )
 
-            return dataset
+            def formatting_func(x):
+                return x["input_ids"]
+
+            if not packing:
+                return dataset
 
         # check if torch dataset / dataloader and do nothing
         # see https://github.com/huggingface/trl/pull/1468 for why datasets.IterableDataset needs a separate check
