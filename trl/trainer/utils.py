@@ -606,7 +606,8 @@ class ConstantLengthDataset(IterableDataset):
         if dataset_text_field is not None and formatting_func is not None:
             warnings.warn(
                 "Only one of `dataset_text_field` and `formatting_func` should be provided. "
-                "Ignoring `dataset_text_field` and using `formatting_func`."
+                "Ignoring `dataset_text_field` and using `formatting_func`.",
+                UserWarning,
             )
 
         if formatting_func is not None:
@@ -616,12 +617,6 @@ class ConstantLengthDataset(IterableDataset):
         else:  # neither is provided
             raise ValueError("Either `dataset_text_field` or `formatting_func` should be provided.")
 
-        if formatting_func is not None:
-            if formatting_func.__code__.co_argcount > 1:
-                warnings.warn(
-                    "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
-                    " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
-                )
         self.pretokenized = False
         column_names = (
             dataset.column_names if isinstance(dataset, (datasets.Dataset, datasets.IterableDataset)) else None
@@ -648,7 +643,6 @@ class ConstantLengthDataset(IterableDataset):
                 except StopIteration:
                     if self.infinite:
                         iterator = iter(self.dataset)
-                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
                     else:
                         more_examples = False
                         break
