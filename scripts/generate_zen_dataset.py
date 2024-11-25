@@ -307,7 +307,7 @@ def main(test_size, push_to_hub, repo_id):
     if push_to_hub:
         standard_unpaired_preference_dataset.push_to_hub(repo_id, config_name="standard_unpaired_preference")
 
-    standard_step_dataset = Dataset.from_dict({
+    standard_stepwise_supervision_dataset = Dataset.from_dict({
         "prompt": [
             "Beautiful is better than",
             "Explicit is better than",
@@ -371,9 +371,9 @@ def main(test_size, push_to_hub, repo_id):
             [False]
         ]
     })
-    standard_step_dataset = standard_step_dataset.train_test_split(test_size=test_size)
+    standard_stepwise_supervision_dataset = standard_stepwise_supervision_dataset.train_test_split(test_size=test_size)
     if push_to_hub:
-        standard_step_dataset.push_to_hub(repo_id, config_name="standard_step")
+        standard_stepwise_supervision_dataset.push_to_hub(repo_id, config_name="standard_stepwise_supervision")
 
     conversational_language_modeling_dataset = Dataset.from_dict({
         "messages": [
