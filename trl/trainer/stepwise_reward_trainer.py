@@ -36,7 +36,6 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import maybe_apply_chat_template
 from .stepwise_reward_config import StepwiseRewardConfig
 from .utils import (
     compute_accuracy,
@@ -67,7 +66,7 @@ def _tokenize(
             raise ValueError("`labels` and `completions` should have the same length.")
         input_ids = []
         token_level_labels = []
-        
+
         if tokenizer.bos_token_id is not None:
             if not prompt.startswith(tokenizer.bos_token):
                 input_ids.append(tokenizer.bos_token_id)
@@ -77,7 +76,6 @@ def _tokenize(
         token_level_labels.extend([-100] * len(input_ids))
 
         for i, (step, label) in enumerate(zip(steps, labels)):
-
             tokenized_step = tokenizer.encode(step, add_special_tokens=False)
             step_labels = [-100] * len(tokenized_step)
             step_labels[-1] = int(label)
@@ -86,7 +84,7 @@ def _tokenize(
                 tokenized_step.extend(post_step_tokens)
                 step_labels.extend([-100] * len(post_step_tokens))
 
-            # Avoid adding steps if the maximum length is reached as in stepwise reward training only the token after the last token is labeled.
+            # Avoid adding steps if the maximum length is reached as in Stepwise reward training only the token after the last token of each step is labeled.
             if (len(input_ids) + len(tokenized_step)) < (max_length - 1):
                 input_ids.extend(tokenized_step)
                 token_level_labels.extend(step_labels)
@@ -200,7 +198,6 @@ class StepwiseRewardTrainer(Trainer):
                     " we have set it for you, but you should do it yourself in the future."
                 )
             with PartialState().local_main_process_first():
-                chat_template_kwargs = {"tokenizer": processing_class}
                 tokenize_kwargs = {
                     "tokenizer": processing_class,
                     "max_length": args.max_length,
