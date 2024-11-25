@@ -28,13 +28,13 @@ class ScriptArguments:
             Fraction of the dataset to include in the test split.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the dataset to the Hugging Face Hub.
-        repo_id (`str`, *optional*, defaults to `"trl-lib/zen"`):
+        repo_id (`str`, *optional*, defaults to `"trl-internal-testing/zen"`):
             Hugging Face repository ID to push the dataset to.
     """
 
     test_size: float = 0.1
     push_to_hub: bool = False
-    repo_id: str = "trl-lib/zen"
+    repo_id: str = "trl-internal-testing/zen"
 
 
 def main(test_size, push_to_hub, repo_id):
