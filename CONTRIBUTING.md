@@ -286,13 +286,21 @@ These examples represent the two ends of a continuum. The specific timeline for 
 
 ### Working with Warnings
 
+Warnings play a critical role in guiding users toward resolving potential issues, but they should be used thoughtfully to avoid unnecessary noise. Unlike logging, which provides informational context or operational details, warnings signal conditions that require attention and action. Overusing warnings can dilute their importance, leading users to ignore them entirely.
+
 When working with warnings in the codebase, please follow these principles:
 
 1. **Warnings must be actionable**
    Every warning raised should be actionable and provide clear guidance on how to address or resolve the underlying issue. For example, a deprecation warning should include an alternative method or function that can be used.
 
-2. **Warnings should not indicate normal behavior**
-   Warnings should not be triggered for issues that do not affect functionality. They must not appear for the expected, intended operation of the software. Warnings should highlight potential problems, not reflect normal behavior. In other words, warnings should not be used as a substitute for logging.
+2. **No warnings for supported operations**  
+   Warnings must not occur during normal, supported operation of the software, even in edge or rare cases. If the behavior is supported—even if uncommon—the code should remain silent. In other words, warnings should not be used as a substitute for logging. 
+
+   - If the user's action is **invalid or unsupported**, the code should raise an exception.  
+   - If the user's action is **valid but potentially suboptimal** (e.g., conflicting arguments), a warning may be appropriate but must clarify the issue and how to resolve it. For example:  
+     *"Both `foo` and `bar` were provided, but only one is allowed. Ignoring `foo`. Please pass only one of these arguments."*  
+
+   In other words, warnings should not be used as a substitute for logging.
 
 3. **Use the appropriate warning type**
    Use the appropriate warning types (e.g., `DeprecationWarning`, `UserWarning`) for features that are being phased out or for behaviors that should be addressed in future versions.
