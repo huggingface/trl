@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from huggingface_hub import ModelCard
+# This script generates tiny models used in the TRL library for unit tests. It pushes them to the Hub under the
+# `trl-internal-testing` organization.
+# This script is meant to be run when adding new tiny model to the TRL library.
+
+from huggingface_hub import HfApi, ModelCard
 from transformers import (
     AutoProcessor,
     AutoTokenizer,
@@ -74,6 +78,9 @@ This is a minimal model built for unit tests in the [TRL](https://github.com/hug
 """
 
 
+api = HfApi()
+
+
 def push_to_hub(model, tokenizer, suffix=None):
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
@@ -81,9 +88,13 @@ def push_to_hub(model, tokenizer, suffix=None):
     repo_id = f"{ORGANIZATION}/tiny-{model_class_name}"
     if suffix is not None:
         repo_id += f"-{suffix}"
-    model.push_to_hub(repo_id)
-    tokenizer.push_to_hub(repo_id)
-    model_card.push_to_hub(repo_id)
+
+    if api.model_exists(repo_id):
+        print(f"Model {repo_id} already exists, skipping")
+    else:
+        model.push_to_hub(repo_id)
+        tokenizer.push_to_hub(repo_id)
+        model_card.push_to_hub(repo_id)
 
 
 # Decoder models
