@@ -54,7 +54,7 @@ if is_wandb_available():
 def _tokenize(
     batch: Dict[str, List[Any]], tokenizer: PreTrainedTokenizerBase, max_length: int, step_separator: str
 ) -> Dict[str, List[Any]]:
-    """Tokenize a batch from a stepwise preference modeling dataset."""
+    """Tokenize a batch from a Stepwise supervision dataset."""
     new_examples = {"input_ids": [], "attention_mask": [], "labels": []}
 
     post_step_tokens = tokenizer.encode(step_separator, add_special_tokens=False)
@@ -67,6 +67,11 @@ def _tokenize(
             raise ValueError("`labels` and `completion` should have the same length.")
         input_ids = []
         token_level_labels = []
+        
+        if tokenizer.bos_token_id is not None:
+            if not prompt.startswith(tokenizer.bos_token):
+                input_ids.append(tokenizer.bos_token_id)
+                token_level_labels.append(-100)
 
         input_ids.extend(tokenizer.encode(prompt, add_special_tokens=False))
         token_level_labels.extend([-100] * len(input_ids))
@@ -89,7 +94,6 @@ def _tokenize(
                 break
 
         # no need to add the eos token at the end
-
         new_examples["input_ids"].append(input_ids)
         new_examples["attention_mask"].append([1] * len(input_ids))
         new_examples["labels"].append(token_level_labels)
