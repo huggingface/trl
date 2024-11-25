@@ -89,7 +89,7 @@ def push_to_hub(model, tokenizer, suffix=None):
     if suffix is not None:
         repo_id += f"-{suffix}"
 
-    if api.model_exists(repo_id):
+    if api.repo_exists(repo_id):
         print(f"Model {repo_id} already exists, skipping")
     else:
         model.push_to_hub(repo_id)
@@ -115,6 +115,7 @@ for model_id, config_class, model_class, suffix in [
     ("facebook/opt-1.3b", OPTConfig, OPTForCausalLM, None),
     ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, None),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, "2.5"),
+    ("Qwen/Qwen2.5-Coder-0.5B", Qwen2Config, Qwen2ForCausalLM, "2.5-Coder"),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
