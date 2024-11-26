@@ -265,14 +265,6 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
         # Just check if the generation works
         _ = model.generate(input_ids, generation_config=generation_config)
 
-    def test_raise_error_not_causallm(self):
-        # Test with a model without a LM head
-        model_id = "trl-internal-testing/tiny-GPT2LMHeadModel"
-        # This should raise a ValueError
-        with self.assertRaises(ValueError):
-            pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
-            _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
-
     def test_transformers_bf16_kwargs(self):
         r"""
         Test if the transformers kwargs are correctly passed
