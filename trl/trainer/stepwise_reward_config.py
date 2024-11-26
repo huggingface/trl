@@ -32,10 +32,13 @@ class StepwiseRewardConfig(TrainingArguments):
             Maximum length of the sequences (prompt + completion) in the batch. The completion is the concatenation of the steps.
         step_separator (`str`, *optional*, defaults to `"\n"`):
             Separator used to separate each step of the reasoning process.
+        train_on_last_step (`bool`, *optional*, defaults to `False`):
+            Whether or not to train on the last step only.
         dataset_num_proc (`int`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
     """
 
     max_length: Optional[int] = None
     step_separator: str = "\n"
+    train_on_last_step: bool = False
     dataset_num_proc: Optional[int] = None

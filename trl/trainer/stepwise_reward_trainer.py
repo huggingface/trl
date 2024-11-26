@@ -54,6 +54,7 @@ def _tokenize(
     tokenizer,
     max_length: int,
     step_separator: str,
+    train_on_last_step: bool,
 ) -> Dict[str, List[Any]]:
     """Tokenize a batch from a Stepwise supervision dataset."""
     new_examples = {"input_ids": [], "attention_mask": [], "labels": []}
@@ -208,6 +209,7 @@ class StepwiseRewardTrainer(Trainer):
                     "tokenizer": processing_class,
                     "max_length": args.max_length,
                     "step_separator": args.step_separator,
+                    "train_on_last_step": args.train_on_last_step,
                 }
                 train_dataset = train_dataset.map(
                     _tokenize,
@@ -223,7 +225,7 @@ class StepwiseRewardTrainer(Trainer):
                         batched=True,
                         fn_kwargs=tokenize_kwargs,
                         num_proc=args.dataset_num_proc,
-                        remove_columns=train_dataset.features
+                        remove_columns=eval_dataset.features
                     )
 
         super().__init__(
