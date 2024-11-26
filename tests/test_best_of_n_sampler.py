@@ -31,7 +31,7 @@ class BestOfNSamplerTester(unittest.TestCase):
     Tests the BestOfNSampler class
     """
 
-    ref_model_name = "trl-internal-testing/dummy-GPT2-correct-vocab"
+    ref_model_name = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
     output_length_sampler = LengthSampler(2, 6)
     model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_model_name)
     tokenizer = AutoTokenizer.from_pretrained(ref_model_name)
