@@ -15,7 +15,7 @@ import gc
 import random
 import warnings
 from contextlib import contextmanager
-from typing import Optional, Union, dict
+from typing import Optional, Union
 
 import numpy as np
 import torch
