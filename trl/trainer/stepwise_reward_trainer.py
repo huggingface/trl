@@ -49,6 +49,7 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
+
 def _tokenize_fn(
     batch: Dict[str, List[Any]],
     tokenizer,
@@ -60,12 +61,10 @@ def _tokenize_fn(
     new_examples = {"input_ids": [], "attention_mask": [], "labels": []}
 
     post_step_tokens = tokenizer.encode(step_separator, add_special_tokens=False)
-    
+
     label_column_name = "label" if "label" in batch else "labels"
 
-    for prompt, steps, labels in zip(
-        batch["prompt"], batch["completions"], batch[label_column_name]
-    ):
+    for prompt, steps, labels in zip(batch["prompt"], batch["completions"], batch[label_column_name]):
         if isinstance(steps, str):
             steps = steps.strip().split(step_separator)
 
@@ -85,7 +84,7 @@ def _tokenize_fn(
         for i, (step, label) in enumerate(zip(steps, labels)):
             tokenized_step = tokenizer.encode(step, add_special_tokens=False)
             step_labels = [-100] * len(tokenized_step)
-            if i==(len(steps)-1) or not train_on_last_step:
+            if i == (len(steps) - 1) or not train_on_last_step:
                 step_labels[-1] = int(label)
 
             if i < len(steps) - 1:
@@ -104,7 +103,7 @@ def _tokenize_fn(
         new_examples["input_ids"].append(input_ids)
         new_examples["attention_mask"].append([1] * len(input_ids))
         new_examples["labels"].append(token_level_labels)
-    
+
     return new_examples
 
 
@@ -217,7 +216,7 @@ class StepwiseRewardTrainer(Trainer):
                     batched=True,
                     fn_kwargs=tokenize_kwargs,
                     num_proc=args.dataset_num_proc,
-                    remove_columns=train_dataset.features
+                    remove_columns=train_dataset.features,
                 )
 
                 if eval_dataset is not None:
@@ -226,7 +225,7 @@ class StepwiseRewardTrainer(Trainer):
                         batched=True,
                         fn_kwargs=tokenize_kwargs,
                         num_proc=args.dataset_num_proc,
-                        remove_columns=eval_dataset.features
+                        remove_columns=eval_dataset.features,
                     )
 
         super().__init__(
