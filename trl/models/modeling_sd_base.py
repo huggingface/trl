@@ -17,7 +17,7 @@ import os
 import random
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import numpy as np
 import torch
@@ -43,9 +43,9 @@ class DDPOPipelineOutput:
     Args:
         images (`torch.Tensor`):
             The generated images.
-        latents (`List[torch.Tensor]`):
+        latents (`list[torch.Tensor]`):
             The latents used to generate the images.
-        log_probs (`List[torch.Tensor]`):
+        log_probs (`list[torch.Tensor]`):
             The log probabilities of the latents.
 
     """
@@ -161,7 +161,7 @@ def _left_broadcast(input_tensor, shape):
     from left to right
         Args:
             input_tensor (`torch.FloatTensor`): is the tensor to broadcast
-            shape (`Tuple[int]`): is the shape to broadcast to
+            shape (`tuple[int]`): is the shape to broadcast to
     """
     input_ndim = input_tensor.ndim
     if input_ndim > len(shape):
@@ -325,15 +325,15 @@ def scheduler_step(
 @torch.no_grad()
 def pipeline_step(
     self,
-    prompt: Optional[Union[str, List[str]]] = None,
+    prompt: Optional[Union[str, list[str]]] = None,
     height: Optional[int] = None,
     width: Optional[int] = None,
     num_inference_steps: int = 50,
     guidance_scale: float = 7.5,
-    negative_prompt: Optional[Union[str, List[str]]] = None,
+    negative_prompt: Optional[Union[str, list[str]]] = None,
     num_images_per_prompt: Optional[int] = 1,
     eta: float = 0.0,
-    generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+    generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
     latents: Optional[torch.FloatTensor] = None,
     prompt_embeds: Optional[torch.FloatTensor] = None,
     negative_prompt_embeds: Optional[torch.FloatTensor] = None,
@@ -341,11 +341,11 @@ def pipeline_step(
     return_dict: bool = True,
     callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
     callback_steps: int = 1,
-    cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+    cross_attention_kwargs: Optional[dict[str, Any]] = None,
     guidance_rescale: float = 0.0,
 ):
     r"""
-    Function invoked when calling the pipeline for generation.  Args: prompt (`str` or `List[str]`, *optional*): The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.  instead.  height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor): The height in pixels of the generated image.
+    Function invoked when calling the pipeline for generation.  Args: prompt (`str` or `list[str]`, *optional*): The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.  instead.  height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor): The height in pixels of the generated image.
         width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
             The width in pixels of the generated image.
         num_inference_steps (`int`, *optional*, defaults to 50):
@@ -357,7 +357,7 @@ def pipeline_step(
             Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting `guidance_scale >
             1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
             usually at the expense of lower image quality.
-        negative_prompt (`str` or `List[str]`, *optional*):
+        negative_prompt (`str` or `list[str]`, *optional*):
             The prompt or prompts not to guide the image generation. If not defined, one has to pass
             `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
             less than `1`).
@@ -366,7 +366,7 @@ def pipeline_step(
         eta (`float`, *optional*, defaults to 0.0):
             Corresponds to parameter eta (η) in the DDIM paper: https://huggingface.co/papers/2010.02502. Only applies to
             [`schedulers.DDIMScheduler`], will be ignored for others.
-        generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
+        generator (`torch.Generator` or `list[torch.Generator]`, *optional*):
             One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
             to make generation deterministic.
         latents (`torch.FloatTensor`, *optional*):
@@ -531,7 +531,7 @@ def pipeline_step(
 
 def pipeline_step_with_grad(
     pipeline,
-    prompt: Optional[Union[str, List[str]]] = None,
+    prompt: Optional[Union[str, list[str]]] = None,
     height: Optional[int] = None,
     width: Optional[int] = None,
     num_inference_steps: int = 50,
@@ -541,10 +541,10 @@ def pipeline_step_with_grad(
     gradient_checkpoint: bool = True,
     truncated_backprop_timestep: int = 49,
     truncated_rand_backprop_minmax: tuple = (0, 50),
-    negative_prompt: Optional[Union[str, List[str]]] = None,
+    negative_prompt: Optional[Union[str, list[str]]] = None,
     num_images_per_prompt: Optional[int] = 1,
     eta: float = 0.0,
-    generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+    generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
     latents: Optional[torch.FloatTensor] = None,
     prompt_embeds: Optional[torch.FloatTensor] = None,
     negative_prompt_embeds: Optional[torch.FloatTensor] = None,
@@ -552,14 +552,14 @@ def pipeline_step_with_grad(
     return_dict: bool = True,
     callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
     callback_steps: int = 1,
-    cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+    cross_attention_kwargs: Optional[dict[str, Any]] = None,
     guidance_rescale: float = 0.0,
 ):
     r"""
     Function to get RGB image with gradients attached to the model weights.
 
     Args:
-        prompt (`str` or `List[str]`, *optional*, defaults to `None`):
+        prompt (`str` or `list[str]`, *optional*, defaults to `None`):
             The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds` instead.
         height (`int`, *optional*, defaults to `pipeline.unet.config.sample_size * pipeline.vae_scale_factor`):
             The height in pixels of the generated image.
@@ -588,7 +588,7 @@ def pipeline_step_with_grad(
         truncated_rand_backprop_minmax (`Tuple`, *optional*, defaults to (0,50)):
             Range for randomized backprop. Here the value at 0 index indicates the earlier diffusion timestep to update (closer to noise), while the value
             at index 1 indicates the later diffusion timestep to update.
-        negative_prompt (`str` or `List[str]`, *optional*):
+        negative_prompt (`str` or `list[str]`, *optional*):
             The prompt or prompts not to guide the image generation. If not defined, one has to pass
             `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
             less than `1`).
@@ -597,7 +597,7 @@ def pipeline_step_with_grad(
         eta (`float`, *optional*, defaults to 0.0):
             Corresponds to parameter eta (η) in the DDIM paper: https://huggingface.co/papers/2010.02502. Only applies to
             [`schedulers.DDIMScheduler`], will be ignored for others.
-        generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
+        generator (`torch.Generator` or `list[torch.Generator]`, *optional*):
             One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
             to make generation deterministic.
         latents (`torch.FloatTensor`, *optional*):

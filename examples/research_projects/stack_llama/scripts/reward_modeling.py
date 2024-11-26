@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional, Union
 
 import evaluate
 import numpy as np
@@ -236,7 +236,7 @@ class RewardDataCollatorWithPadding:
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         features_j = []
         features_k = []
         for feature in features:

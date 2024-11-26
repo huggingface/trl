@@ -15,7 +15,7 @@ import gc
 import random
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Optional, Union
 
 import numpy as np
 import torch
@@ -70,10 +70,10 @@ def top_k_top_p_filtering(
     return logits
 
 
-def flatten_dict(nested: Dict, sep: str = "/") -> Dict:
+def flatten_dict(nested: dict, sep: str = "/") -> dict:
     """Flatten dictionary and concatenate nested keys with separator."""
 
-    def recurse(nest: Dict, prefix: str, into: Dict) -> None:
+    def recurse(nest: dict, prefix: str, into: dict) -> None:
         for k, v in nest.items():
             if sep in k:
                 raise ValueError(f"separator '{sep}' not allowed to be in key '{k}'")
@@ -87,7 +87,7 @@ def flatten_dict(nested: Dict, sep: str = "/") -> Dict:
     return flat
 
 
-def convert_to_scalar(stats: Dict) -> Dict:
+def convert_to_scalar(stats: dict) -> dict:
     """
     Converts the stats from a flattened dict to single scalar dicts
     """
@@ -103,7 +103,7 @@ def convert_to_scalar(stats: Dict) -> Dict:
     return tensorboard_stats
 
 
-def stack_dicts(stats_dicts: List[Dict]) -> Dict:
+def stack_dicts(stats_dicts: list[dict]) -> dict:
     """Stack the values of a dict."""
     results = dict()
     for k in stats_dicts[0]:
@@ -185,7 +185,7 @@ def entropy_from_logits(logits: torch.Tensor) -> torch.Tensor:
     return entropy
 
 
-def stats_to_np(stats_dict: Dict) -> Dict:
+def stats_to_np(stats_dict: dict) -> dict:
     """Cast all torch.tensors in dict to numpy arrays."""
     new_dict = dict()
     for k, v in stats_dict.items():
@@ -202,7 +202,7 @@ def stats_to_np(stats_dict: Dict) -> Dict:
 
 
 def respond_to_batch(
-    model: nn.Module, queries: List[torch.LongTensor], txt_len: int = 20, top_k: int = 0, top_p: float = 1.0
+    model: nn.Module, queries: list[torch.LongTensor], txt_len: int = 20, top_k: int = 0, top_p: float = 1.0
 ) -> torch.LongTensor:
     """Sample text from language model."""
     input_ids = queries
@@ -271,8 +271,8 @@ class PPODecorators:
 
 
 def randn_tensor(
-    shape: Union[Tuple, List],
-    generator: Optional[Union[List[torch.Generator], torch.Generator]] = None,
+    shape: Union[tuple, list],
+    generator: Optional[Union[list[torch.Generator], torch.Generator]] = None,
     device: Optional[torch.device] = None,
     dtype: Optional[torch.dtype] = None,
     layout: Optional[torch.layout] = None,
