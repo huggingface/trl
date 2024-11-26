@@ -154,8 +154,8 @@ if __name__ == "__main__":
     trainer = PPOTrainer(
         args=training_args,
         processing_class=tokenizer,
-        policy=policy,
-        ref_policy=ref_policy,
+        model=policy,
+        ref_model=ref_policy,
         reward_model=reward_model,
         value_model=value_model,
         train_dataset=train_dataset,
