@@ -59,9 +59,11 @@ def _tokenize(
     new_examples = {"input_ids": [], "attention_mask": [], "labels": []}
 
     post_step_tokens = tokenizer.encode(step_separator, add_special_tokens=False)
+    
+    label_column_name = "label" if "label" in batch else "labels"
 
     for prompt, steps, labels in zip(
-        batch["prompt"], batch["completions"], batch["label"]
+        batch["prompt"], batch["completions"], batch[label_column_name]
     ):
         if isinstance(steps, str):
             steps = steps.strip().split(step_separator)
