@@ -132,15 +132,6 @@ class StepwiseRewardTrainer(Trainer):
         if compute_metrics is None:
             compute_metrics = compute_accuracy
 
-        if processing_class.pad_token_id is not None:
-            self.padding_value = processing_class.pad_token_id
-        else:
-            raise ValueError(
-                "Can't find `pad_token_id` in the `processing_class`. "
-                "Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`) "
-                "before instantiating the trainer."
-            )
-
         if data_collator is None:
             data_collator = DataCollatorForTokenClassification(processing_class)
 
