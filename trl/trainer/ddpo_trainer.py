@@ -16,7 +16,7 @@ import os
 import textwrap
 from collections import defaultdict
 from concurrent import futures
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 from warnings import warn
 
 import torch
@@ -46,8 +46,8 @@ class DDPOTrainer(BaseTrainer):
     Attributes:
         **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more
          details.
-        **reward_function** (Callable[[torch.Tensor, Tuple[str], Tuple[Any]], torch.Tensor]) -- Reward function to be used
-        **prompt_function** (Callable[[], Tuple[str, Any]]) -- Function to generate prompts to guide model
+        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used
+        **prompt_function** (Callable[[], tuple[str, Any]]) -- Function to generate prompts to guide model
         **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
         **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
     """
@@ -57,8 +57,8 @@ class DDPOTrainer(BaseTrainer):
     def __init__(
         self,
         config: DDPOConfig,
-        reward_function: Callable[[torch.Tensor, Tuple[str], Tuple[Any]], torch.Tensor],
-        prompt_function: Callable[[], Tuple[str, Any]],
+        reward_function: Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor],
+        prompt_function: Callable[[], tuple[str, Any]],
         sd_pipeline: DDPOStableDiffusionPipeline,
         image_samples_hook: Optional[Callable[[Any, Any, Any], Any]] = None,
     ):
@@ -437,7 +437,7 @@ class DDPOTrainer(BaseTrainer):
             batch_size (int): Batch size to use for sampling
 
         Returns:
-            samples (List[Dict[str, torch.Tensor]]), prompt_image_pairs (List[List[Any]])
+            samples (list[dict[str, torch.Tensor]]), prompt_image_pairs (list[list[Any]])
         """
         samples = []
         prompt_image_pairs = []
@@ -498,7 +498,7 @@ class DDPOTrainer(BaseTrainer):
             inner_epoch (int): The current inner epoch
             epoch (int): The current epoch
             global_step (int): The current global step
-            batched_samples (List[Dict[str, torch.Tensor]]): The batched samples to train on
+            batched_samples (list[dict[str, torch.Tensor]]): The batched samples to train on
 
         Side Effects:
             - Model weights are updated
@@ -551,7 +551,7 @@ class DDPOTrainer(BaseTrainer):
                     info = defaultdict(list)
         return global_step
 
-    def _config_check(self) -> Tuple[bool, str]:
+    def _config_check(self) -> tuple[bool, str]:
         samples_per_epoch = (
             self.config.sample_batch_size * self.accelerator.num_processes * self.config.sample_num_batches_per_epoch
         )
@@ -596,7 +596,7 @@ class DDPOTrainer(BaseTrainer):
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -606,7 +606,7 @@ class DDPOTrainer(BaseTrainer):
                 The name of the model.
             dataset_name (`str`, *optional*, defaults to `None`):
                 The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
