@@ -133,6 +133,10 @@ class StepwiseRewardTrainer(Trainer):
             compute_metrics = compute_accuracy
 
         if data_collator is None:
+            if processing_class is None:
+                raise ValueError(
+                    "A processing_class must be specified when using the default DataCollatorForTokenClassification"
+                )
             data_collator = DataCollatorForTokenClassification(processing_class)
 
         if "input_ids" not in train_dataset.column_names:
