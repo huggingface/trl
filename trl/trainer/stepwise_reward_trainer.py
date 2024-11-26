@@ -85,7 +85,8 @@ def _tokenize(
         for i, (step, label) in enumerate(zip(steps, labels)):
             tokenized_step = tokenizer.encode(step, add_special_tokens=False)
             step_labels = [-100] * len(tokenized_step)
-            step_labels[-1] = int(label)
+            if i==(len(steps)-1) or not train_on_last_step:
+                step_labels[-1] = int(label)
 
             if i < len(steps) - 1:
                 tokenized_step.extend(post_step_tokens)
