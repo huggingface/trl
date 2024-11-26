@@ -96,8 +96,10 @@ class PolicyAndValueWrapper(nn.Module):
 class PPOTrainer(Trainer):
     _tag_names = ["trl", "ppo"]
 
-    @deprecate_kwarg("config", new_name="args", version="0.15.0", raise_if_both_names=True)
-    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.15.0", raise_if_both_names=True)
+    @deprecate_kwarg("config", "0.15.0", "args", warn_if_greater_or_equal_version=True, raise_if_both_names=True)
+    @deprecate_kwarg(
+        "tokenizer", "0.15.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
     @deprecate_kwarg("policy", "0.15.0", "model", warn_if_greater_or_equal_version=True, raise_if_both_names=True)
     @deprecate_kwarg(
         "ref_policy", "0.15.0", "ref_model", warn_if_greater_or_equal_version=True, raise_if_both_names=True
