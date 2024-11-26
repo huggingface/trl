@@ -287,7 +287,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
 
             self.assertTrue(
                 any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings),
-                "Can't test the model because it doesn't have any of the expected lm_head namings", 
+                "Can't test the model because it doesn't have any of the expected lm_head namings",
             )
 
             for lm_head_naming in lm_head_namings:
