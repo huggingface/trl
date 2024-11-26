@@ -29,7 +29,7 @@ class StepwiseRewardConfig(TrainingArguments):
 
     Parameters:
         max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
-            Maximum length of the target.
+            Maximum length of the completion. The completion is the concatenation of the steps.
         step_separator (`str`, *optional*, defaults to `"\n"`):
             Separator used to separate each step of the reasoning process.
         train_on_last_step_only (`bool`, *optional*, defaults to `False`):
