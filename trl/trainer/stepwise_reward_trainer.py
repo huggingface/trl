@@ -11,11 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import inspect
 import os
 import textwrap
 import warnings
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from itertools import chain
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -48,61 +50,6 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
-
-
-def _tokenize_fn(
-    batch: Dict[str, List[Any]],
-    tokenizer,
-    max_length: int,
-    step_separator: str,
-    train_on_last_step: bool,
-) -> Dict[str, List[Any]]:
-    """Tokenize a batch from a Stepwise supervision dataset."""
-    new_examples = {"input_ids": [], "attention_mask": [], "labels": []}
-
-    post_step_tokens = tokenizer.encode(step_separator, add_special_tokens=False)
-
-    label_column_name = "label" if "label" in batch else "labels"
-
-    for prompt, steps, labels in zip(batch["prompt"], batch["completions"], batch[label_column_name]):
-        if isinstance(steps, str):
-            steps = steps.strip().split(step_separator)
-
-        if len(steps) != len(labels):
-            raise ValueError("`labels` and `completions` should have the same length.")
-        input_ids = []
-        token_level_labels = []
-
-        if tokenizer.bos_token_id is not None:
-            if not prompt.startswith(tokenizer.bos_token):
-                input_ids.append(tokenizer.bos_token_id)
-                token_level_labels.append(-100)
-
-        prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-        input_ids.extend(prompt_ids)
-        token_level_labels.extend([-100] * len(prompt_ids))
-        for i, (step, label) in enumerate(zip(steps, labels)):
-            tokenized_step = tokenizer.encode(step, add_special_tokens=False)
-            step_labels = [-100] * len(tokenized_step)
-            if i == (len(steps) - 1) or not train_on_last_step:
-                step_labels[-1] = int(label)
-
-            if i < len(steps) - 1:
-                tokenized_step.extend(post_step_tokens)
-                step_labels.extend([-100] * len(post_step_tokens))
-
-            # Avoid adding steps if the maximum length is reached as only the token after the last token of each step is labeled.
-            if (len(input_ids) + len(tokenized_step)) < (max_length - 1):
-                input_ids.extend(tokenized_step)
-                token_level_labels.extend(step_labels)
-            else:
-                break
-
-        new_examples["input_ids"].append(input_ids)
-        new_examples["attention_mask"].append([1] * len(input_ids))
-        new_examples["labels"].append(token_level_labels)
-
-    return new_examples
 
 
 class StepwiseRewardTrainer(Trainer):
@@ -196,34 +143,28 @@ class StepwiseRewardTrainer(Trainer):
             data_collator = DataCollatorForTokenClassification(processing_class, max_length=args.max_length)
 
         if "input_ids" not in train_dataset.column_names:
-            if args.max_length is None:
-                args.max_length = 512
-                warnings.warn(
-                    "When the dataset isn't pretokenized, you should set `max_length` in the `StepwiseRewardConfig`"
-                    " we have set it for you, but you should do it yourself in the future."
-                )
             with PartialState().local_main_process_first():
-                tokenize_kwargs = {
-                    "tokenizer": processing_class,
-                    "max_length": args.max_length,
+                fn_kwargs = {
+                    "processing_class": processing_class,
                     "step_separator": args.step_separator,
-                    "train_on_last_step": args.train_on_last_step,
+                    "max_completion_length": args.max_completion_length,
+                    "train_on_last_step_only": args.train_on_last_step_only,
                 }
                 train_dataset = train_dataset.map(
-                    _tokenize_fn,
-                    batched=True,
-                    fn_kwargs=tokenize_kwargs,
+                    self.tokenize_row,
+                    fn_kwargs=fn_kwargs,
                     num_proc=args.dataset_num_proc,
                     remove_columns=train_dataset.features,
+                    desc="Tokenizing train dataset",
                 )
 
                 if eval_dataset is not None:
                     eval_dataset = eval_dataset.map(
-                        _tokenize_fn,
-                        batched=True,
-                        fn_kwargs=tokenize_kwargs,
+                        self.tokenize_row,
+                        fn_kwargs=fn_kwargs,
                         num_proc=args.dataset_num_proc,
                         remove_columns=eval_dataset.features,
+                        desc="Tokenizing eval dataset",
                     )
 
         super().__init__(
@@ -243,6 +184,73 @@ class StepwiseRewardTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
+
+    @staticmethod
+    def tokenize_row(features, processing_class, step_separator, max_completion_length, train_on_last_step_only):
+        """
+        Tokenize a row of the dataset.
+
+        Args:
+            features (`Dict[str, str]`):
+                Row of the dataset, should contain the keys `"prompt"`, `"completions"`, and `"labels"`.
+            processing_class (`PreTrainedTokenizerBase`):
+                Processing class used to process the data.
+            step_separator (`str`):
+                Separator between steps in the completion.
+            max_completion_length (`int` or `None`):
+                Maximum length of the completion sequences. If `None`, the completion sequences are not truncated.
+            train_on_last_step_only (`bool`):
+                Whether to train only on the last step. If `True`, the labels are `-100` for all tokens except the last
+                token of the completion.
+
+        Returns:
+            `Dict[str, List[int]]`:
+                Tokenized sequences with the keys `"prompt_input_ids"`, `"completion_input_ids"`, and `"label".
+
+        Example:
+        ```python
+        >>> from transformers import AutoTokenizer
+        >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B")
+        >>> features = {"prompt": "Which number is larger, 9.8 or 9.11?",
+        ...             "completions": ["11 is greater than 8.",
+        ...                             "Hence, 9.11 > 9.8."],
+        ...             "labels": [True, False]}
+        >>> StepwiseRewardTrainer.tokenize_row(features, tokenizer, "\n", max_completion_length=None, train_on_last_step_only=False)
+        {'prompt_input_ids': [23085, 1372, 374, 8131, 11, 220, 24, 13, 23, 476, 220, 24, 13, 16, 16, 30],
+         'completion_input_ids': [16, 16, 374, 7046, 1091, 220, 23, 13, 198, 39, 763, 11, 220, 24, 13, 16, 16, 861, 220, 24, 13, 23, 13, 198],
+         'label': [-100, -100, -100, -100, -100, -100, -100, -100, 1.0, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0.0]}
+        ```
+        """
+        tokenizer = processing_class  # the processing class is a tokenizer
+
+        # Tokenize the prompt and completions
+        prompt_ids = tokenizer(features["prompt"])["input_ids"]
+        completions_ids = [tokenizer(completion)["input_ids"] for completion in features["completions"]]
+        if train_on_last_step_only:
+            labels = [-100] * (len(features["labels"]) - 1) + [float(features["labels"][-1])]
+        else:
+            labels = [float(label) for label in features["labels"]]
+
+        # Get the ID of the separator token and add it to the completions
+        separator_ids = tokenizer.encode(step_separator)
+        completions_ids = [completion + separator_ids for completion in completions_ids]
+
+        # Create the label
+        labels = [[-100] * (len(completion) - 1) + [label] for completion, label in zip(completions_ids, labels)]
+
+        # Join the completions and labels steps
+        completion_ids = list(chain(*completions_ids))
+        label = list(chain(*labels))
+
+        if max_completion_length is not None:
+            completion_ids = completion_ids[:max_completion_length]
+            label = label[:max_completion_length]
+
+        return {
+            "prompt_input_ids": prompt_ids,
+            "completion_input_ids": completion_ids,
+            "label": label,
+        }
 
     def create_model_card(
         self,
