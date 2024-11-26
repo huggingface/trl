@@ -49,7 +49,7 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
-def _tokenize(
+def _tokenize_fn(
     batch: Dict[str, List[Any]],
     tokenizer,
     max_length: int,
@@ -213,7 +213,7 @@ class StepwiseRewardTrainer(Trainer):
                     "train_on_last_step": args.train_on_last_step,
                 }
                 train_dataset = train_dataset.map(
-                    _tokenize,
+                    _tokenize_fn,
                     batched=True,
                     fn_kwargs=tokenize_kwargs,
                     num_proc=args.dataset_num_proc,
@@ -222,7 +222,7 @@ class StepwiseRewardTrainer(Trainer):
 
                 if eval_dataset is not None:
                     eval_dataset = eval_dataset.map(
-                        _tokenize,
+                        _tokenize_fn,
                         batched=True,
                         fn_kwargs=tokenize_kwargs,
                         num_proc=args.dataset_num_proc,

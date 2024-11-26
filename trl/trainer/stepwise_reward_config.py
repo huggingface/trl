@@ -33,7 +33,7 @@ class StepwiseRewardConfig(TrainingArguments):
         step_separator (`str`, *optional*, defaults to `"\n"`):
             Separator used to separate each step of the reasoning process.
         train_on_last_step (`bool`, *optional*, defaults to `False`):
-            Whether or not to train on the last step only.
+            Whether or not to train only on the last step.
         dataset_num_proc (`int`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
     """
