@@ -137,7 +137,7 @@ class StepwiseRewardTrainer(Trainer):
                 raise ValueError(
                     "A processing_class must be specified when using the default DataCollatorForTokenClassification"
                 )
-            data_collator = DataCollatorForTokenClassification(processing_class)
+            data_collator = DataCollatorForTokenClassification(processing_class, max_length=args.max_length)
 
         if "input_ids" not in train_dataset.column_names:
             with PartialState().local_main_process_first():

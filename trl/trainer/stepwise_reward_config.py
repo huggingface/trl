@@ -28,8 +28,10 @@ class StepwiseRewardConfig(TrainingArguments):
     command line.
 
     Parameters:
+        max_length (`Optional[int]`, *optional*, defaults to `None`):
+            Maximum length of the sequences (prompt + completion) used for truncation.
         max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
-            Maximum length of the completion. The completion is the concatenation of the steps.
+            Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
         step_separator (`str`, *optional*, defaults to `"\n"`):
             Separator used to separate each step of the reasoning process.
         train_on_last_step_only (`bool`, *optional*, defaults to `False`):
@@ -38,6 +40,7 @@ class StepwiseRewardConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
     """
 
+    max_length: Optional[int] = None
     max_completion_length: Optional[int] = None
     step_separator: str = "\n"
     train_on_last_step_only: bool = False
