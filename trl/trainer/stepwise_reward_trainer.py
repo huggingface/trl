@@ -202,7 +202,7 @@ class StepwiseRewardTrainer(Trainer):
 
         Returns:
             `dict[str, list[int]]`:
-                Tokenized sequences with the keys `"input_ids"`, and `"label".
+                Tokenized sequences with the keys `"input_ids"`, and `"labels".
 
         Example:
         ```python
@@ -214,7 +214,7 @@ class StepwiseRewardTrainer(Trainer):
         ...             "labels": [True, False]}
         >>> StepwiseRewardTrainer.tokenize_row(features, tokenizer, "\n", max_completion_length=None, train_on_last_step_only=False)
         {'input_ids': [23085, 1372, 374, 8131, 11, 220, 24, 13, 23, 476, 220, 24, 13, 16, 16, 30, 16, 16, 374, 7046, 1091, 220, 23, 13, 198, 39, 763, 11, 220, 24, 13, 16, 16, 861, 220, 24, 13, 23, 13, 198],
-         'label': [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0]}
+         'labels': [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0]}
         ```
         """
         # Tokenize the prompt and completions
@@ -234,13 +234,13 @@ class StepwiseRewardTrainer(Trainer):
 
         # Join the completions and labels steps
         completion_ids = list(chain(*completions_ids))
-        label = list(chain(*labels))
+        labels = list(chain(*labels))
 
         if max_completion_length is not None:
             completion_ids = completion_ids[:max_completion_length]
-            label = label[:max_completion_length]
+            labels = labels[:max_completion_length]
 
-        return {"input_ids": prompt_ids + completion_ids, "label": label}
+        return {"input_ids": prompt_ids + completion_ids, "labels": labels}
 
     def create_model_card(
         self,
