@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,16 +49,20 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
-
 def _tokenize(
-    batch: Dict[str, List[Any]], tokenizer: PreTrainedTokenizerBase, max_length: int, step_separator: str
+    batch: Dict[str, List[Any]],
+    tokenizer,
+    max_length: int,
+    step_separator: str,
 ) -> Dict[str, List[Any]]:
     """Tokenize a batch from a Stepwise supervision dataset."""
     new_examples = {"input_ids": [], "attention_mask": [], "labels": []}
 
     post_step_tokens = tokenizer.encode(step_separator, add_special_tokens=False)
 
-    for prompt, steps, labels in zip(batch["prompt"], batch["completions"], batch["labels"]):
+    for prompt, steps, labels in zip(
+        batch["prompt"], batch["completions"], batch["label"]
+    ):
         if isinstance(steps, str):
             steps = steps.strip().split(step_separator)
 
@@ -72,9 +76,9 @@ def _tokenize(
                 input_ids.append(tokenizer.bos_token_id)
                 token_level_labels.append(-100)
 
-        input_ids.extend(tokenizer.encode(prompt, add_special_tokens=False))
-        token_level_labels.extend([-100] * len(input_ids))
-
+        prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+        input_ids.extend(prompt_ids)
+        token_level_labels.extend([-100] * len(prompt_ids))
         for i, (step, label) in enumerate(zip(steps, labels)):
             tokenized_step = tokenizer.encode(step, add_special_tokens=False)
             step_labels = [-100] * len(tokenized_step)
@@ -96,6 +100,8 @@ def _tokenize(
         new_examples["input_ids"].append(input_ids)
         new_examples["attention_mask"].append([1] * len(input_ids))
         new_examples["labels"].append(token_level_labels)
+        
+        print("We are in")
 
     return new_examples
 
@@ -208,6 +214,7 @@ class StepwiseRewardTrainer(Trainer):
                     batched=True,
                     fn_kwargs=tokenize_kwargs,
                     num_proc=args.dataset_num_proc,
+                    remove_columns=train_dataset.features
                 )
 
                 if eval_dataset is not None:
@@ -216,6 +223,7 @@ class StepwiseRewardTrainer(Trainer):
                         batched=True,
                         fn_kwargs=tokenize_kwargs,
                         num_proc=args.dataset_num_proc,
+                        remove_columns=train_dataset.features
                     )
 
         super().__init__(
