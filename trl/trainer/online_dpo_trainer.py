@@ -127,7 +127,9 @@ class OnlineDPOTrainer(Trainer):
 
     _tag_names = ["trl", "online-dpo"]
 
-    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.14.0", raise_if_both_names=True)
+    @deprecate_kwarg(
+        "tokenizer", "0.14.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module],
