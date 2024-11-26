@@ -18,7 +18,7 @@ import textwrap
 import warnings
 from dataclasses import dataclass
 from itertools import chain
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -88,7 +88,7 @@ class PromptCompletionCollator(DataCollatorMixin):
     pad_token_id: int
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
         prompt_input_ids = [torch.tensor(example["prompt_input_ids"]) for example in examples]
         prompt_attention_mask = [torch.ones_like(input_ids) for input_ids in prompt_input_ids]
@@ -116,19 +116,19 @@ class StepwiseRewardTrainer(Trainer):
         args: Optional[StepwiseRewardConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
+        callbacks: Optional[list[TrainerCallback]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
             None,
             None,
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[Dict] = None,
+        peft_config: Optional[dict] = None,
     ):
         """
         Initialize StepwiseRewardTrainer.
@@ -151,15 +151,15 @@ class StepwiseRewardTrainer(Trainer):
                 reuse the fine-tuned model.
             model_init (`Callable[[], transformers.PreTrainedModel]`):
                 The model initializer to use for training. If None is specified, the default model initializer will be used.
-            compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
+            compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to `compute_accuracy`):
                 The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
-            callbacks (`List[transformers.TrainerCallback]`):
+            callbacks (`list[transformers.TrainerCallback]`):
                 The callbacks to use for training.
-            optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
                 The optimizer and scheduler to use for training.
             preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
                 The function to use to preprocess the logits before computing the metrics.
-            peft_config (`Dict`, defaults to `None`):
+            peft_config (`dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
         if not is_peft_available() and peft_config is not None:
@@ -251,7 +251,7 @@ class StepwiseRewardTrainer(Trainer):
         Tokenize a row of the dataset.
 
         Args:
-            features (`Dict[str, str]`):
+            features (`dict[str, str]`):
                 Row of the dataset, should contain the keys `"prompt"`, `"completions"`, and `"labels"`.
             processing_class (`PreTrainedTokenizerBase`):
                 Processing class used to process the data.
@@ -264,7 +264,7 @@ class StepwiseRewardTrainer(Trainer):
                 token of the completion.
 
         Returns:
-            `Dict[str, List[int]]`:
+            `dict[str, list[int]]`:
                 Tokenized sequences with the keys `"prompt_input_ids"`, `"completion_input_ids"`, and `"label".
 
         Example:
@@ -324,7 +324,7 @@ class StepwiseRewardTrainer(Trainer):
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -333,7 +333,7 @@ class StepwiseRewardTrainer(Trainer):
                 The name of the model.
             dataset_name (`str`, *optional*, defaults to `None`):
                 The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -351,15 +351,13 @@ class StepwiseRewardTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.append("unsloth")
 
-        citation = textwrap.dedent(
-            """\
+        citation = textwrap.dedent("""\
         @article{uesato2022solving,
-	title        = {Solving Math Word Problems With Process- and Outcome-Based Feedback},
-	author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
-	year         = 2022,
-	journal      = {arXiv preprint arXiv:2211.14275}
-        }"""
-        )
+            title        = {Solving Math Word Problems With Process- and Outcome-Based Feedback},
+            author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
+            year         = 2022,
+            journal      = {arXiv preprint arXiv:2211.14275}
+        }""")
 
         model_card = generate_model_card(
             base_model=base_model,
