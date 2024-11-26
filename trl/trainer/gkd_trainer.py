@@ -16,7 +16,7 @@ import random
 import textwrap
 import warnings
 from copy import deepcopy
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -73,7 +73,7 @@ class GKDTrainer(SFTTrainer):
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,

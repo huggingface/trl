@@ -22,7 +22,7 @@ from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Literal, Optional, Union
 
 import torch
 import torch.amp as amp
@@ -173,7 +173,7 @@ class DPOTrainer(Trainer):
             This supercedes the `tokenizer` argument, which is now deprecated.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
         callbacks (`list[transformers.TrainerCallback]`):
@@ -182,7 +182,7 @@ class DPOTrainer(Trainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`Dict`, defaults to `None`):
+        peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
     """
 
@@ -203,11 +203,11 @@ class DPOTrainer(Trainer):
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[Dict] = None,
+        peft_config: Optional[dict] = None,
     ):
         if not isinstance(model, str) and ref_model is model:
             raise ValueError(
@@ -794,7 +794,7 @@ class DPOTrainer(Trainer):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
 
-    def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> Dict:
+    def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
         compte_ref_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
         with torch.no_grad(), compte_ref_context_manager:
@@ -807,14 +807,14 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: dict[str, Union[List, torch.LongTensor]], padding_value: int
+        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int
     ) -> dict[str, torch.LongTensor]:
         """
         Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
         and completion sequences.
 
         Args:
-            batch (`dict[str, Union[List, torch.LongTensor]]`):
+            batch (`dict[str, Union[list, torch.LongTensor]]`):
                 A batch of input data. The batch must contain the following keys:
 
                 - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input IDs.
@@ -1060,7 +1060,7 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[List, torch.LongTensor]]):
+    def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
@@ -1202,7 +1202,7 @@ class DPOTrainer(Trainer):
     def get_batch_loss_metrics(
         self,
         model,
-        batch: dict[str, Union[List, torch.LongTensor]],
+        batch: dict[str, Union[list, torch.LongTensor]],
         train_eval: Literal["train", "eval"] = "train",
     ):
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""

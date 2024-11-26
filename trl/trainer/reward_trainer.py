@@ -16,7 +16,7 @@ import os
 import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import pandas as pd
 import torch
@@ -95,7 +95,7 @@ class RewardTrainer(Trainer):
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
             None,
@@ -103,7 +103,7 @@ class RewardTrainer(Trainer):
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         max_length: Optional[int] = None,
-        peft_config: Optional[Dict] = None,
+        peft_config: Optional[dict] = None,
     ):
         """
         Initialize RewardTrainer.
@@ -126,7 +126,7 @@ class RewardTrainer(Trainer):
                 reuse the fine-tuned model.
             model_init (`Callable[[], transformers.PreTrainedModel]`):
                 The model initializer to use for training. If None is specified, the default model initializer will be used.
-            compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
+            compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to `compute_accuracy`):
                 The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
             callbacks (`list[transformers.TrainerCallback]`):
                 The callbacks to use for training.
@@ -134,7 +134,7 @@ class RewardTrainer(Trainer):
                 The optimizer and scheduler to use for training.
             preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
                 The function to use to preprocess the logits before computing the metrics.
-            peft_config (`Dict`, defaults to `None`):
+            peft_config (`dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
         if type(args) is TrainingArguments:

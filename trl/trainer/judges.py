@@ -15,7 +15,7 @@
 import concurrent.futures
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 from accelerate import Accelerator
@@ -67,7 +67,7 @@ class BaseJudge(ABC):
     """
 
     @abstractmethod
-    def judge(self, prompts: list[str], completions: list[str], shuffle_order: bool = True) -> List:
+    def judge(self, prompts: list[str], completions: list[str], shuffle_order: bool = True) -> list:
         raise NotImplementedError("Judge subclasses must implement the `judge` method.")
 
 

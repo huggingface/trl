@@ -13,7 +13,7 @@
 # limitations under the License.
 import os
 import warnings
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Optional, Union
 
 import torch
 from datasets import Dataset
@@ -72,7 +72,7 @@ class IterativeSFTTrainer(Trainer):
             The truncation mode to use, either `keep_end` or `keep_start`.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
         optimize_device_cache (`bool`, *optional*, defaults to `False`):
             Optimize CUDA cache for slightly more memory-efficient training.
@@ -96,7 +96,7 @@ class IterativeSFTTrainer(Trainer):
         max_length: Optional[int] = None,
         truncation_mode: Optional[str] = "keep_end",
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
         optimize_device_cache: Optional[bool] = False,
     ):
         # Step 0: check positional arguments validity

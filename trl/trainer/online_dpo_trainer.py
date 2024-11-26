@@ -16,7 +16,7 @@ import os
 import textwrap
 import warnings
 from functools import wraps
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import datasets
 import jinja2
@@ -112,9 +112,9 @@ class OnlineDPOTrainer(Trainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-        peft_config (`Dict`):
+        peft_config (`dict`):
             The peft config to use for training.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
         callbacks (`list[transformers.TrainerCallback]`):
@@ -144,8 +144,8 @@ class OnlineDPOTrainer(Trainer):
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
-        peft_config: Optional[Dict] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        peft_config: Optional[dict] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,

@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, List, Optional, Sequence, TypeVar
+from typing import Any, Optional, Sequence, TypeVar
 
 from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizer
@@ -307,7 +307,7 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
     }
 
 
-def maybe_extract_prompt(example: dict[str, List]) -> dict[str, List]:
+def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     r"""
     Extracts the shared prompt from a preference data example, where the prompt is implicit within both
     the chosen and rejected completions.
@@ -318,12 +318,12 @@ def maybe_extract_prompt(example: dict[str, List]) -> dict[str, List]:
     "rejected" completions.
 
     Args:
-        example (`dict[str, List]`):
+        example (`dict[str, list]`):
             A dictionary representing a single data entry in the preference dataset. It must contain the keys
             `"chosen"` and `"rejected"`, where each value is either conversational or standard (`str`).
 
     Returns:
-        `dict[str, List]`: A dictionary containing:
+        `dict[str, list]`: A dictionary containing:
             - `"prompt"`: The longest common prefix between the "chosen" and "rejected" completions.
             - `"chosen"`: The remainder of the "chosen" completion, with the prompt removed.
             - `"rejected"`: The remainder of the "rejected" completion, with the prompt removed.

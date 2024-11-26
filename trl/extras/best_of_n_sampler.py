@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 from transformers import GenerationConfig, PreTrainedTokenizer, PreTrainedTokenizerFast
@@ -104,7 +104,7 @@ class BestOfNSampler:
 
         if isinstance(tokenized_query, torch.Tensor) and tokenized_query.ndim == 1:
             queries = tokenized_query.unsqueeze(0)
-        elif isinstance(tokenized_query, List):
+        elif isinstance(tokenized_query, list):
             element_type = type(tokenized_query[0])
             if element_type is int:
                 queries = torch.tensor(tokenized_query).unsqueeze(0)

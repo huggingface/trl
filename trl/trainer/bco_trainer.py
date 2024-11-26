@@ -21,7 +21,7 @@ from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from operator import itemgetter
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 
 import numpy as np
 import torch
@@ -152,7 +152,7 @@ def _tokenize(
     return output
 
 
-def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> Dict:
+def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> dict:
     """Process tokens of a BCO specific dataset.
 
     At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -306,11 +306,11 @@ class BCOTrainer(Trainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`Dict`, defaults to `None`):
+        peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         disable_dropout (`bool`, defaults to `True`):
             Whether or not to disable dropouts in `model` and `ref_model`.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
         model_adapter_name (`str`, defaults to `None`):
@@ -336,8 +336,8 @@ class BCOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[Dict] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        peft_config: Optional[dict] = None,
+        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
         embedding_func: Optional[Callable] = None,
@@ -782,7 +782,7 @@ class BCOTrainer(Trainer):
         return embeddings
 
     def _get_prompt_embeddings(
-        self, batch: dict[str, Union[List, torch.LongTensor]]
+        self, batch: dict[str, Union[list, torch.LongTensor]]
     ) -> tuple[torch.FloatTensor, torch.FloatTensor]:
         """Extract embeddings from frozen embedding model"""
 
@@ -988,7 +988,7 @@ class BCOTrainer(Trainer):
 
         return super().get_eval_dataloader(eval_dataset=eval_dataset)
 
-    def compute_reference_log_probs(self, padded_batch: Dict) -> Dict:
+    def compute_reference_log_probs(self, padded_batch: dict) -> dict:
         """Computes log probabilities of the reference model for a single padded batch of a BCO specific dataset."""
         with torch.no_grad():
             if self.ref_model is None:
@@ -1072,7 +1072,7 @@ class BCOTrainer(Trainer):
             return (per_token_logps * loss_mask).sum(-1)
 
     def forward(
-        self, model: nn.Module, batch: dict[str, Union[List, torch.LongTensor]]
+        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         model_kwargs = (
             {
@@ -1194,7 +1194,7 @@ class BCOTrainer(Trainer):
     def get_batch_loss_metrics(
         self,
         model,
-        batch: dict[str, Union[List, torch.LongTensor]],
+        batch: dict[str, Union[list, torch.LongTensor]],
     ):
         """Compute the BCO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}

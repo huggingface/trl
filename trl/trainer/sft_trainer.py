@@ -15,7 +15,7 @@ import dataclasses
 import inspect
 import os
 import warnings
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Optional, Union
 
 import datasets
 import torch
@@ -89,7 +89,7 @@ class SFTTrainer(Trainer):
             This supercedes the `tokenizer` argument, which is now deprecated.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
-        compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to None):
+        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to None):
             The function used to compute metrics during evaluation. It should return a dictionary mapping metric names to metric values.
             If not specified, only the loss will be computed during evaluation.
         callbacks (`list[transformers.TrainerCallback]`):
@@ -120,7 +120,7 @@ class SFTTrainer(Trainer):
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,

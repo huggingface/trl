@@ -20,7 +20,7 @@ import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Literal, Optional, Union
 
 import numpy as np
 import torch
@@ -97,9 +97,9 @@ class CPOTrainer(Trainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`Dict`, defaults to `None`):
+        peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
     """
@@ -123,8 +123,8 @@ class CPOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[Dict] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        peft_config: Optional[dict] = None,
+        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
     ):
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
@@ -422,7 +422,7 @@ class CPOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
-    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
+    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> dict:
         """Tokenize a single row from a CPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -570,7 +570,7 @@ class CPOTrainer(Trainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: dict[str, Union[List, torch.LongTensor]],
+        batch: dict[str, Union[list, torch.LongTensor]],
         is_encoder_decoder: bool = False,
         label_pad_token_id: int = -100,
         padding_value: int = 0,
@@ -720,7 +720,7 @@ class CPOTrainer(Trainer):
             return (per_token_logps * loss_mask).sum(-1)
 
     def concatenated_forward(
-        self, model: nn.Module, batch: dict[str, Union[List, torch.LongTensor]]
+        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
@@ -797,7 +797,7 @@ class CPOTrainer(Trainer):
     def get_batch_loss_metrics(
         self,
         model,
-        batch: dict[str, Union[List, torch.LongTensor]],
+        batch: dict[str, Union[list, torch.LongTensor]],
         train_eval: Literal["train", "eval"] = "train",
     ):
         """Compute the CPO loss and other metrics for the given batch of inputs for train or test."""
