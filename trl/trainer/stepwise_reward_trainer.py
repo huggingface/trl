@@ -16,8 +16,9 @@ import inspect
 import os
 import textwrap
 import warnings
+from dataclasses import dataclass
 from itertools import chain
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -26,7 +27,6 @@ from datasets import Dataset
 from transformers import (
     BaseImageProcessor,
     DataCollator,
-    DataCollatorForTokenClassification,
     FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -34,15 +34,13 @@ from transformers import (
     Trainer,
     is_wandb_available,
 )
+from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from .stepwise_reward_config import StepwiseRewardConfig
-from .utils import (
-    compute_accuracy,
-    generate_model_card,
-)
+from .utils import compute_accuracy, generate_model_card, pad
 
 
 if is_peft_available():
@@ -50,6 +48,63 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+
+@dataclass
+class PromptCompletionCollator(DataCollatorMixin):
+    """
+    Data collator used for prompt-completion data. Inputs are dynamically padded to the maximum length of a batch if
+    they are not all of the same length.
+
+    Args:
+        pad_token_id (`int`):
+            Token ID to use for padding.
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
+            Type of Tensor to return. Only `"pt"` is currently supported.
+
+    Examples:
+    ```python
+    >>> from trl import PromptCompletionCollator
+    >>> collator = PromptCompletionCollator(pad_token_id=0)
+    >>> examples = [
+    ...     {"prompt_input_ids": [1, 2, 3], "completion_input_ids": [4, 5], "label": [1, 0]},
+    ...     {"prompt_input_ids": [7, 8], "completion_input_ids": [9], "label": [1]}
+    ... ]
+    >>> collator(examples)
+    {'prompt_input_ids': tensor([[1, 2, 3],
+                                 [0, 7, 8]]),
+     'prompt_attention_mask': tensor([[1, 1, 1],
+                                      [0, 1, 1]]),
+     'completion_input_ids': tensor([[4, 5],
+                                     [9, 0]]),
+     'completion_attention_mask': tensor([[1, 1],
+                                          [1, 0]]),
+     'label': tensor([[1, 0],
+                      [1, 0]])
+    }
+    ```
+    """
+
+    pad_token_id: int
+    return_tensors: str = "pt"
+
+    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+        # Convert to tensor
+        prompt_input_ids = [torch.tensor(example["prompt_input_ids"]) for example in examples]
+        prompt_attention_mask = [torch.ones_like(input_ids) for input_ids in prompt_input_ids]
+        completion_input_ids = [torch.tensor(example["completion_input_ids"]) for example in examples]
+        completion_attention_mask = [torch.ones_like(input_ids) for input_ids in completion_input_ids]
+        label = [torch.tensor(example["label"]) for example in examples]
+
+        # Pad
+        output = {}
+        output["prompt_input_ids"] = pad(prompt_input_ids, padding_value=self.pad_token_id, padding_side="left")
+        output["prompt_attention_mask"] = pad(prompt_attention_mask, padding_value=0, padding_side="left")
+        output["completion_input_ids"] = pad(completion_input_ids, padding_value=self.pad_token_id)
+        output["completion_attention_mask"] = pad(completion_attention_mask, padding_value=0)
+        output["label"] = pad(label, padding_value=-100)
+
+        return output
 
 
 class StepwiseRewardTrainer(Trainer):
@@ -135,12 +190,17 @@ class StepwiseRewardTrainer(Trainer):
         if compute_metrics is None:
             compute_metrics = compute_accuracy
 
+        if processing_class.pad_token_id is not None:
+            self.padding_value = processing_class.pad_token_id
+        else:
+            raise ValueError(
+                "Can't find `pad_token_id` in the `processing_class`. "
+                "Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`) "
+                "before instantiating the trainer."
+            )
+
         if data_collator is None:
-            if processing_class is None:
-                raise ValueError(
-                    "A processing_class must be specified when using the default DataCollatorForTokenClassification"
-                )
-            data_collator = DataCollatorForTokenClassification(processing_class, max_length=args.max_length)
+            data_collator = PromptCompletionCollator(pad_token_id=self.padding_value)
 
         if "input_ids" not in train_dataset.column_names:
             with PartialState().local_main_process_first():
@@ -227,9 +287,9 @@ class StepwiseRewardTrainer(Trainer):
         prompt_ids = tokenizer(features["prompt"])["input_ids"]
         completions_ids = [tokenizer(completion)["input_ids"] for completion in features["completions"]]
         if train_on_last_step_only:
-            labels = [-100] * (len(features["labels"]) - 1) + [float(features["labels"][-1])]
+            labels = [-100] * (len(features["labels"]) - 1) + [int(features["labels"][-1])]
         else:
-            labels = [float(label) for label in features["labels"]]
+            labels = [int(label) for label in features["labels"]]
 
         # Get the ID of the separator token and add it to the completions
         separator_ids = tokenizer.encode(step_separator)
@@ -251,6 +311,14 @@ class StepwiseRewardTrainer(Trainer):
             "completion_input_ids": completion_ids,
             "label": label,
         }
+
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs.
+        # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
+        # Instead, we set them to the columns expected by `DPODataCollatorWithPadding`, hence the override.
+        if self._signature_columns is None:
+            self._signature_columns = ["prompt_input_ids", "completion_input_ids", "label"]
 
     def create_model_card(
         self,

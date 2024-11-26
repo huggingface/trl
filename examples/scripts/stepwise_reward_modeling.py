@@ -23,8 +23,7 @@ python examples/scripts/stepwise_reward_modeling.py \
     --learning_rate 1.0e-5 \
     --logging_steps 25 \
     --eval_strategy steps \
-    --eval_steps 50 \
-    --max_length 2048
+    --eval_steps 50
 
 LoRA:
 python examples/scripts/stepwise_reward_modeling.py \
@@ -37,8 +36,7 @@ python examples/scripts/stepwise_reward_modeling.py \
     --learning_rate 1.0e-4 \
     --logging_steps 25 \
     --eval_strategy steps \
-    --eval_steps 50 \
-    --max_length 2048 \
+    --eval_steps 50
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16
