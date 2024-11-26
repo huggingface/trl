@@ -15,7 +15,7 @@
 import itertools
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
 from accelerate.utils import is_deepspeed_available
 from transformers import PreTrainedModel, PreTrainedTokenizer
@@ -80,7 +80,7 @@ def setup_chat_format(
     tokenizer: PreTrainedTokenizer,
     format: Optional[Literal["chatml"]] = "chatml",
     resize_to_multiple_of: Optional[int] = None,
-) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
+) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 

@@ -15,7 +15,7 @@
 # 0. imports
 import os
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Optional
 
 import torch
 from accelerate import Accelerator
@@ -109,9 +109,9 @@ def get_stack_exchange_paired(
 
     The dataset is converted to a dictionary with the following structure:
     {
-        'prompt': List[str],
-        'chosen': List[str],
-        'rejected': List[str],
+        'prompt': list[str],
+        'chosen': list[str],
+        'rejected': list[str],
     }
 
     Prompts are structured as follows:
@@ -126,7 +126,7 @@ def get_stack_exchange_paired(
     )
     original_columns = dataset.column_names
 
-    def return_prompt_and_responses(samples) -> Dict[str, str]:
+    def return_prompt_and_responses(samples) -> dict[str, str]:
         return {
             "prompt": ["Question: " + question + "\n\nAnswer: " for question in samples["question"]],
             "chosen": samples["response_j"],
