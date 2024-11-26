@@ -142,7 +142,7 @@ class StepwiseRewardTrainer(Trainer):
         if "input_ids" not in train_dataset.column_names:
             with PartialState().local_main_process_first():
                 fn_kwargs = {
-                    "processing_class": processing_class,
+                    "tokenizer": processing_class,
                     "step_separator": args.step_separator,
                     "max_completion_length": args.max_completion_length,
                     "train_on_last_step_only": args.train_on_last_step_only,
@@ -183,15 +183,15 @@ class StepwiseRewardTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
     @staticmethod
-    def tokenize_row(features, processing_class, step_separator, max_completion_length, train_on_last_step_only):
+    def tokenize_row(features, tokenizer, step_separator, max_completion_length, train_on_last_step_only):
         """
         Tokenize a row of the dataset.
 
         Args:
             features (`dict[str, str]`):
                 Row of the dataset, should contain the keys `"prompt"`, `"completions"`, and `"labels"`.
-            processing_class (`PreTrainedTokenizerBase`):
-                Processing class used to process the data.
+            tokenizer (`PreTrainedTokenizerBase`):
+                Tokenizer used to process the data.
             step_separator (`str`):
                 Separator between steps in the completion.
             max_completion_length (`int` or `None`):
@@ -218,8 +218,6 @@ class StepwiseRewardTrainer(Trainer):
          'label': [-100, -100, -100, -100, -100, -100, -100, -100, 1.0, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0.0]}
         ```
         """
-        tokenizer = processing_class  # the processing class is a tokenizer
-
         # Tokenize the prompt and completions
         prompt_ids = tokenizer(features["prompt"])["input_ids"]
         completions_ids = [tokenizer(completion)["input_ids"] for completion in features["completions"]]
