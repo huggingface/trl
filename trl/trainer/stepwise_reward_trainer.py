@@ -315,8 +315,8 @@ class StepwiseRewardTrainer(Trainer):
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
-        # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
-        # Instead, we set them to the columns expected by `DPODataCollatorWithPadding`, hence the override.
+        # In `StepwiseRewardTrainer`, we preprocess data, so using the model's signature columns doesn't work.
+        # Instead, we set them to the columns expected by `PromptCompletionCollator`, hence the override.
         if self._signature_columns is None:
             self._signature_columns = ["prompt_input_ids", "completion_input_ids", "label"]
 
