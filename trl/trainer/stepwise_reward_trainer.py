@@ -100,9 +100,7 @@ def _tokenize(
         new_examples["input_ids"].append(input_ids)
         new_examples["attention_mask"].append([1] * len(input_ids))
         new_examples["labels"].append(token_level_labels)
-        
-        print("We are in")
-
+    
     return new_examples
 
 
