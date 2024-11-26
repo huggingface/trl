@@ -72,7 +72,7 @@ trainer.train()
 
 The dataset should be formatted as a [Stepwise Supervision](dataset_formats#stepwise-supervision) dataset, which implies that it should contain the following columns: `prompt`, `completions` and `labels`, where `completions` contains a list of reasoning steps and `labels` a list of booleans or floats indicating the correctness of each step.
 
-The [`StepwiseRewardTrainer`] only supports [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+The [`StepwiseRewardTrainer`] only supports [standard](dataset_formats#standard) dataset format.
 
 You can also use a pretokenized dataset, in which case the dataset should contain the following columns: `input_ids`, `attention_mask` and `labels`.
 
