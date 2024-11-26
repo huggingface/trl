@@ -350,7 +350,7 @@ def main(test_size, push_to_hub, repo_id):
             [" of those great ideas,", " that solve many problems."],
             [" the code should still aim for balance."],
         ],
-        "label": [
+        "labels": [
             [False, True],
             [False, True, False],
             [False, True],
