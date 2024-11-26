@@ -91,15 +91,13 @@ def _tokenize_fn(
                 tokenized_step.extend(post_step_tokens)
                 step_labels.extend([-100] * len(post_step_tokens))
 
-            # Avoid adding steps if the maximum length is reached as in Stepwise reward training only the token after the last token of each step is labeled.
+            # Avoid adding steps if the maximum length is reached as only the token after the last token of each step is labeled.
             if (len(input_ids) + len(tokenized_step)) < (max_length - 1):
                 input_ids.extend(tokenized_step)
                 token_level_labels.extend(step_labels)
             else:
-                # exit if the maximum length is reached to avoid skipping steps in favor or shoter steps.
                 break
 
-        # no need to add the eos token at the end
         new_examples["input_ids"].append(input_ids)
         new_examples["attention_mask"].append([1] * len(input_ids))
         new_examples["labels"].append(token_level_labels)
