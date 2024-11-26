@@ -202,7 +202,7 @@ class StepwiseRewardTrainer(Trainer):
 
         Returns:
             `dict[str, list[int]]`:
-                Tokenized sequences with the keys `"prompt_input_ids"`, `"completion_input_ids"`, and `"label".
+                Tokenized sequences with the keys `"input_ids"`, and `"label".
 
         Example:
         ```python
@@ -213,9 +213,8 @@ class StepwiseRewardTrainer(Trainer):
         ...                             "Hence, 9.11 > 9.8."],
         ...             "labels": [True, False]}
         >>> StepwiseRewardTrainer.tokenize_row(features, tokenizer, "\n", max_completion_length=None, train_on_last_step_only=False)
-        {'prompt_input_ids': [23085, 1372, 374, 8131, 11, 220, 24, 13, 23, 476, 220, 24, 13, 16, 16, 30],
-         'completion_input_ids': [16, 16, 374, 7046, 1091, 220, 23, 13, 198, 39, 763, 11, 220, 24, 13, 16, 16, 861, 220, 24, 13, 23, 13, 198],
-         'label': [-100, -100, -100, -100, -100, -100, -100, -100, 1.0, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0.0]}
+        {'input_ids': [23085, 1372, 374, 8131, 11, 220, 24, 13, 23, 476, 220, 24, 13, 16, 16, 30, 16, 16, 374, 7046, 1091, 220, 23, 13, 198, 39, 763, 11, 220, 24, 13, 16, 16, 861, 220, 24, 13, 23, 13, 198],
+         'label': [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0]}
         ```
         """
         # Tokenize the prompt and completions
