@@ -14,7 +14,7 @@
 import warnings
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -96,10 +96,10 @@ class DPOConfig(TrainingArguments):
             useful when training without the reference model to reduce the total GPU memory needed.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
-        model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
-        ref_model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        ref_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
             from a string.
         model_adapter_name (`Optional[str]`, *optional*, defaults to `None`):
@@ -174,8 +174,8 @@ class DPOConfig(TrainingArguments):
     generate_during_eval: bool = False
     precompute_ref_log_probs: bool = False
     dataset_num_proc: Optional[int] = None
-    model_init_kwargs: Optional[Dict[str, Any]] = None
-    ref_model_init_kwargs: Optional[Dict[str, Any]] = None
+    model_init_kwargs: Optional[dict[str, Any]] = None
+    ref_model_init_kwargs: Optional[dict[str, Any]] = None
     model_adapter_name: Optional[str] = None
     ref_adapter_name: Optional[str] = None
     reference_free: bool = False
