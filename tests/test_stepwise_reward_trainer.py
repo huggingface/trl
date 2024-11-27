@@ -88,7 +88,6 @@ class TestTokenizeRow(unittest.TestCase):
             "labels": [True, False],
         }
 
-        # Call the method with no truncation
         result = StepwiseRewardTrainer.tokenize_row(
             features=features,
             tokenizer=self.tokenizer,
@@ -140,7 +139,7 @@ class TestTokenizeRow(unittest.TestCase):
             "labels": [True, False],
         }
 
-        # Call the method with no truncation
+        # Call the method with truncation on the prompt and completion
         result = StepwiseRewardTrainer.tokenize_row(
             features=features,
             tokenizer=self.tokenizer,
@@ -166,7 +165,7 @@ class TestTokenizeRow(unittest.TestCase):
             "labels": [True, False],
         }
 
-        # Call the method with no truncation
+        # Call the method using multiple tokens as step_separator
         result = StepwiseRewardTrainer.tokenize_row(
             features=features,
             tokenizer=self.tokenizer,
