@@ -57,6 +57,23 @@ python examples/scripts/gkd.py \
     --push_to_hub \
     --gradient_checkpointing \
     --torch_dtype bfloat16
+
+# ULD LoRA:
+python examples/scripts/gkd.py \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --teacher_model_name_or_path google/gemma-2-2b-it \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --learning_rate 2e-4 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 8 \
+    --output_dir gkd-model \
+    --logging_steps 10 \
+    --num_train_epochs 1 \
+    --push_to_hub \
+    --gradient_checkpointing \
+    --use_peft \
+    --lora_r 64 \
+    --lora_alpha 16
 """
 
 from accelerate import PartialState
