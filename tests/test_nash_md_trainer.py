@@ -31,10 +31,10 @@ if is_peft_available():
 
 class TestNashMDTrainer(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        self.reward_model = AutoModelForSequenceClassification.from_pretrained("EleutherAI/pythia-14m", num_labels=1)
+        self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id, num_labels=1)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 

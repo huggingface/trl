@@ -39,6 +39,10 @@ def formatting_prompts_func(example):
     return text
 
 
+def formatting_func_for_pretokenized(example):
+    return example["input_ids"]
+
+
 def formatting_prompts_func_batched(example):
     output_text = []
     for i, question in enumerate(example["question"]):
@@ -58,7 +62,7 @@ class SFTTrainerTester(unittest.TestCase):
     r""" """
 
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -93,6 +97,17 @@ class SFTTrainerTester(unittest.TestCase):
                 ],
             }
         )
+        self.dummy_tokenized_dataset = Dataset.from_dict(
+            {
+                "input_ids": [
+                    self.tokenizer.encode(
+                        "TRL is a library to post-train LLMs and diffusion models with methods such as Supervised Fine-tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO)."
+                    )
+                ]
+                * 10
+            }
+        )
+
         self.conversational_lm_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
         self.standard_prompt_completion_dataset = load_dataset(
             "trl-internal-testing/zen", "standard_prompt_completion"
@@ -157,6 +172,42 @@ class SFTTrainerTester(unittest.TestCase):
             seq_length=16,
             num_of_sequences=16,
         )
+
+        self.train_dataset_from_pretokenized = ConstantLengthDataset(
+            self.tokenizer,
+            self.dummy_tokenized_dataset,
+            seq_length=16,
+            num_of_sequences=16,
+            formatting_func=formatting_func_for_pretokenized,
+        )
+
+        self.eval_dataset_from_pretokenized = ConstantLengthDataset(
+            self.tokenizer,
+            self.dummy_tokenized_dataset,
+            seq_length=16,
+            num_of_sequences=16,
+            formatting_func=formatting_func_for_pretokenized,
+        )
+
+    def test_constant_length_dataset_with_pretokenized_data(self):
+        constant_len_dataset = ConstantLengthDataset(
+            self.tokenizer,
+            self.dummy_tokenized_dataset,
+            formatting_func=formatting_func_for_pretokenized,
+        )
+
+        assert len(constant_len_dataset) == len(self.dummy_tokenized_dataset)
+        assert len(constant_len_dataset) > 0
+
+        for example in constant_len_dataset:
+            assert "input_ids" in example
+            assert "labels" in example
+
+            assert len(example["input_ids"]) == constant_len_dataset.seq_length
+            assert len(example["labels"]) == constant_len_dataset.seq_length
+
+            decoded_text = self.tokenizer.decode(example["input_ids"])
+            assert ("TRL" in decoded_text) and ("(DPO)" in decoded_text)
 
     def test_constant_length_dataset(self):
         formatted_dataset = ConstantLengthDataset(
@@ -235,6 +286,34 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
             self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))
+
+    def test_sft_trainer_with_pretokenzied_data_packing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                packing=True,
+                report_to="none",
+            )
+
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.train_dataset_from_pretokenized,
+                eval_dataset=self.eval_dataset_from_pretokenized,
+            )
+
+            trainer.train()
+
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
+
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
     def test_sft_trainer_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1067,7 +1146,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 21)
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
             self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
     def test_sft_trainer_eval_packing(self):
@@ -1092,8 +1171,8 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 21)
-            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 2)
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
+            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 6)  # w/ this dataset, we end up with 6 seqs
 
     def test_sft_trainer_no_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1186,9 +1265,9 @@ class SFTTrainerTester(unittest.TestCase):
                 report_to="none",
             )
             tiny_llava = LlavaForConditionalGeneration.from_pretrained(
-                "trl-internal-testing/tiny-random-LlavaForConditionalGeneration"
+                "trl-internal-testing/tiny-LlavaForConditionalGeneration"
             )
-            processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-random-LlavaForConditionalGeneration")
+            processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlavaForConditionalGeneration")
 
             processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 

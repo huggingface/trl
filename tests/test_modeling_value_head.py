@@ -24,38 +24,27 @@ from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValu
 
 
 ALL_CAUSAL_LM_MODELS = [
-    "trl-internal-testing/tiny-random-CodeGenForCausalLM",
-    "trl-internal-testing/tiny-random-GPTJForCausalLM",
-    "trl-internal-testing/tiny-random-GPTNeoForCausalLM",
-    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM",
-    "trl-internal-testing/tiny-random-OPTForCausalLM",
-    "trl-internal-testing/tiny-random-BloomForCausalLM",
-    "trl-internal-testing/tiny-random-GPT2LMHeadModel",
-    "trl-internal-testing/tiny-random-CodeGenForCausalLM-sharded",
-    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors-sharded",
-    "trl-internal-testing/tiny-random-GPTNeoXForCausalLM-safetensors",
-    "trl-internal-testing/tiny-random-LlamaForCausalLM",
+    "trl-internal-testing/tiny-BloomForCausalLM",
+    "trl-internal-testing/tiny-CohereForCausalLM",
+    "trl-internal-testing/tiny-DbrxForCausalLM",
+    "trl-internal-testing/tiny-FalconMambaForCausalLM",
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
+    "trl-internal-testing/tiny-GemmaForCausalLM",
+    "trl-internal-testing/tiny-GPT2LMHeadModel",
+    "trl-internal-testing/tiny-GPTNeoXForCausalLM",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    "trl-internal-testing/tiny-OPTForCausalLM",
+    "trl-internal-testing/tiny-Phi3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
 ]
 
 ALL_SEQ2SEQ_MODELS = [
-    "trl-internal-testing/tiny-random-BartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BigBirdPegasusForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BlenderbotForConditionalGeneration",
-    "trl-internal-testing/tiny-random-BlenderbotSmallForConditionalGeneration",
-    "trl-internal-testing/tiny-random-FSMTForConditionalGeneration",
-    "trl-internal-testing/tiny-random-LEDForConditionalGeneration",
-    "trl-internal-testing/tiny-random-LongT5ForConditionalGeneration",
-    "trl-internal-testing/tiny-random-M2M100ForConditionalGeneration",
-    "trl-internal-testing/tiny-random-MarianMTModel",
-    "trl-internal-testing/tiny-random-MBartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-MT5ForConditionalGeneration",
-    "trl-internal-testing/tiny-random-MvpForConditionalGeneration",
-    "trl-internal-testing/tiny-random-PegasusForConditionalGeneration",
-    "trl-internal-testing/tiny-random-PegasusXForConditionalGeneration",
-    "trl-internal-testing/tiny-random-PLBartForConditionalGeneration",
-    "trl-internal-testing/tiny-random-ProphetNetForConditionalGeneration",
-    "trl-internal-testing/tiny-random-SwitchTransformersForConditionalGeneration",
-    "trl-internal-testing/tiny-random-T5ForConditionalGeneration",
+    "trl-internal-testing/tiny-T5ForConditionalGeneration",
+    "trl-internal-testing/tiny-BartModel",
 ]
 
 
@@ -278,7 +267,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
 
     def test_raise_error_not_causallm(self):
         # Test with a model without a LM head
-        model_id = "trl-internal-testing/tiny-random-GPT2Model"
+        model_id = "trl-internal-testing/tiny-GPT2LMHeadModel"
         # This should raise a ValueError
         with self.assertRaises(ValueError):
             pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -405,7 +394,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
     def test_raise_error_not_causallm(self):
         # Test with a model without a LM head
-        model_id = "trl-internal-testing/tiny-random-T5Model"
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         # This should raise a ValueError
         with self.assertRaises(ValueError):
             pretrained_model = AutoModel.from_pretrained(model_id)
@@ -442,10 +431,6 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
             lm_head_namings = self.trl_model_class.lm_head_namings
 
-            if model_name == "trl-internal-testing/tiny-random-FSMTForConditionalGeneration":
-                # skip the test for FSMT as it does not support mixed-prec
-                continue
-
             self.assertTrue(
                 any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
             )
@@ -462,34 +447,32 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
 class ReferenceModelTest(unittest.TestCase):
     def setUp(self):
-        self.model = AutoModelForCausalLMWithValueHead.from_pretrained(
-            "trl-internal-testing/tiny-random-GPT2LMHeadModel"
-        )
+        self.model = AutoModelForCausalLMWithValueHead.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         self.test_input = torch.tensor([[0, 1, 2, 3]])
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)
         self.layer_format = "pretrained_model.transformer.h.{layer}.attn.c_attn.weight"
 
     def test_independent_reference(self):
         layer_0 = self.layer_format.format(layer=0)
-        layer_5 = self.layer_format.format(layer=4)
+        layer_1 = self.layer_format.format(layer=1)
 
         ref_model = create_reference_model(self.model)
 
         first_layer_before = self.model.get_parameter(layer_0).data.clone()
-        last_layer_before = self.model.get_parameter(layer_5).data.clone()
+        last_layer_before = self.model.get_parameter(layer_1).data.clone()  # the model only has 2 layers
 
         first_ref_layer_before = ref_model.get_parameter(layer_0).data.clone()
-        last_ref_layer_before = ref_model.get_parameter(layer_5).data.clone()
+        last_ref_layer_before = ref_model.get_parameter(layer_1).data.clone()
 
         output = self.model(input_ids=self.test_input, labels=self.test_input)
         output[1].backward()
         self.optimizer.step()
 
         first_layer_after = self.model.get_parameter(layer_0).data.clone()
-        last_layer_after = self.model.get_parameter(layer_5).data.clone()
+        last_layer_after = self.model.get_parameter(layer_1).data.clone()
 
         first_ref_layer_after = ref_model.get_parameter(layer_0).data.clone()
-        last_ref_layer_after = ref_model.get_parameter(layer_5).data.clone()
+        last_ref_layer_after = ref_model.get_parameter(layer_1).data.clone()
 
         # before optimization ref and model are identical
         self.assertTrue((first_layer_before == first_ref_layer_before).all())

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 from transformers import GenerationConfig, PreTrainedTokenizer, PreTrainedTokenizerFast
@@ -26,7 +26,7 @@ class BestOfNSampler:
         self,
         model: PreTrainedModelWrapper,
         tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
-        queries_to_scores: Callable[[List[str]], List[float]],
+        queries_to_scores: Callable[[list[str]], list[float]],
         length_sampler: Any,
         sample_size: int = 4,
         seed: Optional[int] = None,
@@ -41,7 +41,7 @@ class BestOfNSampler:
                 The pretrained model to use for generation
             tokenizer (`PreTrainedTokenizer` or `PreTrainedTokenizerFast`):
                 Tokenizer associated with the pretrained model
-            queries_to_scores (`Callable[[List[str]], List[float]]`):
+            queries_to_scores (`Callable[[list[str]], list[float]]`):
                 Callable that takes a list of generated texts and returns the associated reward scores
             length_sampler (`Any`):
                 Sampler used to sample the length of the generated text
@@ -78,16 +78,16 @@ class BestOfNSampler:
 
     def generate(
         self,
-        tokenized_query: Union[List[int], torch.Tensor, List[torch.Tensor], List[List[int]]],
+        tokenized_query: Union[list[int], torch.Tensor, list[torch.Tensor], list[list[int]]],
         skip_special_tokens: bool = True,
         device: Optional[Union[str, torch.device]] = None,
         **generation_kwargs,
-    ) -> List[List[str]]:
+    ) -> list[list[str]]:
         r"""
         Generate the best of n samples for input queries
 
         Args:
-            tokenized_query (`List[int]` or `torch.Tensor` or `List[torch.Tensor]` or `List[int]`):
+            tokenized_query (`list[int]` or `torch.Tensor` or `list[torch.Tensor]` or `list[int]`):
                 represents either a single tokenized query (a single tensor or a list of integers) or a batch of tokenized queries (a list of tensors or a list of lists of integers)
             skip_special_tokens (`bool`):
                 Whether to remove the special tokens from the output
@@ -98,13 +98,13 @@ class BestOfNSampler:
                 This is used to override generation config
 
         Returns:
-            List[List[str]]: A list of lists of generated texts
+            list[list[str]]: A list of lists of generated texts
         """
         queries = None
 
         if isinstance(tokenized_query, torch.Tensor) and tokenized_query.ndim == 1:
             queries = tokenized_query.unsqueeze(0)
-        elif isinstance(tokenized_query, List):
+        elif isinstance(tokenized_query, list):
             element_type = type(tokenized_query[0])
             if element_type is int:
                 queries = torch.tensor(tokenized_query).unsqueeze(0)
