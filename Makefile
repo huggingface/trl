@@ -7,7 +7,8 @@ COMMAND_FILES_PATH = `pwd`/commands
 
 
 dev:
-	[ -L "$(pwd)/trl/commands/scripts" ] && unlink "$(pwd)/trl/commands/scripts" || true
+	@if [ -L "$(pwd)/trl/commands/scripts" ]; then unlink "$(pwd)/trl/commands/scripts"; fi
+	@if [ -e "$(pwd)/trl/commands/scripts" ] && [ ! -L "$(pwd)/trl/commands/scripts" ]; then rm -rf "$(pwd)/trl/commands/scripts"; fi
 	pip install -e ".[dev]"
 	ln -s `pwd`/examples/scripts/ `pwd`/trl/commands
 

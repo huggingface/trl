@@ -34,14 +34,14 @@ _import_structure = {
     "gkd_trainer": ["GKDTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
+        "AllTrueJudge",
         "BaseJudge",
+        "BaseBinaryJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
         "PairRMJudge",
-        "RandomPairwiseJudge",
-        "RandomRankJudge",
     ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
@@ -98,14 +98,14 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .judges import (
+        AllTrueJudge,
+        BaseBinaryJudge,
         BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
         PairRMJudge,
-        RandomPairwiseJudge,
-        RandomRankJudge,
     )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
@@ -118,8 +118,6 @@ if TYPE_CHECKING:
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
-    from .ppov2_config import PPOv2Config
-    from .ppov2_trainer import PPOv2Trainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
     from .rloo_config import RLOOConfig
