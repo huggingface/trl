@@ -96,7 +96,7 @@ class TextHistoryTest(unittest.TestCase):
 class TextEnvironmentTester(unittest.TestCase):
     def setUp(self):
         # model_id
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
         # get models and tokenizer
         self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
@@ -258,7 +258,7 @@ class TextEnvironmentTester(unittest.TestCase):
         task_2 = "Hello there! General Kenobi!"
 
         query, response, response_mask, reward, histories = env.run([task_1, task_2])
-        self.assertEqual(len(query[0]), 9)
+        self.assertEqual(len(query[0]), 8)
         self.assertEqual(len(query[1]), 12)
         self.assertEqual(len(response[0]), 14)
         self.assertEqual(len(response[1]), 14)

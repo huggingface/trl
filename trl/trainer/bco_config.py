@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from transformers import TrainingArguments
 
@@ -54,10 +54,10 @@ class BCOConfig(TrainingArguments):
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
-        model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
-        ref_model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        ref_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
             from a string.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
@@ -80,8 +80,8 @@ class BCOConfig(TrainingArguments):
     generate_during_eval: bool = False
     is_encoder_decoder: Optional[bool] = None
     precompute_ref_log_probs: bool = False
-    model_init_kwargs: Optional[Dict[str, Any]] = None
-    ref_model_init_kwargs: Optional[Dict[str, Any]] = None
+    model_init_kwargs: Optional[dict[str, Any]] = None
+    ref_model_init_kwargs: Optional[dict[str, Any]] = None
     dataset_num_proc: Optional[int] = None
     prompt_sample_size: int = 1024
     min_density_ratio: float = 0.5
