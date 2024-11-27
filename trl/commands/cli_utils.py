@@ -158,7 +158,7 @@ class TrlParser(HfArgumentParser):
         with the processed parsers.
 
         Args:
-            parsers (`List[argparse.ArgumentParser`]):
+            parsers (`list[argparse.ArgumentParser`]):
                 List of parsers.
             ignore_extra_args (`bool`):
                 Whether to ignore extra arguments passed by the config

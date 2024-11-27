@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional
+from typing import Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -66,7 +66,7 @@ class OnlineDPOConfig(TrainingArguments):
     max_new_tokens: int = 64
     temperature: float = 0.9
     missing_eos_penalty: Optional[float] = None
-    beta: List[float] = field(default_factory=lambda: [0.1])
+    beta: list[float] = field(default_factory=lambda: [0.1])
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
     dataset_num_proc: Optional[int] = None
     disable_dropout: bool = True

@@ -62,6 +62,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
         """
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
@@ -116,6 +117,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
         """
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
@@ -180,6 +182,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
 
         model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(

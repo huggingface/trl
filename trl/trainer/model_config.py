@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import Literal, Optional
 
 
 @dataclass
@@ -53,9 +53,9 @@ class ModelConfig:
             LoRA alpha.
         lora_dropout (`float`, *optional*, defaults to `0.05`):
             LoRA dropout.
-        lora_target_modules (`Optional[Union[str, List[str]]]`, *optional*, defaults to `None`):
+        lora_target_modules (`Optional[Union[str, list[str]]]`, *optional*, defaults to `None`):
             LoRA target modules.
-        lora_modules_to_save (`Optional[List[str]]`, *optional*, defaults to `None`):
+        lora_modules_to_save (`Optional[list[str]]`, *optional*, defaults to `None`):
             Model layers to unfreeze & train.
         lora_task_type (`str`, *optional*, defaults to `"CAUSAL_LM"`):
             Task type to pass for LoRA (use `"SEQ_CLS"` for reward modeling).
@@ -81,8 +81,8 @@ class ModelConfig:
     lora_r: int = 16
     lora_alpha: int = 32
     lora_dropout: float = 0.05
-    lora_target_modules: Optional[List[str]] = None
-    lora_modules_to_save: Optional[List[str]] = None
+    lora_target_modules: Optional[list[str]] = None
+    lora_modules_to_save: Optional[list[str]] = None
     lora_task_type: str = "CAUSAL_LM"
     use_rslora: bool = False
     load_in_8bit: bool = False
