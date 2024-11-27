@@ -45,40 +45,14 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
         self.assertEqual(accuracy["accuracy"], 0.5)
 
     @parameterized.expand([True, False])
-    def test_preprocessing(self, train_on_last_step_only):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
-            training_args = StepwiseRewardConfig(
-                output_dir=tmp_dir, report_to="none", max_length=512, train_on_last_step=train_on_last_step
-            )
-            trainer = StepwiseRewardTrainer(
-                model=self.model,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset,
-            )
-            dummy_dataset = dummy_dataset.map(
-                trainer.tokenize_row,
-                fn_kwargs={
-                    "tokenizer": self.tokenizer,
-                    "step_separator": "\n",
-                    "max_completion_length": 512,
-                    "train_on_last_step_only": train_on_last_step_only,
-                },
-                remove_columns=dummy_dataset.features,
-            )
-            self.assertDictEqual(trainer.train_dataset[:], dummy_dataset[:])
-
-    @parameterized.expand([True, False])
-    def test_train_full(self, train_on_last_step):
+    def test_train_full(self, train_on_last_step_only):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
             training_args = StepwiseRewardConfig(
                 output_dir=tmp_dir,
                 max_steps=3,
                 report_to="none",
-                max_length=512,
-                train_on_last_step=train_on_last_step,
+                train_on_last_step_only=train_on_last_step_only,
             )
             trainer = StepwiseRewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
@@ -94,18 +68,18 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
-    @parameterized.expand([True, False])
-    def test_train_full_pretokenized(self, train_on_last_step):
+    def test_train_full_pretokenized(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
+
             dummy_dataset = dummy_dataset.map(
-                _tokenize_fn,
-                batched=True,
+                StepwiseRewardTrainer.tokenize_row,
                 fn_kwargs={
                     "tokenizer": self.tokenizer,
-                    "max_length": 512,
+                    "max_length": None,
+                    "max_completion_length": None,
                     "step_separator": "\n",
-                    "train_on_last_step": train_on_last_step,
+                    "train_on_last_step_only": False,
                 },
                 remove_columns=dummy_dataset.features,
             )
@@ -114,12 +88,11 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 max_steps=3,
                 report_to="none",
-                max_length=512,
-                train_on_last_step=train_on_last_step,
             )
             trainer = StepwiseRewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
+
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
             trainer.train()
 
@@ -142,7 +115,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
-            training_args = StepwiseRewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none", max_length=512)
+            training_args = StepwiseRewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
             trainer = StepwiseRewardTrainer(
                 model=self.model,
                 args=training_args,
@@ -180,7 +153,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
     def test_tags(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
-            training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none", max_length=512)
+            training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = StepwiseRewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )

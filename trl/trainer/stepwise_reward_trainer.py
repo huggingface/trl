@@ -222,7 +222,9 @@ class StepwiseRewardTrainer(Trainer):
         """
         # Tokenize the prompt and completions
         prompt_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
-        completions_ids = [tokenizer(completion, add_special_tokens=False)["input_ids"] for completion in features["completions"]]
+        completions_ids = [
+            tokenizer(completion, add_special_tokens=False)["input_ids"] for completion in features["completions"]
+        ]
         if train_on_last_step_only:
             labels = [-100] * (len(features["labels"]) - 1) + [int(features["labels"][-1])]
         else:
@@ -242,13 +244,13 @@ class StepwiseRewardTrainer(Trainer):
         if max_completion_length is not None:
             completion_ids = completion_ids[:max_completion_length]
             labels = labels[:max_completion_length]
-            
+
         if tokenizer.bos_token_id is not None:
             prompt_ids = [tokenizer.bos_token_id] + prompt_ids
-            
+
         input_ids = prompt_ids + completion_ids
         labels = [-100] * len(prompt_ids) + labels
-        
+
         if max_length is not None:
             input_ids = input_ids[:max_length]
             labels = labels[:max_length]
