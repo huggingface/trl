@@ -254,6 +254,64 @@ class TestDataCollatorForChatML(unittest.TestCase):
         # Verify that EOS token is at the end of labels
         self.assertEqual(labels[-1], self.eos_token_id, "The last token of labels should be EOS token.")
 
+    def test_data_collator_for_chatml_with_teacher(self):
+        # Initialize teacher tokenizer
+        teacher_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        if teacher_tokenizer.pad_token is None:
+            teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
+
+        # Initialize the data collator with teacher tokenizer
+        collator = DataCollatorForChatML(
+            tokenizer=self.tokenizer,
+            teacher_tokenizer=teacher_tokenizer,
+            max_length=self.max_length,
+            ignore_index=self.ignore_index,
+        )
+
+        # Process the data
+        data = collator(self.examples)
+
+        # Verify that teacher-specific outputs are present
+        expected_teacher_keys = [
+            "teacher_input_ids",
+            "teacher_attention_mask",
+            "teacher_labels",
+            "teacher_prompts",
+            "teacher_prompt_attention_mask",
+        ]
+        for key in expected_teacher_keys:
+            self.assertIn(key, data, f"Expected {key} in collated data")
+            self.assertEqual(
+                data[key].shape[0],
+                len(self.examples),
+                f"Expected batch dimension of {key} to match number of examples",
+            )
+
+        # Verify that teacher tensors have same batch size as student tensors
+        self.assertEqual(
+            data["teacher_input_ids"].shape[0],
+            data["input_ids"].shape[0],
+            "Teacher and student batch sizes should match",
+        )
+
+        # Verify that teacher labels are properly masked with ignore_index
+        teacher_labels = data["teacher_labels"][0].tolist()
+        teacher_prompts = data["teacher_prompts"][0].tolist()
+
+        # Check that prompt tokens are masked in labels
+        prompt_length = len(teacher_prompts)
+        self.assertTrue(
+            all(label == self.ignore_index for label in teacher_labels[:prompt_length]),
+            "Prompt tokens should be masked in teacher labels",
+        )
+
+        # Verify padding is consistent
+        self.assertEqual(
+            data["teacher_input_ids"].shape,
+            data["teacher_attention_mask"].shape,
+            "Teacher input_ids and attention_mask should have same shape",
+        )
+
 
 class TestBatchGeneration(unittest.TestCase):
     def setUp(self):
