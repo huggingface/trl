@@ -67,6 +67,8 @@
     title: Text Environments
   title: API
 - sections:
+  - local: community_notebooks
+    title: Community notebooks
   - local: example_overview
     title: Example Overview
   - local: sentiment_tuning
