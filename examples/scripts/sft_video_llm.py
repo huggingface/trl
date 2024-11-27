@@ -45,7 +45,7 @@ import json
 import os
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any
 
 import requests
 import torch
@@ -90,7 +90,7 @@ def download_video(url: str, cache_dir: str) -> str:
         raise Exception(f"Failed to download video: {e}") from e
 
 
-def prepare_dataset(example: Dict[str, Any], cache_dir: str) -> Dict[str, List[Dict[str, Any]]]:
+def prepare_dataset(example: dict[str, Any], cache_dir: str) -> dict[str, list[dict[str, Any]]]:
     """Prepare dataset example for training."""
     video_url = example["video_url"]
     timecoded_cc = example["timecoded_cc"]
@@ -120,7 +120,7 @@ Based on this information, please answer the following questions:"""
     return {"messages": messages}
 
 
-def collate_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+def collate_fn(examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
     """Collate batch of examples for training."""
     texts = []
     video_inputs = []

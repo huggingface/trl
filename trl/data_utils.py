@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, Dict, List, Optional, Sequence, TypeVar
+from typing import Any, Optional, Sequence, TypeVar
 
 from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizer
@@ -20,12 +20,12 @@ from transformers import PreTrainedTokenizer
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
-def is_conversational(example: Dict[str, Any]) -> bool:
+def is_conversational(example: dict[str, Any]) -> bool:
     r"""
     Check if the example is in a conversational format.
 
     Args:
-        example (`Dict[str, Any]`):
+        example (`dict[str, Any]`):
             A single data entry of a dataset. The example can have different keys depending on the
             dataset type.
 
@@ -60,7 +60,7 @@ def is_conversational(example: Dict[str, Any]) -> bool:
     return False
 
 
-def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: PreTrainedTokenizer) -> Dict[str, str]:
+def apply_chat_template(example: dict[str, list[dict[str, str]]], tokenizer: PreTrainedTokenizer) -> dict[str, str]:
     r"""
     Apply a chat template to a conversational example.
 
@@ -139,13 +139,13 @@ def apply_chat_template(example: Dict[str, List[Dict[str, str]]], tokenizer: Pre
 
 
 def maybe_apply_chat_template(
-    example: Dict[str, List[Dict[str, str]]], tokenizer: PreTrainedTokenizer
-) -> Dict[str, str]:
+    example: dict[str, list[dict[str, str]]], tokenizer: PreTrainedTokenizer
+) -> dict[str, str]:
     r"""
     If the example is in a conversational format, apply a chat template to it.
 
     Args:
-        example (`Dict[str, List[Dict[str, str]]`):
+        example (`dict[str, list[dict[str, str]]`):
             Dictionary representing a single data entry of a conversational dataset. Each data entry can have different
             keys depending on the dataset type. The supported dataset types are:
 
@@ -163,7 +163,7 @@ def maybe_apply_chat_template(
             The tokenizer to apply the chat template with.
 
     Returns:
-        `Dict[str, str]`: The formatted example with the chat template applied.
+        `dict[str, str]`: The formatted example with the chat template applied.
 
     Note:
         This function does not alter the keys, except for Language modeling dataset, where `"messages"` is replaced by
@@ -188,7 +188,7 @@ def maybe_apply_chat_template(
         return example
 
 
-def _unpair_row(examples: List[Dict[str, List[Dict[str, str]]]]) -> List[Dict[str, List[Dict[str, str]]]]:
+def _unpair_row(examples: list[dict[str, list[dict[str, str]]]]) -> list[dict[str, list[dict[str, str]]]]:
     batch_size = len(examples["chosen"])
     new_rows = {
         "completion": examples["chosen"] + examples["rejected"],
@@ -288,7 +288,7 @@ def maybe_unpair_preference_dataset(
         return dataset
 
 
-def extract_prompt(example: Dict[str, Sequence]) -> Dict[str, Sequence]:
+def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
     r"""
     Extracts the shared prompt from a preference data example, where the prompt is implicit within both
     the chosen and rejected completions.
@@ -307,7 +307,7 @@ def extract_prompt(example: Dict[str, Sequence]) -> Dict[str, Sequence]:
     }
 
 
-def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
+def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     r"""
     Extracts the shared prompt from a preference data example, where the prompt is implicit within both
     the chosen and rejected completions.
@@ -318,12 +318,12 @@ def maybe_extract_prompt(example: Dict[str, List]) -> Dict[str, List]:
     "rejected" completions.
 
     Args:
-        example (`Dict[str, List]`):
+        example (`dict[str, list]`):
             A dictionary representing a single data entry in the preference dataset. It must contain the keys
             `"chosen"` and `"rejected"`, where each value is either conversational or standard (`str`).
 
     Returns:
-        `Dict[str, List]`: A dictionary containing:
+        `dict[str, list]`: A dictionary containing:
             - `"prompt"`: The longest common prefix between the "chosen" and "rejected" completions.
             - `"chosen"`: The remainder of the "chosen" completion, with the prompt removed.
             - `"rejected"`: The remainder of the "rejected" completion, with the prompt removed.

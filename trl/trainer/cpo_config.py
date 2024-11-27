@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -70,7 +70,7 @@ class CPOConfig(TrainingArguments):
         is_encoder_decoder (`Optional[bool]`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
-        model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
@@ -92,5 +92,5 @@ class CPOConfig(TrainingArguments):
     truncation_mode: str = "keep_end"
     generate_during_eval: bool = False
     is_encoder_decoder: Optional[bool] = None
-    model_init_kwargs: Optional[Dict[str, Any]] = None
+    model_init_kwargs: Optional[dict[str, Any]] = None
     dataset_num_proc: Optional[int] = None
