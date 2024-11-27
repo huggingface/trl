@@ -243,7 +243,7 @@ class StepwiseRewardTrainer(Trainer):
         if tokenizer.bos_token_id is not None:
             prompt_ids = [tokenizer.bos_token_id] + prompt_ids
 
-        return {"input_ids": prompt_ids + completion_ids, "labels": labels}
+        return {"input_ids": prompt_ids + completion_ids, "labels": [-100] * len(prompt_ids) + labels}
 
     def create_model_card(
         self,
