@@ -23,7 +23,6 @@ from transformers.utils import is_peft_available
 
 from trl import StepwiseRewardConfig, StepwiseRewardTrainer
 from trl.trainer import compute_accuracy
-from trl.trainer.stepwise_reward_trainer import _tokenize_fn
 
 
 if is_peft_available():
@@ -46,7 +45,7 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
         self.assertEqual(accuracy["accuracy"], 0.5)
 
     @parameterized.expand([True, False])
-    def test_preprocessing(self, train_on_last_step):
+    def test_preprocessing(self, train_on_last_step_only):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
             training_args = StepwiseRewardConfig(
@@ -59,13 +58,12 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
                 train_dataset=dummy_dataset,
             )
             dummy_dataset = dummy_dataset.map(
-                _tokenize_fn,
-                batched=True,
+                trainer.tokenize_row,
                 fn_kwargs={
                     "tokenizer": self.tokenizer,
-                    "max_length": 512,
                     "step_separator": "\n",
-                    "train_on_last_step": train_on_last_step,
+                    "max_completion_length": 512,
+                    "train_on_last_step_only": train_on_last_step_only,
                 },
                 remove_columns=dummy_dataset.features,
             )

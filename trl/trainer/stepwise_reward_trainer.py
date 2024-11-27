@@ -144,6 +144,7 @@ class StepwiseRewardTrainer(Trainer):
                 fn_kwargs = {
                     "tokenizer": processing_class,
                     "step_separator": args.step_separator,
+                    "max_length": args.max_length,
                     "max_completion_length": args.max_completion_length,
                     "train_on_last_step_only": args.train_on_last_step_only,
                 }
@@ -183,7 +184,7 @@ class StepwiseRewardTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
     @staticmethod
-    def tokenize_row(features, tokenizer, step_separator, max_completion_length, train_on_last_step_only):
+    def tokenize_row(features, tokenizer, step_separator, max_length, max_completion_length, train_on_last_step_only):
         """
         Tokenize a row of the dataset.
 
@@ -194,6 +195,8 @@ class StepwiseRewardTrainer(Trainer):
                 Tokenizer used to process the data.
             step_separator (`str`):
                 Separator between steps in the completion.
+            max_length (`int` or `None`):
+               Maximum length of the sequences (prompt + completion). If `None`, the sequences are not truncated.
             max_completion_length (`int` or `None`):
                 Maximum length of the completion sequences. If `None`, the completion sequences are not truncated.
             train_on_last_step_only (`bool`):
@@ -242,8 +245,15 @@ class StepwiseRewardTrainer(Trainer):
             
         if tokenizer.bos_token_id is not None:
             prompt_ids = [tokenizer.bos_token_id] + prompt_ids
+            
+        input_ids = prompt_ids + completion_ids
+        labels = [-100] * len(prompt_ids) + labels
+        
+        if max_length is not None:
+            input_ids = input_ids[:max_length]
+            labels = labels[:max_length]
 
-        return {"input_ids": prompt_ids + completion_ids, "labels": [-100] * len(prompt_ids) + labels}
+        return {"input_ids": input_ids, "labels": labels}
 
     def create_model_card(
         self,
