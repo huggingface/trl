@@ -13,11 +13,12 @@
 # limitations under the License.
 import tempfile
 import unittest
+from unittest.mock import MagicMock
 
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import AutoModelForTokenClassification, AutoTokenizer, EvalPrediction
+from transformers import AutoModelForTokenClassification, AutoTokenizer, EvalPrediction, PreTrainedTokenizerBase
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
@@ -27,6 +28,161 @@ from trl.trainer import compute_accuracy
 
 if is_peft_available():
     from peft import LoraConfig, TaskType
+
+
+class TestTokenizeRow(unittest.TestCase):
+    def setUp(self):
+        # Set up the mock tokenizer with specific behaviors
+        self.tokenizer = MagicMock(spec=PreTrainedTokenizerBase)
+        self.tokenizer.bos_token_id = 0
+        self.tokenizer.eos_token_id = 2
+
+        def mock_encode(text, add_special_tokens):
+            token_map = {
+                "Which number is larger, 9.8 or 9.11?": [465, 6766, 318, 298],
+                "11 is greater than 8.": [4, 322, 12],
+                "Hence, 9.11 > 9.8.": [4995, 11, 22],
+                "\n": [1030],
+                "\n\n": [1030, 1030],
+            }
+
+            return token_map[text]
+
+        def mock_tokenizer_call(text, add_special_tokens):
+            return {"input_ids": mock_encode(text, add_special_tokens)}
+
+        self.tokenizer.encode.side_effect = mock_encode
+        self.tokenizer.side_effect = mock_tokenizer_call
+
+    def test_tokenize_row_no_truncation(self):
+        # Define the input features
+        features = {
+            "prompt": "Which number is larger, 9.8 or 9.11?",
+            "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
+            "labels": [True, False],
+        }
+
+        # Call the method with no truncation
+        result = StepwiseRewardTrainer.tokenize_row(
+            features=features,
+            tokenizer=self.tokenizer,
+            step_separator="\n",
+            max_length=None,
+            max_completion_length=None,
+            train_on_last_step_only=False,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
+                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
+            },
+        )
+
+    def test_tokenize_row_train_on_last_step_only(self):
+        # Define the input features
+        features = {
+            "prompt": "Which number is larger, 9.8 or 9.11?",
+            "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
+            "labels": [True, False],
+        }
+
+        # Call the method with no truncation
+        result = StepwiseRewardTrainer.tokenize_row(
+            features=features,
+            tokenizer=self.tokenizer,
+            step_separator="\n",
+            max_length=None,
+            max_completion_length=None,
+            train_on_last_step_only=True,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
+                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
+            },
+        )
+
+    def test_tokenize_row_completion_truncation(self):
+        # Define the input features
+        features = {
+            "prompt": "Which number is larger, 9.8 or 9.11?",
+            "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
+            "labels": [True, False],
+        }
+
+        # Call the method with truncation on the completion
+        result = StepwiseRewardTrainer.tokenize_row(
+            features=features,
+            tokenizer=self.tokenizer,
+            step_separator="\n",
+            max_length=None,
+            max_completion_length=6,
+            train_on_last_step_only=False,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11],
+                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100],
+            },
+        )
+
+    def test_tokenize_row_prompt_completion_truncation(self):
+        # Define the input features
+        features = {
+            "prompt": "Which number is larger, 9.8 or 9.11?",
+            "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
+            "labels": [True, False],
+        }
+
+        # Call the method with no truncation
+        result = StepwiseRewardTrainer.tokenize_row(
+            features=features,
+            tokenizer=self.tokenizer,
+            step_separator="\n",
+            max_length=9,
+            max_completion_length=None,
+            train_on_last_step_only=False,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030],
+                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1],
+            },
+        )
+
+    def test_tokenize_row_multi_token_separator(self):
+        # Define the input features
+        features = {
+            "prompt": "Which number is larger, 9.8 or 9.11?",
+            "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
+            "labels": [True, False],
+        }
+
+        # Call the method with no truncation
+        result = StepwiseRewardTrainer.tokenize_row(
+            features=features,
+            tokenizer=self.tokenizer,
+            step_separator="\n\n",
+            max_length=None,
+            max_completion_length=None,
+            train_on_last_step_only=False,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 1030, 4995, 11, 22, 1030, 1030],
+                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, 0],
+            },
+        )
 
 
 class StepwiseRewardTrainerTester(unittest.TestCase):
