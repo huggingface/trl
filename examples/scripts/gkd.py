@@ -123,6 +123,13 @@ if __name__ == "__main__":
     if teacher_tokenizer.pad_token is None:
         teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
 
+    tokenizer_vocab_keys = set(tokenizer.vocab.keys())
+    teacher_tokenizer_vocab_keys = set(teacher_tokenizer.vocab.keys())
+
+    # if the vocabularies are the same, we don't need the teacher model else we need it and use ULD
+    if set(tokenizer.vocab.keys()) == set(teacher_tokenizer.vocab.keys()):
+        teacher_tokenizer = None
+
     ################
     # Dataset
     ################
