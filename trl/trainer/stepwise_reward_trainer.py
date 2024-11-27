@@ -218,15 +218,15 @@ class StepwiseRewardTrainer(Trainer):
         ```
         """
         # Tokenize the prompt and completions
-        prompt_ids = tokenizer(features["prompt"])["input_ids"]
-        completions_ids = [tokenizer(completion)["input_ids"] for completion in features["completions"]]
+        prompt_ids = tokenizer(features["prompt"], add_special_tokens=False)["input_ids"]
+        completions_ids = [tokenizer(completion, add_special_tokens=False)["input_ids"] for completion in features["completions"]]
         if train_on_last_step_only:
             labels = [-100] * (len(features["labels"]) - 1) + [int(features["labels"][-1])]
         else:
             labels = [int(label) for label in features["labels"]]
 
         # Get the ID of the separator token and add it to the completions
-        separator_ids = tokenizer.encode(step_separator)
+        separator_ids = tokenizer.encode(step_separator, add_special_tokens=False)
         completions_ids = [completion + separator_ids for completion in completions_ids]
 
         # Create the label
@@ -239,6 +239,9 @@ class StepwiseRewardTrainer(Trainer):
         if max_completion_length is not None:
             completion_ids = completion_ids[:max_completion_length]
             labels = labels[:max_completion_length]
+            
+        if tokenizer.bos_token_id is not None:
+            prompt_ids = [tokenizer.bos_token_id] + prompt_ids
 
         return {"input_ids": prompt_ids + completion_ids, "labels": labels}
 
