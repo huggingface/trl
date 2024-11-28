@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import pandas as pd
 import torch
@@ -48,18 +48,18 @@ if is_deepspeed_available():
 
 
 def _generate_completions(
-    prompts: List[str],
+    prompts: list[str],
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
     accelerator: Accelerator,
     generation_config: Optional[GenerationConfig],
     batch_size: int = 1,
-) -> List[str]:
+) -> list[str]:
     """
     Generates completions for a list of pre-formatted prompts from the given model.
 
     Args:
-        prompts (List[str]): A list of input prompts for which completions are to be generated.
+        prompts (list[str]): A list of input prompts for which completions are to be generated.
         model (PreTrainedModel): The pre-trained model to be used for generation.
         tokenizer (PreTrainedTokenizerBase): The tokenizer to be used for encoding and decoding.
         accelerator (Accelerator): The accelerator to be used for model execution.
@@ -67,7 +67,7 @@ def _generate_completions(
         batch_size (int, optional): The number of prompts to process in each batch. Default is 1.
 
     Returns:
-        List[str]: A list of generated text completions corresponding to the input prompts.
+        list[str]: A list of generated text completions corresponding to the input prompts.
     """
     completions = []
     with unwrap_model_for_generation(model, accelerator) as unwrapped_model:

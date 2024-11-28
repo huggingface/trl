@@ -19,7 +19,7 @@ import warnings
 from collections import deque
 from dataclasses import dataclass
 from importlib.metadata import version
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal, Optional, Union
 
 import datasets
 import numpy as np
@@ -91,10 +91,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     calculated on the completion made by the assistant.
 
     Args:
-        response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
+        response_template (`Union[str, list[int]]`): the template form that indicates the start of the response, typically something like
             '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
             differently if it does not have proper context.
-        instruction_template (`Union[str, List[int]]`): the template form that indicates the start of the human instruction, typically something like
+        instruction_template (`Union[str, list[int]]`): the template form that indicates the start of the human instruction, typically something like
             '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
@@ -105,8 +105,8 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
     def __init__(
         self,
-        response_template: Union[str, List[int]],
-        instruction_template: Optional[Union[str, List[int]]] = None,
+        response_template: Union[str, list[int]],
+        instruction_template: Optional[Union[str, list[int]]] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
@@ -142,7 +142,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         self.ignore_index = ignore_index
         self.padding_free = padding_free
 
-    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         batch = super().torch_call(examples)
 
         if self.instruction_template is None:
@@ -255,7 +255,7 @@ class DataCollatorForChatML:
             # set a sensible default
             self.max_length = min(self.tokenizer.model_max_length, 1024)
 
-    def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+    def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
         input_ids = []
         attention_mask = []
         prompts_input_ids = []
@@ -350,7 +350,7 @@ class RewardDataCollatorWithPadding:
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         features_chosen = []
         features_rejected = []
         margin = []
@@ -407,12 +407,12 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
-def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
+def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
 
     Args:
-        tensors (`List[torch.Tensor]`):
+        tensors (`list[torch.Tensor]`):
             List of input tensors to pad.
         padding_value (`int`):
             Value to use for padding. Default is 0.
@@ -474,7 +474,7 @@ class DPODataCollatorWithPadding:
     label_pad_token_id: int = -100
     is_encoder_decoder: Optional[bool] = False
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         # first, pad everything to the same length
         padded_batch = {}
         for k in features[0].keys():
@@ -701,7 +701,7 @@ class RunningMoments:
     count: float = 1e-24
 
     @torch.no_grad()
-    def update(self, xs: torch.Tensor) -> Tuple[float, float]:
+    def update(self, xs: torch.Tensor) -> tuple[float, float]:
         """
         Updates running moments from batch's moments computed across ranks
         """
@@ -749,7 +749,7 @@ class RunningMoments:
 @torch.no_grad()
 def get_global_statistics(
     accelerator, xs: torch.Tensor, mask=None, device="cpu"
-) -> Tuple[torch.Tensor, torch.Tensor, int]:
+) -> tuple[torch.Tensor, torch.Tensor, int]:
     """
     Computes element-wise mean and variance of the tensor across processes. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
@@ -767,7 +767,7 @@ def get_global_statistics(
     return global_mean.to(device), global_var.to(device), count.item()
 
 
-def compute_accuracy(eval_pred) -> Dict[str, float]:
+def compute_accuracy(eval_pred) -> dict[str, float]:
     predictions, labels = eval_pred
     # Here, predictions is rewards_chosen and rewards_rejected.
     # We want to see how much of the time rewards_chosen > rewards_rejected.
@@ -898,7 +898,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
     return quantization_config
 
 
-def get_kbit_device_map() -> Optional[Dict[str, int]]:
+def get_kbit_device_map() -> Optional[dict[str, int]]:
     if is_torch_xpu_available():
         return {"": f"xpu:{PartialState().local_process_index}"}
     elif torch.cuda.is_available():
@@ -1080,7 +1080,7 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long):
 
 def get_reward(
     model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Computes the reward logits and the rewards for a given model and query responses.
 
@@ -1239,7 +1239,7 @@ def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Te
 
 def generate(
     lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: GenerationConfig
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generates sequences from the language model backbone in a way that does not affect padding tokens.
 
@@ -1312,11 +1312,11 @@ def batch_generation(
 def add_bos_token_if_needed(
     bos_token_id: Optional[int],
     prompt_len_input_ids: int,
-    prompt_tokens: Dict[str, List[int]],
+    prompt_tokens: dict[str, list[int]],
     chosen_prompt_len_input_ids: int,
-    chosen_tokens: Dict[str, List[int]],
+    chosen_tokens: dict[str, list[int]],
     rejected_prompt_len_input_ids: int,
-    rejected_tokens: Dict[str, List[int]],
+    rejected_tokens: dict[str, list[int]],
 ):
     if bos_token_id is not None:
         if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
@@ -1332,7 +1332,7 @@ def add_bos_token_if_needed(
 
 
 def add_eos_token_if_needed(
-    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
+    eos_token_id: int, chosen_tokens: dict[str, list[int]], rejected_tokens: dict[str, list[int]]
 ):
     if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
         chosen_tokens["input_ids"].append(eos_token_id)
@@ -1345,7 +1345,7 @@ def add_eos_token_if_needed(
 
 def truncate_right(
     input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Truncates the input tensor from the right side after the first occurrence of the stop token.
 
@@ -1390,7 +1390,7 @@ def empty_cache() -> None:
         torch.cuda.empty_cache()
 
 
-def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> List[str]:
+def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> list[str]:
     """
     Decodes the input tensor and strips the padding tokens.
 
@@ -1401,7 +1401,7 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
             The tokenizer used to decode the input tensor.
 
     Returns:
-        `List[str]`:
+        `list[str]`:
             The list of decoded strings with padding tokens stripped.
     """
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
@@ -1413,7 +1413,7 @@ def generate_model_card(
     model_name: str,
     hub_model_id: str,
     dataset_name: Optional[str],
-    tags: List[str],
+    tags: list[str],
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
@@ -1432,7 +1432,7 @@ def generate_model_card(
             Hub model ID as `username/model_id`.
         dataset_name (`str` or `None`):
             Dataset name.
-        tags (`List[str]`):
+        tags (`list[str]`):
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.

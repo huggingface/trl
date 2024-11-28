@@ -13,7 +13,7 @@
 # limitations under the License.
 import os
 import warnings
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Optional, Union
 
 import torch
 from datasets import Dataset
@@ -60,7 +60,7 @@ class IterativeSFTTrainer(Trainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
         data_collator (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*):
             Data collator to be used for training and passed along the dataloader.
@@ -72,7 +72,7 @@ class IterativeSFTTrainer(Trainer):
             The truncation mode to use, either `keep_end` or `keep_start`.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
         optimize_device_cache (`bool`, *optional*, defaults to `False`):
             Optimize CUDA cache for slightly more memory-efficient training.
@@ -87,16 +87,16 @@ class IterativeSFTTrainer(Trainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
             None,
             None,
         ),
         data_collator: Optional[DataCollator] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         max_length: Optional[int] = None,
         truncation_mode: Optional[str] = "keep_end",
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
         optimize_device_cache: Optional[bool] = False,
     ):
         # Step 0: check positional arguments validity
@@ -205,25 +205,25 @@ class IterativeSFTTrainer(Trainer):
 
     @staticmethod
     def _step_safety_checker(
-        input_ids: List[torch.LongTensor],
-        attention_mask: List[torch.LongTensor],
-        labels: List[torch.LongTensor],
-        texts: List[str],
-        texts_labels: List[str],
+        input_ids: list[torch.LongTensor],
+        attention_mask: list[torch.LongTensor],
+        labels: list[torch.LongTensor],
+        texts: list[str],
+        texts_labels: list[str],
     ):
         """
         Check if the input data is valid for training.
 
         Args:
-            input_ids (List[`torch.LongTensor`]):
+            input_ids (list[`torch.LongTensor`]):
                 List of tensors containing the input_ids
-            attention_mask (List[`torch.LongTensor`]):
+            attention_mask (list[`torch.LongTensor`]):
                 List of tensors containing the attention_mask
-            labels (List[`torch.FloatTensor`]):
+            labels (list[`torch.FloatTensor`]):
                 List of tensors containing the labels
-            texts (List[`str`]):
+            texts (list[`str`]):
                 List of string containing the text input.
-            texts_labels (List[`str`]):
+            texts_labels (list[`str`]):
                 List of string containing the text labels.
 
         Returns:
@@ -260,24 +260,24 @@ class IterativeSFTTrainer(Trainer):
     @PPODecorators.empty_device_cache()
     def step(
         self,
-        input_ids: Optional[List[torch.LongTensor]] = None,
-        attention_mask: Optional[List[torch.LongTensor]] = None,
-        labels: Optional[List[torch.LongTensor]] = None,
-        texts: Optional[List[str]] = None,
-        texts_labels: Optional[List[str]] = None,
+        input_ids: Optional[list[torch.LongTensor]] = None,
+        attention_mask: Optional[list[torch.LongTensor]] = None,
+        labels: Optional[list[torch.LongTensor]] = None,
+        texts: Optional[list[str]] = None,
+        texts_labels: Optional[list[str]] = None,
     ):
         """
         Run an optimisation step given a list of input_ids, attention_mask, and labels or a list of text and text_labels.
         Args:
-            input_ids (List[`torch.LongTensor`]):
+            input_ids (list[`torch.LongTensor`]):
                 List of tensors containing the input_ids (if not provided, text will be used)
-            attention_mask (List[`torch.LongTensor`], , *optional*):
+            attention_mask (list[`torch.LongTensor`], , *optional*):
                 List of tensors containing the attention_mask
-            labels (List[`torch.FloatTensor`], *optional*):
+            labels (list[`torch.FloatTensor`], *optional*):
                 List of tensors containing the labels (if set to None, will default to input_ids)
-            texts (List[`str`], *optional*):
+            texts (list[`str`], *optional*):
                 List of strings containing the text input (if not provided, input_ids will directly be used)
-            texts_labels (List[`str`], *optional*):
+            texts_labels (list[`str`], *optional*):
                 List of strings containing the text labels (if set to None, will default to text)
 
         Returns:
@@ -384,7 +384,7 @@ class IterativeSFTTrainer(Trainer):
         # check if logging is required
         if self.args.logging_steps is not None:
             if self.state.global_step % self.args.logging_steps == 0 and self.state.global_step != 0:
-                logs: Dict[str, float] = {}
+                logs: dict[str, float] = {}
 
                 tr_loss_scalar = self._nested_gather(self.tr_loss).mean().item()
 
@@ -402,7 +402,7 @@ class IterativeSFTTrainer(Trainer):
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -412,7 +412,7 @@ class IterativeSFTTrainer(Trainer):
                 The name of the model.
             dataset_name (`str`, *optional*, defaults to `None`):
                 The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
