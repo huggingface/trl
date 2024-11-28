@@ -15,7 +15,7 @@
 import concurrent.futures
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 from accelerate import Accelerator
@@ -67,7 +67,7 @@ class BaseJudge(ABC):
     """
 
     @abstractmethod
-    def judge(self, prompts: List[str], completions: List[str], shuffle_order: bool = True) -> List:
+    def judge(self, prompts: list[str], completions: list[str], shuffle_order: bool = True) -> list:
         raise NotImplementedError("Judge subclasses must implement the `judge` method.")
 
 
@@ -90,20 +90,20 @@ class BaseRankJudge(ABC):
     """
 
     @abstractmethod
-    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[List[int]]:
+    def judge(self, prompts: list[str], completions: list[list[str]], shuffle_order: bool = True) -> list[list[int]]:
         """
         Judge the completion for the given prompts and return the ranks of each completion.
 
         Args:
-            prompts (`List[str]`):
+            prompts (`list[str]`):
                 List of prompts.
-            completions (`List[List[str]]`):
+            completions (`list[list[str]]`):
                 List of completions list, where each element is a list of completions for the corresponding prompt.
             shuffle_order (`bool`, *optional*, defaults to `True`):
                 Whether to shuffle the order of the completions to avoid positional bias.
 
         Returns:
-            `List[List[int]]`:
+            `list[list[int]]`:
                 List of lists of idxs, where each list contains the ranks of the completions for the corresponding
                 prompt. E.g., `[1, 2, 0]` means that the second completion (`idx=1`) is the best, followed by the
                 third, and then the first.
@@ -117,20 +117,20 @@ class BasePairwiseJudge(BaseJudge):
     """
 
     @abstractmethod
-    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[int]:
+    def judge(self, prompts: list[str], completions: list[list[str]], shuffle_order: bool = True) -> list[int]:
         """
         Judge the completion pairs for the given prompts.
 
         Args:
-            prompts (`List[str]`):
+            prompts (`list[str]`):
                 List of prompts.
-            completions (`List[List[str]]`):
+            completions (`list[list[str]]`):
                 List of completions pairs, where each element is a pair of completions for the corresponding prompt.
             shuffle_order (`bool`, *optional*, defaults to `True`):
                 Whether to shuffle the order of the completions to avoid positional bias.
 
         Returns:
-            `List[int]`:
+            `list[int]`:
                 List of idxs, where each idx is the rank of the best completion for the corresponding prompt.
                 E.g., `1` means that the second completion (`idx=1`) is the best.
 
@@ -151,11 +151,11 @@ class BaseBinaryJudge(BaseJudge):
     @abstractmethod
     def judge(
         self,
-        prompts: List[str],
-        completions: List[str],
-        gold_completions: Optional[List[str]] = None,
+        prompts: list[str],
+        completions: list[str],
+        gold_completions: Optional[list[str]] = None,
         shuffle_order: bool = True,
-    ) -> List[int]:
+    ) -> list[int]:
         """
         Judge the completion for a given prompt. Used to assess if a completion satisfies a constraint.
 
@@ -164,13 +164,13 @@ class BaseBinaryJudge(BaseJudge):
         It is relevant for assessing whether or not a prompt completion pair satisfies a specific contraint.
 
         Args:
-            prompts (`List[str]`): List of prompts.
-            completions (`List[str]`): List of completions.
-            gold_completions (`List[str]`, `optional`): List of gold completions if it exists.
+            prompts (`list[str]`): List of prompts.
+            completions (`list[str]`): List of completions.
+            gold_completions (`list[str]`, `optional`): List of gold completions if it exists.
             shuffle_order (`bool`): Whether to shuffle the order of the completions to avoid positional bias.
 
         Returns:
-            List[int]: A list of binary labels:
+            list[int]: A list of binary labels:
                 - 1 indicates that the completion satisfies the evaluated constraint.
                 - 0 indicates that the completion does not satisfy the evaluated constraint.
 
@@ -219,19 +219,19 @@ class PairRMJudge(BasePairwiseJudge):
 
     def judge(
         self,
-        prompts: List[str],
-        completions: List[List[str]],
+        prompts: list[str],
+        completions: list[list[str]],
         shuffle_order: bool = True,
         return_scores: bool = False,
         temperature: float = 1.0,
-    ) -> List[Union[int, float]]:
+    ) -> list[Union[int, float]]:
         """
         Judge the completion pairs for the given prompts using the PairRM model.
 
         Args:
-            prompts (`List[str]`):
+            prompts (`list[str]`):
                 List of prompts to judge.
-            completions (`List[List[str]]`):
+            completions (`list[list[str]]`):
                 List of completion pairs for each prompt.
             shuffle_order (`bool`, *optional*, defaults to `True`):
                 Whether to shuffle the order of the completions to avoid positional bias.
@@ -241,7 +241,7 @@ class PairRMJudge(BasePairwiseJudge):
                 Temperature for scaling logits if `return_scores` is True.
 
         Returns:
-            `Union[List[int, float]]`:
+            `Union[list[int, float]]`:
                 If `return_scores` is `False`, returns a list of ranks (`0` or `1`) for each prompt, indicating which
                 completion is preferred.
                 If `return_scores` is `True`, returns softmax probabilities for the first completion.
@@ -311,7 +311,7 @@ class HfPairwiseJudge(BasePairwiseJudge):
         self.client = InferenceClient(model=model, token=token)
         self.system_prompt = system_prompt or DEFAULT_PAIRWISE_SYSTEM_PROMPT
 
-    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[int]:
+    def judge(self, prompts: list[str], completions: list[list[str]], shuffle_order: bool = True) -> list[int]:
         # Shuffle the order of the completions to avoid positional bias
         if shuffle_order:
             flip_mask = np.random.choice([True, False], size=len(prompts))
@@ -370,7 +370,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
         self.num_requests = 0
         self._warned = False
 
-    def judge(self, prompts: List[str], completions: List[List[str]], shuffle_order: bool = True) -> List[int]:
+    def judge(self, prompts: list[str], completions: list[list[str]], shuffle_order: bool = True) -> list[int]:
         # Check if the limit of requests is reached, if so, use random choice instead
         if self.max_requests is not None and self.num_requests >= self.max_requests:
             if not self._warned:  # Print the warning only once
@@ -423,19 +423,19 @@ class AllTrueJudge(BaseBinaryJudge):
     Implements the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370).
 
     Args:
-    judges (`List[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
+    judges (`list[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
     """
 
-    def __init__(self, judges: List[BaseBinaryJudge]):
+    def __init__(self, judges: list[BaseBinaryJudge]):
         self.judges = judges
 
     def judge(
         self,
-        prompts: List[str],
-        completions: List[str],
-        gold_completions: Optional[List[str]] = None,
+        prompts: list[str],
+        completions: list[str],
+        gold_completions: Optional[list[str]] = None,
         shuffle_order: bool = True,
-    ) -> List[int]:
+    ) -> list[int]:
         all_binary_judgments = [
             judge.judge(prompts, completions, gold_completions, shuffle_order) for judge in self.judges
         ]

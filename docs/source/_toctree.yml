@@ -65,6 +65,8 @@
     title: Data Utilities
   - local: text_environments
     title: Text Environments
+  - local: script_utils
+    title: Script Utilities
   title: API
 - sections:
   - local: example_overview

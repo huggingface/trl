@@ -16,7 +16,7 @@ import os
 import sys
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, Literal, Optional, Tuple
+from typing import Any, Literal, Optional
 
 from transformers import is_bitsandbytes_available, is_torchvision_available
 
@@ -42,11 +42,11 @@ class AlignPropConfig:
             [tracking](https://huggingface.co/docs/accelerate/usage_guides/tracking) for more details.
         log_image_freq (`int`, *optional*, defaults to `1`):
             Frequency for logging images.
-        tracker_kwargs (`Dict[str, Any]`, *optional*, defaults to `{}`):
+        tracker_kwargs (`dict[str, Any]`, *optional*, defaults to `{}`):
             Keyword arguments for the tracker (e.g., `wandb_project`).
-        accelerator_kwargs (`Dict[str, Any]`, *optional*, defaults to `{}`):
+        accelerator_kwargs (`dict[str, Any]`, *optional*, defaults to `{}`):
             Keyword arguments for the accelerator.
-        project_kwargs (`Dict[str, Any]`, *optional*, defaults to `{}`):
+        project_kwargs (`dict[str, Any]`, *optional*, defaults to `{}`):
             Keyword arguments for the accelerator project config (e.g., `logging_dir`).
         tracker_project_name (`str`, *optional*, defaults to `"trl"`):
             Name of project to use for tracking.
@@ -92,7 +92,7 @@ class AlignPropConfig:
             If `True`, randomized truncation to different diffusion timesteps is used.
         truncated_backprop_timestep (`int`, *optional*, defaults to `49`):
             Absolute timestep to which the gradients are backpropagated. Used only if `truncated_backprop_rand=False`.
-        truncated_rand_backprop_minmax (`Tuple[int, int]`, *optional*, defaults to `(0, 50)`):
+        truncated_rand_backprop_minmax (`tuple[int, int]`, *optional*, defaults to `(0, 50)`):
             Range of diffusion timesteps for randomized truncated backpropagation.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the final model to the Hub.
@@ -103,9 +103,9 @@ class AlignPropConfig:
     seed: int = 0
     log_with: Optional[Literal["wandb", "tensorboard"]] = None
     log_image_freq: int = 1
-    tracker_kwargs: Dict[str, Any] = field(default_factory=dict)
-    accelerator_kwargs: Dict[str, Any] = field(default_factory=dict)
-    project_kwargs: Dict[str, Any] = field(default_factory=dict)
+    tracker_kwargs: dict[str, Any] = field(default_factory=dict)
+    accelerator_kwargs: dict[str, Any] = field(default_factory=dict)
+    project_kwargs: dict[str, Any] = field(default_factory=dict)
     tracker_project_name: str = "trl"
     logdir: str = "logs"
     num_epochs: int = 100
@@ -129,7 +129,7 @@ class AlignPropConfig:
     negative_prompts: Optional[str] = None
     truncated_backprop_rand: bool = True
     truncated_backprop_timestep: int = 49
-    truncated_rand_backprop_minmax: Tuple[int, int] = (0, 50)
+    truncated_rand_backprop_minmax: tuple[int, int] = (0, 50)
     push_to_hub: bool = False
 
     def to_dict(self):

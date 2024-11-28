@@ -156,10 +156,10 @@ class KTOTrainerTester(unittest.TestCase):
             self.assertListEqual(tokenized_dataset["prompt"], train_dataset["prompt"])
             self.assertListEqual(tokenized_dataset["completion"], train_dataset["completion"])
             self.assertListEqual(tokenized_dataset["label"], train_dataset["label"])
-            self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [31137])
-            self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1])
-            self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [374, 2664, 1091, 16965, 13])
-            self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1])
+            self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
+            self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
+            self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [27261, 13])
+            self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1])
 
             # Test corruption of (prompt, completion) pairs for KL dataset
             for batch_size in [2, 3]:
@@ -196,13 +196,15 @@ class KTOTrainerTester(unittest.TestCase):
             self.assertListEqual(processed_dataset["prompt"], train_dataset["prompt"])
             self.assertListEqual(processed_dataset["completion"], train_dataset["completion"])
             self.assertListEqual(processed_dataset["label"], train_dataset["label"])
-            self.assertListEqual(processed_dataset["prompt_input_ids"][0], [31137])
-            self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1])
+            self.assertListEqual(processed_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
+            self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
             self.assertListEqual(
-                processed_dataset["completion_input_ids"][0], [31137, 374, 2664, 1091, 16965, 13, 151645]
+                processed_dataset["completion_input_ids"][0], [46518, 374, 2664, 1091, 27261, 13, 151645]
             )
             self.assertListEqual(processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
-            self.assertListEqual(processed_dataset["completion_labels"][0], [-100, 374, 2664, 1091, 16965, 13, 151645])
+            self.assertListEqual(
+                processed_dataset["completion_labels"][0], [-100, -100, -100, -100, 27261, 13, 151645]
+            )
 
     def test_kto_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
