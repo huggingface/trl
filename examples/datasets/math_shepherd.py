@@ -118,13 +118,14 @@ if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
 
-    dataset = load_dataset("peiyi9979/Math-Shepherd")
+    dataset = load_dataset("peiyi9979/Math-Shepherd", split="train")
 
     dataset = dataset.map(
         process_example,
         remove_columns=["input", "label", "task"],
         num_proc=script_args.dataset_num_proc,
     )
+    dataset = dataset.train_test_split(test_size=0.05, seed=42)
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
