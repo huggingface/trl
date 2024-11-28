@@ -68,7 +68,7 @@
   title: API
 - sections:
   - local: community_notebooks
-    title: Community notebooks
+    title: Community Tutorials
   - local: example_overview
     title: Example Overview
   - local: sentiment_tuning
