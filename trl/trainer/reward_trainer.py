@@ -16,7 +16,7 @@ import os
 import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 
 import pandas as pd
 import torch
@@ -25,9 +25,12 @@ from accelerate import PartialState
 from accelerate.utils import gather_object
 from datasets import Dataset
 from transformers import (
+    BaseImageProcessor,
     DataCollator,
+    FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainingArguments,
     is_wandb_available,
@@ -36,6 +39,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template
 from .reward_config import RewardConfig
@@ -55,7 +59,7 @@ if is_wandb_available():
     import wandb
 
 
-def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase") -> Dict[str, List[Any]]:
+def _tokenize(batch: dict[str, list[Any]], tokenizer: "PreTrainedTokenizerBase") -> dict[str, list[Any]]:
     """Tokenize a batch from a reward modelling dataset."""
     new_examples = {
         "input_ids_chosen": [],
@@ -77,24 +81,29 @@ def _tokenize(batch: Dict[str, List[Any]], tokenizer: "PreTrainedTokenizerBase")
 class RewardTrainer(Trainer):
     _tag_names = ["trl", "reward-trainer"]
 
+    @deprecate_kwarg(
+        "tokenizer", "0.15.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         args: Optional[RewardConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
+        callbacks: Optional[list[TrainerCallback]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
             None,
             None,
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         max_length: Optional[int] = None,
-        peft_config: Optional[Dict] = None,
+        peft_config: Optional[dict] = None,
     ):
         """
         Initialize RewardTrainer.
@@ -111,19 +120,21 @@ class RewardTrainer(Trainer):
                 The dataset to use for training.
             eval_dataset (`datasets.Dataset`):
                 The dataset to use for evaluation.
-            tokenizer (`transformers.PreTrainedTokenizerBase`):
-                The tokenizer to use for training. This argument is required if you want to use the default data collator.
+            processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+                Processing class used to process the data. If provided, will be used to automatically process the inputs
+                for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+                reuse the fine-tuned model.
             model_init (`Callable[[], transformers.PreTrainedModel]`):
                 The model initializer to use for training. If None is specified, the default model initializer will be used.
-            compute_metrics (`Callable[[transformers.EvalPrediction], Dict]`, *optional* defaults to `compute_accuracy`):
+            compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to `compute_accuracy`):
                 The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
-            callbacks (`List[transformers.TrainerCallback]`):
+            callbacks (`list[transformers.TrainerCallback]`):
                 The callbacks to use for training.
-            optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
                 The optimizer and scheduler to use for training.
             preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
                 The function to use to preprocess the logits before computing the metrics.
-            peft_config (`Dict`, defaults to `None`):
+            peft_config (`dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
         if type(args) is TrainingArguments:
@@ -175,12 +186,14 @@ class RewardTrainer(Trainer):
             compute_metrics = compute_accuracy
 
         if data_collator is None:
-            if tokenizer is None:
-                raise ValueError("A tokenizer must be specified when using the default RewardDataCollatorWithPadding")
+            if processing_class is None:
+                raise ValueError(
+                    "A processing_class must be specified when using the default RewardDataCollatorWithPadding"
+                )
             if max_length is None:
                 max_length = 512 if type(args) is TrainingArguments or args.max_length is None else args.max_length
 
-            data_collator = RewardDataCollatorWithPadding(tokenizer)
+            data_collator = RewardDataCollatorWithPadding(processing_class)
 
             if args.remove_unused_columns:
                 try:  # for bc before https://github.com/huggingface/transformers/pull/25435
@@ -198,10 +211,19 @@ class RewardTrainer(Trainer):
         else:
             self.use_reward_data_collator = False
 
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in Reward, the sampled data does not include the
+        # "input_ids" key. Instead, the available keys are "input_ids_chosen" and "input_ids_rejected". As a result,
+        # the trainer issues the warning: "Could not estimate the number of tokens of the input, floating-point
+        # operations will not be computed." To suppress this warning, we set the "estimate_tokens" key in the model's
+        # "warnings_issued" dictionary to True. This acts as a flag to indicate that the warning has already been
+        # issued.
+        model.warnings_issued["estimate_tokens"] = True
+
         if "input_ids_chosen" not in train_dataset.column_names:
             with PartialState().local_main_process_first():
-                fn_kwargs = {"tokenizer": tokenizer}
-                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                fn_kwargs = {"tokenizer": processing_class}
+                train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class})
                 train_dataset = train_dataset.map(
                     _tokenize,
                     batched=True,
@@ -216,7 +238,9 @@ class RewardTrainer(Trainer):
                     num_proc=args.dataset_num_proc,
                 )
                 if eval_dataset is not None:
-                    eval_dataset = eval_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
+                    eval_dataset = eval_dataset.map(
+                        maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}
+                    )
                     eval_dataset = eval_dataset.map(
                         _tokenize,
                         fn_kwargs=fn_kwargs,
@@ -238,7 +262,7 @@ class RewardTrainer(Trainer):
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
             model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -253,9 +277,10 @@ class RewardTrainer(Trainer):
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+        num_items_in_batch=None,
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
         if not self.use_reward_data_collator:
             warnings.warn(
                 "The current compute_loss is implemented for RewardDataCollatorWithPadding,"
@@ -291,10 +316,10 @@ class RewardTrainer(Trainer):
     def prediction_step(
         self,
         model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = None,
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        ignore_keys: Optional[list[str]] = None,
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         inputs = self._prepare_inputs(inputs)
         if ignore_keys is None:
             if hasattr(self.model, "config"):
@@ -337,8 +362,8 @@ class RewardTrainer(Trainer):
         table = defaultdict(list)
         for _, inputs in enumerate(eval_dataloader):
             _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
-            chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.tokenizer)
-            rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.tokenizer)
+            chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.processing_class)
+            rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.processing_class)
             table["chosen_text"].extend(gather_object(chosen_text))
             table["rejected_text"].extend(gather_object(rejected_text))
             table["logits"].extend(
@@ -359,7 +384,7 @@ class RewardTrainer(Trainer):
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -369,7 +394,7 @@ class RewardTrainer(Trainer):
                 The name of the model.
             dataset_name (`str`, *optional*, defaults to `None`):
                 The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -379,6 +404,13 @@ class RewardTrainer(Trainer):
             base_model = self.model.config._name_or_path
         else:
             base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
 
         model_card = generate_model_card(
             base_model=base_model,

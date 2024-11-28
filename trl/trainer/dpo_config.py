@@ -14,7 +14,7 @@
 import warnings
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -63,9 +63,11 @@ class DPOConfig(TrainingArguments):
                 - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675) paper.
                 - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
                 - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
+                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
-
+        use_weighting (`bool`, *optional*, defaults to `False`):
+            Whether or not to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`Optional[int]`, *optional*, defaults to `None`):
@@ -87,17 +89,17 @@ class DPOConfig(TrainingArguments):
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
-            This argument is required if you want to use the default data collator.
+            If `True`, generates and logs completions from both the model and the reference model to W&B during
+            evaluation.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
-        model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
-        ref_model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        ref_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
             from a string.
         model_adapter_name (`Optional[str]`, *optional*, defaults to `None`):
@@ -131,6 +133,14 @@ class DPOConfig(TrainingArguments):
             α parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper (v3), which controls the
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
             DPO loss. The paper recommends `rpo_alpha=1.0`.
+        discopop_tau (`float`, *optional*, defaults to `0.05`):
+            τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
+            the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
+        use_num_logits_to_keep (`bool`, *optional*, defaults to `False`):
+            If `True`, only a specified number of logits are computed in the forward pass of CausalLM. This can be useful
+            for saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios
+            when working with very long prompts where labels are -ignored (-100).
+            [Read more](https://huggingface.co/docs/transformers/main/model_doc/llama#transformers.LlamaForCausalLM)
     """
 
     learning_rate: float = 1e-6
@@ -147,9 +157,11 @@ class DPOConfig(TrainingArguments):
         "sppo_hard",
         "aot",
         "aot_pair",
+        "discopop",
         "apo_zero",
         "apo_down",
     ] = "sigmoid"
+    use_weighting: bool = False
     label_pad_token_id: int = -100
     padding_value: Optional[int] = None
     truncation_mode: str = "keep_end"
@@ -162,8 +174,8 @@ class DPOConfig(TrainingArguments):
     generate_during_eval: bool = False
     precompute_ref_log_probs: bool = False
     dataset_num_proc: Optional[int] = None
-    model_init_kwargs: Optional[Dict[str, Any]] = None
-    ref_model_init_kwargs: Optional[Dict[str, Any]] = None
+    model_init_kwargs: Optional[dict[str, Any]] = None
+    ref_model_init_kwargs: Optional[dict[str, Any]] = None
     model_adapter_name: Optional[str] = None
     ref_adapter_name: Optional[str] = None
     reference_free: bool = False
@@ -174,6 +186,8 @@ class DPOConfig(TrainingArguments):
     ref_model_mixup_alpha: float = 0.9
     ref_model_sync_steps: int = 64
     rpo_alpha: Optional[float] = None
+    discopop_tau: float = 0.05
+    use_num_logits_to_keep: bool = False
 
     def __post_init__(self):
         if self.max_target_length is not None:

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from transformers import TrainingArguments
 
@@ -27,6 +27,9 @@ class ORPOConfig(TrainingArguments):
     command line.
 
     Parameters:
+        learning_rate (`float`, *optional*, defaults to `1e-6`):
+            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
+            [`~transformers.TrainingArguments`].
         max_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
@@ -52,13 +55,14 @@ class ORPOConfig(TrainingArguments):
         is_encoder_decoder (`Optional[bool]`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
-        model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
     """
 
+    learning_rate: float = 1e-6
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
     max_completion_length: Optional[int] = None
@@ -69,5 +73,5 @@ class ORPOConfig(TrainingArguments):
     truncation_mode: str = "keep_end"
     generate_during_eval: bool = False
     is_encoder_decoder: Optional[bool] = None
-    model_init_kwargs: Optional[Dict[str, Any]] = None
+    model_init_kwargs: Optional[dict[str, Any]] = None
     dataset_num_proc: Optional[int] = None

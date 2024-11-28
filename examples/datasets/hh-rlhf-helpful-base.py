@@ -14,7 +14,7 @@
 
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
 
 from datasets import load_dataset
 from transformers import HfArgumentParser
@@ -51,7 +51,7 @@ def common_start(str1: str, str2: str) -> str:
     return "".join(common_chars)
 
 
-def extract_dialogue(example: str) -> List[Dict[str, str]]:
+def extract_dialogue(example: str) -> list[dict[str, str]]:
     # Extract the prompt, which corresponds to the common start of the chosen and rejected dialogues
     prompt_text = common_start(example["chosen"], example["rejected"])
 
@@ -79,7 +79,7 @@ def extract_dialogue(example: str) -> List[Dict[str, str]]:
         prompt.append({"role": role, "content": content})
 
     # Remove the prompt from the chosen and rejected dialogues
-    chosen = [{"role": "assitant", "content": chosen_line}]
+    chosen = [{"role": "assistant", "content": chosen_line}]
     rejected = [{"role": "assistant", "content": rejected_line}]
 
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -67,17 +67,19 @@ class KTOConfig(TrainingArguments):
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
-        model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
-        ref_model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        ref_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
             from a string.
         dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model.
     """
 
-    learning_rate: float = 5e-7
+    learning_rate: float = 1e-6
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
     max_completion_length: Optional[int] = None
@@ -90,7 +92,8 @@ class KTOConfig(TrainingArguments):
     truncation_mode: str = "keep_end"
     generate_during_eval: bool = False
     is_encoder_decoder: Optional[bool] = None
+    disable_dropout: bool = True
     precompute_ref_log_probs: bool = False
-    model_init_kwargs: Optional[Dict[str, Any]] = None
-    ref_model_init_kwargs: Optional[Dict[str, Any]] = None
+    model_init_kwargs: Optional[dict[str, Any]] = None
+    ref_model_init_kwargs: Optional[dict[str, Any]] = None
     dataset_num_proc: Optional[int] = None

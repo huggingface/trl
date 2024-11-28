@@ -22,15 +22,9 @@ import torch
 from accelerate.commands.config import default_config_file, load_config_from_file
 from rich.console import Console
 from transformers import is_bitsandbytes_available
-from transformers.utils import is_openai_available, is_peft_available
+from transformers.utils import is_liger_kernel_available, is_openai_available, is_peft_available
 
-from .. import (
-    __version__,
-    is_deepspeed_available,
-    is_diffusers_available,
-    is_liger_kernel_available,
-    is_llmblender_available,
-)
+from .. import __version__, is_deepspeed_available, is_diffusers_available, is_llm_blender_available
 from .cli_utils import get_git_commit_hash
 
 
@@ -38,6 +32,9 @@ SUPPORTED_COMMANDS = ["sft", "dpo", "chat", "kto", "env"]
 
 
 def print_env():
+    if torch.cuda.is_available():
+        devices = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
+
     accelerate_config = accelerate_config_str = "not found"
 
     # Get the default from the config file.
@@ -56,7 +53,7 @@ def print_env():
         "Platform": platform.platform(),
         "Python version": platform.python_version(),
         "PyTorch version": version("torch"),
-        "CUDA device": torch.cuda.get_device_name() if torch.cuda.is_available() else "not available",
+        "CUDA device(s)": ", ".join(devices) if torch.cuda.is_available() else "not available",
         "Transformers version": version("transformers"),
         "Accelerate version": version("accelerate"),
         "Accelerate config": accelerate_config_str,
@@ -67,7 +64,7 @@ def print_env():
         "DeepSpeed version": version("deepspeed") if is_deepspeed_available() else "not installed",
         "Diffusers version": version("diffusers") if is_diffusers_available() else "not installed",
         "Liger-Kernel version": version("liger_kernel") if is_liger_kernel_available() else "not installed",
-        "LLM-Blender version": version("llm_blender") if is_llmblender_available() else "not installed",
+        "LLM-Blender version": version("llm_blender") if is_llm_blender_available() else "not installed",
         "OpenAI version": version("openai") if is_openai_available() else "not installed",
         "PEFT version": version("peft") if is_peft_available() else "not installed",
     }
