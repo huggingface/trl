@@ -19,18 +19,29 @@ import logging
 import os
 import subprocess
 import sys
-from argparse import Namespace
+import warnings
 from dataclasses import dataclass, field
+from typing import Iterable, Optional, Union
 
 import yaml
 from transformers import HfArgumentParser
+from transformers.hf_argparser import DataClassType
 
 
 logger = logging.getLogger(__name__)
 
 
 class YamlConfigParser:
-    def parse_and_set_env(self, config_path):
+    """ """
+
+    def __init__(self) -> None:
+        warnings.warn(
+            "The `YamlConfigParser` class is deprecated and will be removed in version 0.14. "
+            "If you need to use this class, please copy the code to your own project.",
+            DeprecationWarning,
+        )
+
+    def parse_and_set_env(self, config_path: str) -> dict:
         with open(config_path) as yaml_file:
             config = yaml.safe_load(yaml_file)
 
@@ -152,88 +163,124 @@ class ChatArguments:
 
 class TrlParser(HfArgumentParser):
     """
-    The TRL parser parses a list of parsers (TrainingArguments, trl.ModelConfig, etc.), creates a config
-    parsers for users that pass a valid `config` field and merge the values that are set in the config
-    with the processed parsers.
+    A subclass of [`transformers.HfArgumentParser`] designed for parsing command-line arguments with dataclass-backed
+    configurations, while also supporting configuration file loading and environment variable management.
 
     Args:
-        parsers (`List[argparse.ArgumentParser]`):
-            List of parsers.
-        ignore_extra_args (`bool`):
-            Whether to ignore extra arguments passed by the config
-            and not raise errors.
+        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]`):
+            The dataclass types to use for argument parsing.
+        **kwargs:
+            Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.
+
+    Examples:
+
+    ```yaml
+    # config.yaml
+    env:
+        VAR1: value1
+    arg1: 23
+    ```
+
+    ```python
+    # main.py
+    from dataclasses import dataclass
+    import os
+    from trl import TrlParser
+
+    @dataclass
+    class MyArguments:
+        arg1: int
+        arg2: str = "alpha"
+
+    parser = TrlParser(dataclass_types=[MyArguments])
+    training_args = parser.parse_args_and_config()
+
+    print(training_args, os.environ.get("VAR1"))
+    ```
+
+    ```bash
+    $ python main.py --config config.yaml
+    (MyArguments(arg1=23, arg2='alpha'),) value1
+
+    $ python main.py --arg1 5 --arg2 beta
+    (MyArguments(arg1=5, arg2='beta'),) None
+    ```
     """
 
-    def __init__(self, parsers, ignore_extra_args=False):
-        super().__init__(parsers)
-        self.yaml_parser = YamlConfigParser()
-        self.ignore_extra_args = ignore_extra_args
+    def __init__(
+        self,
+        dataclass_types: Union[DataClassType, Iterable[DataClassType]],
+        ignore_extra_args: Optional[bool] = None,
+        **kwargs,
+    ):
+        super().__init__(dataclass_types=dataclass_types, **kwargs)
+        if ignore_extra_args is not None:
+            warnings.warn(
+                "The `ignore_extra_args` parameter is deprecated and will be removed in version 0.14. "
+                "It is no longer functional and can be safely removed from your code.",
+                DeprecationWarning,
+            )
+
+        # Check that none of the dataclasses have the "config" field
+        for dataclass_type in dataclass_types:
+            if "config" in dataclass_type.__dataclass_fields__:
+                raise ValueError(
+                    f"Dataclass {dataclass_type.__name__} has a field named 'config'. This field is reserved for the "
+                    f"config file path and should not be used in the dataclass."
+                )
 
     def post_process_dataclasses(self, dataclasses):
         """
         Post process dataclasses to merge the TrainingArguments with the SFTScriptArguments or DPOScriptArguments.
         """
-
-        training_args = trl_args = None
-        training_args_index = None
-
-        for i, dataclass_obj in enumerate(dataclasses):
-            if dataclass_obj.__class__.__name__ == "TrainingArguments":
-                training_args = dataclass_obj
-                training_args_index = i
-            elif dataclass_obj.__class__.__name__ in ("SFTScriptArguments", "DPOScriptArguments"):
-                trl_args = dataclass_obj
-            else:
-                ...
-
-        if trl_args is not None and training_args is not None:
-            training_args.gradient_checkpointing_kwargs = dict(
-                use_reentrant=trl_args.gradient_checkpointing_use_reentrant
-            )
-            dataclasses[training_args_index] = training_args
-
+        warnings.warn(
+            "The `post_process_dataclasses` method is deprecated and will be removed in version 0.14. "
+            "It is no longer functional and can be safely removed from your code.",
+            DeprecationWarning,
+        )
         return dataclasses
 
-    def parse_args_and_config(self, return_remaining_strings=False):
+    def parse_args_and_config(self, args=None, return_remaining_strings=False):
         """
         Parse the command line arguments and the config file.
+
+        This method is a wrapper around the `parse_args_into_dataclasses` method that also parses the config file
+        specified in the command line arguments with the `--config` flag. The config file should be a YAML file with
+        the arguments to be parsed. The method will set the environment variables specified in the `env` field of the
+        config file and then parse the arguments from the config file and the command line.
         """
-        yaml_config = None
-        if "--config" in sys.argv:
-            config_index = sys.argv.index("--config")
+        args = list(args) if args is not None else sys.argv[1:]
+        if "--config" in args:
+            # Get the config file path from
+            config_index = args.index("--config")
+            args.pop(config_index)  # remove the --config flag
+            config_path = args.pop(config_index)  # get the path to the config file
+            with open(config_path) as yaml_file:
+                config = yaml.safe_load(yaml_file)
 
-            _ = sys.argv.pop(config_index)  # --config
-            config_path = sys.argv.pop(config_index)  # path to config
-            yaml_config = self.yaml_parser.parse_and_set_env(config_path)
+            # Set the environment variables specified in the config file
+            if "env" in config:
+                env_vars = config.pop("env", {})
+                if not isinstance(env_vars, dict):
+                    raise ValueError("`env` field should be a dict in the YAML file.")
+                for key, value in env_vars.items():
+                    os.environ[key] = str(value)
 
-            self.set_defaults_with_config(**yaml_config)
+            # Set the defaults from the config values
+            self.set_defaults_with_config(**config)
 
-        outputs = self.parse_args_into_dataclasses(return_remaining_strings=return_remaining_strings)
-
-        if yaml_config is None:
-            return outputs
-
-        if return_remaining_strings:
-            # if we have extra yaml config and command line strings
-            # outputs[-1] is remaining command line strings
-            # outputs[-2] is remaining yaml config as Namespace
-            # combine them into remaining strings object
-            remaining_strings = outputs[-1] + [f"{key}: {value}" for key, value in vars(outputs[-2]).items()]
-            return outputs[:-2], remaining_strings
-        else:
-            # outputs[-1] is either remaining yaml config as Namespace or parsed config as Dataclass
-            if isinstance(outputs[-1], Namespace) and not self.ignore_extra_args:
-                remaining_args = vars(outputs[-1])
-                raise ValueError(f"Some specified config arguments are not used by the TrlParser: {remaining_args}")
-
-            return outputs
+        return self.parse_args_into_dataclasses(args=args, return_remaining_strings=return_remaining_strings)
 
     def set_defaults_with_config(self, **kwargs):
-        """Defaults we're setting with config allow us to change to required = False"""
+        """
+        Overrides the parser's default values with those provided via keyword arguments.
+
+        Any argument with an updated default will also be marked as not required
+        if it was previously required.
+        """
         self._defaults.update(kwargs)
 
-        # if these defaults match any existing arguments, replace
-        # the previous default on the object with the new one
+        # If an argument is in the kwargs, update its default and set it as not required
         for action in self._actions:
             if action.dest in kwargs:
                 action.default = kwargs[action.dest]
