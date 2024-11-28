@@ -36,7 +36,12 @@ For meta-llama/Llama-3.2-11B-Vision-Instruct, use: (requires transformers>=4.45.
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForVision2Seq, AutoProcessor, LlavaForConditionalGeneration, Idefics3ForConditionalGeneration
+from transformers import (
+    AutoModelForVision2Seq,
+    AutoProcessor,
+    Idefics3ForConditionalGeneration,
+    LlavaForConditionalGeneration,
+)
 
 from trl import (
     ModelConfig,
@@ -100,10 +105,11 @@ if __name__ == "__main__":
         labels[labels == processor.tokenizer.pad_token_id] = -100  #
         # Ignore the image token index in the loss computation (model specific)
         if isinstance(model, Idefics3ForConditionalGeneration):
-          image_token_id = processor.tokenizer.additional_special_tokens_ids[
-            processor.tokenizer.additional_special_tokens.index("<image>")]
+            image_token_id = processor.tokenizer.additional_special_tokens_ids[
+                processor.tokenizer.additional_special_tokens.index("<image>")
+            ]
         else:
-          image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
+            image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
         labels[labels == image_token_id] = -100
         batch["labels"] = labels
 
