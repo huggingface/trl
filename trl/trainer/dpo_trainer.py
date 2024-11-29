@@ -143,6 +143,8 @@ class PreferenceCollator(DataCollatorMixin):
             output["pixel_values"] = pad(pixel_values, padding_value=0.0)
         if "pixel_attention_mask" in examples[0]:
             output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
+        if "image_sizes" in examples[0]:
+            output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
 
         return output
 
@@ -645,6 +647,8 @@ class DPOTrainer(Trainer):
 
         if "pixel_attention_mask" in processed_features:
             output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
+        if "image_sizes" in processed_features:
+            output["image_sizes"] = processed_features["image_sizes"][0]
 
         return output
 
@@ -685,7 +689,7 @@ class DPOTrainer(Trainer):
         # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by `DPODataCollatorWithPadding`, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids"]
+            self._signature_columns = ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids", "image_sizes"]
 
     def get_train_dataloader(self) -> DataLoader:
         """
@@ -855,6 +859,8 @@ class DPOTrainer(Trainer):
             output["pixel_attention_mask"] = torch.cat(
                 [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
             )
+        if "image_sizes" in batch:
+            output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
 
         # Concatenate the chosen and rejected completions
         max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
@@ -1078,6 +1084,8 @@ class DPOTrainer(Trainer):
             model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
         if "pixel_attention_mask" in concatenated_batch:
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+        if "image_sizes" in concatenated_batch:
+            model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
 
         prompt_input_ids = concatenated_batch["prompt_input_ids"]
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
