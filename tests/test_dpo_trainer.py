@@ -1139,7 +1139,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
             ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),
             # ("trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",),
             ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
-            # ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
+            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
         ]
     )
     def test_vdpo_trainer(self, model_id):
@@ -1211,7 +1211,10 @@ class DPOVisionTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
-                    if model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and (
+                    if model_id in [
+                        "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+                        "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+                    ] and (
                         n.startswith("vision_tower.vision_model.encoder.layers.1")
                         or n == "vision_tower.vision_model.post_layernorm.weight"
                     ):
