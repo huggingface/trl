@@ -14,11 +14,10 @@
 
 import os
 import sys
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
-from transformers import is_bitsandbytes_available, is_torchvision_available
+from transformers import is_bitsandbytes_available
 
 from ..core import flatten_dict
 
@@ -139,14 +138,6 @@ class AlignPropConfig:
         return flatten_dict(output_dict)
 
     def __post_init__(self):
-        if self.log_with not in ["wandb", "tensorboard"]:
-            warnings.warn(
-                "Accelerator tracking only supports image logging if `log_with` is set to 'wandb' or 'tensorboard'."
-            )
-
-        if self.log_with == "wandb" and not is_torchvision_available():
-            warnings.warn("Wandb image logging requires torchvision to be installed")
-
         if self.train_use_8bit_adam and not is_bitsandbytes_available():
             raise ImportError(
                 "You need to install bitsandbytes to use 8bit Adam. "
