@@ -277,6 +277,11 @@ class OnlineDPOTrainer(Trainer):
 
         self._beta = args.beta
 
+        if self.ref_model is not None:
+            self.ref_model = self.ref_model.to(self.accelerator.device)
+        if self.reward_model is not None:
+            self.reward_model = self.reward_model.to(self.accelerator.device)
+
     @property
     def beta(self):
         if isinstance(self._beta, list):
