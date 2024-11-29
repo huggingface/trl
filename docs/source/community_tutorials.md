@@ -13,10 +13,10 @@ Community tutorials are made by active members of the Hugging Face community tha
 
 # Vision Language Models
 
-| Task | Class | Description | Author | Tutorial |
-|------|--------|-------------|---------|----------|
-| Visual QA | [`SFTTrainer`] | Fine-tuning Qwen2-VL-7B for visual question answering on ChartQA dataset | [Sergio Paniego](https://github.com/sergiopaniego) | [Link](https://huggingface.co/learn/cookbook/fine_tuning_vlm_trl) |
-| SEO Description | [`SFTTrainer`] | Fine-tuning Qwen2-VL-7B for generating SEO-friendly descriptions from images | [Philipp Schmid](https://github.com/philschmid) | [Link](https://www.philschmid.de/fine-tune-multimodal-llms-with-trl) |
+| Task            | Class          | Description                                                                  | Author                                                 | Tutorial                                                             |
+| --------------- | -------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------- |
+| Visual QA       | [`SFTTrainer`] | Fine-tuning Qwen2-VL-7B for visual question answering on ChartQA dataset     | [Sergio Paniego](https://huggingface.co/sergiopaniego) | [Link](https://huggingface.co/learn/cookbook/fine_tuning_vlm_trl)    |
+| SEO Description | [`SFTTrainer`] | Fine-tuning Qwen2-VL-7B for generating SEO-friendly descriptions from images | [Philipp Schmid](https://huggingface.co/philschmid)    | [Link](https://www.philschmid.de/fine-tune-multimodal-llms-with-trl) |
 
 ## Contributing
 
