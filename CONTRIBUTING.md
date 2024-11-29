@@ -283,3 +283,56 @@ The deprecation and removal schedule is based on each feature's usage and impact
 - **Widely-Used Components**: For a feature with high usage, we aim for a more gradual transition period of approximately **5 months**, generally scheduling deprecation around **5 minor releases** after the initial warning.
 
 These examples represent the two ends of a continuum. The specific timeline for each feature will be determined individually, balancing innovation with user stability needs.
+
+### Working with warnings
+
+Warnings play a critical role in guiding users toward resolving potential issues, but they should be used thoughtfully to avoid unnecessary noise. Unlike logging, which provides informational context or operational details, warnings signal conditions that require attention and action. Overusing warnings can dilute their importance, leading users to ignore them entirely.
+
+#### Definitions
+
+- **Correct**: An operation is correct if it is valid, follows the intended approach, and aligns with the current best practices or guidelines within the codebase. This is the recommended or intended way to perform the operation.
+- **Supported**: An operation is supported if it is technically valid and works within the current codebase, but it may not be the most efficient, optimal, or recommended way to perform the task. This includes deprecated features or legacy approaches that still work but may be phased out in the future.
+
+#### Choosing the right message
+
+- **Correct → No warning**:  
+   If the operation is fully valid and expected, no message should be issued. The system is working as intended, so no warning is necessary.  
+
+- **Correct but deserves attention → No warning, possibly a log message**:
+   When an operation is correct but uncommon or requires special attention, providing an informational message can be helpful. This keeps users informed without implying any issue. If available, use the logger to output this message. Example:  
+
+   ```python
+   logger.info("This is an informational message about a rare but correct operation.")
+   ```
+
+- **Correct but very likely a mistake → Warning with option to disable**:  
+   In rare cases, you may want to issue a warning for a correct operation that’s very likely a mistake. In such cases, you must provide an option to suppress the warning. This can be done with a flag in the function. Example:  
+
+   ```python
+   def my_function(foo, bar, _warn=True):
+       if foo == bar:
+           if _warn:
+               warnings.warn("foo and bar are the same, this is likely a mistake. Ignore this warning by setting `_warn=False`.")
+           # Do something
+   ```
+
+- **Supported but not correct → Warning**:  
+   If the operation is technically supported but is deprecated, suboptimal, or could cause future issues (e.g., conflicting arguments), a warning should be raised. This message should be actionable, meaning it must explain how to resolve the issue. Example:  
+
+   ```python
+   def my_function(foo, bar):
+       if foo and bar:
+           warnings.warn("Both `foo` and `bar` were provided, but only one is allowed. Ignoring `foo`. Please pass only one of these arguments.")
+           # Do something
+   ```
+
+- **Not supported → Exception**:  
+   If the operation is invalid or unsupported, raise an exception. This indicates that the operation cannot be performed and requires immediate attention. Example:  
+
+   ```python
+   def my_function(foo, bar):
+       if foo and bar:
+           raise ValueError("Both `foo` and `bar` were provided, but only one is allowed. Please pass only one of these arguments.")
+   ```
+
+By following this classification, you ensure that warnings, information, and exceptions are used appropriately, providing clear guidance to the user without cluttering the system with unnecessary messages.
