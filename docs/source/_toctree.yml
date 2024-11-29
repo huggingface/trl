@@ -67,7 +67,7 @@
     title: Text Environments
   title: API
 - sections:
-  - local: community_notebooks
+  - local: community_tutorials
     title: Community Tutorials
   - local: example_overview
     title: Example Overview
