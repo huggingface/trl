@@ -860,9 +860,7 @@ class DPOTrainer(Trainer):
                 [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
             )
         if "image_sizes" in batch:
-            output["image_sizes"] = torch.cat(
-                [batch["image_sizes"], batch["image_sizes"]], dim=0
-            )
+            output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
 
         # Concatenate the chosen and rejected completions
         max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
