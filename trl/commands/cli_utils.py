@@ -25,7 +25,7 @@ from typing import Iterable, Optional, Union
 
 import yaml
 from transformers import HfArgumentParser
-from transformers.hf_argparser import DataClassType
+from transformers.hf_argparser import DataClass, DataClassType
 
 
 logger = logging.getLogger(__name__)
@@ -183,8 +183,8 @@ class TrlParser(HfArgumentParser):
 
     ```python
     # main.py
-    from dataclasses import dataclass
     import os
+    from dataclasses import dataclass
     from trl import TrlParser
 
     @dataclass
@@ -240,7 +240,9 @@ class TrlParser(HfArgumentParser):
         )
         return dataclasses
 
-    def parse_args_and_config(self, args=None, return_remaining_strings=False):
+    def parse_args_and_config(
+        self, args: Optional[Iterable[str]] = None, return_remaining_strings: bool = False
+    ) -> tuple[DataClass, ...]:
         """
         Parse the command line arguments and the config file.
 
@@ -271,7 +273,7 @@ class TrlParser(HfArgumentParser):
 
         return self.parse_args_into_dataclasses(args=args, return_remaining_strings=return_remaining_strings)
 
-    def set_defaults_with_config(self, **kwargs):
+    def set_defaults_with_config(self, **kwargs) -> None:
         """
         Overrides the parser's default values with those provided via keyword arguments.
 
