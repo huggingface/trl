@@ -14,12 +14,12 @@
 
 import os
 import warnings
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Type, Union
 
 import datasets
 import torch
 import torch.nn as nn
-from accelerate.state import PartialState
+from accelerate import PartialState
 from datasets import Dataset, IterableDataset
 from transformers import (
     AutoModelForCausalLM,
@@ -37,18 +37,14 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
-from transformers.utils.deprecation import deprecate_kwarg
 
-from trl import maybe_apply_chat_template
-from trl.data_utils import pack_dataset
-
-from ..import_utils import is_liger_kernel_available
+from ..data_utils import maybe_apply_chat_template, pack_examples
 from .sft_config import SFTConfig
-from .utils import generate_model_card
+from .utils import ConstantLengthDataset, generate_model_card
 
 
 if is_peft_available():
-    from peft import PeftConfig
+    from peft import PeftConfig, get_peft_model
 
 if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
@@ -62,19 +58,22 @@ class SFTTrainer(Trainer):
 
     def __init__(
         self,
-        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
+        model: Union[PreTrainedModel, nn.Module] = None,
         args: Optional[SFTConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset], "datasets.Dataset"]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset], "datasets.Dataset"]] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
+        compute_loss_func: Optional[Callable] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
+        optimizer_cls_and_kwargs: Optional[tuple[Type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional["PeftConfig"] = None,
-        formatting_func: Optional[Callable] = None,
+        peft_config: Optional[PeftConfig] = None,
     ):
         # 1. Handle the model
         if args.model_init_kwargs is not None and not isinstance(model, str):
@@ -111,66 +110,28 @@ class SFTTrainer(Trainer):
             if not is_peft_available():
                 raise ImportError("To use the PeftModel, you need to install the `peft` library.")
 
-            # PEFT logif here
+            model = get_peft_model(model, peft_config)
 
         # 3. Handle the tokenizer
-        if tokenizer is None:
-            tokenizer = AutoTokenizer.from_pretrained(model.config._name_or_path)
-            tokenizer.pad_token = tokenizer.eos_token  # required for padding when collating data
+        if processing_class is None:
+            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
+            if processing_class.pad_token is None:
+                processing_class.pad_token = processing_class.eos_token  # required for padding when collating data
 
         # 4. Handle the dataset
-        with PartialState().local_main_process_first():
-            # Apply the chat template if needed
-            train_dataset = train_dataset.map(
-                maybe_apply_chat_template,
-                fn_kwargs={"tokenizer": tokenizer},
-                num_proc=args.dataset_num_proc,
-                desc="Applying chat template to train dataset",
-            )
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": tokenizer},
-                    num_proc=args.dataset_num_proc,
-                    desc="Applying chat template to eval dataset",
-                )
-
-            # Tokenize and prepare the training datasets
-            max_length = args.max_seq_length or min(tokenizer.model_max_length, 1024)
-            fn_kwargs = {
-                "tokenizer": tokenizer,
-                "dataset_text_field": args.dataset_text_field,
-                "max_length": max_length if not args.packing else None,
-            }
-            train_dataset = train_dataset.map(
-                self._tokenize, fn_kwargs=fn_kwargs, num_proc=args.dataset_num_proc, desc="Tokenizing train dataset"
-            )
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    self._tokenize, fn_kwargs=fn_kwargs, num_proc=args.dataset_num_proc, desc="Tokenizing eval dataset"
-                )
-
-            # Pack the datasets
-            if args.packing:
-                train_dataset = train_dataset.select_columns(["input_ids"])
-                train_dataset = pack_dataset(
-                    train_dataset,
-                    max_length,
-                    num_proc=args.dataset_num_proc,
-                    desc="Packing train dataset",
-                )
-                if eval_dataset is not None:
-                    eval_dataset = eval_dataset.select_columns(["input_ids"])
-                    eval_dataset = pack_dataset(
-                        eval_dataset,
-                        max_length,
-                        num_proc=args.dataset_num_proc,
-                        desc="Packing eval dataset",
-                    )
+        train_dataset = self.preprocess_dataset(train_dataset, processing_class, args, "train")
+        if eval_dataset is not None:
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self.preprocess_dataset(dataset, processing_class, args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self.preprocess_dataset(eval_dataset, processing_class, args, "eval")
 
         # 5. Handle the data collator
         if data_collator is None:
-            data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+            data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
         super().__init__(
             model=model,
@@ -180,9 +141,11 @@ class SFTTrainer(Trainer):
             eval_dataset=eval_dataset,
             processing_class=processing_class,
             model_init=model_init,
+            compute_loss_func=compute_loss_func,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
+            optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
@@ -190,13 +153,56 @@ class SFTTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
+    def preprocess_dataset(
+        self,
+        dataset: Union[Dataset, IterableDataset],
+        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        args: SFTConfig,
+        train_or_test: str,
+    ) -> Union[Dataset, IterableDataset]:
+        # Convert the dataset to an IterableDataset if it is a ConstantLengthDataset
+        if isinstance(dataset, ConstantLengthDataset):
+            return dataset
+
+        # Build the kwargs for the `map` function
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
+            map_kwargs["num_proc"] = args.dataset_num_proc
+
+        with PartialState().local_main_process_first():
+            # Apply the chat template if needed
+            if isinstance(dataset, Dataset):  # IterableDataset does not support desc
+                map_kwargs["desc"] = f"Applying chat template to {train_or_test} dataset"
+            dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
+
+            # Tokenize the dataset
+            if isinstance(dataset, Dataset):  # IterableDataset does not support desc
+                map_kwargs["desc"] = f"Tokenizing {train_or_test} dataset"
+            fn_kwargs = {
+                "tokenizer": processing_class,
+                "dataset_text_field": args.dataset_text_field,
+                "max_length": args.max_length,
+            }
+            dataset = dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, **map_kwargs)
+
+            # Pack the dataset
+
+            if args.packing:
+                if isinstance(dataset, Dataset):  # IterableDataset does not support desc
+                    map_kwargs["desc"] = f"Packing {train_or_test} dataset"
+                fn_kwargs = {"seq_length": args.seq_length}
+                dataset = dataset.select_columns(["input_ids"])
+                dataset = dataset.map(pack_examples, batched=True, fn_kwargs=fn_kwargs, **map_kwargs)
+
+        return dataset
+
     @staticmethod
-    def _tokenize(
-        examples: Dict[str, List[str]],
+    def tokenize_row(
+        examples: dict[str, list[str]],
         tokenizer: PreTrainedTokenizerBase,
         dataset_text_field: str,
         max_length: Optional[int],
-    ) -> Dict[str, List[int]]:
+    ) -> dict[str, list[int]]:
         return tokenizer(examples[dataset_text_field], max_length=max_length, truncation=max_length is not None)
 
     def create_model_card(

@@ -399,7 +399,7 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
 
 
-def pack_examples(examples: Dict[str, List[List]], seq_length: int) -> Dict[str, List[List]]:
+def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str, list[list]]:
     """
     Pack examples into chunks of size `seq_length`.
 
@@ -434,11 +434,7 @@ def pack_examples(examples: Dict[str, List[List]], seq_length: int) -> Dict[str,
 
 
 def pack_dataset(
-    dataset: Dataset,
-    seq_length: int,
-    batch_size: int = 1000,
-    num_proc: Optional[int] = None,
-    desc: Optional[str] = None,
+    dataset: Dataset, seq_length: int, batch_size: int = 1000, map_kwargs: Optional[dict] = None
 ) -> Dataset:
     """
     Pack a dataset into chunks of size `seq_length`.
@@ -450,10 +446,8 @@ def pack_dataset(
             Sequence length.
         batch_size (`int`, *optional*, defaults to `1000`):
             Batch size for packing the dataset.
-        num_proc (`Optional[int]`, *optional*, defaults to `None`):
-            Number of processes to use for processing the dataset.
-        desc (`Optional[str]`, *optional*, defaults to `None`):
-            Description for the progress bar.
+        map_kwargs (`Optional[Dict]`, *optional*, defaults to `None`):
+            Additional keyword arguments to pass to the `map` method.
 
     Returns:
         `Dataset`: Packed dataset.
@@ -474,10 +468,5 @@ def pack_dataset(
     ```
     """
     return dataset.map(
-        pack_examples,
-        batched=True,
-        batch_size=batch_size,
-        fn_kwargs={"seq_length": seq_length},
-        num_proc=num_proc,
-        desc=desc,
+        pack_examples, batched=True, batch_size=batch_size, fn_kwargs={"seq_length": seq_length}, **map_kwargs
     )

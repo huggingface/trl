@@ -61,12 +61,13 @@ class SFTConfig(TrainingArguments):
     dataset_text_field: str = "text"
     packing: bool = False
     learning_rate: float = 2.0e-5
-    max_seq_length: Optional[int] = None
+    max_length: Optional[int] = None
     dataset_num_proc: Optional[int] = None
     dataset_batch_size: int = 1000
     model_init_kwargs: Optional[dict[str, Any]] = None
     dataset_kwargs: Optional[dict[str, Any]] = None
     eval_packing: Optional[bool] = None
+    seq_length: Optional[int] = None
     num_of_sequences: int = 1024
     chars_per_token: float = 3.6
     use_liger: bool = False
