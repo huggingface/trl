@@ -32,6 +32,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     Trainer,
+    TrainingArguments,
     is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
@@ -59,7 +60,7 @@ class SFTTrainer(Trainer):
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
-        args: Optional[SFTConfig] = None,
+        args: Optional[Union[SFTConfig, TrainingArguments]] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset], "datasets.Dataset"]] = None,
@@ -73,8 +74,18 @@ class SFTTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         optimizer_cls_and_kwargs: Optional[tuple[Type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        formatting_func: Optional[Callable[[dict], str]] = None,
         peft_config: Optional[PeftConfig] = None,
     ):
+        # 0. Handle the args
+        if args is None:
+            args = SFTConfig(output_dir="output_dir")
+        elif not isinstance(args, SFTConfig):
+            dict_args = args.to_dict()
+            dict_args["hub_token"] = args.hub_token
+            dict_args.pop("push_to_hub_token")
+            args = SFTConfig(**dict_args)
+
         # 1. Handle the model
         if args.model_init_kwargs is not None and not isinstance(model, str):
             warnings.warn(
@@ -112,6 +123,11 @@ class SFTTrainer(Trainer):
 
             model = get_peft_model(model, peft_config)
 
+            gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = gradient_checkpointing_kwargs.get("use_reentrant", True)
+            if args.gradient_checkpointing and use_reentrant:
+                model.enable_input_require_grads()
+
         # 3. Handle the tokenizer
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
@@ -119,15 +135,22 @@ class SFTTrainer(Trainer):
                 processing_class.pad_token = processing_class.eos_token  # required for padding when collating data
 
         # 4. Handle the dataset
-        train_dataset = self.preprocess_dataset(train_dataset, processing_class, args, "train")
-        if eval_dataset is not None:
-            if isinstance(eval_dataset, dict):
-                eval_dataset = {
-                    key: self.preprocess_dataset(dataset, processing_class, args, key)
-                    for key, dataset in eval_dataset.items()
-                }
-            else:
-                eval_dataset = self.preprocess_dataset(eval_dataset, processing_class, args, "eval")
+        preprocess_dataset = args.dataset_kwargs is None or args.dataset_kwargs.get("skip_prepare_dataset", False)
+        if preprocess_dataset:
+            train_dataset = self.preprocess_dataset(
+                train_dataset, processing_class, args, args.packing, formatting_func, "train"
+            )
+            if eval_dataset is not None:
+                packing = args.packing if args.eval_packing is None else args.eval_packing
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        key: self.preprocess_dataset(dataset, processing_class, args, packing, formatting_func, key)
+                        for key, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self.preprocess_dataset(
+                        eval_dataset, processing_class, args, packing, formatting_func, "eval"
+                    )
 
         # 5. Handle the data collator
         if data_collator is None:
@@ -158,7 +181,9 @@ class SFTTrainer(Trainer):
         dataset: Union[Dataset, IterableDataset],
         processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
         args: SFTConfig,
-        train_or_test: str,
+        packing: bool,
+        formatting_func: Optional[Callable[[dict], str]],
+        dataset_name: str,
     ) -> Union[Dataset, IterableDataset]:
         # Convert the dataset to an IterableDataset if it is a ConstantLengthDataset
         if isinstance(dataset, ConstantLengthDataset):
@@ -170,14 +195,20 @@ class SFTTrainer(Trainer):
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().local_main_process_first():
+            if formatting_func is not None:
+                # Apply the chat template if needed
+                if isinstance(dataset, Dataset):  # IterableDataset does not support desc
+                    map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
+                dataset = dataset.map(formatting_func, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
+
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # IterableDataset does not support desc
-                map_kwargs["desc"] = f"Applying chat template to {train_or_test} dataset"
+                map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
             dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
 
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # IterableDataset does not support desc
-                map_kwargs["desc"] = f"Tokenizing {train_or_test} dataset"
+                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
             fn_kwargs = {
                 "tokenizer": processing_class,
                 "dataset_text_field": args.dataset_text_field,
@@ -186,11 +217,10 @@ class SFTTrainer(Trainer):
             dataset = dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, **map_kwargs)
 
             # Pack the dataset
-
-            if args.packing:
+            if packing:
                 if isinstance(dataset, Dataset):  # IterableDataset does not support desc
-                    map_kwargs["desc"] = f"Packing {train_or_test} dataset"
-                fn_kwargs = {"seq_length": args.seq_length}
+                    map_kwargs["desc"] = f"Packing {dataset_name} dataset"
+                fn_kwargs = {"seq_length": args.max_seq_length or min(processing_class.model_max_length, 1024)}
                 dataset = dataset.select_columns(["input_ids"])
                 dataset = dataset.map(pack_examples, batched=True, fn_kwargs=fn_kwargs, **map_kwargs)
 

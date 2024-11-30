@@ -807,8 +807,6 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.eval_dataset,
             )
 
-            self.assertTrue(trainer.train_dataset.infinite)
-
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
@@ -835,8 +833,6 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
-
-            self.assertFalse(trainer.train_dataset.infinite)
 
             trainer.train()
 
