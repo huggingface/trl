@@ -55,8 +55,7 @@ class PPOConfig(OnPolicyConfig):
             Lambda value for GAE.
         use_model_eos_token (`bool`, *optional*, defaults to `True`):
             Whether to use the model's EOS token for generation. If False, generation will continue until max_length.
-        force_pad_token_to_none (`bool`, *optional*, defaults to `True`):
-            Whether to force pad_token_id to None during generation to avoid padding.
+.
     """
 
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
@@ -72,7 +71,5 @@ class PPOConfig(OnPolicyConfig):
     """Clip range for the value function."""
     use_model_eos_token: bool = True
     """Whether to use the model's EOS token for generation. If False, generation will continue until max_length."""
-    force_pad_token_to_none: bool = True
-    """Whether to force pad_token_id to None during generation to avoid padding."""
     gamma: float = 1.0
     lam: float = 0.95
