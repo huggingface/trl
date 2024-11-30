@@ -144,9 +144,8 @@ class PPOTrainer(Trainer):
             # Fallback to model config's EOS token
             self.model.generation_config.eos_token_id = self.model.config.eos_token_id
         
-        # Optionally disable padding during generation
-        if self.args.force_pad_token_to_none:
-            self.model.generation_config.pad_token_id = None
+        
+        self.model.generation_config.pad_token_id = None
 
         # peft support
         if not is_peft_available() and peft_config is not None:
