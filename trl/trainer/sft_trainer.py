@@ -103,7 +103,7 @@ class SFTTrainer(Trainer):
     )
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module] = None,
+        model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         args: Optional[Union[SFTConfig, TrainingArguments]] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
