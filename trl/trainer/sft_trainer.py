@@ -140,7 +140,7 @@ class SFTTrainer(Trainer):
             )
 
         if isinstance(model, str):
-            # `model`` is a model id. We need to instantiate the model.
+            # `model` is a model id. We need to instantiate the model.
             model_init_kwargs = args.model_init_kwargs or {}
 
             # Get the torch dtype from the model_init_kwargs
