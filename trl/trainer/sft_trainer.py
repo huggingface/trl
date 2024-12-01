@@ -82,7 +82,7 @@ class SFTTrainer(Trainer):
             args = SFTConfig(output_dir="output_dir")
         elif not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
-            dict_args["hub_token"] = args.hub_token
+            dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
             dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
@@ -105,7 +105,7 @@ class SFTTrainer(Trainer):
                     torch_dtype = getattr(torch, torch_dtype)
                 if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
                     raise ValueError(
-                        "Invalid `torch_dtype` passed to the `SFTConfig`. Expected a string with either `torch.dtype` "
+                        "Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` "
                         f"or 'auto', but got {torch_dtype}."
                     )
                 model_init_kwargs["torch_dtype"] = torch_dtype
@@ -135,7 +135,7 @@ class SFTTrainer(Trainer):
                 processing_class.pad_token = processing_class.eos_token  # required for padding when collating data
 
         # 4. Handle the dataset
-        preprocess_dataset = args.dataset_kwargs is None or args.dataset_kwargs.get("skip_prepare_dataset", False)
+        preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
         if preprocess_dataset:
             train_dataset = self.preprocess_dataset(
                 train_dataset, processing_class, args, args.packing, formatting_func, "train"
@@ -195,8 +195,8 @@ class SFTTrainer(Trainer):
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().local_main_process_first():
+            # Apply the formatting function if any
             if formatting_func is not None:
-                # Apply the chat template if needed
                 if isinstance(dataset, Dataset):  # IterableDataset does not support desc
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
                 dataset = dataset.map(formatting_func, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
