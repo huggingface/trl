@@ -192,7 +192,8 @@ class DPOConfig(TrainingArguments):
     def __post_init__(self):
         if self.max_target_length is not None:
             warnings.warn(
-                "The `max_target_length` argument is deprecated in favor of `max_completion_length` and will be removed in a future version.",
+                "The `max_target_length` argument is deprecated in favor of `max_completion_length` and will be "
+                "removed in v0.14.",
                 FutureWarning,
             )
             if self.max_completion_length is None:

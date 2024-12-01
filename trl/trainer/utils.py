@@ -136,7 +136,8 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 "The pad_token_id and eos_token_id values of this tokenizer are identical. "
                 "If you are planning for multi-turn training, "
                 "it can result in the model continuously generating questions and answers without eos token. "
-                "To avoid this, set the pad_token_id to a different value."
+                "To avoid this, set the pad_token_id to a different value.",
+                UserWarning,
             )
 
         self.ignore_index = ignore_index
@@ -159,10 +160,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if response_token_ids_start_idx is None:
                     warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find response key `{self.response_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
                 else:
@@ -186,10 +187,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(response_token_ids_idxs) == 0:
                     warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find response key `{self.response_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
 
@@ -201,10 +202,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(human_token_ids_idxs) == 0:
                     warnings.warn(
-                        f"Could not find instruction key `{self.instruction_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find instruction key `{self.instruction_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
 
@@ -592,13 +593,6 @@ class ConstantLengthDataset(IterableDataset):
         add_special_tokens=True,
     ):
         self.tokenizer = tokenizer
-
-        if tokenizer.eos_token_id is None:
-            warnings.warn(
-                "The passed tokenizer does not have an EOS token. We will use the passed eos_token_id instead which corresponds"
-                f" to {eos_token_id}. If this is not the correct EOS token, make sure to pass the correct eos_token_id."
-            )
-
         self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
         self.dataset = dataset
         self.seq_length = seq_length
@@ -612,7 +606,8 @@ class ConstantLengthDataset(IterableDataset):
         if dataset_text_field is not None and formatting_func is not None:
             warnings.warn(
                 "Only one of `dataset_text_field` and `formatting_func` should be provided. "
-                "Ignoring `dataset_text_field` and using `formatting_func`."
+                "Ignoring `dataset_text_field` and using `formatting_func`.",
+                UserWarning,
             )
 
         if formatting_func is not None:
@@ -622,12 +617,6 @@ class ConstantLengthDataset(IterableDataset):
         else:  # neither is provided
             raise ValueError("Either `dataset_text_field` or `formatting_func` should be provided.")
 
-        if formatting_func is not None:
-            if formatting_func.__code__.co_argcount > 1:
-                warnings.warn(
-                    "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
-                    " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
-                )
         self.pretokenized = False
         column_names = (
             dataset.column_names if isinstance(dataset, (datasets.Dataset, datasets.IterableDataset)) else None
@@ -654,7 +643,6 @@ class ConstantLengthDataset(IterableDataset):
                 except StopIteration:
                     if self.infinite:
                         iterator = iter(self.dataset)
-                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
                     else:
                         more_examples = False
                         break
@@ -771,9 +759,12 @@ def compute_accuracy(eval_pred) -> dict[str, float]:
     predictions, labels = eval_pred
     # Here, predictions is rewards_chosen and rewards_rejected.
     # We want to see how much of the time rewards_chosen > rewards_rejected.
-    if np.array(predictions[:, 0] == predictions[:, 1], dtype=float).sum() > 0:
+    equal_predictions_count = np.array(predictions[:, 0] == predictions[:, 1], dtype=float).sum()
+    if equal_predictions_count > 0:
         warnings.warn(
-            f"There are {np.array(predictions[:, 0] == predictions[:, 1]).sum()} out of {len(predictions[:, 0])} instances where the predictions for both options are equal. As a consequence the accuracy can be misleading."
+            f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions for "
+            "both options are equal. As a consequence the accuracy can be misleading.",
+            UserWarning,
         )
     predictions = np.argmax(predictions, axis=1)
 
