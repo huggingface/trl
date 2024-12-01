@@ -16,7 +16,6 @@ import os
 import warnings
 from typing import Any, Callable, Optional, Type, Union
 
-import datasets
 import torch
 import torch.nn as nn
 from accelerate import PartialState
@@ -107,8 +106,8 @@ class SFTTrainer(Trainer):
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: Optional[Union[SFTConfig, TrainingArguments]] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
-        train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset], "datasets.Dataset"]] = None,
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
@@ -182,18 +181,18 @@ class SFTTrainer(Trainer):
         # 4. Handle the dataset
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
         if preprocess_dataset:
-            train_dataset = self.preprocess_dataset(
+            train_dataset = self._prepare_dataset(
                 train_dataset, processing_class, args, args.packing, formatting_func, "train"
             )
             if eval_dataset is not None:
                 packing = args.packing if args.eval_packing is None else args.eval_packing
                 if isinstance(eval_dataset, dict):
                     eval_dataset = {
-                        key: self.preprocess_dataset(dataset, processing_class, args, packing, formatting_func, key)
+                        key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
                         for key, dataset in eval_dataset.items()
                     }
                 else:
-                    eval_dataset = self.preprocess_dataset(
+                    eval_dataset = self._prepare_dataset(
                         eval_dataset, processing_class, args, packing, formatting_func, "eval"
                     )
 
@@ -221,7 +220,7 @@ class SFTTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-    def preprocess_dataset(
+    def _prepare_dataset(
         self,
         dataset: Union[Dataset, IterableDataset],
         processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
