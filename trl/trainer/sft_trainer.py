@@ -256,7 +256,7 @@ class SFTTrainer(Trainer):
         with PartialState().local_main_process_first():
             # Apply the formatting function if any
             if formatting_func is not None:
-                if isinstance(dataset, Dataset):  # IterableDataset does not support desc
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
 
                 batched = isinstance(formatting_func(next(iter(dataset))), list)
@@ -275,19 +275,19 @@ class SFTTrainer(Trainer):
                 dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 
             # Apply the chat template if needed
-            if isinstance(dataset, Dataset):  # IterableDataset does not support desc
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
             dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
 
             # Tokenize the dataset
-            if isinstance(dataset, Dataset):  # IterableDataset does not support desc
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
             fn_kwargs = {"tokenizer": processing_class, "dataset_text_field": args.dataset_text_field}
             dataset = dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, **map_kwargs)
 
             # Pack the dataset
             if packing:
-                if isinstance(dataset, Dataset):  # IterableDataset does not support desc
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 fn_kwargs = {"seq_length": args.max_seq_length or min(processing_class.model_max_length, 1024)}
                 dataset = dataset.select_columns(["input_ids"])
