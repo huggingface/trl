@@ -141,6 +141,8 @@ class DPOConfig(TrainingArguments):
             for saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios
             when working with very long prompts where labels are -ignored (-100).
             [Read more](https://huggingface.co/docs/transformers/main/model_doc/llama#transformers.LlamaForCausalLM)
+        precompute_ref_batch_size (`int`, *optional*, defaults to `None`):
+            Batch size to use when precomputing reference model log probabilities. Since no gradients need to be stored during precomputation, this can be set higher than the training batch size to speed up preprocessing. If None, defaults to per_device_train_batch_size for training and per_device_eval_batch_size for evaluation.
     """
 
     learning_rate: float = 1e-6
@@ -188,6 +190,7 @@ class DPOConfig(TrainingArguments):
     rpo_alpha: Optional[float] = None
     discopop_tau: float = 0.05
     use_num_logits_to_keep: bool = False
+    precompute_ref_batch_size: Optional[int] = None
 
     def __post_init__(self):
         if self.max_target_length is not None:
