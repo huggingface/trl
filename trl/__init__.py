@@ -29,6 +29,7 @@ _import_structure = {
         "maybe_apply_chat_template",
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
+        "pack_examples",
         "unpair_preference_dataset",
     ],
     "environment": ["TextEnvironment", "TextHistory"],
@@ -123,6 +124,7 @@ if TYPE_CHECKING:
         maybe_apply_chat_template,
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
+        pack_examples,
         unpair_preference_dataset,
     )
     from .environment import TextEnvironment, TextHistory
