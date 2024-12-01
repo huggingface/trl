@@ -200,10 +200,12 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # IterableDataset does not support desc
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
 
+                batched = isinstance(formatting_func(next(iter(dataset))), list)
+
                 def _func(example):
                     return {"text": formatting_func(example)}
 
-                dataset = dataset.map(_func, **map_kwargs)
+                dataset = dataset.map(_func, batched=batched, **map_kwargs)
 
             # If the dataset is prompt-completion, convert it to language modeling type
             if "prompt" in dataset.column_names and "completion" in dataset.column_names:
