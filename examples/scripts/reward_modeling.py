@@ -99,7 +99,8 @@ if __name__ == "__main__":
     if model_config.use_peft and model_config.lora_task_type != "SEQ_CLS":
         warnings.warn(
             "You are using a `task_type` that is different than `SEQ_CLS` for PEFT. This will lead to silent bugs"
-            " Make sure to pass --lora_task_type SEQ_CLS when using this script with PEFT."
+            " Make sure to pass --lora_task_type SEQ_CLS when using this script with PEFT.",
+            UserWarning,
         )
 
     ##############

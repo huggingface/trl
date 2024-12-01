@@ -32,7 +32,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     Trainer,
-    TrainingArguments,
     is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
@@ -137,26 +136,10 @@ class RewardTrainer(Trainer):
             peft_config (`dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        if type(args) is TrainingArguments:
-            warnings.warn(
-                "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `RewardConfig` instead.",
-                FutureWarning,
+        if max_length is not None and args.max_length is not None:
+            raise ValueError(
+                "You cannot specify both `max_length` and `args.max_length`. Please use the `RewardConfig` to set `max_length` once."
             )
-            if max_length is not None:
-                warnings.warn(
-                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
-                    FutureWarning,
-                )
-        else:
-            if max_length is not None and args.max_length is not None:
-                raise ValueError(
-                    "You cannot specify both `max_length` and `args.max_length`. Please use the `RewardConfig` to set `max_length` once."
-                )
-            if max_length is not None and args.max_length is None:
-                warnings.warn(
-                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
-                    FutureWarning,
-                )
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -173,7 +156,8 @@ class RewardTrainer(Trainer):
                     if not _supports_gc_kwargs and args.gradient_checkpointing_kwargs is not None:
                         warnings.warn(
                             "You passed `gradient_checkpointing_kwargs` in the trainer's kwargs, but your peft version does not support it. "
-                            "please update to the latest version of peft to use `gradient_checkpointing_kwargs`."
+                            "please update to the latest version of peft to use `gradient_checkpointing_kwargs`.",
+                            UserWarning,
                         )
                     elif _supports_gc_kwargs and args.gradient_checkpointing_kwargs is not None:
                         prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
@@ -191,7 +175,7 @@ class RewardTrainer(Trainer):
                     "A processing_class must be specified when using the default RewardDataCollatorWithPadding"
                 )
             if max_length is None:
-                max_length = 512 if type(args) is TrainingArguments or args.max_length is None else args.max_length
+                max_length = 512 if args.max_length is None else args.max_length
 
             data_collator = RewardDataCollatorWithPadding(processing_class)
 
@@ -281,12 +265,6 @@ class RewardTrainer(Trainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
-        if not self.use_reward_data_collator:
-            warnings.warn(
-                "The current compute_loss is implemented for RewardDataCollatorWithPadding,"
-                " if you are using a custom data collator make sure you know what you are doing or"
-                " implement your own compute_loss method."
-            )
         rewards_chosen = model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
