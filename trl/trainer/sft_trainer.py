@@ -18,8 +18,10 @@ from typing import Any, Callable, Optional, Type, Union
 
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import PartialState
 from datasets import Dataset, IterableDataset
+from packaging import version
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -200,6 +202,19 @@ class SFTTrainer(Trainer):
         if data_collator is None:
             data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
+        # 6. Call the parent class constructor
+        # Some arguments are only available for transformers>=4.47.0. Can be removed when the min version is bumped.
+        super_init_kwargs = {}
+        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+            super_init_kwargs["optimizer_cls_and_kwargs"] = optimizer_cls_and_kwargs
+        else:
+            if optimizer_cls_and_kwargs is not None:
+                warnings.warn(
+                    "The `optimizer_cls_and_kwargs` argument is only available for `transformers>=4.47.0`. "
+                    "The default optimizer will be used. "
+                    "Remove the `optimizer_cls_and_kwargs` or upgrade to `transformers>=4.47.0`."
+                )
+
         super().__init__(
             model=model,
             args=args,
@@ -212,8 +227,8 @@ class SFTTrainer(Trainer):
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
-            optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            **super_init_kwargs,
         )
 
         # Add tags for models that have been loaded with the correct transformers version
