@@ -121,7 +121,6 @@ class SFTTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[PeftConfig] = None,
         formatting_func: Optional[Callable[[dict], str]] = None,
-
     ):
         # 0. Handle the args
         if args is None:
