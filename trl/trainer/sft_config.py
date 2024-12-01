@@ -70,6 +70,3 @@ class SFTConfig(TrainingArguments):
     num_of_sequences: int = 1024
     chars_per_token: float = 3.6
     use_liger: bool = False
-    max_length: Optional[int] = None
-    seq_length: Optional[int] = None
-    dataset_kwargs: Optional[dict[str, Any]] = None

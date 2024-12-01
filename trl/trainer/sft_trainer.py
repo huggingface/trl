@@ -223,11 +223,7 @@ class SFTTrainer(Trainer):
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # IterableDataset does not support desc
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
-            fn_kwargs = {
-                "tokenizer": processing_class,
-                "dataset_text_field": args.dataset_text_field,
-                "max_length": args.max_length,
-            }
+            fn_kwargs = {"tokenizer": processing_class, "dataset_text_field": args.dataset_text_field}
             dataset = dataset.map(self.tokenize_row, fn_kwargs=fn_kwargs, **map_kwargs)
 
             # Pack the dataset
@@ -245,9 +241,8 @@ class SFTTrainer(Trainer):
         examples: dict[str, list[str]],
         tokenizer: PreTrainedTokenizerBase,
         dataset_text_field: str,
-        max_length: Optional[int],
     ) -> dict[str, list[int]]:
-        return tokenizer(examples[dataset_text_field], max_length=max_length, truncation=max_length is not None)
+        return tokenizer(examples[dataset_text_field])
 
     def create_model_card(
         self,
