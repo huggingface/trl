@@ -28,7 +28,8 @@ class SFTConfig(TrainingArguments):
 
     Parameters:
         dataset_text_field (`str`, *optional*, defaults to `"text"`):
-            Name of the text field of the dataset.
+            Name of the text field of the dataset. If provided, the trainer will automatically create a
+            [`ConstantLengthDataset`] based on `dataset_text_field`.
         packing (`bool`, *optional*, defaults to `False`):
             Controls whether the [`ConstantLengthDataset`] packs the sequences of the dataset.
         learning_rate (`float`, *optional*, defaults to `2e-5`):
@@ -61,14 +62,14 @@ class SFTConfig(TrainingArguments):
     packing: bool = False
     learning_rate: float = 2.0e-5
     max_seq_length: Optional[int] = None
-    max_length: Optional[int] = None
     dataset_num_proc: Optional[int] = None
     dataset_batch_size: int = 1000
     model_init_kwargs: Optional[dict[str, Any]] = None
     dataset_kwargs: Optional[dict[str, Any]] = None
     eval_packing: Optional[bool] = None
-    seq_length: Optional[int] = None
     num_of_sequences: int = 1024
     chars_per_token: float = 3.6
     use_liger: bool = False
+    max_length: Optional[int] = None
+    seq_length: Optional[int] = None
     dataset_kwargs: Optional[dict[str, Any]] = None
