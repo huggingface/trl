@@ -38,6 +38,7 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, pack_examples
 from .sft_config import SFTConfig
@@ -57,6 +58,9 @@ if is_wandb_available():
 class SFTTrainer(Trainer):
     _tag_names = ["trl", "sft"]
 
+    @deprecate_kwarg(
+        "tokenizer", "0.16.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
