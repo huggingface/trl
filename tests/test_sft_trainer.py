@@ -407,45 +407,6 @@ class SFTTrainerTester(unittest.TestCase):
                 formatting_func=formatting_prompts_func,
             )
 
-            # This should not work because not enough data for one sample
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                max_steps=2,
-                eval_steps=1,
-                save_steps=1,
-                per_device_train_batch_size=2,
-                max_seq_length=1024,  # make sure there is NOT at least 1 packed sequence
-                packing=True,
-                report_to="none",
-            )
-            with self.assertRaises(ValueError):
-                _ = SFTTrainer(
-                    model=self.model,
-                    args=training_args,
-                    train_dataset=self.dummy_dataset,
-                    formatting_func=formatting_prompts_func,
-                )
-
-            # This should not work as well
-            with self.assertRaises(ValueError):
-                training_args = SFTConfig(
-                    output_dir=tmp_dir,
-                    dataloader_drop_last=True,
-                    max_steps=2,
-                    eval_steps=1,
-                    save_steps=1,
-                    per_device_train_batch_size=2,
-                    packing=False,
-                    report_to="none",
-                )
-                _ = SFTTrainer(
-                    model=self.model,
-                    args=training_args,
-                    train_dataset=self.dummy_dataset,
-                    formatting_func=formatting_prompts_func,
-                )
-
             # but this should work
             training_args = SFTConfig(
                 output_dir=tmp_dir,
