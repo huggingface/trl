@@ -199,7 +199,19 @@ class SFTTrainer(Trainer):
             if formatting_func is not None:
                 if isinstance(dataset, Dataset):  # IterableDataset does not support desc
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
-                dataset = dataset.map(formatting_func, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
+
+                def _func(example):
+                    return {"text": formatting_func(example)}
+
+                dataset = dataset.map(_func, **map_kwargs)
+
+            # If the dataset is prompt-completion, convert it to language modeling type
+            if "prompt" in dataset.column_names and "completion" in dataset.column_names:
+
+                def concat_prompt_completion(example):
+                    return {"text": example["prompt"] + example["completion"]}
+
+                dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # IterableDataset does not support desc
