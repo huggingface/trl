@@ -140,14 +140,8 @@ class PPOTrainer(Trainer):
         if hasattr(self.processing_class, "eos_token_id") and self.args.use_model_eos_token:
             # Use the tokenizer's EOS token if available
             self.model.generation_config.eos_token_id = self.processing_class.eos_token_id
-        elif hasattr(self.model.config, "eos_token_id") and self.args.use_model_eos_token:
-            # Fallback to model config's EOS token
-            self.model.generation_config.eos_token_id = self.model.config.eos_token_id
-        
-        # Optionally disable padding during generation
-        if self.args.force_pad_token_to_none:
-            self.model.generation_config.pad_token_id = None
-
+                
+        self.model.generation_config.pad_token_id = None
         # peft support
         if not is_peft_available() and peft_config is not None:
             raise ImportError(
