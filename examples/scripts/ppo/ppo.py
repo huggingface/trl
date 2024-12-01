@@ -46,9 +46,7 @@ python -i examples/scripts/ppo/ppo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --missing_eos_penalty 1.0 \
-    --use_model_eos_token False \
-    --force_pad_token_to_none False
+    --missing_eos_penalty 1.0
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/ppo/ppo.py \
@@ -65,20 +63,13 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --sft_model_path EleutherAI/pythia-1b-deduped \
     --reward_model_path EleutherAI/pythia-1b-deduped \
     --local_rollout_forward_batch_size 1 \
-    --missing_eos_penalty 1.0 \
-    --use_model_eos_token False \
-    --force_pad_token_to_none False
+    --missing_eos_penalty 1.0
 """
 
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PPOConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_into_dataclasses()
-    
-    # Configure EOS token behavior
-    training_args.use_model_eos_token = False  # Enable EOS token usage
-    training_args.force_pad_token_to_none = False  # Disable padding during generation
-    
     # remove output_dir if exists
     shutil.rmtree(training_args.output_dir, ignore_errors=True)
 
@@ -139,7 +130,6 @@ if __name__ == "__main__":
 
         def tokenize(element):
             outputs = tokenizer(
-
                 element[dataset_text_field],
                 padding=False,
             )
