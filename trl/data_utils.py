@@ -404,13 +404,13 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     Pack examples into chunks of size `seq_length`.
 
     Args:
-        examples (`Dict[str, List[List]]`):
+        examples (`dict[str, list[list]]`):
             Dictionary of examples with keys as strings and values as lists of lists.
         seq_length (`int`):
             Maximum sequence length.
 
     Returns:
-        `Dict[str, List[List]]`: Dictionary of examples with keys as strings and values as lists of lists.
+        `dict[str, list[list]]`: Dictionary of examples with keys as strings and values as lists of lists.
 
     Example:
 
