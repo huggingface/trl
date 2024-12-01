@@ -60,6 +60,7 @@ class SFTTrainer(Trainer):
     Class definition of the Supervised Finetuning Trainer (SFT Trainer).
     This class is a wrapper around the `transformers.Trainer` class and inherits all of its attributes and methods.
     The trainer takes care of properly initializing the PeftModel in case a user passes a `PeftConfig` object.
+
     Args:
         model (Union[`transformers.PreTrainedModel`, `nn.Module`, `str`]):
             The model to train, can be a `PreTrainedModel`, a `torch.nn.Module` or a string with the model name to
@@ -103,7 +104,7 @@ class SFTTrainer(Trainer):
     )
     def __init__(
         self,
-        model: Optional[Union[PreTrainedModel, nn.Module]] = None,
+        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: Optional[Union[SFTConfig, TrainingArguments]] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
@@ -118,8 +119,9 @@ class SFTTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         optimizer_cls_and_kwargs: Optional[tuple[Type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        formatting_func: Optional[Callable[[dict], str]] = None,
         peft_config: Optional[PeftConfig] = None,
+        formatting_func: Optional[Callable[[dict], str]] = None,
+
     ):
         # 0. Handle the args
         if args is None:
