@@ -56,6 +56,46 @@ if is_wandb_available():
 
 
 class SFTTrainer(Trainer):
+    r"""
+    Class definition of the Supervised Finetuning Trainer (SFT Trainer).
+    This class is a wrapper around the `transformers.Trainer` class and inherits all of its attributes and methods.
+    The trainer takes care of properly initializing the PeftModel in case a user passes a `PeftConfig` object.
+    Args:
+        model (Union[`transformers.PreTrainedModel`, `nn.Module`, `str`]):
+            The model to train, can be a `PreTrainedModel`, a `torch.nn.Module` or a string with the model name to
+            load from cache or download. The model can be also converted to a `PeftModel` if a `PeftConfig` object is
+            passed to the `peft_config` argument.
+        args (`Optional[SFTConfig]`):
+            The arguments to tweak for training. Will default to a basic instance of [`SFTConfig`] with the `output_dir`
+            set to a directory named *tmp_trainer* in the current directory if not provided.
+        data_collator (`Optional[transformers.DataCollator]`):
+            The data collator to use for training.
+        train_dataset (`Optional[datasets.Dataset]`):
+            The dataset to use for training. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
+        eval_dataset (Optional[Union[`datasets.Dataset`, dict[`str`, `datasets.Dataset`]]]):
+            The dataset to use for evaluation. We recommend users to use `trl.trainer.ConstantLengthDataset` to create their dataset.
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
+            This supercedes the `tokenizer` argument, which is now deprecated.
+        model_init (`Callable[[], transformers.PreTrainedModel]`):
+            The model initializer to use for training. If None is specified, the default model initializer will be used.
+        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to None):
+            The function used to compute metrics during evaluation. It should return a dictionary mapping metric names to metric values.
+            If not specified, only the loss will be computed during evaluation.
+        callbacks (`list[transformers.TrainerCallback]`):
+            The callbacks to use for training.
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            The optimizer and scheduler to use for training.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
+            The function to use to preprocess the logits before computing the metrics.
+        peft_config (`Optional[PeftConfig]`):
+            The PeftConfig object to use to initialize the PeftModel.
+        formatting_func (`Optional[Callable]`):
+            The formatting function to be used for creating the `ConstantLengthDataset`.
+    """
+
     _tag_names = ["trl", "sft"]
 
     @deprecate_kwarg(
