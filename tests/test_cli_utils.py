@@ -78,7 +78,7 @@ class TestTrlParser(unittest.TestCase):
 
         args = ["--arg1", "3", "--config", "config.yaml"]  # override arg1 default with 3
 
-        # Simulate the config being loaded and environment variables being set
+        # Simulate the config being loaded and arguments being passed
         result_args = parser.parse_args_and_config(args)
 
         # Check the parsed arguments
