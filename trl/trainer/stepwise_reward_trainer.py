@@ -148,18 +148,20 @@ class StepwiseRewardTrainer(Trainer):
                     "max_completion_length": args.max_completion_length,
                     "train_on_last_step_only": args.train_on_last_step_only,
                 }
+                train_fn_kwargs = {**fn_kwargs, "is_eval": False}
                 train_dataset = train_dataset.map(
                     self.tokenize_row,
-                    fn_kwargs=fn_kwargs,
+                    fn_kwargs=train_fn_kwargs,
                     num_proc=args.dataset_num_proc,
                     remove_columns=train_dataset.features,
                     desc="Tokenizing train dataset",
                 )
 
+                eval_fn_kwargs = {**fn_kwargs, "is_eval": True}
                 if eval_dataset is not None:
                     eval_dataset = eval_dataset.map(
                         self.tokenize_row,
-                        fn_kwargs=fn_kwargs,
+                        fn_kwargs=eval_fn_kwargs,
                         num_proc=args.dataset_num_proc,
                         remove_columns=eval_dataset.features,
                         desc="Tokenizing eval dataset",
@@ -184,7 +186,7 @@ class StepwiseRewardTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
     @staticmethod
-    def tokenize_row(features, tokenizer, step_separator, max_length, max_completion_length, train_on_last_step_only):
+    def tokenize_row(features, tokenizer, step_separator, max_length, max_completion_length, train_on_last_step_only, is_eval):
         """
         Tokenize a row of the dataset.
 
@@ -202,6 +204,8 @@ class StepwiseRewardTrainer(Trainer):
             train_on_last_step_only (`bool`):
                 Whether to train only on the last step. If `True`, the labels are `-100` for all tokens except the last
                 token of the completion.
+            is_eval (`bool`):
+                Whether the function is used to tokenize samples from a training or an evaluation dataset. Used only if `train_on_last_step_only` is set to `True`.
 
         Returns:
             `dict[str, list[int]]`:
@@ -225,7 +229,7 @@ class StepwiseRewardTrainer(Trainer):
         completions_ids = [
             tokenizer(completion, add_special_tokens=False)["input_ids"] for completion in features["completions"]
         ]
-        if train_on_last_step_only:
+        if train_on_last_step_only and not is_eval:
             labels = [-100] * (len(features["labels"]) - 1) + [int(features["labels"][-1])]
         else:
             labels = [int(label) for label in features["labels"]]
