@@ -70,6 +70,7 @@ class TestTokenizeRow(unittest.TestCase):
             max_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
+            is_eval=False,
         )
 
         self.assertEqual(
@@ -95,6 +96,7 @@ class TestTokenizeRow(unittest.TestCase):
             max_length=None,
             max_completion_length=None,
             train_on_last_step_only=True,
+            is_eval=False,
         )
 
         self.assertEqual(
@@ -121,6 +123,7 @@ class TestTokenizeRow(unittest.TestCase):
             max_length=None,
             max_completion_length=6,
             train_on_last_step_only=False,
+            is_eval=False,
         )
 
         self.assertEqual(
@@ -147,6 +150,7 @@ class TestTokenizeRow(unittest.TestCase):
             max_length=9,
             max_completion_length=None,
             train_on_last_step_only=False,
+            is_eval=False,
         )
 
         self.assertEqual(
@@ -173,6 +177,7 @@ class TestTokenizeRow(unittest.TestCase):
             max_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
+            is_eval=False,
         )
 
         self.assertEqual(

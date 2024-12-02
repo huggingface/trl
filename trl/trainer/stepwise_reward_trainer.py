@@ -186,7 +186,9 @@ class StepwiseRewardTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
     @staticmethod
-    def tokenize_row(features, tokenizer, step_separator, max_length, max_completion_length, train_on_last_step_only, is_eval):
+    def tokenize_row(
+        features, tokenizer, step_separator, max_length, max_completion_length, train_on_last_step_only, is_eval
+    ):
         """
         Tokenize a row of the dataset.
 
@@ -219,7 +221,7 @@ class StepwiseRewardTrainer(Trainer):
         ...             "completions": ["11 is greater than 8.",
         ...                             "Hence, 9.11 > 9.8."],
         ...             "labels": [True, False]}
-        >>> StepwiseRewardTrainer.tokenize_row(features, tokenizer, "\n", max_completion_length=None, train_on_last_step_only=False)
+        >>> StepwiseRewardTrainer.tokenize_row(features, tokenizer, "\n", max_completion_length=None, train_on_last_step_only=False, is_eval=False)
         {'input_ids': [23085, 1372, 374, 8131, 11, 220, 24, 13, 23, 476, 220, 24, 13, 16, 16, 30, 16, 16, 374, 7046, 1091, 220, 23, 13, 198, 39, 763, 11, 220, 24, 13, 16, 16, 861, 220, 24, 13, 23, 13, 198],
          'labels': [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0]}
         ```

@@ -103,6 +103,8 @@ if __name__ == "__main__":
     # Load dataset
     ##############
     dataset = load_dataset(script_args.dataset_name)
+    
+    dataset = dataset.filter(lambda x: len(x["completions"])>0)
 
     ##########
     # Training
