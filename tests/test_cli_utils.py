@@ -14,7 +14,7 @@
 
 import unittest
 from dataclasses import dataclass
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 from trl import TrlParser
 
@@ -42,6 +42,7 @@ class TestTrlParser(unittest.TestCase):
             TrlParser(dataclass_types=[InvalidDataclass])
         self.assertTrue("has a field named 'config'" in str(context.exception))
 
+    @patch("builtins.open", mock_open(read_data="env:\n VAR1: value1\n VAR2: value2\narg1: 2"))
     @patch("yaml.safe_load")
     @patch("os.environ", new_callable=dict)  # Mock os.environ as a dictionary
     def test_parse_args_and_config_with_valid_config(self, mock_environ, mock_yaml_load):
@@ -69,6 +70,7 @@ class TestTrlParser(unittest.TestCase):
         self.assertEqual(result_args[0].arg1, 2)
         self.assertEqual(result_args[0].arg2, "value")
 
+    @patch("builtins.open", mock_open(read_data="arg1: 2"))
     @patch("yaml.safe_load")
     def test_parse_args_and_arg_override_config(self, mock_yaml_load):
         """Test parse_args_and_config method and check that arguments override the config."""
@@ -86,6 +88,7 @@ class TestTrlParser(unittest.TestCase):
         self.assertIsInstance(result_args[0], MyDataclass)
         self.assertEqual(result_args[0].arg1, 3)
 
+    @patch("builtins.open", mock_open(read_data="env: not_a_dict"))
     @patch("yaml.safe_load")
     def test_parse_args_and_config_with_invalid_env(self, mock_yaml_load):
         """Test parse_args_and_config method when the 'env' field is not a dictionary."""
@@ -143,6 +146,7 @@ class TestTrlParser(unittest.TestCase):
         self.assertEqual(result_args[0].arg2, "value")
         self.assertEqual(result_args[1], ["remaining"])
 
+    @patch("builtins.open", mock_open(read_data="remaining_string_in_config: abc"))
     @patch("yaml.safe_load")
     def test_parse_args_and_config_with_remaining_strings_in_config_and_args(self, mock_yaml_load):
         mock_yaml_load.return_value = {"remaining_string_in_config": "abc"}
