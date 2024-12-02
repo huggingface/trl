@@ -142,3 +142,20 @@ class TestTrlParser(unittest.TestCase):
         self.assertEqual(result_args[0].arg1, 2)
         self.assertEqual(result_args[0].arg2, "value")
         self.assertEqual(result_args[1], ["remaining"])
+
+    @patch("yaml.safe_load")
+    def test_parse_args_and_config_with_remaining_strings_in_config_and_args(self, mock_yaml_load):
+        mock_yaml_load.return_value = {"remaining_string_in_config": "abc"}
+
+        parser = TrlParser(dataclass_types=[MyDataclass])
+
+        args = ["--arg1", "2", "--remaining_string_in_args", "def", "--config", "config.yaml"]
+
+        # Simulate the config being loaded and arguments being passed
+        result_args = parser.parse_args_and_config(args, return_remaining_strings=True)
+
+        # Check that the arguments are parsed as is
+        self.assertEqual(len(result_args), 2)
+        self.assertIsInstance(result_args[0], MyDataclass)
+        self.assertEqual(result_args[0].arg1, 2)
+        self.assertEqual(result_args[1], ["--remaining_string_in_config", "abc", "--remaining_string_in_args", "def"])

@@ -168,7 +168,7 @@ class TrlParser(HfArgumentParser):
 
     Args:
         dataclass_types (`Union[DataClassType, Iterable[DataClassType]]`):
-            The dataclass types to use for argument parsing.
+            Dataclass types to use for argument parsing.
         **kwargs:
             Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.
 
@@ -217,9 +217,10 @@ class TrlParser(HfArgumentParser):
         if ignore_extra_args is not None:
             warnings.warn(
                 "The `ignore_extra_args` parameter is deprecated and will be removed in version 0.14. "
-                "It is no longer functional and can be safely removed from your code.",
+                "Use the `return_remaining_strings` in the `parse_args_and_config` method instead.",
                 DeprecationWarning,
             )
+        self._ignore_extra_args = ignore_extra_args
 
         # Check that none of the dataclasses have the "config" field
         for dataclass_type in dataclass_types:
@@ -246,11 +247,14 @@ class TrlParser(HfArgumentParser):
         """
         Parse the command line arguments and the config file.
 
-        This method is a wrapper around the `parse_args_into_dataclasses` method that also parses the config file
-        specified in the command line arguments with the `--config` flag. The config file should be a YAML file with
-        the arguments to be parsed. The method will set the environment variables specified in the `env` field of the
-        config file and then parse the arguments from the config file and the command line.
+        This method is a wrapper around the [`transformers.HfArgumentParser.parse_args_into_dataclasses`] method that
+        also parses the config file specified in the command line arguments with the `--config` flag. The config file
+        should be a YAML file with the arguments to be parsed. The method will set the environment variables specified
+        in the `env` field of the config file and then parse the arguments from the config file and the command line.
         """
+        if self._ignore_extra_args is not None:
+            return_remaining_strings = not self._ignore_extra_args
+
         args = list(args) if args is not None else sys.argv[1:]
         if "--config" in args:
             # Get the config file path from
@@ -269,24 +273,36 @@ class TrlParser(HfArgumentParser):
                     os.environ[key] = str(value)
 
             # Set the defaults from the config values
-            self.set_defaults_with_config(**config)
+            config_remaining_strings = self.set_defaults_with_config(**config)
+        else:
+            config_remaining_strings = []
 
-        return self.parse_args_into_dataclasses(args=args, return_remaining_strings=return_remaining_strings)
+        # Parse the arguments from the command line
+        output = self.parse_args_into_dataclasses(args=args, return_remaining_strings=return_remaining_strings)
 
-    def set_defaults_with_config(self, **kwargs) -> None:
+        # Merge remaining strings from the config file with the remaining strings from the command line
+        if return_remaining_strings:
+            args_remaining_strings = output[-1]
+            return output[:-1] + (config_remaining_strings + args_remaining_strings,)
+        else:
+            return output
+
+    def set_defaults_with_config(self, **kwargs) -> list[str]:
         """
         Overrides the parser's default values with those provided via keyword arguments.
 
         Any argument with an updated default will also be marked as not required
         if it was previously required.
-        """
-        self._defaults.update(kwargs)
 
+        Returns a list of strings that were not consumed by the parser.
+        """
         # If an argument is in the kwargs, update its default and set it as not required
         for action in self._actions:
             if action.dest in kwargs:
-                action.default = kwargs[action.dest]
+                action.default = kwargs.pop(action.dest)
                 action.required = False
+        remaining_strings = [item for key, value in kwargs.items() for item in [f"--{key}", str(value)]]
+        return remaining_strings
 
 
 def get_git_commit_hash(package_name):
