@@ -245,12 +245,12 @@ class TrlParser(HfArgumentParser):
         self, args: Optional[Iterable[str]] = None, return_remaining_strings: bool = False
     ) -> tuple[DataClass, ...]:
         """
-        Parse the command line arguments and the config file.
+        Parse command-line args and config file into instances of the specified dataclass types.
 
-        This method is a wrapper around the [`transformers.HfArgumentParser.parse_args_into_dataclasses`] method that
-        also parses the config file specified in the command line arguments with the `--config` flag. The config file
-        should be a YAML file with the arguments to be parsed. The method will set the environment variables specified
-        in the `env` field of the config file and then parse the arguments from the config file and the command line.
+        This method wraps [`transformers.HfArgumentParser.parse_args_into_dataclasses`] and also parses the config file
+        specified with the `--config` flag. The config file (in YAML format) provides argument values that replace the
+        default values in the dataclasses. Command line arguments can override values set by the config file. The
+        method also sets any environment variables specified in the `env` field of the config file.
         """
         if self._ignore_extra_args is not None:
             return_remaining_strings = not self._ignore_extra_args
