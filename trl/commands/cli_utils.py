@@ -26,6 +26,7 @@ from typing import Iterable, Optional, Union
 import yaml
 from transformers import HfArgumentParser
 from transformers.hf_argparser import DataClass, DataClassType
+from transformers.utils.deprecation import deprecate_kwarg
 
 
 logger = logging.getLogger(__name__)
@@ -207,6 +208,12 @@ class TrlParser(HfArgumentParser):
     ```
     """
 
+    @deprecate_kwarg(
+        "ignore_extra_args",
+        "0.14.0",
+        warn_if_greater_or_equal_version=True,
+        additional_message="Use the `return_remaining_strings` in the `parse_args_and_config` method instead.",
+    )
     def __init__(
         self,
         dataclass_types: Union[DataClassType, Iterable[DataClassType]],
@@ -214,12 +221,6 @@ class TrlParser(HfArgumentParser):
         **kwargs,
     ):
         super().__init__(dataclass_types=dataclass_types, **kwargs)
-        if ignore_extra_args is not None:
-            warnings.warn(
-                "The `ignore_extra_args` parameter is deprecated and will be removed in version 0.14. "
-                "Use the `return_remaining_strings` in the `parse_args_and_config` method instead.",
-                DeprecationWarning,
-            )
         self._ignore_extra_args = ignore_extra_args
 
         # Check that none of the dataclasses have the "config" field
