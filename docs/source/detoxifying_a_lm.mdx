@@ -105,8 +105,8 @@ and the optimizer will take care of computing the gradients in `bfloat16` precis
 </div>
 
 ```python
-ref_policy = create_reference_model(model, num_shared_layers=6)
-trainer = PPOTrainer(..., ref_policy=ref_policy)
+ref_model = create_reference_model(model, num_shared_layers=6)
+trainer = PPOTrainer(..., ref_model=ref_model)
 ```
 
 In the example above this means that the model have the 4 first layers frozen (i.e. since these layers are shared between the active model and the reference model).
