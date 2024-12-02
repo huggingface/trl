@@ -94,7 +94,7 @@ class DPOConfig(TrainingArguments):
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
-        precompute_ref_batch_size (`int`, *optional*, defaults to `None`):
+        precompute_ref_batch_size (`Optional[int]`, *optional*, defaults to `None`):
             Batch size to use when precomputing reference model log probabilities. This can be set higher than the
             training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
             training and `per_device_eval_batch_size` for evaluation.
