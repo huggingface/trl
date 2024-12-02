@@ -350,6 +350,40 @@ class DPOTrainerTester(unittest.TestCase):
                     train_dataset=dummy_dataset["train"],
                 )
 
+    def test_precompute_ref_batch_size(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                precompute_ref_log_probs=True,
+                precompute_ref_batch_size=4,
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            trainer = DPOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+
     @require_peft
     def test_dpo_trainer_without_providing_ref_model_with_lora(self):
         from peft import LoraConfig
