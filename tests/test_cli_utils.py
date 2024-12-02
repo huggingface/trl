@@ -76,7 +76,7 @@ class TestTrlParser(unittest.TestCase):
 
         parser = TrlParser(dataclass_types=[MyDataclass])
 
-        args = ["--arg1", "3", "--config", "config.yaml"]  # don't set arg1 to test default value
+        args = ["--arg1", "3", "--config", "config.yaml"]  # override arg1 default with 3
 
         # Simulate the config being loaded and environment variables being set
         result_args = parser.parse_args_and_config(args)
