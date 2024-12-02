@@ -52,7 +52,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 if is_wandb_available():
     import wandb
@@ -145,6 +145,12 @@ class RewardTrainer(Trainer):
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
+            if not isinstance(peft_config, PeftConfig):
+                raise ValueError(
+                    "If you want to use the PeftModel, you need to pass a valid PeftConfig object to the RewardTrainer."
+                    f" and you passed a {type(peft_config)}."
+                )
+                
             if not isinstance(model, PeftModel):
                 if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_quantized", False):
                     _supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
