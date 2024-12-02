@@ -175,6 +175,7 @@ class DPOConfig(TrainingArguments):
     disable_dropout: bool = True
     generate_during_eval: bool = False
     precompute_ref_log_probs: bool = False
+    precompute_ref_batch_size: Optional[int] = None
     dataset_num_proc: Optional[int] = None
     model_init_kwargs: Optional[dict[str, Any]] = None
     ref_model_init_kwargs: Optional[dict[str, Any]] = None
@@ -190,7 +191,6 @@ class DPOConfig(TrainingArguments):
     rpo_alpha: Optional[float] = None
     discopop_tau: float = 0.05
     use_num_logits_to_keep: bool = False
-    precompute_ref_batch_size: Optional[int] = None
 
     def __post_init__(self):
         if self.max_target_length is not None:
