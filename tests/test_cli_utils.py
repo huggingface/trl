@@ -14,7 +14,7 @@
 
 import unittest
 from dataclasses import dataclass
-from unittest.mock import mock_open, patch
+from unittest.mock import patch
 
 from trl import TrlParser
 
@@ -42,7 +42,6 @@ class TestTrlParser(unittest.TestCase):
             TrlParser(dataclass_types=[InvalidDataclass])
         self.assertTrue("has a field named 'config'" in str(context.exception))
 
-    @patch("builtins.open", mock_open(read_data="env:\n  VAR1: value1\n  VAR2: value2"))
     @patch("yaml.safe_load")
     @patch("os.environ", new_callable=dict)  # Mock os.environ as a dictionary
     def test_parse_args_and_config_with_valid_config(self, mock_environ, mock_yaml_load):
@@ -70,7 +69,23 @@ class TestTrlParser(unittest.TestCase):
         self.assertEqual(result_args[0].arg1, 2)
         self.assertEqual(result_args[0].arg2, "value")
 
-    @patch("builtins.open", mock_open(read_data="env: not_a_dict"))
+    @patch("yaml.safe_load")
+    def test_parse_args_and_arg_override_config(self, mock_yaml_load):
+        """Test parse_args_and_config method and check that arguments override the config."""
+        mock_yaml_load.return_value = {"arg1": 2}  # this arg is meant to be overridden
+
+        parser = TrlParser(dataclass_types=[MyDataclass])
+
+        args = ["--arg1", "3", "--config", "config.yaml"]  # don't set arg1 to test default value
+
+        # Simulate the config being loaded and environment variables being set
+        result_args = parser.parse_args_and_config(args)
+
+        # Check the parsed arguments
+        self.assertEqual(len(result_args), 1)
+        self.assertIsInstance(result_args[0], MyDataclass)
+        self.assertEqual(result_args[0].arg1, 3)
+
     @patch("yaml.safe_load")
     def test_parse_args_and_config_with_invalid_env(self, mock_yaml_load):
         """Test parse_args_and_config method when the 'env' field is not a dictionary."""
@@ -85,9 +100,7 @@ class TestTrlParser(unittest.TestCase):
 
         self.assertEqual(str(context.exception), "`env` field should be a dict in the YAML file.")
 
-    @patch("builtins.open", mock_open(read_data=""))
-    @patch("yaml.safe_load")
-    def test_parse_args_and_config_without_config(self, mock_yaml_load):
+    def test_parse_args_and_config_without_config(self):
         """Test parse_args_and_config without the `--config` argument."""
         parser = TrlParser(dataclass_types=[MyDataclass])
 
