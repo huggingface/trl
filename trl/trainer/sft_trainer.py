@@ -128,9 +128,7 @@ class SFTTrainer(Trainer):
         formatting_func: Optional[Callable] = None,
     ):
         if args is None:
-            output_dir = "tmp_trainer"
-            warnings.warn(f"No `SFTConfig` passed, using `output_dir={output_dir}`.")
-            args = SFTConfig(output_dir=output_dir)
+            args = SFTConfig(output_dir="tmp_trainer")
         elif args is not None and args.__class__.__name__ == "TrainingArguments":
             args_as_dict = args.to_dict()
             # Manually copy token values as TrainingArguments.to_dict() redacts them
@@ -155,10 +153,6 @@ class SFTTrainer(Trainer):
                 model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
-            warnings.warn(
-                "You passed a model_id to the SFTTrainer. This will automatically create an "
-                "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
-            )
             if args.use_liger:
                 model = AutoLigerKernelForCausalLM.from_pretrained(model, **model_init_kwargs)
             else:
@@ -245,10 +239,6 @@ class SFTTrainer(Trainer):
             # to overcome some issues with broken tokenizers
             args.max_seq_length = min(processing_class.model_max_length, 1024)
 
-            warnings.warn(
-                f"You didn't pass a `max_seq_length` argument to the SFTTrainer, this will default to {args.max_seq_length}"
-            )
-
         self.dataset_num_proc = args.dataset_num_proc
         self.dataset_batch_size = args.dataset_batch_size
 
@@ -306,8 +296,10 @@ class SFTTrainer(Trainer):
 
         if processing_class.padding_side is not None and processing_class.padding_side != "right":
             warnings.warn(
-                "You passed a processing_class with `padding_side` not equal to `right` to the SFTTrainer. This might lead to some unexpected behaviour due to "
-                "overflow issues when training a model in half-precision. You might consider adding `processing_class.padding_side = 'right'` to your code."
+                "You passed a processing_class with `padding_side` not equal to `right` to the SFTTrainer. This might "
+                "lead to some unexpected behaviour due to overflow issues when training a model in half-precision. "
+                "You might consider adding `processing_class.padding_side = 'right'` to your code.",
+                UserWarning,
             )
 
         super().__init__(
@@ -330,9 +322,6 @@ class SFTTrainer(Trainer):
 
         if self.train_dataset is not None:
             if self.args.max_steps > 0 and args.packing:
-                warnings.warn(
-                    "You passed `packing=True` to the SFTTrainer/SFTConfig, and you are training your model with `max_steps` strategy. The dataset will be iterated until the `max_steps` are reached."
-                )
                 self.train_dataset.infinite = True
             elif self.args.max_steps == -1 and args.packing:
                 self.train_dataset.infinite = False
@@ -366,7 +355,10 @@ class SFTTrainer(Trainer):
         if column_names and "input_ids" in column_names:
             if formatting_func is not None:
                 warnings.warn(
-                    "You passed a dataset that is already processed (contains an `input_ids` field) together with a valid formatting function. Therefore `formatting_func` will be ignored."
+                    "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
+                    "valid formatting function. Therefore `formatting_func` will be ignored. Either remove the "
+                    "`formatting_func` or pass a dataset that is not already processed.",
+                    UserWarning,
                 )
 
             def formatting_func(x):
@@ -444,8 +436,11 @@ class SFTTrainer(Trainer):
 
         if not remove_unused_columns and len(extra_columns) > 0:
             warnings.warn(
-                "You passed `remove_unused_columns=False` on a non-packed dataset. This might create some issues with the default collator and yield to errors. If you want to "
-                f"inspect dataset other columns (in this case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
+                "You passed `remove_unused_columns=False` on a non-packed dataset. This might create some issues with "
+                "the default collator and yield to errors. If you want to inspect dataset other columns (in this "
+                f"case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the "
+                "default collator and create your own data collator in order to inspect the unused dataset columns.",
+                UserWarning,
             )
 
         map_kwargs = {
