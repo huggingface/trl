@@ -39,9 +39,15 @@ class RewardConfig(TrainingArguments):
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether or not to remove the columns that are not used by the model's forward pass. Can be `True` only if
             the dataset is pretokenized.
+        feedback_method (`str`, *optional*, defaults to `None`):
+            Feedback method to use for the reward model. Options are `vanilla` or `teacher`.
+        lm_weight (`float`, *optional*, defaults to `0.1`):
+            Weight for the language model loss when feedback method is `teacher`.
     """
 
     max_length: Optional[int] = None
     dataset_num_proc: Optional[int] = None
     center_rewards_coefficient: Optional[float] = None
     remove_unused_columns: bool = False
+    feedback_method: Optional[str] = None
+    lm_weight: float = 0.1

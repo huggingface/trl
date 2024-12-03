@@ -41,6 +41,7 @@ from transformers.utils import is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template
+from ..models.modeling_cloud_head import CLoudRewardModel, CLoudRewardModelConfig
 from .reward_config import RewardConfig
 from .utils import (
     RewardDataCollatorWithPadding,
@@ -240,6 +241,17 @@ class RewardTrainer(Trainer):
                         num_proc=args.dataset_num_proc,
                     )
 
+        self.feedback_method = model.config.feedback_method
+        if self.feedback_method is not None:
+            self.lm_loss = nn.CrossEntropyLoss(ignore_index=-100)
+            if model is None and args.model_name_or_path is not None:
+                model = CLoudRewardModel(
+                    CLoudRewardModelConfig(
+                        base_model_name_or_path=args.model_name_or_path,
+                        feedback_method=self.feedback_method,
+                    )
+                )
+
         super().__init__(
             model=model,
             args=args,
@@ -265,29 +277,53 @@ class RewardTrainer(Trainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
-        rewards_chosen = model(
+        # Get outputs for chosen and rejected responses
+        chosen_outputs = model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
             return_dict=True,
-        )["logits"]
-        rewards_rejected = model(
+        )
+        rejected_outputs = model(
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
             return_dict=True,
-        )["logits"]
-        # calculate loss, optionally modulate with margin
+        )
+
+        # The reward scores come from the reward head
+        rewards_chosen = chosen_outputs["logits"]  # This is the reward score
+        rewards_rejected = rejected_outputs["logits"]  # This is the reward score
+
+        # Calculate reward loss
         if "margin" in inputs:
-            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
+            reward_loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
         else:
-            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
+            reward_loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
 
         if self.args.center_rewards_coefficient is not None:
-            loss += self.args.center_rewards_coefficient * torch.mean((rewards_chosen + rewards_rejected) ** 2)
+            reward_loss += self.args.center_rewards_coefficient * torch.mean((rewards_chosen + rewards_rejected) ** 2)
+
+        # Add language modeling loss for teacher forcing
+        if self.feedback_method == "teacher":
+            # The language model logits come from the base model
+            chosen_lm_loss = self.lm_loss(
+                chosen_outputs["lm_logits"].view(-1, model.reward_base_model.config.vocab_size),
+                inputs.get("chosen_lm_labels", inputs["input_ids_chosen"]).view(-1),
+            )
+            rejected_lm_loss = self.lm_loss(
+                rejected_outputs["lm_logits"].view(-1, model.reward_base_model.config.vocab_size),
+                inputs.get("rejected_lm_labels", inputs["input_ids_rejected"]).view(-1),
+            )
+            lm_loss = (chosen_lm_loss + rejected_lm_loss) / 2
+            loss = reward_loss + self.args.lm_weight * lm_loss
+        else:
+            loss = reward_loss
 
         if return_outputs:
             return loss, {
                 "rewards_chosen": rewards_chosen,
                 "rewards_rejected": rewards_rejected,
+                "chosen_logits": chosen_outputs["lm_logits"] if self.feedback_method == "teacher" else None,
+                "rejected_logits": rejected_outputs["lm_logits"] if self.feedback_method == "teacher" else None,
             }
         return loss
 
