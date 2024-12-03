@@ -162,7 +162,7 @@ class DPOTrainer(Trainer):
         args (`DPOConfig`):
             The DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
+            The data collator to use for training. If None is specified, the default data collator (`PreferenceCollator`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
@@ -672,9 +672,9 @@ class DPOTrainer(Trainer):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
         # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
-        # Instead, we set them to the columns expected by `DPODataCollatorWithPadding`, hence the override.
+        # Instead, we set them to the columns expected by `PreferenceCollator`, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids", "image_sizes"]
+            self._signature_columns = ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids", "image_sizes", "ref_chosen_logps", "ref_rejected_logps"]
 
     def get_train_dataloader(self) -> DataLoader:
         """
