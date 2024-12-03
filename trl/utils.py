@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -28,8 +27,6 @@ class ScriptArguments:
             Dataset split to use for training.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
             Dataset split to use for evaluation.
-        config (`str` or `None`, *optional*, defaults to `None`):
-            Path to the optional config file.
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
             Whether to apply `use_reentrant` for gradient_checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
@@ -40,6 +37,5 @@ class ScriptArguments:
     dataset_name: str
     dataset_train_split: str = "train"
     dataset_test_split: str = "test"
-    config: Optional[str] = None
     gradient_checkpointing_use_reentrant: bool = False
     ignore_bias_buffers: bool = False
