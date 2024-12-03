@@ -152,7 +152,18 @@ class RewardTrainer(Trainer):
                 )
                 
             if not isinstance(model, PeftModel):
-                if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_quantized", False):
+                is_sharded_qlora = False
+                # Below is to support QLoRA + FSDP / DS-Zero3 - one should never call
+                # peft_module_casting_to_bf16 or prepare_model_for_kbit_training when doing
+                # QLoRA + FSDP / DS-Zero3
+                if getattr(model, "is_loaded_in_4bit", False):
+                    for _, param in model.named_parameters():
+                        if param.__class__.__name__ == "Params4bit":
+                            is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
+                            break
+                        
+                if getattr(model, "is_loaded_in_8bit", False) or (
+                    getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora):
                     _supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
                         inspect.signature(prepare_model_for_kbit_training).parameters
                     )
