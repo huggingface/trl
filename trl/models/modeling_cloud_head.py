@@ -15,18 +15,18 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedConfig, PreTrainedModel
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 
 
 class RewardHead(nn.Module):
     """Head for reward prediction."""
 
-    def __init__(self, cfg: PreTrainedConfig, n_labels: int = 1):
+    def __init__(self, config: PretrainedConfig, n_labels: int = 1):
         super().__init__()
-        self.dense = nn.Linear(cfg.hidden_size, cfg.hidden_size)
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         # use same dropout as attention dropout
-        self.dropout = nn.Dropout(cfg.attention_dropout if hasattr(cfg, "attention_dropout") else 0.1)
-        self.out_proj = nn.Linear(cfg.hidden_size, n_labels)
+        self.dropout = nn.Dropout(config.attention_dropout if hasattr(config, "attention_dropout") else 0.1)
+        self.out_proj = nn.Linear(config.hidden_size, n_labels)
 
     def forward(self, hidden_states: torch.Tensor, **kwargs: Any):
         hidden_states = self.dropout(hidden_states)
@@ -37,7 +37,7 @@ class RewardHead(nn.Module):
         return output
 
 
-class CLoudRewardModelConfig(PreTrainedConfig):
+class CLoudRewardModelConfig(PretrainedConfig):
     """Configuration class for CLoud Reward Model."""
 
     def __init__(self, feedback_method="vanilla", base_model_name_or_path=None, **kwargs):
