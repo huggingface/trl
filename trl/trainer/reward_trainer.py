@@ -241,7 +241,7 @@ class RewardTrainer(Trainer):
                         num_proc=args.dataset_num_proc,
                     )
 
-        self.feedback_method = model.config.feedback_method
+        self.feedback_method = args.feedback_method
         if self.feedback_method is not None:
             self.lm_loss = nn.CrossEntropyLoss(ignore_index=-100)
             if model is None and args.model_name_or_path is not None:
