@@ -18,7 +18,8 @@ import sys
 
 from accelerate.commands.launch import launch_command, launch_command_parser
 
-from trl.scripts.dpo import make_parser as make_dpo_parser
+from .scripts.dpo import make_parser as make_dpo_parser
+from .scripts.env import print_env
 
 
 def main():
@@ -29,6 +30,7 @@ def main():
 
     # Add the subparsers for every script
     make_dpo_parser(subparsers)
+    subparsers.add_parser("env", help="Print the environment information")
 
     # Parse the arguments
     args = parser.parse_args()
@@ -43,6 +45,9 @@ def main():
 
         # Launch the training
         launch_command(args)
+
+    elif args.command == "env":
+        print_env()
 
 
 if __name__ == "__main__":
