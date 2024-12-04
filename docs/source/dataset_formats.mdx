@@ -395,7 +395,7 @@ For simplicity, some of the examples below do not follow this recommendation and
 
 | From \ To                       | Language modeling                                                       | Prompt-completion                                                       | Prompt-only                                                       | Preference with implicit prompt                           | Preference                                                | Unpaired preference                                                       | Stepwise supervision |
 | ------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------- |
-| Language modeling               | N/A                                                                     | N/A                                                                     | N/A                                                               | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
+| Language modeling               | N/A                                                                     | N/A                                                                     | N/A                                                               | N/A                                                       | N/A                                                       | [🔗](#from-language-modeling-to-unpaired-preference-dataset)                                                                       | N/A                  |
 | Prompt-completion               | [🔗](#from-prompt-completion-to-language-modeling-dataset)               | N/A                                                                     | [🔗](#from-prompt-completion-to-prompt-only-dataset)               | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
 | Prompt-only                     | N/A                                                                     | N/A                                                                     | N/A                                                               | N/A                                                       | N/A                                                       | N/A                                                                       | N/A                  |
 | Preference with implicit prompt | [🔗](#from-preference-with-implicit-prompt-to-language-modeling-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-completion-dataset) | [🔗](#from-preference-with-implicit-prompt-to-prompt-only-dataset) | N/A                                                       | [🔗](#from-implicit-to-explicit-prompt-preference-dataset) | [🔗](#from-preference-with-implicit-prompt-to-unpaired-preference-dataset) | N/A                  |
@@ -405,8 +405,7 @@ For simplicity, some of the examples below do not follow this recommendation and
 
 ### From language modeling to unpaired preference dataset
 
-To convert a language modeling dataset into an unpaired preference dataset, process the two text datasets into a completion with a label and concatenate.
-
+To convert two language modeling datasets into an unpaired preference dataset, process the text from each data into a completion, give each a label and an empty prompt, and concatenate.
 
 
 ```python
@@ -428,7 +427,7 @@ transformed_bad_examples = bad_examples.map(process_into_preference(False), remo
 
 transformed_good_examples = good_examples.map(process_into_preference(True), remove_columns=['text'])
 
-data_as_unpaired_preference = concatenate_datasets([transformed_good_examples, transformed_bad_examples])
+dataset = concatenate_datasets([transformed_good_examples, transformed_bad_examples])
 
 ```
 
