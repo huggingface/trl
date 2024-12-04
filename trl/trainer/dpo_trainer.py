@@ -130,6 +130,9 @@ class PreferenceCollator(DataCollatorMixin):
             pixel_values = [torch.tensor(example["pixel_values"]) for example in examples]
         if "pixel_attention_mask" in examples[0]:
             pixel_attention_mask = [torch.tensor(example["pixel_attention_mask"]) for example in examples]
+        if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
+            ref_chosen_logps = torch.tensor([example["ref_chosen_logps"] for example in examples])
+            ref_rejected_logps = torch.tensor([example["ref_rejected_logps"] for example in examples])
 
         # Pad
         output = {}
@@ -143,6 +146,11 @@ class PreferenceCollator(DataCollatorMixin):
             output["pixel_values"] = pad(pixel_values, padding_value=0.0)
         if "pixel_attention_mask" in examples[0]:
             output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
+        if "image_sizes" in examples[0]:
+            output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
+        if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
+            output["ref_chosen_logps"] = ref_chosen_logps
+            output["ref_rejected_logps"] = ref_rejected_logps
 
         return output
 
@@ -160,7 +168,7 @@ class DPOTrainer(Trainer):
         args (`DPOConfig`):
             The DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
+            The data collator to use for training. If None is specified, the default data collator (`PreferenceCollator`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
@@ -209,6 +217,9 @@ class DPOTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[dict] = None,
     ):
+        if model is None:
+            raise ValueError("No model provided. Please provide a model to train.")
+
         if not isinstance(model, str) and ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
@@ -254,17 +265,9 @@ class DPOTrainer(Trainer):
                 ref_model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
-            warnings.warn(
-                "You passed a model_id to the DPOTrainer. This will automatically create an "
-                "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
-            )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         if isinstance(ref_model, str):
-            warnings.warn(
-                "You passed a ref model_id to the DPOTrainer. This will automatically create an "
-                "`AutoModelForCausalLM`"
-            )
             ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
@@ -338,23 +341,8 @@ class DPOTrainer(Trainer):
                 " Please install `wandb` to resolve."
             )
 
-        if model is not None:
-            self.is_encoder_decoder = model.config.is_encoder_decoder
-        elif args.is_encoder_decoder is None:
-            raise ValueError(
-                "When no model is provided, you need to pass the parameter is_encoder_decoder to the DPOTrainer/DPOConfig."
-            )
-        else:
-            self.is_encoder_decoder = args.is_encoder_decoder
-
-        if model is not None:
-            self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
-        else:
-            warnings.warn(
-                "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
-            )
-            self.is_vision_model = False
-
+        self.is_encoder_decoder = model.config.is_encoder_decoder
+        self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
@@ -412,7 +400,9 @@ class DPOTrainer(Trainer):
             and args.label_smoothing > 0
         ):
             warnings.warn(
-                "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
+                f"You are using the {args.loss_type} loss type that does not support label smoothing. The "
+                "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
+                UserWarning,
             )
         if args.loss_type == "kto_pair":
             raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
@@ -425,8 +415,11 @@ class DPOTrainer(Trainer):
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
             warnings.warn(
-                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
-                " meaning the auxiliary loss will not be used."
+                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
+                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
+                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
+                "loss.",
+                UserWarning,
             )
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
@@ -645,6 +638,8 @@ class DPOTrainer(Trainer):
 
         if "pixel_attention_mask" in processed_features:
             output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
+        if "image_sizes" in processed_features:
+            output["image_sizes"] = processed_features["image_sizes"][0]
 
         return output
 
@@ -683,9 +678,16 @@ class DPOTrainer(Trainer):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
         # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
-        # Instead, we set them to the columns expected by `DPODataCollatorWithPadding`, hence the override.
+        # Instead, we set them to the columns expected by `PreferenceCollator`, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids"]
+            self._signature_columns = [
+                "prompt_input_ids",
+                "chosen_input_ids",
+                "rejected_input_ids",
+                "image_sizes",
+                "ref_chosen_logps",
+                "ref_rejected_logps",
+            ]
 
     def get_train_dataloader(self) -> DataLoader:
         """
@@ -695,8 +697,9 @@ class DPOTrainer(Trainer):
         """
 
         if self.precompute_ref_log_probs and not self._precomputed_train_ref_log_probs:
+            batch_size = self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size
             dataloader_params = {
-                "batch_size": self.args.per_device_train_batch_size,
+                "batch_size": batch_size,
                 "collate_fn": self.data_collator,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
@@ -748,8 +751,9 @@ class DPOTrainer(Trainer):
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
 
         if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
+            batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
             dataloader_params = {
-                "batch_size": self.args.per_device_eval_batch_size,
+                "batch_size": batch_size,
                 "collate_fn": self.data_collator,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
@@ -855,6 +859,8 @@ class DPOTrainer(Trainer):
             output["pixel_attention_mask"] = torch.cat(
                 [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
             )
+        if "image_sizes" in batch:
+            output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
 
         # Concatenate the chosen and rejected completions
         max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
@@ -1078,6 +1084,8 @@ class DPOTrainer(Trainer):
             model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
         if "pixel_attention_mask" in concatenated_batch:
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+        if "image_sizes" in concatenated_batch:
+            model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
 
         prompt_input_ids = concatenated_batch["prompt_input_ids"]
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]

@@ -69,6 +69,8 @@
     title: Script Utilities
   title: API
 - sections:
+  - local: community_tutorials
+    title: Community Tutorials
   - local: example_overview
     title: Example Overview
   - local: sentiment_tuning

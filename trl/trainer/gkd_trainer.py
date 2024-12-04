@@ -14,7 +14,6 @@
 import os
 import random
 import textwrap
-import warnings
 from copy import deepcopy
 from typing import Any, Callable, Optional, Union
 
@@ -115,10 +114,6 @@ class GKDTrainer(SFTTrainer):
             )
 
         if isinstance(teacher_model, str):
-            warnings.warn(
-                "You passed a teacher model_id to the GKDTrainer. This will automatically create an "
-                "`AutoModelForCausalLM`"
-            )
             if args.use_liger:
                 teacher_model = AutoLigerKernelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
             else:

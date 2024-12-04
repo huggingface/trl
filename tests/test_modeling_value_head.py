@@ -265,14 +265,6 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
         # Just check if the generation works
         _ = model.generate(input_ids, generation_config=generation_config)
 
-    def test_raise_error_not_causallm(self):
-        # Test with a model without a LM head
-        model_id = "trl-internal-testing/tiny-GPT2LMHeadModel"
-        # This should raise a ValueError
-        with self.assertRaises(ValueError):
-            pretrained_model = AutoModelForCausalLM.from_pretrained(model_id)
-            _ = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model.transformer)
-
     def test_transformers_bf16_kwargs(self):
         r"""
         Test if the transformers kwargs are correctly passed
@@ -283,10 +275,11 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
         for model_name in self.all_model_names:
             trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
 
-            lm_head_namings = self.trl_model_class.lm_head_namings
+            lm_head_namings = ["lm_head", "embed_out", "output_layer"]
 
             self.assertTrue(
-                any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
+                any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings),
+                "Can't test the model because it doesn't have any of the expected lm_head namings",
             )
 
             for lm_head_naming in lm_head_namings:
