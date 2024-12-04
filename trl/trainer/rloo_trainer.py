@@ -279,7 +279,7 @@ class RLOOTrainer(Trainer):
         # trainer state initialization
         self.state.global_step = 0
         self.state.episode = 0
-        self.state.max_steps = args.num_total_batches * args.num_mini_batches
+        self.state.max_steps = (args.num_total_batches * args.num_mini_batches) // 2
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
