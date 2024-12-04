@@ -117,7 +117,8 @@ class PreferenceCollator(DataCollatorMixin):
 
     pad_token_id: int
     return_tensors: str = "pt"
-
+    padding_free:bool=False
+    
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
         prompt_input_ids = [torch.tensor(example["prompt_input_ids"]) for example in examples]
@@ -131,23 +132,41 @@ class PreferenceCollator(DataCollatorMixin):
         if "pixel_attention_mask" in examples[0]:
             pixel_attention_mask = [torch.tensor(example["pixel_attention_mask"]) for example in examples]
 
-        # Pad
-        output = {}
-        output["prompt_input_ids"] = pad(prompt_input_ids, padding_value=self.pad_token_id, padding_side="left")
-        output["prompt_attention_mask"] = pad(prompt_attention_mask, padding_value=0, padding_side="left")
-        output["chosen_input_ids"] = pad(chosen_input_ids, padding_value=self.pad_token_id)
-        output["chosen_attention_mask"] = pad(chosen_attention_mask, padding_value=0)
-        output["rejected_input_ids"] = pad(rejected_input_ids, padding_value=self.pad_token_id)
-        output["rejected_attention_mask"] = pad(rejected_attention_mask, padding_value=0)
-        if "pixel_values" in examples[0]:
-            output["pixel_values"] = pad(pixel_values, padding_value=0.0)
-        if "pixel_attention_mask" in examples[0]:
-            output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
-        if "image_sizes" in examples[0]:
-            output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
+   
+        # Pad only if padding_free is False
+        if not self.padding_free:
+            # Pad
+            output = {}
+            output["prompt_input_ids"] = pad(prompt_input_ids, padding_value=self.pad_token_id, padding_side="left")
+            output["prompt_attention_mask"] = pad(prompt_attention_mask, padding_value=0, padding_side="left")
+            output["chosen_input_ids"] = pad(chosen_input_ids, padding_value=self.pad_token_id)
+            output["chosen_attention_mask"] = pad(chosen_attention_mask, padding_value=0)
+            output["rejected_input_ids"] = pad(rejected_input_ids, padding_value=self.pad_token_id)
+            output["rejected_attention_mask"] = pad(rejected_attention_mask, padding_value=0)
+            if "pixel_values" in examples[0]:
+                output["pixel_values"] = pad(pixel_values, padding_value=0.0)
+            if "pixel_attention_mask" in examples[0]:
+                output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
+            if "image_sizes" in examples[0]:
+                output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
+        else:
+            # If padding_free is True, return the tensors without padding
+            output = {
+                "prompt_input_ids": torch.stack(prompt_input_ids),
+                "prompt_attention_mask": torch.stack(prompt_attention_mask),
+                "chosen_input_ids": torch.stack(chosen_input_ids),
+                "chosen_attention_mask": torch.stack(chosen_attention_mask),
+                "rejected_input_ids": torch.stack(rejected_input_ids),
+                "rejected_attention_mask": torch.stack(rejected_attention_mask),
+            }
+            if "pixel_values" in examples[0]:
+                output["pixel_values"] = torch.stack(pixel_values)
+            if "pixel_attention_mask" in examples[0]:
+                output["pixel_attention_mask"] = torch.stack(pixel_attention_mask)
+            if "image_sizes" in examples[0]:
+                output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
 
         return output
-
 
 class DPOTrainer(Trainer):
     r"""
@@ -186,6 +205,8 @@ class DPOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+        padding_free (`bool`, defaults to `False`):
+            Whether to use padding-free training. If set to `True`, the trainer will operate in a padding-free mode.
     """
 
     _tag_names = ["trl", "dpo"]
@@ -210,7 +231,10 @@ class DPOTrainer(Trainer):
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[dict] = None,
-    ):
+        padding_free:bool=False
+    ):  
+        
+        self.padding_free = padding_free 
         if model is None:
             raise ValueError("No model provided. Please provide a model to train.")
 
@@ -368,7 +392,7 @@ class DPOTrainer(Trainer):
                 )
 
         if data_collator is None:
-            data_collator = PreferenceCollator(pad_token_id=self.padding_value)
+            data_collator = PreferenceCollator(pad_token_id=self.padding_value,padding_free=self.padding_free)
 
         if args.disable_dropout:
             disable_dropout_in_model(model)
@@ -383,7 +407,7 @@ class DPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
         self.use_num_logits_to_keep = args.use_num_logits_to_keep
-
+    
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
         self._precomputed_train_ref_log_probs = False
@@ -796,71 +820,123 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int
+        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int, padding_free: bool
     ) -> dict[str, torch.LongTensor]:
         """
         Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
-        and completion sequences.
+        and completion sequences. Also handles position IDs for models that require them.
 
         Args:
             batch (`dict[str, Union[list, torch.LongTensor]]`):
                 A batch of input data. The batch must contain the following keys:
-
                 - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input IDs.
                 - `"chosen_input_ids"`: Tensor of shape `(batch_size, chosen_length)` representing the chosen completion input IDs.
                 - `"rejected_input_ids"`: Tensor of shape `(batch_size, rejected_length)` representing the rejected completion input IDs.
+                - `"prompt_attention_mask"`: Tensor of shape `(batch_size, prompt_length)` for prompt attention masks.
+                - `"chosen_attention_mask"`: Tensor of shape `(batch_size, chosen_length)` for chosen completion attention masks.
+                - `"rejected_attention_mask"`: Tensor of shape `(batch_size, rejected_length)` for rejected completion attention masks.
                 - `"prompt_pixel_values"` (optional): Tensor for pixel values, if available.
                 - `"prompt_pixel_attention_mask"` (optional): Tensor for pixel attention masks, if available.
+                - `"image_sizes"` (optional): Tensor for image sizes, if available.
 
             padding_value (`int`):
-                The padding value to use for the concatenated completion sequences (`chosen_input_ids` and
-                `rejected_input_ids`).
+                The padding value to use for the concatenated completion sequences.
+
+            padding_free (`bool`):
+                Whether to operate in padding-free mode. When True, removes padding and generates position IDs.
 
         Returns:
             `dict[str, torch.LongTensor]`: A dictionary containing:
+                If padding_free=True:
+                    - `"prompt_input_ids"`: Concatenated prompt input IDs without padding
+                    - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs without padding
+                    - `"prompt_position_ids"`: Position IDs for prompt sequences
+                    - `"completion_position_ids"`: Position IDs for completion sequences
+                    - `"pixel_values"` (optional): Concatenated pixel values if present
+                    - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if present
+                    - `"image_sizes"` (optional): Concatenated image sizes if present
 
-                - `"prompt_input_ids"`: Concatenated prompt input IDs of shape `(2 * batch_size, prompt_length)`.
-                - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs of shape `(2 * batch_size, max_completion_length)`.
-                - `"prompt_attention_mask"`: Concatenated prompt attention masks of shape `(2 * batch_size, prompt_length)`.
-                - `"completion_attention_mask"`: Concatenated chosen and rejected attention masks of shape `(2 * batch_size, max_completion_length)`.
-                - `"pixel_values"` (optional): Concatenated pixel values if `"prompt_pixel_values"` are present.
-                - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if `"prompt_pixel_attention_mask"` are present.
+                If padding_free=False:
+                    - `"prompt_input_ids"`: Concatenated prompt input IDs with padding
+                    - `"prompt_attention_mask"`: Concatenated prompt attention masks
+                    - `"completion_input_ids"`: Concatenated and padded chosen/rejected completion input IDs
+                    - `"completion_attention_mask"`: Concatenated and padded chosen/rejected attention masks
+                    - `"pixel_values"` (optional): Concatenated pixel values if present
+                    - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if present
+                    - `"image_sizes"` (optional): Concatenated image sizes if present
 
         Notes:
-            The completion input IDs and attention masks are padded to the maximum completion length of the chosen
-            or rejected sequences.
+            - In padding-free mode, attention masks are removed after being used to create position IDs
+            - Position IDs in padding-free mode are generated to maintain continuous positions across prompt and completion
+            - Optional pixel-related features are handled the same way in both modes
         """
         output = {}
+        if padding_free:
+            # Get and pop attention masks since we won't need them after processing
+            prompt_attn_mask = batch.pop("prompt_attention_mask")
+            chosen_attn_mask = batch.pop("chosen_attention_mask")
+            rejected_attn_mask = batch.pop("rejected_attention_mask")
 
-        # For the prompt, the input_ids are the same for both the chosen and rejected responses
-        output["prompt_input_ids"] = torch.cat([batch["prompt_input_ids"], batch["prompt_input_ids"]], dim=0)
-        output["prompt_attention_mask"] = torch.cat(
-            [batch["prompt_attention_mask"], batch["prompt_attention_mask"]], dim=0
-        )
-        if "pixel_values" in batch:
-            output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
+            # Process inputs using attention masks
+            prompt_ids = batch["prompt_input_ids"][prompt_attn_mask.bool()].unsqueeze(0)
+            chosen_ids = batch["chosen_input_ids"][chosen_attn_mask.bool()].unsqueeze(0)
+            rejected_ids = batch["rejected_input_ids"][rejected_attn_mask.bool()].unsqueeze(0)
 
-        if "pixel_attention_mask" in batch:
-            output["pixel_attention_mask"] = torch.cat(
-                [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
+            # Create position IDs using cumsum of attention masks
+            prompt_positions = prompt_attn_mask.cumsum(1)[prompt_attn_mask.bool()].unsqueeze(0) - 1
+            chosen_positions = chosen_attn_mask.cumsum(1)[chosen_attn_mask.bool()].unsqueeze(0) - 1
+            rejected_positions = rejected_attn_mask.cumsum(1)[rejected_attn_mask.bool()].unsqueeze(0) - 1
+
+            # Duplicate prompt and its positions for both chosen and rejected
+            output["prompt_input_ids"] = torch.cat([prompt_ids, prompt_ids], dim=0)
+            output["prompt_position_ids"] = torch.cat([prompt_positions, prompt_positions], dim=0)
+            
+            # Concatenate chosen and rejected
+            output["completion_input_ids"] = torch.cat([chosen_ids, rejected_ids], dim=0)
+            output["completion_position_ids"] = torch.cat([chosen_positions, rejected_positions], dim=0)
+
+            # Handle optional pixel-related features
+            if "pixel_values" in batch:
+                output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
+            if "pixel_attention_mask" in batch:
+                output["pixel_attention_mask"] = torch.cat(
+                    [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
+                )
+            if "image_sizes" in batch:
+                output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
+                    
+
+        
+        else:
+            # For the prompt, the input_ids are the same for both the chosen and rejected responses
+            output["prompt_input_ids"] = torch.cat([batch["prompt_input_ids"], batch["prompt_input_ids"]], dim=0)
+            output["prompt_attention_mask"] = torch.cat(
+                [batch["prompt_attention_mask"], batch["prompt_attention_mask"]], dim=0
             )
-        if "image_sizes" in batch:
-            output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
+            if "pixel_values" in batch:
+                output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
 
-        # Concatenate the chosen and rejected completions
-        max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
-        output["completion_input_ids"] = torch.cat(
-            (
-                pad_to_length(batch["chosen_input_ids"], max_completion_length, pad_value=padding_value),
-                pad_to_length(batch["rejected_input_ids"], max_completion_length, pad_value=padding_value),
-            ),
-        )
-        output["completion_attention_mask"] = torch.cat(
-            (
-                pad_to_length(batch["chosen_attention_mask"], max_completion_length, pad_value=0),
-                pad_to_length(batch["rejected_attention_mask"], max_completion_length, pad_value=0),
-            ),
-        )
+            if "pixel_attention_mask" in batch:
+                output["pixel_attention_mask"] = torch.cat(
+                    [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
+                )
+            if "image_sizes" in batch:
+                output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
+
+            # Concatenate the chosen and rejected completions
+            max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
+            output["completion_input_ids"] = torch.cat(
+                (
+                    pad_to_length(batch["chosen_input_ids"], max_completion_length, pad_value=padding_value),
+                    pad_to_length(batch["rejected_input_ids"], max_completion_length, pad_value=padding_value),
+                ),
+            )
+            output["completion_attention_mask"] = torch.cat(
+                (
+                    pad_to_length(batch["chosen_attention_mask"], max_completion_length, pad_value=0),
+                    pad_to_length(batch["rejected_attention_mask"], max_completion_length, pad_value=0),
+                ),
+            )
 
         return output
 
@@ -1058,7 +1134,7 @@ class DPOTrainer(Trainer):
         """
         num_examples = batch["prompt_input_ids"].shape[0]
 
-        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
+        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value,padding_free=self.padding_free)
 
         model_kwargs = {}
         if self.aux_loss_enabled:
