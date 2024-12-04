@@ -29,7 +29,7 @@ from rich.markdown import Markdown
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
 from trl import TrlParser, init_zero_verbose
-from trl.commands.cli_utils import ChatArguments
+from trl.scripts.utils import ChatArguments
 from trl.trainer.utils import get_quantization_config
 
 
