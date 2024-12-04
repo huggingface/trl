@@ -128,12 +128,6 @@ class ChatArguments:
         default="cpu",
         metadata={"help": "device to use for inference."},
     )
-    config: str = field(
-        default="default",
-        metadata={
-            "help": "Config file used for setting the configs. If `default` uses examples/scripts/config/default_chat_config.yaml"
-        },
-    )
     examples: str = field(default=None, metadata={"help": "Empty placeholder needs to be set via config."})
     # generation settings
     max_new_tokens: int = field(default=256, metadata={"help": "Maximum number of tokens to generate"})
@@ -250,6 +244,8 @@ class TrlParser(HfArgumentParser):
         self._ignore_extra_args = ignore_extra_args
 
         # Check that none of the dataclasses have the "config" field
+        if not isinstance(dataclass_types, list):
+            dataclass_types = [dataclass_types]
         for dataclass_type in dataclass_types:
             if "config" in dataclass_type.__dataclass_fields__:
                 raise ValueError(
