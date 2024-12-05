@@ -24,7 +24,7 @@ class ScriptArguments:
     Args:
         dataset_name (`str`):
             Dataset name.
-        datast_config_name (`str`, *optional*, defaults to `None`):
+        datast_config_name (`str` or `None`, *optional*, defaults to `None`):
             Dataset configuration name.
         dataset_train_split (`str`, *optional*, defaults to `"train"`):
             Dataset split to use for training.
