@@ -20,6 +20,7 @@ from accelerate.commands.launch import launch_command, launch_command_parser
 
 from .scripts.dpo import make_parser as make_dpo_parser
 from .scripts.env import print_env
+from .scripts.sft import make_parser as make_sft_parser
 from .scripts.utils import TrlParser
 
 
@@ -32,6 +33,7 @@ def main():
     # Add the subparsers for every script
     make_dpo_parser(subparsers)
     subparsers.add_parser("env", help="Print the environment information")
+    make_sft_parser(subparsers)
 
     # Parse the arguments
     args = parser.parse_args()
@@ -47,6 +49,15 @@ def main():
 
     elif args.command == "env":
         print_env()
+
+    elif args.command == "sft":
+        # Get the default args for the launch command
+        sft_training_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "sft.py")
+        args = launch_command_parser().parse_args([sft_training_script])
+
+        # Feed the args to the launch command
+        args.training_script_args = sys.argv[2:]  # remove "trl" and "sft"
+        launch_command(args)  # launch training
 
 
 if __name__ == "__main__":
