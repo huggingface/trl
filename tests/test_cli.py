@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import tempfile
 import unittest
 from io import StringIO
@@ -20,6 +21,12 @@ from trl.cli import main
 
 
 class TestCLI(unittest.TestCase):
+    def test_dpo(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
+            command = f"trl dpo --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_preference --report_to none"
+            with patch("sys.argv", command.split(" ")):
+                main()
+
     @patch("sys.stdout", new_callable=StringIO)
     def test_env(self, mock_stdout):
         command = "trl env"
@@ -27,15 +34,15 @@ class TestCLI(unittest.TestCase):
             main()
         self.assertIn("TRL version: ", mock_stdout.getvalue().strip())
 
-    def test_sft(self):
+    def test_kto(self):
         with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
-            command = f"trl sft --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_language_modeling --report_to none"
+            command = f"trl kto --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_unpaired_preference --report_to none"
             with patch("sys.argv", command.split(" ")):
                 main()
 
-    def test_dpo(self):
+    def test_sft(self):
         with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
-            command = f"trl dpo --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_preference --report_to none"
+            command = f"trl sft --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_language_modeling --report_to none"
             with patch("sys.argv", command.split(" ")):
                 main()
 
