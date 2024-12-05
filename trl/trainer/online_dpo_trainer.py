@@ -59,6 +59,7 @@ from .utils import (
     empty_cache,
     generate_model_card,
     get_reward,
+    prepare_deepspeed,
     truncate_right,
 )
 
@@ -276,6 +277,22 @@ class OnlineDPOTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
         self._beta = args.beta
+
+        # Placed after the super().__init__ because we need self.is_deepspeed_enabled and self.accelerator
+        if self.is_deepspeed_enabled:
+            if self.reward_model is not None:
+                self.reward_model = prepare_deepspeed(
+                    self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
+            if self.ref_model is not None:
+                self.ref_model = prepare_deepspeed(
+                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
+        else:
+            if self.ref_model is not None:
+                self.ref_model = self.ref_model.to(self.accelerator.device)
+            if self.reward_model is not None:
+                self.reward_model = self.reward_model.to(self.accelerator.device)
 
         if self.ref_model is not None:
             self.ref_model = self.ref_model.to(self.accelerator.device)
