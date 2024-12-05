@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import subprocess
-import sys
 import unittest
 
 
 class CLITester(unittest.TestCase):
-    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
     def test_sft_cli(self):
         try:
             subprocess.run(
@@ -28,7 +26,6 @@ class CLITester(unittest.TestCase):
         except BaseException:
             self.fail("An error occurred while running the CLI, please double check")
 
-    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
     def test_dpo_cli(self):
         try:
             subprocess.run(
