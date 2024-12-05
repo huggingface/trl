@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import platform
 import subprocess
 
 from transformers.testing_utils import require_peft
@@ -33,6 +34,10 @@ python examples/scripts/ppo/ppo.py \
     --save_strategy no \
     --stop_token eos
 """
+    if platform.system() == "Windows":
+        # windows CI does not work with subprocesses for some reason
+        # e.g., https://github.com/huggingface/trl/actions/runs/9600036224/job/26475286210?pr=1743
+        return
     subprocess.run(
         command,
         shell=True,
@@ -57,6 +62,10 @@ python examples/scripts/ppo/ppo.py \
     --save_strategy no \
     --stop_token eos
 """
+    if platform.system() == "Windows":
+        # windows CI does not work with subprocesses for some reason
+        # e.g., https://github.com/huggingface/trl/actions/runs/9600036224/job/26475286210?pr=1743
+        return
     subprocess.run(
         command,
         shell=True,
@@ -84,6 +93,10 @@ python examples/scripts/ppo/ppo.py \
     --lora_alpha 16 \
     --lora_target_modules query_key_value dense
 """
+    if platform.system() == "Windows":
+        # windows CI does not work with subprocesses for some reason
+        # e.g., https://github.com/huggingface/trl/actions/runs/9600036224/job/26475286210?pr=1743
+        return
     subprocess.run(
         command,
         shell=True,
