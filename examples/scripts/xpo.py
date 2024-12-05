@@ -105,7 +105,7 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
-    dataset = load_dataset(script_args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config_name)
 
     trainer = XPOTrainer(
         model=model,

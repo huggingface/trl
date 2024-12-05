@@ -110,7 +110,7 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config_name)
 
     ##########
     # Training
