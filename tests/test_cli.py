@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import tempfile
 import unittest
 from io import StringIO
 from unittest.mock import patch
@@ -20,26 +21,23 @@ from trl.cli import main
 
 class TestCLI(unittest.TestCase):
     @patch("sys.stdout", new_callable=StringIO)
-    @patch("sys.argv", ["trl", "env"])
     def test_env(self, mock_stdout):
-        main()
+        command = "trl env"
+        with patch("sys.argv", command.split(" ")):
+            main()
         self.assertIn("TRL version: ", mock_stdout.getvalue().strip())
 
-    @patch(
-        "sys.argv",
-        [
-            "trl",
-            "dpo",
-            "--output_dir",
-            "output_dir",
-            "--model_name_or_path",
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            "--dataset_name trl-internal-testing/zen",
-            "--report_to none",
-        ],
-    )
+    def test_sft(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
+            command = f"trl sft --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_language_modeling --report_to none"
+            with patch("sys.argv", command.split(" ")):
+                main()
+
     def test_dpo(self):
-        main()
+        with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
+            command = f"trl dpo --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_preference --report_to none"
+            with patch("sys.argv", command.split(" ")):
+                main()
 
 
 if __name__ == "__main__":

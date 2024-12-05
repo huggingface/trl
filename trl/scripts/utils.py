@@ -191,7 +191,7 @@ class TrlParser(HfArgumentParser):
     configurations, while also supporting configuration file loading and environment variable management.
 
     Args:
-        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]`):
+        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]` or `None`, *optional*, defaults to `None`):
             Dataclass types to use for argument parsing.
         **kwargs:
             Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.
@@ -239,22 +239,26 @@ class TrlParser(HfArgumentParser):
     )
     def __init__(
         self,
-        dataclass_types: Union[DataClassType, Iterable[DataClassType]],
+        dataclass_types: Optional[Union[DataClassType, Iterable[DataClassType]]] = None,
         ignore_extra_args: Optional[bool] = None,
         **kwargs,
     ):
-        super().__init__(dataclass_types=dataclass_types, **kwargs)
-        self._ignore_extra_args = ignore_extra_args
+        # Make sure dataclass_types is an iterable
+        if dataclass_types is None:
+            dataclass_types = []
+        elif not isinstance(dataclass_types, Iterable):
+            dataclass_types = [dataclass_types]
 
         # Check that none of the dataclasses have the "config" field
-        if not isinstance(dataclass_types, list):
-            dataclass_types = [dataclass_types]
         for dataclass_type in dataclass_types:
             if "config" in dataclass_type.__dataclass_fields__:
                 raise ValueError(
                     f"Dataclass {dataclass_type.__name__} has a field named 'config'. This field is reserved for the "
                     f"config file path and should not be used in the dataclass."
                 )
+
+        super().__init__(dataclass_types=dataclass_types, **kwargs)
+        self._ignore_extra_args = ignore_extra_args
 
     def post_process_dataclasses(self, dataclasses):
         """

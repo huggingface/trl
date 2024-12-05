@@ -138,13 +138,11 @@ def main(script_args, training_args, model_config):
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
+    dataclass_types = (ScriptArguments, DPOConfig, ModelConfig)
     if subparsers is not None:
-        parser = subparsers.add_parser("dpo", help="Run the DPO training script")
+        parser = subparsers.add_parser("dpo", help="Run the DPO training script", dataclass_types=dataclass_types)
     else:
-        parser = parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
-
-    if subparsers is not None:
-        parser.set_defaults(func=main)
+        parser = TrlParser(dataclass_types)
     return parser
 
 

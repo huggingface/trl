@@ -20,13 +20,14 @@ from accelerate.commands.launch import launch_command, launch_command_parser
 
 from .scripts.dpo import make_parser as make_dpo_parser
 from .scripts.env import print_env
+from .scripts.utils import TrlParser
 
 
 def main():
-    parser = argparse.ArgumentParser("TRL CLI", usage="trl", allow_abbrev=False)
+    parser = argparse.ArgumentParser(prog="TRL CLI", usage="trl", allow_abbrev=False)
 
     # Add the subparsers
-    subparsers = parser.add_subparsers(help="available commands", dest="command")
+    subparsers = parser.add_subparsers(help="available commands", dest="command", parser_class=TrlParser)
 
     # Add the subparsers for every script
     make_dpo_parser(subparsers)
@@ -42,9 +43,7 @@ def main():
 
         # Feed the args to the launch command
         args.training_script_args = sys.argv[2:]  # remove "trl" and "dpo"
-
-        # Launch the training
-        launch_command(args)
+        launch_command(args)  # launch training
 
     elif args.command == "env":
         print_env()
