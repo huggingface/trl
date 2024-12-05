@@ -54,6 +54,7 @@ class ScriptArguments:
     """
 
     dataset_name: str
+    dataset_config_name: Optional[str] = None
     dataset_train_split: str = "train"
     dataset_test_split: str = "test"
     gradient_checkpointing_use_reentrant: bool = False
