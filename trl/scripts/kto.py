@@ -124,5 +124,5 @@ def make_parser(subparsers: argparse._SubParsersAction = None):
 
 if __name__ == "__main__":
     parser = make_parser()
-    script_args, training_args, model_config = parser.parse_args_and_config()
-    main(script_args, training_args, model_config)
+    script_args, training_args, model_args = parser.parse_args_and_config()
+    main(script_args, training_args, model_args)
