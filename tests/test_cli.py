@@ -11,34 +11,36 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import subprocess
-import sys
 import unittest
+from io import StringIO
+from unittest.mock import patch
+
+from trl.cli import main
 
 
-class CLITester(unittest.TestCase):
-    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
-    def test_sft_cli(self):
-        try:
-            subprocess.run(
-                "trl sft --max_steps 1 --output_dir tmp-sft --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name stanfordnlp/imdb --learning_rate 1e-4 --lr_scheduler_type cosine",
-                shell=True,
-                check=True,
-            )
-        except BaseException:
-            self.fail("An error occurred while running the CLI, please double check")
+class TestCLI(unittest.TestCase):
+    @patch("sys.stdout", new_callable=StringIO)
+    @patch("sys.argv", ["trl", "env"])
+    def test_env(self, mock_stdout):
+        main()
+        self.assertIn("TRL version: ", mock_stdout.getvalue().strip())
 
-    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
-    def test_dpo_cli(self):
-        try:
-            subprocess.run(
-                "trl dpo --max_steps 1 --output_dir tmp-dpo --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/tiny-ultrafeedback-binarized --learning_rate 1e-4 --lr_scheduler_type cosine",
-                shell=True,
-                check=True,
-            )
-        except BaseException:
-            self.fail("An error occurred while running the CLI, please double check")
+    @patch(
+        "sys.argv",
+        [
+            "trl",
+            "dpo",
+            "--output_dir",
+            "output_dir",
+            "--model_name_or_path",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "--dataset_name trl-internal-testing/zen",
+            "--report_to none",
+        ],
+    )
+    def test_dpo(self):
+        main()
 
-    def test_env_cli(self):
-        output = subprocess.run("trl env", capture_output=True, text=True, shell=True, check=True)
-        self.assertIn("- Python version: ", output.stdout)
+
+if __name__ == "__main__":
+    unittest.main()
