@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import argparse
 import os
 import sys
 
 from accelerate.commands.launch import launch_command, launch_command_parser
 
+from .scripts.chat import main as chat_main
+from .scripts.chat import make_parser as make_chat_parser
 from .scripts.dpo import make_parser as make_dpo_parser
 from .scripts.env import print_env
 from .scripts.sft import make_parser as make_sft_parser
@@ -25,18 +26,23 @@ from .scripts.utils import TrlParser
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="TRL CLI", usage="trl", allow_abbrev=False)
+    parser = TrlParser(prog="TRL CLI", usage="trl", allow_abbrev=False)
 
     # Add the subparsers
     subparsers = parser.add_subparsers(help="available commands", dest="command", parser_class=TrlParser)
 
     # Add the subparsers for every script
+    make_chat_parser(subparsers)
     make_dpo_parser(subparsers)
     subparsers.add_parser("env", help="Print the environment information")
     make_sft_parser(subparsers)
 
     # Parse the arguments
     args = parser.parse_args()
+
+    if args.command == "chat":
+        (chat_args,) = parser.parse_args_and_config()
+        chat_main(chat_args)
 
     if args.command == "dpo":
         # Get the default args for the launch command
