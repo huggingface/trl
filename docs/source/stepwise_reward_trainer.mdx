@@ -1,0 +1,85 @@
+# Stepwise Reward Modeling
+
+## Overview
+
+Stepwise or process reward models were proposed in [Solving math word problems with process- and outcome-based feedback](https://huggingface.co/papers/2211.14275) by Jonathan Uesato, Nate Kushman, Ramana Kumar, Francis Song, Noah Siegel, Lisa Wang, Antonia Creswell, Geoffrey Irving, and Irina Higgins.
+
+The abstract from the paper is the following:
+
+> Recent work has shown that asking language models to generate reasoning steps improves performance on many reasoning tasks. When moving beyond prompting, this raises the question of how we should supervise such models: outcome-based approaches which supervise the final result, or process-based approaches which supervise the reasoning process itself? Differences between these approaches might naturally be expected not just in final-answer errors but also in reasoning errors, which can be difficult to detect and are problematic in many real-world domains such as education. We run the first comprehensive comparison between process- and outcome-based approaches trained on a natural language task, GSM8K. We find that pure outcome-based supervision produces similar final-answer error rates with less label supervision. However, for correct reasoning steps we find it necessary to use processbased supervision or supervision from learned reward models that emulate process-based feedback. In total, we improve the previous best results from 16.8% → 12.7% final-answer error and 14.0% → 3.4% reasoning error among final-answer-correct solutions.
+
+This post-training method was contributed by [Gaetan Lopez](https://github.com/gaetanlop), [Lewis Tunstall](https://huggingface.co/lewtun) and [Quentin Gallouédec](https://huggingface.co/qgallouedec)
+
+## Usage tips  
+
+The [`StepwiseRewardTrainer`] is a wrapper around the [`Trainer`] class. It needs two parameters to be set via the [`StepwiseRewardConfig`], namely:
+* `max_length`: controls the maximum length of the sequences, where a sequence is composed of the prompt and the concatenation of each completion step.
+* `step_separator`: indicates the separator used to separate each step of the reasoning process. By default, it is set to `"\n"`.
+
+The basic API is as follows:
+
+```python
+from datasets import Dataset
+from transformers import AutoModelForTokenClassification, AutoTokenizer
+from trl import StepwiseRewardTrainer, StepwiseRewardConfig
+
+
+NUM_DUMMY_SAMPLES = 100
+
+model = AutoModelForTokenClassification.from_pretrained("Qwen/Qwen2-0.5B-Instruct", num_labels=2)
+
+train_dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            "Which number has a larger absolute value, -13.1 or 7.0?",
+        ],
+        "completions": [
+            ["The absolute value of -13.1 is 13.1.","The absolute value of 7.0 is 7.0", "7.0 is larger than 13.1.", "Hence, in absolute value, 7.0 is larger than -13.1."]
+        ]
+        "labels": [
+            [True, True, False, False]
+        ]
+        * NUM_DUMMY_SAMPLES
+    }
+)
+eval_dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            "Is 19 divisible by 6?",
+        ],
+        "completion": [
+            ["Dividing 19 by 6 gives a remainder of 1.", "A number is divisible by another number if the division results in no remainder.", "Hence, 19 is not divisible by 6."]
+        ]
+        "labels": [
+            [True, True, True]
+        ]
+        * NUM_DUMMY_SAMPLES
+    }
+)
+
+config = StepwiseRewardConfig(output_dir="stepwise-reward-model", per_device_train_batch_size=1, max_length=512, step_separator="\n")
+trainer = StepwiseRewardTrainer(
+    model=model,
+    args=training_args,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+## Expected dataset format
+
+The dataset should be formatted as a [Stepwise Supervision](dataset_formats#stepwise-supervision) dataset, which implies that it should contain the following columns: `prompt`, `completions` and `labels`, where `completions` contains a list of reasoning steps and `labels` a list of booleans or floats indicating the correctness of each step.
+
+The [`StepwiseRewardTrainer`] only supports [standard](dataset_formats#standard) dataset format.
+
+You can also use a pretokenized dataset, in which case the dataset should contain the following columns: `input_ids`, `attention_mask` and `labels`.
+
+## StepwiseRewardTrainer
+
+[[autodoc]] StepwiseRewardTrainer
+
+## StepwiseRewardConfig
+
+[[autodoc]] StepwiseRewardConfig

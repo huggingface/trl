@@ -68,6 +68,8 @@ _import_structure = {
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
+    "stepwise_reward_config": ["StepwiseRewardConfig"],
+    "stepwise_reward_trainer": ["StepwiseRewardTrainer"],
     "utils": [
         "AdaptiveKLController",
         "ConstantLengthDataset",
@@ -136,6 +138,8 @@ if TYPE_CHECKING:
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
+    from .stepwise_reward_config import StepwiseRewardConfig
+    from .stepwise_reward_trainer import StepwiseRewardTrainer
     from .utils import (
         AdaptiveKLController,
         ConstantLengthDataset,
