@@ -18,7 +18,6 @@ import copy
 import json
 import os
 import platform
-import pwd
 import re
 import time
 from dataclasses import dataclass, field
