@@ -60,7 +60,8 @@ if is_wandb_available():
 
 
 def _build_prompt_tokens(prompt, tokenizer):
-    tokenized_prompt = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=True)
+    # Remove chat template application since it's already been applied
+    tokenized_prompt = tokenizer(prompt, return_tensors=None)["input_ids"]
     return tokenized_prompt, [-100] * len(tokenized_prompt)
 
 
@@ -75,7 +76,8 @@ def _build_response_tokens(response, tokenizer, keep_targets=False):
     Returns:
         tuple: (tokenized_response, response_labels)
     """
-    tokenized_response = tokenizer.apply_chat_template([{"role": "assistant", "content": response}], tokenize=True)
+    # Remove chat template application since it's already been applied
+    tokenized_response = tokenizer(response, return_tensors=None)["input_ids"]
 
     # Remove BOS token if present
     if tokenized_response[0] == tokenizer.bos_token_id:

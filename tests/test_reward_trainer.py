@@ -295,43 +295,42 @@ class RewardTrainerTester(unittest.TestCase):
             ).mean()
             self.assertGreater(loss, reward_loss)  # Total loss should be larger due to LM component
 
+    def test_train_with_feedback_pretokenized(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Create a dummy dataset with feedback and pre-tokenize it
+            dummy_dataset_dict = {
+                "prompt": ["What is 2+2?", "How are you?"],
+                "chosen": ["The answer is 4.", "I'm doing great!"],
+                "rejected": ["The answer is 5.", "Not so good."],
+                "chosen_feedback": [["Good explanation", "Clear answer"], ["Nice response", "Polite"]],
+                "rejected_feedback": [["Wrong answer", "Incorrect"], ["Too negative", "Unhelpful"]],
+            }
+            dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
 
-def test_train_with_feedback_pretokenized(self):
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        # Create a dummy dataset with feedback and pre-tokenize it
-        dummy_dataset_dict = {
-            "prompt": ["What is 2+2?", "How are you?"],
-            "chosen": ["The answer is 4.", "I'm doing great!"],
-            "rejected": ["The answer is 5.", "Not so good."],
-            "chosen_feedback": [["Good explanation", "Clear answer"], ["Nice response", "Polite"]],
-            "rejected_feedback": [["Wrong answer", "Incorrect"], ["Too negative", "Unhelpful"]],
-        }
-        dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
+            # Pre-tokenize the dataset
+            dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
+            dummy_dataset = dummy_dataset.map(
+                _tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer, "feedback_method": "teacher"}
+            )
+            # Configure training arguments
+            training_args = RewardConfig(
+                output_dir=tmp_dir, max_steps=3, report_to="none", feedback_method="teacher", lm_weight=1.0
+            )
 
-        # Pre-tokenize the dataset
-        dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
-        dummy_dataset = dummy_dataset.map(
-            _tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer, "feedback_method": "teacher"}
-        )
-        # Configure training arguments
-        training_args = RewardConfig(
-            output_dir=tmp_dir, max_steps=3, report_to="none", feedback_method="teacher", lm_weight=1.0
-        )
+            # Initialize and train
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
+            trainer = RewardTrainer(
+                model=model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            )
 
-        # Initialize and train
-        model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        trainer = RewardTrainer(
-            model=model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
-        )
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
 
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-        trainer.train()
+            # Verify training occurred
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-        # Verify training occurred
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        # Check parameters changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if param.sum() != 0:
-                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+            # Check parameters changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
