@@ -70,6 +70,10 @@ class CLoudRewardModel(PreTrainedModel):
     def forward(self, input_ids, attention_mask, **kwargs):
         batch_size, _ = input_ids.shape
 
+        # Remove duplicate kwargs if they exist
+        kwargs.pop("output_hidden_states", None)
+        kwargs.pop("return_dict", None)
+
         outputs = self.reward_base_model(
             input_ids, attention_mask, output_hidden_states=True, return_dict=True, **kwargs
         )

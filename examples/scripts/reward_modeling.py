@@ -76,7 +76,7 @@ python examples/scripts/reward_modeling.py \
     --lora_r 32 \
     --lora_alpha 16 \
     --feedback_method teacher \
-    --lm_weight 1.25 
+    --lm_weight 1.25
 """
 
 import warnings

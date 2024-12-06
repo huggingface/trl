@@ -40,7 +40,7 @@ class RewardConfig(TrainingArguments):
             Whether or not to remove the columns that are not used by the model's forward pass. Can be `True` only if
             the dataset is pretokenized.
         feedback_method (`str`, *optional*, defaults to `None`):
-            Feedback method to use for the reward model. Options are `vanilla` or `teacher`. When using `teacher`, the model is 
+            Feedback method to use for the reward model. Options are `vanilla` or `teacher`. When using `teacher`, the model is
             trained to both produce explicit reasoning about quality and to score based on these critique reasoning traces.
         lm_weight (`float`, *optional*, defaults to `1.25`):
             Weight for the language model loss when feedback method is `teacher`.

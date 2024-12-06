@@ -59,43 +59,111 @@ if is_wandb_available():
     import wandb
 
 
+def _build_prompt_tokens(prompt, tokenizer):
+    tokenized_prompt = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=True)
+    return tokenized_prompt, [-100] * len(tokenized_prompt)
+
+
+def _build_response_tokens(response, tokenizer, keep_targets=False):
+    """Build tokens for a response.
+
+    Args:
+        response (str): The response text
+        tokenizer: The tokenizer to use
+        keep_targets (bool): Whether to keep the response tokens as targets for language modeling
+
+    Returns:
+        tuple: (tokenized_response, response_labels)
+    """
+    tokenized_response = tokenizer.apply_chat_template([{"role": "assistant", "content": response}], tokenize=True)
+
+    # Remove BOS token if present
+    if tokenized_response[0] == tokenizer.bos_token_id:
+        tokenized_response = tokenized_response[1:]
+
+    if keep_targets:
+        # For teacher forcing, use the tokens themselves as targets (shifted right by 1)
+        # Add -100 as final target since there's nothing to predict after the last token
+        return tokenized_response, tokenized_response[1:] + [-100]
+    else:
+        # For regular training, don't use response tokens as targets
+        return tokenized_response, [-100] * len(tokenized_response)
+
+
 def _tokenize(
-    batch: dict[str, list[Any]], tokenizer: "PreTrainedTokenizerBase", feedback_method: str
+    batch: dict[str, list[Any]], tokenizer: "PreTrainedTokenizerBase", feedback_method: Optional[str] = None
 ) -> dict[str, list[Any]]:
-    """Tokenize a batch from a reward modelling dataset."""
+    """Tokenize a batch from a reward modelling dataset.
+
+    Args:
+        batch: Dictionary containing either just 'chosen'/'rejected' or 'prompt'/'chosen'/'rejected'
+        tokenizer: The tokenizer to use
+        feedback_method: The feedback method being used (teacher, vanilla, etc.)
+    """
+    # Original implementation when feedback_method is None
+    if feedback_method is None:
+        new_examples = {
+            "input_ids_chosen": [],
+            "attention_mask_chosen": [],
+            "input_ids_rejected": [],
+            "attention_mask_rejected": [],
+        }
+        for chosen, rejected in zip(batch["chosen"], batch["rejected"]):
+            tokenized_chosen = tokenizer(chosen)
+            tokenized_rejected = tokenizer(rejected)
+            new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
+            new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
+            new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
+            new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
+        return new_examples
+
+    # New implementation for feedback methods
     new_examples = {
         "input_ids_chosen": [],
         "attention_mask_chosen": [],
         "input_ids_rejected": [],
         "attention_mask_rejected": [],
     }
-    for chosen, rejected in zip(batch["chosen"], batch["rejected"]):
-        tokenized_chosen = tokenizer(chosen)
-        tokenized_rejected = tokenizer(rejected)
-        new_examples["input_ids_chosen"].append(tokenized_chosen["input_ids"])
-        new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
-        new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
-        new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
 
-        # Add feedback tokenization for CLoud teacher forcing
+    if feedback_method == "teacher":
+        new_examples.update(
+            {
+                "chosen_lm_labels": [],
+                "rejected_lm_labels": [],
+            }
+        )
+
+    for prompt, chosen, rejected in zip(batch["prompt"], batch["chosen"], batch["rejected"]):
+        # Build prompt tokens
+        prompt_tokens, prompt_labels = _build_prompt_tokens(prompt, tokenizer)
+
+        # Build response tokens
+        keep_targets = feedback_method == "teacher"
+        chosen_response_tokens, chosen_response_labels = _build_response_tokens(
+            chosen, tokenizer, keep_targets=keep_targets
+        )
+        rejected_response_tokens, rejected_response_labels = _build_response_tokens(
+            rejected, tokenizer, keep_targets=keep_targets
+        )
+
+        # Combine prompt + response tokens
+        chosen_tokens = prompt_tokens + chosen_response_tokens
+        rejected_tokens = prompt_tokens + rejected_response_tokens
+
+        # Create attention masks
+        chosen_mask = [1] * len(chosen_tokens)
+        rejected_mask = [1] * len(rejected_tokens)
+
+        new_examples["input_ids_chosen"].append(chosen_tokens)
+        new_examples["attention_mask_chosen"].append(chosen_mask)
+        new_examples["input_ids_rejected"].append(rejected_tokens)
+        new_examples["attention_mask_rejected"].append(rejected_mask)
+
         if feedback_method == "teacher":
-            if "chosen_feedback" in batch and "rejected_feedback" in batch:
-                chosen_feedback = (
-                    batch["chosen_feedback"][0]
-                    if isinstance(batch["chosen_feedback"][0], list)
-                    else batch["chosen_feedback"]
-                )
-                rejected_feedback = (
-                    batch["rejected_feedback"][0]
-                    if isinstance(batch["rejected_feedback"][0], list)
-                    else batch["rejected_feedback"]
-                )
-
-                tokenized_chosen_feedback = tokenizer(chosen_feedback)
-                tokenized_rejected_feedback = tokenizer(rejected_feedback)
-
-                new_examples["chosen_lm_labels"].append(tokenized_chosen_feedback["input_ids"])
-                new_examples["rejected_lm_labels"].append(tokenized_rejected_feedback["input_ids"])
+            chosen_labels = prompt_labels + chosen_response_labels
+            rejected_labels = prompt_labels + rejected_response_labels
+            new_examples["chosen_lm_labels"].append(chosen_labels)
+            new_examples["rejected_lm_labels"].append(rejected_labels)
 
     return new_examples
 
@@ -266,13 +334,12 @@ class RewardTrainer(Trainer):
         self.feedback_method = args.feedback_method
         if self.feedback_method is not None:
             self.lm_loss = nn.CrossEntropyLoss(ignore_index=-100)
-            if model is None and args.model_name_or_path is not None:
-                model = CLoudRewardModel(
-                    CLoudRewardModelConfig(
-                        base_model_name_or_path=args.model_name_or_path,
-                        feedback_method=self.feedback_method,
-                    )
-                )
+            model = CLoudRewardModel(
+                CLoudRewardModelConfig(
+                    feedback_method=self.feedback_method,
+                ),
+                pretrained_reward_base_model=model,
+            )
 
         super().__init__(
             model=model,
@@ -292,28 +359,24 @@ class RewardTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-    def compute_loss(
-        self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]],
-        return_outputs=False,
-        num_items_in_batch=None,
-    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Get outputs for chosen and rejected responses
         chosen_outputs = model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
+            output_hidden_states=True,
             return_dict=True,
         )
         rejected_outputs = model(
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
+            output_hidden_states=True,
             return_dict=True,
         )
 
         # The reward scores come from the reward head
-        rewards_chosen = chosen_outputs["logits"]  # This is the reward score
-        rewards_rejected = rejected_outputs["logits"]  # This is the reward score
+        rewards_chosen = chosen_outputs["logits"]
+        rewards_rejected = rejected_outputs["logits"]
 
         # Calculate reward loss
         if "margin" in inputs:
@@ -326,27 +389,42 @@ class RewardTrainer(Trainer):
 
         # Add language modeling loss for teacher forcing
         if self.feedback_method == "teacher":
-            # The language model logits come from the base model
+            # Get the hidden states from the base model outputs
+            chosen_hidden_states = chosen_outputs["hidden_states"][-1]
+            rejected_hidden_states = rejected_outputs["hidden_states"][-1]
+
+            # Project hidden states to vocabulary space using the base model's lm_head
+            chosen_lm_logits = model.reward_base_model.lm_head(chosen_hidden_states)
+            rejected_lm_logits = model.reward_base_model.lm_head(rejected_hidden_states)
+
+            # Make sure to use the correct labels from inputs
             chosen_lm_loss = self.lm_loss(
-                chosen_outputs["lm_logits"].view(-1, model.reward_base_model.config.vocab_size),
-                inputs.get("chosen_lm_labels", inputs["input_ids_chosen"]).view(-1),
+                chosen_lm_logits.view(-1, chosen_lm_logits.size(-1)),
+                inputs["chosen_lm_labels"].view(-1),
             )
             rejected_lm_loss = self.lm_loss(
-                rejected_outputs["lm_logits"].view(-1, model.reward_base_model.config.vocab_size),
-                inputs.get("rejected_lm_labels", inputs["input_ids_rejected"]).view(-1),
+                rejected_lm_logits.view(-1, rejected_lm_logits.size(-1)),
+                inputs["rejected_lm_labels"].view(-1),
             )
+
             lm_loss = (chosen_lm_loss + rejected_lm_loss) / 2
             loss = reward_loss + self.args.lm_weight * lm_loss
         else:
             loss = reward_loss
 
         if return_outputs:
-            return loss, {
+            outputs_dict = {
                 "rewards_chosen": rewards_chosen,
                 "rewards_rejected": rewards_rejected,
-                "chosen_logits": chosen_outputs["lm_logits"] if self.feedback_method == "teacher" else None,
-                "rejected_logits": rejected_outputs["lm_logits"] if self.feedback_method == "teacher" else None,
             }
+            if self.feedback_method == "teacher":
+                outputs_dict.update(
+                    {
+                        "chosen_logits": chosen_lm_logits,
+                        "rejected_logits": rejected_lm_logits,
+                    }
+                )
+            return loss, outputs_dict
         return loss
 
     def prediction_step(

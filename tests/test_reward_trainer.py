@@ -16,7 +16,7 @@ import unittest
 
 import torch
 from datasets import Dataset, load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
@@ -240,3 +240,98 @@ class RewardTrainerTester(unittest.TestCase):
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             self.assertEqual(trainer.model.model_tags, trainer._tag_names)
+
+    def test_train_with_feedback(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Create a dummy dataset with feedback
+            dummy_dataset_dict = {
+                "prompt": ["What is 2+2?", "How are you?"],
+                "chosen": ["The answer is 4.", "I'm doing great!"],
+                "rejected": ["The answer is 5.", "Not so good."],
+                "chosen_feedback": [["Good explanation", "Clear answer"], ["Nice response", "Polite"]],
+                "rejected_feedback": [["Wrong answer", "Incorrect"], ["Too negative", "Unhelpful"]],
+            }
+            dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
+
+            # Configure training arguments with feedback
+            training_args = RewardConfig(
+                output_dir=tmp_dir, max_steps=3, report_to="none", feedback_method="teacher", lm_weight=1.0
+            )
+
+            # Initialize trainer with feedback
+            model = AutoModelForCausalLM.from_pretrained(self.model_id)
+            trainer = RewardTrainer(
+                model=model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+            )
+
+            # Store initial parameters
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Verify training occurred
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that parameters changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:  # Ignore zero-initialized parameters
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+
+            # Test compute_loss with feedback
+            batch = next(iter(trainer.get_train_dataloader()))
+            loss, outputs = trainer.compute_loss(trainer.model, batch, return_outputs=True)
+
+            # Verify outputs contain both reward and language model logits
+            self.assertIn("rewards_chosen", outputs)
+            self.assertIn("rewards_rejected", outputs)
+            self.assertIsNotNone(outputs["chosen_logits"])
+            self.assertIsNotNone(outputs["rejected_logits"])
+
+            # Verify loss is computed correctly (includes both reward and LM components)
+            reward_loss = -torch.nn.functional.logsigmoid(
+                outputs["rewards_chosen"] - outputs["rewards_rejected"]
+            ).mean()
+            self.assertGreater(loss, reward_loss)  # Total loss should be larger due to LM component
+
+
+def test_train_with_feedback_pretokenized(self):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # Create a dummy dataset with feedback and pre-tokenize it
+        dummy_dataset_dict = {
+            "prompt": ["What is 2+2?", "How are you?"],
+            "chosen": ["The answer is 4.", "I'm doing great!"],
+            "rejected": ["The answer is 5.", "Not so good."],
+            "chosen_feedback": [["Good explanation", "Clear answer"], ["Nice response", "Polite"]],
+            "rejected_feedback": [["Wrong answer", "Incorrect"], ["Too negative", "Unhelpful"]],
+        }
+        dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
+
+        # Pre-tokenize the dataset
+        dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
+        dummy_dataset = dummy_dataset.map(
+            _tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer, "feedback_method": "teacher"}
+        )
+        # Configure training arguments
+        training_args = RewardConfig(
+            output_dir=tmp_dir, max_steps=3, report_to="none", feedback_method="teacher", lm_weight=1.0
+        )
+
+        # Initialize and train
+        model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        trainer = RewardTrainer(
+            model=model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+
+        # Verify training occurred
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check parameters changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
