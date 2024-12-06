@@ -42,6 +42,41 @@ python examples/scripts/reward_modeling.py \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16
+
+CLoud full training:
+python examples/scripts/reward_modeling.py \
+    --model_name_or_path meta-llama/Meta-Llama-3-8B \
+    --dataset_name ankner/Llama3-8b-ultra-self-gen-8b \
+    --output_dir Meta-Llama-3-8B-CLoud \
+    --per_device_train_batch_size 8 \
+    --num_train_epochs 1 \
+    --gradient_checkpointing True \
+    --learning_rate 1.0e-5 \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --max_length 2048 \
+    --feedback_method teacher \
+    --lm_weight 1.25
+
+CLoud LoRA:
+python examples/scripts/reward_modeling.py \
+    --model_name_or_path meta-llama/Meta-Llama-3-8B \
+    --dataset_name ankner/Llama3-8b-ultra-self-gen-8b \
+    --output_dir Meta-Llama-3-8B-CLoud-LoRA \
+    --per_device_train_batch_size 8 \
+    --num_train_epochs 1 \
+    --gradient_checkpointing True \
+    --learning_rate 1.0e-4 \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --max_length 2048 \
+    --use_peft \
+    --lora_r 32 \
+    --lora_alpha 16 \
+    --feedback_method teacher \
+    --lm_weight 1.25 
 """
 
 import warnings
