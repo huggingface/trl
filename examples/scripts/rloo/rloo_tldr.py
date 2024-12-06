@@ -65,7 +65,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, RLOOConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(training_args.output_dir, ignore_errors=True)
 
@@ -73,21 +73,21 @@ if __name__ == "__main__":
     # Model & Tokenizer
     ################
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path,
+        model_args.model_name_or_path,
         padding_side="left",
-        trust_remote_code=model_config.trust_remote_code,
+        trust_remote_code=model_args.trust_remote_code,
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
+        training_args.reward_model_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
     )
     ref_policy = AutoModelForCausalLM.from_pretrained(
-        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code
+        training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
     )
     policy = AutoModelForCausalLM.from_pretrained(
-        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code
+        training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
     )
     ################
     # Dataset
