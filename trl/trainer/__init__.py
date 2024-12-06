@@ -68,6 +68,8 @@ _import_structure = {
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
+    "srpo_config": ["SRPOConfig"],
+    "srpo_trainer": ["SRPOTrainer"],
     "utils": [
         "AdaptiveKLController",
         "ConstantLengthDataset",
@@ -106,8 +108,6 @@ if TYPE_CHECKING:
     from .ddpo_config import DDPOConfig
     from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
     from .dpo_trainer import DPOTrainer
-    from .gkd_config import GKDConfig
-    from .gkd_trainer import GKDTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .judges import (
         AllTrueJudge,
@@ -136,6 +136,8 @@ if TYPE_CHECKING:
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
+    from .srpo_config import SRPOConfig
+    from .srpo_trainer import SRPOTrainer
     from .utils import (
         AdaptiveKLController,
         ConstantLengthDataset,
