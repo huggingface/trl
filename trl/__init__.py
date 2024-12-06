@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.12.1"
+__version__ = "0.12.2"
 
 from typing import TYPE_CHECKING
 
