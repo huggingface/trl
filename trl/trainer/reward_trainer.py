@@ -59,7 +59,9 @@ if is_wandb_available():
     import wandb
 
 
-def _tokenize(batch: dict[str, list[Any]], tokenizer: "PreTrainedTokenizerBase") -> dict[str, list[Any]]:
+def _tokenize(
+    batch: dict[str, list[Any]], tokenizer: "PreTrainedTokenizerBase", feedback_method: str
+) -> dict[str, list[Any]]:
     """Tokenize a batch from a reward modelling dataset."""
     new_examples = {
         "input_ids_chosen": [],
@@ -74,6 +76,26 @@ def _tokenize(batch: dict[str, list[Any]], tokenizer: "PreTrainedTokenizerBase")
         new_examples["attention_mask_chosen"].append(tokenized_chosen["attention_mask"])
         new_examples["input_ids_rejected"].append(tokenized_rejected["input_ids"])
         new_examples["attention_mask_rejected"].append(tokenized_rejected["attention_mask"])
+
+        # Add feedback tokenization for CLoud teacher forcing
+        if feedback_method == "teacher":
+            if "chosen_feedback" in batch and "rejected_feedback" in batch:
+                chosen_feedback = (
+                    batch["chosen_feedback"][0]
+                    if isinstance(batch["chosen_feedback"][0], list)
+                    else batch["chosen_feedback"]
+                )
+                rejected_feedback = (
+                    batch["rejected_feedback"][0]
+                    if isinstance(batch["rejected_feedback"][0], list)
+                    else batch["rejected_feedback"]
+                )
+
+                tokenized_chosen_feedback = tokenizer(chosen_feedback)
+                tokenized_rejected_feedback = tokenizer(rejected_feedback)
+
+                new_examples["chosen_lm_labels"].append(tokenized_chosen_feedback["input_ids"])
+                new_examples["rejected_lm_labels"].append(tokenized_rejected_feedback["input_ids"])
 
     return new_examples
 
@@ -207,7 +229,7 @@ class RewardTrainer(Trainer):
 
         if "input_ids_chosen" not in train_dataset.column_names:
             with PartialState().local_main_process_first():
-                fn_kwargs = {"tokenizer": processing_class}
+                fn_kwargs = {"tokenizer": processing_class, "feedback_method": args.feedback_method}
                 train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class})
                 train_dataset = train_dataset.map(
                     _tokenize,
