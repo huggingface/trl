@@ -49,6 +49,8 @@ _import_structure = {
     "trainer": [
         "AlignPropConfig",
         "AlignPropTrainer",
+        "AsyncOnlineDPOConfig",
+        "AsyncOnlineDPOTrainer",
         "AllTrueJudge",
         "BaseBinaryJudge",
         "BaseJudge",
@@ -139,6 +141,8 @@ if TYPE_CHECKING:
     from .trainer import (
         AlignPropConfig,
         AlignPropTrainer,
+        AsyncOnlineDPOConfig,
+        AsyncOnlineDPOTrainer,
         AllTrueJudge,
         BaseBinaryJudge,
         BaseJudge,
