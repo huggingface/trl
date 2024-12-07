@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,15 +14,15 @@
 
 from typing import TYPE_CHECKING
 
-from ..import_utils import OptionalDependencyNotAvailable, _LazyModule
+from ..import_utils import _LazyModule
 
 
 _import_structure = {
-    "cli_utils": ["DPOScriptArguments", "SFTScriptArguments", "TrlParser", "YamlConfigParser", "init_zero_verbose"],
+    "utils": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
 }
 
 if TYPE_CHECKING:
-    from .cli_utils import DPOScriptArguments, SFTScriptArguments, TrlParser, YamlConfigParser, init_zero_verbose
+    from .utils import ScriptArguments, TrlParser, init_zero_verbose
 else:
     import sys
 
