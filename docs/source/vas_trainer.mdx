@@ -1,0 +1,110 @@
+# VAS Trainer
+
+[![](https://img.shields.io/badge/All_models-VAS-blue)](https://huggingface.co/models?other=vas,trl)
+
+## Overview
+value Augmented Sampling (VAS) is an inference-time algorithm, introduced in the paper [Value Augmented Sampling for Language Model Alignment and Personalization](https://arxiv.org/abs/2405.06639) by [Seungwook Han](https://huggingface.co/hanseungwook), Idan Shenfeld, Akash Srivastava, Yoon Kim, and Pulkit Agrawal. At a high level, VAS is a method to improve the quality of language model generations by leveraging a value model to guide the sampling process. The value model is trained to predict the quality of the generated text, and the sampling process is modified to prefer samples that are predicted to be of higher quality.
+
+This approach allows VAS to optimize for arbitrary reward functions without requiring modifications to the language model's weights. This is in contrast to traditional reinforcement learning methods, which require training the language model with a reward function as part of the training process.
+
+## Quick start
+
+This example demonstrates how to train a model using the online DPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model and as a [reward](https://huggingface.co/trl-lib/Qwen2-0.5B-Reward). We use the prompts from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the prompts in the dataset here:
+
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
+
+Below is the script to train the model:
+
+```python
+# train_vas.py
+from datasets import load_dataset
+from trl import CPOConfig, CPOTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForSequenceClassification
+
+ref_policy = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+value_model = AutoModelForSequenceClassification.from_pretrained("Qwen/Qwen2-0.5B-Instruct", num_labels=1)
+reward_model = AutoModelForSequenceClassification.from_pretrained("trl-lib/Qwen2-0.5B-Reward", num_labels=1)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+
+train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+train_dataset = train_dataset.map(
+    lambda x: {"input_ids": tokenizer(x["prompt"][0]["content"]).input_ids},
+    remove_columns=train_dataset.column_names,
+)
+
+training_args = VASConfig(output_dir="Qwen2-0.5B-VAS", logging_steps=10)
+trainer = VASTrainer(ref_policy=ref_policy, value_model=value_model, reward_model=reward_model, config=training_args, processing_class=tokenizer, train_dataset=train_dataset)
+trainer.train()
+```
+
+Execute the script using the following command:
+
+```bash
+accelerate launch train_vas.py
+```
+
+## Expected dataset type
+
+VAS requires a [prompt-only dataset](dataset_formats#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+
+## Usage tips
+
+<Tip warning={true}>
+
+Make sure that the reference policy, value model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
+
+</Tip>
+
+### Encourage EOS token generation
+
+We may want the model to generate completions within a given length. During training, the model will generate completions up to the maximum length specified in the `max_new_tokens` argument of [`VASConfig`]. If you want to penalize the model for not generating an EOS token before reaching the maximum length, you can use the `missing_eos_penalty` argument of [`VASConfig`]:
+
+```python
+training_args = VASConfig(..., max_new_tokens=128, missing_eos_penalty=1.0)
+```
+
+### Logging Completions
+
+To better understand your model’s behavior during training, you can log sample completions periodically using the [`num_sample_generations`] argument of [`VASConfig`]. Notice that generations at the beginning of the training will appear much worse than those of the reference policy, as the value function is initialized randomly.
+
+## Example script
+
+We provide an example script to train a model using the VAS method. The script is available in [`examples/scripts/vas.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/vas.py).
+
+To test the VAS script with the [Pythia 1B model](https://huggingface.co/EleutherAI/pythia-1b-deduped) on the [TL;DR dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized), run the following command:
+
+```bash
+accelerate launch examples/scripts/vas.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --output_dir models/minimal/vas_tldr \
+    --total_episodes 1000 \
+    --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
+    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
+    --response_length 256 \
+    --stop_token eos
+```
+
+## Logged metrics
+
+While training and evaluating we record the following reward metrics:
+
+* `objective/scores`: The mean scores returned by the reward model.
+* `loss/value_loss`: The average loss, indicating the difference between the predicted value and the actual reward.
+* `train/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
+* `train/lr`: The current learning rate used by the optimizer.
+* `train/episode`: The current global step or episode count in the training process.
+* `train/eps`: Tracks the number of episodes per second.
+
+## VASTrainer
+
+[[autodoc]] VASTrainer
+
+## VASConfig
+
+[[autodoc]] VASConfig
