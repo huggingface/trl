@@ -51,7 +51,6 @@ from transformers.utils import (
 from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
-
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
 
@@ -274,7 +273,7 @@ class DataCollatorForChatML:
             if "input_ids" not in example:
                 message = example[self.messages_key]
                 formatted_message = self.tokenizer.apply_chat_template(
-                    message, tokenize=False, add_generation_prompt=True
+                    message, tokenize=False, add_generation_prompt=False
                 )
                 tokenized_message = self.tokenizer(
                     formatted_message,
