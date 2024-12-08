@@ -355,8 +355,14 @@ class RewardDataCollatorWithPadding:
         features_chosen = []
         features_rejected = []
         margin = []
+        chosen_lm_labels = []
+        rejected_lm_labels = []
+
         # check if we have a margin. If we do, we need to batch it as well
         has_margin = "margin" in features[0]
+        # check if we have language modeling labels
+        has_lm_labels = "chosen_lm_labels" in features[0]
+
         for feature in features:
             # check if the keys are named as expected
             if (
@@ -383,6 +389,10 @@ class RewardDataCollatorWithPadding:
             )
             if has_margin:
                 margin.append(feature["margin"])
+            if has_lm_labels:
+                chosen_lm_labels.append(feature["chosen_lm_labels"])
+                rejected_lm_labels.append(feature["rejected_lm_labels"])
+
         batch_chosen = self.tokenizer.pad(
             features_chosen,
             padding=self.padding,
@@ -405,6 +415,17 @@ class RewardDataCollatorWithPadding:
         if has_margin:
             margin = torch.tensor(margin, dtype=torch.float)
             batch["margin"] = margin
+        if has_lm_labels:
+            # Pad the labels
+            chosen_lm_labels = pad_sequence(
+                [torch.tensor(x) for x in chosen_lm_labels], batch_first=True, padding_value=-100
+            )
+            rejected_lm_labels = pad_sequence(
+                [torch.tensor(x) for x in rejected_lm_labels], batch_first=True, padding_value=-100
+            )
+            batch["chosen_lm_labels"] = chosen_lm_labels
+            batch["rejected_lm_labels"] = rejected_lm_labels
+
         return batch
 
 
