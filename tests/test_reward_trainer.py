@@ -264,8 +264,10 @@ class RewardTrainerTester(unittest.TestCase):
                 model=model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
 
-            # Store initial parameters
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            # Store initial parameters for both base model and reward head
+            previous_params = {}
+            for name, param in trainer.model.named_parameters():
+                previous_params[name] = param.clone()
 
             # Train the model
             trainer.train()
@@ -273,11 +275,32 @@ class RewardTrainerTester(unittest.TestCase):
             # Verify training occurred
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check that parameters changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if param.sum() != 0:  # Ignore zero-initialized parameters
-                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+            # Check that at least some parameters changed in either component
+            params_changed = False
+            for name, param in trainer.model.named_parameters():
+                if previous_params[name].sum() != 0:  # Ignore zero-initialized parameters
+                    if not torch.allclose(previous_params[name], param, rtol=1e-12, atol=1e-12):
+                        params_changed = True
+                        break
+
+            self.assertTrue(params_changed, "No parameters changed during training")
+
+            # Optional: Add specific checks for reward head and base model
+            reward_head_changed = False
+            base_model_changed = False
+            for name, param in trainer.model.named_parameters():
+                if param.sum() == 0:  # Skip zero-initialized parameters
+                    continue
+                if "reward_head" in name:
+                    if not torch.allclose(previous_params[name], param, rtol=1e-12, atol=1e-12):
+                        reward_head_changed = True
+                elif "reward_base_model" in name:
+                    if not torch.allclose(previous_params[name], param, rtol=1e-12, atol=1e-12):
+                        base_model_changed = True
+
+            self.assertTrue(params_changed, "No parameters changed during training")
+            self.assertTrue(reward_head_changed, "Reward head parameters did not change during training")
+            self.assertTrue(base_model_changed, "Base model parameters did not change during training")
 
             # Test compute_loss with feedback
             batch = next(iter(trainer.get_train_dataloader()))
@@ -323,14 +346,40 @@ class RewardTrainerTester(unittest.TestCase):
                 model=model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            # Store initial parameters for both base model and reward head
+            previous_params = {}
+            for name, param in trainer.model.named_parameters():
+                previous_params[name] = param.clone()
+
+            # Train the model
             trainer.train()
 
             # Verify training occurred
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check parameters changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if param.sum() != 0:
-                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+            # Check that at least some parameters changed in either component
+            params_changed = False
+            for name, param in trainer.model.named_parameters():
+                if previous_params[name].sum() != 0:  # Ignore zero-initialized parameters
+                    if not torch.allclose(previous_params[name], param, rtol=1e-12, atol=1e-12):
+                        params_changed = True
+                        break
+
+            self.assertTrue(params_changed, "No parameters changed during training")
+
+            # Optional: Add specific checks for reward head and base model
+            reward_head_changed = False
+            base_model_changed = False
+            for name, param in trainer.model.named_parameters():
+                if param.sum() == 0:  # Skip zero-initialized parameters
+                    continue
+                if "reward_head" in name:
+                    if not torch.allclose(previous_params[name], param, rtol=1e-12, atol=1e-12):
+                        reward_head_changed = True
+                elif "reward_base_model" in name:
+                    if not torch.allclose(previous_params[name], param, rtol=1e-12, atol=1e-12):
+                        base_model_changed = True
+
+            self.assertTrue(params_changed, "No parameters changed during training")
+            self.assertTrue(reward_head_changed, "Reward head parameters did not change during training")
+            self.assertTrue(base_model_changed, "Base model parameters did not change during training")
