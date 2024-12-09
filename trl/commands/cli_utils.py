@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This file is a copy of trl/examples/scripts/sft.py so that we could
-# use it together with rich and the TRL CLI in a more customizable manner.
-
 import importlib
 import inspect
 import logging
