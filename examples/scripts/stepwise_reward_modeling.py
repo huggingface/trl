@@ -56,7 +56,6 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    setup_chat_format,
 )
 
 
@@ -88,10 +87,6 @@ if __name__ == "__main__":
     )
     # Align padding tokens between tokenizer and model
     model.config.pad_token_id = tokenizer.pad_token_id
-
-    # If post-training a base model, use ChatML as the default template
-    if tokenizer.chat_template is None:
-        model, tokenizer = setup_chat_format(model, tokenizer)
 
     if model_config.use_peft and model_config.lora_task_type != "TOKEN_CLS":
         warnings.warn(
