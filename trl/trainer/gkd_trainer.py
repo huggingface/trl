@@ -71,6 +71,9 @@ class GKDTrainer(SFTTrainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
+        teacher_processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
@@ -81,7 +84,10 @@ class GKDTrainer(SFTTrainer):
     ):
         # add remove_unused_columns=False to the the dataclass args
         args.remove_unused_columns = False
-        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_seq_length)
+        data_collator = DataCollatorForChatML(
+            tokenizer=processing_class, max_length=args.max_seq_length, teacher_tokenizer=teacher_processing_class
+        )
+        self.use_uld_loss = teacher_processing_class is not None
 
         super().__init__(
             model,
@@ -209,6 +215,64 @@ class GKDTrainer(SFTTrainer):
         else:
             return jsd
 
+    @staticmethod
+    def uld_loss(student_logits, teacher_logits, student_labels, teacher_labels, reduction="sum"):
+        """
+        Compute the Universal Logit Distillation (ULD) loss.
+
+        Args:
+            student_logits: Tensor of shape (batch_size, student_sequence_length, student_vocab_size)
+            teacher_logits: Tensor of shape (batch_size, teacher_sequence_length, teacher_vocab_size)
+            student_labels: Tensor of shape (batch_size, student_sequence_length) with -100 for padding tokens
+            teacher_labels: Tensor of shape (batch_size, teacher_sequence_length) with -100 for padding tokens
+            reduction: Specifies the reduction to apply to the output (default: 'sum')
+
+        Returns:
+            loss: Scalar tensor with the ULD loss
+        """
+        # Convert logits to probabilities
+        student_probs = F.softmax(student_logits, dim=-1)
+        teacher_probs = F.softmax(teacher_logits, dim=-1)
+
+        # Create masks for non-padding tokens
+        student_mask = student_labels != -100
+        teacher_mask = teacher_labels != -100
+
+        # Ensure the masks have the same shape as their corresponding probabilities
+        student_mask = student_mask.unsqueeze(-1).expand_as(student_probs)
+        teacher_mask = teacher_mask.unsqueeze(-1).expand_as(teacher_probs)
+
+        # Apply masks
+        student_probs_masked = student_probs.masked_select(student_mask).view(-1, student_probs.size(-1))
+        teacher_probs_masked = teacher_probs.masked_select(teacher_mask).view(-1, teacher_probs.size(-1))
+
+        # Ensure we have the same number of tokens for both student and teacher
+        min_tokens = min(student_probs_masked.size(0), teacher_probs_masked.size(0))
+        student_probs_masked = student_probs_masked[:min_tokens]
+        teacher_probs_masked = teacher_probs_masked[:min_tokens]
+
+        # Sort probabilities in descending order
+        student_probs_sorted, _ = torch.sort(student_probs_masked, dim=-1, descending=True)
+        teacher_probs_sorted, _ = torch.sort(teacher_probs_masked, dim=-1, descending=True)
+
+        # Pad the probabilities to the max vocab size
+        max_vocab_size = max(student_probs_sorted.size(1), teacher_probs_sorted.size(1))
+        student_probs_sorted = F.pad(student_probs_sorted, (0, max_vocab_size - student_probs_sorted.size(1)))
+        teacher_probs_sorted = F.pad(teacher_probs_sorted, (0, max_vocab_size - teacher_probs_sorted.size(1)))
+
+        # Compute Wasserstein distance
+        wasserstein_distance = torch.abs(student_probs_sorted - teacher_probs_sorted).sum(dim=-1)
+
+        # Apply reduction
+        if reduction == "batchmean":
+            return wasserstein_distance.sum() / wasserstein_distance.size(0)
+        elif reduction == "sum":
+            return wasserstein_distance.sum()
+        elif reduction == "mean":
+            return wasserstein_distance.mean()
+        else:
+            return wasserstein_distance
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # compute student output
         outputs_student = model(
@@ -218,25 +282,37 @@ class GKDTrainer(SFTTrainer):
 
         # compute teacher output in eval mode
         self.teacher_model.eval()
+        teacher_input_ids = inputs.get("teacher_input_ids", inputs["input_ids"])
+        teacher_attention_mask = inputs.get("teacher_attention_mask", inputs["attention_mask"])
         with torch.no_grad():
             outputs_teacher = self.teacher_model(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
+                input_ids=teacher_input_ids,
+                attention_mask=teacher_attention_mask,
             )
 
         # slice the logits for the generated tokens using the inputs["prompts"] lengths
         prompt_lengths = inputs["prompts"].shape[1]
+        teacher_prompt_lengths = inputs.get("teacher_prompts", inputs["prompts"]).shape[1]
         shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
-        shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
+        shifted_teacher_logits = outputs_teacher.logits[:, teacher_prompt_lengths - 1 : -1, :]
         shifted_labels = inputs["labels"][:, prompt_lengths:]
 
         # compute loss
-        loss = self.generalized_jsd_loss(
-            student_logits=shifted_student_logits,
-            teacher_logits=shifted_teacher_logits,
-            labels=shifted_labels,
-            beta=self.beta,
-        )
+        if self.use_uld_loss:
+            shifted_teacher_labels = inputs.get("teacher_labels", inputs["labels"])[:, teacher_prompt_lengths:]
+            loss = self.uld_loss(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                student_labels=shifted_labels,
+                teacher_labels=shifted_teacher_labels,
+            )
+        else:
+            loss = self.generalized_jsd_loss(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                labels=shifted_labels,
+                beta=self.beta,
+            )
 
         # empty cache
         empty_cache()
@@ -279,8 +355,14 @@ class GKDTrainer(SFTTrainer):
         """
         if self.seq_kd:
             with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
+                teacher_inputs = {
+                    "prompts": inputs.get("teacher_prompts", inputs["prompts"]),
+                    "prompt_attention_mask": inputs.get(
+                        "teacher_prompt_attention_mask", inputs["prompt_attention_mask"]
+                    ),
+                }
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    unwrapped_model, teacher_inputs, self.generation_config, self.processing_class.pad_token_id
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
