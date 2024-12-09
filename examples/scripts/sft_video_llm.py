@@ -50,24 +50,13 @@ from typing import Any
 
 import requests
 import torch
+import wandb
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
-from transformers import (
-    AutoModelForVision2Seq,
-    AutoProcessor,
-    BitsAndBytesConfig,
-    Qwen2VLProcessor,
-)
+from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
-import wandb
-from trl import (
-    SFTConfig,
-    SFTTrainer,
-    get_kbit_device_map,
-)
-from trl.commands.cli_utils import SFTScriptArguments, TrlParser
-from trl.trainer import ModelConfig
+from trl import ModelConfig, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
 
 
 def download_video(url: str, cache_dir: str) -> str:
