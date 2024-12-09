@@ -56,7 +56,7 @@ from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
 from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
-from trl import ModelConfig, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
+from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
 
 
 def download_video(url: str, cache_dir: str) -> str:
@@ -151,7 +151,7 @@ def collate_fn(examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
 
 
 @dataclass
-class CustomScriptArguments(SFTScriptArguments):
+class CustomScriptArguments(ScriptArguments):
     video_cache_dir: str = "/tmp/videos/"
 
 
