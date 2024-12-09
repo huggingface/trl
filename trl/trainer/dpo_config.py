@@ -94,6 +94,10 @@ class DPOConfig(TrainingArguments):
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
+        precompute_ref_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+            Batch size to use when precomputing reference model log probabilities. This can be set higher than the
+            training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
+            training and `per_device_eval_batch_size` for evaluation.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
@@ -173,6 +177,7 @@ class DPOConfig(TrainingArguments):
     disable_dropout: bool = True
     generate_during_eval: bool = False
     precompute_ref_log_probs: bool = False
+    precompute_ref_batch_size: Optional[int] = None
     dataset_num_proc: Optional[int] = None
     model_init_kwargs: Optional[dict[str, Any]] = None
     ref_model_init_kwargs: Optional[dict[str, Any]] = None
