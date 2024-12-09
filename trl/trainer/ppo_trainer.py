@@ -264,7 +264,7 @@ class PPOTrainer(Trainer):
         self.dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.local_dataloader_batch_size,
-            shuffle=True,
+            shuffle=False, #True
             collate_fn=self.data_collator,
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
