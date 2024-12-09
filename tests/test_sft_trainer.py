@@ -1367,8 +1367,8 @@ class SFTTrainerTester2(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 if n in base_param_names:  # We expect the base model parameters to be the same
-                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
                 elif (
                     "base_layer" not in n
                 ):  # We expect the peft parameters to be different (except for the base layer)
-                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
