@@ -88,7 +88,8 @@ It's a win!
 
 ## Expected dataset type
 
-The dataset should be formatted as a [Stepwise supervision](dataset_formats#stepwise-supervision) dataset, which implies that it should contain the following columns: `prompt`, `completions` and `labels`, where `completions` contains a list of reasoning steps and `labels` a list of booleans or floats indicating the correctness of each step.
+Stepwise supervision reward modeling requires a [stepwise supervision](dataset_formats#stepwise-supervision).
+The dataset should contain the following columns: `prompt`, `completions` and `labels`, where `completions` contains a list of reasoning steps and `labels` a list of booleans or floats indicating the correctness of each step.
 
 The [`StepwiseRewardTrainer`] only supports [standard](dataset_formats#standard) dataset format.
 
