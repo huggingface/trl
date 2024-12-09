@@ -22,7 +22,7 @@ from typing import Callable, Optional, Union
 import torch
 import torch.nn as nn
 from accelerate import PartialState
-from datasets import Dataset
+from datasets import Dataset, features
 from transformers import (
     BaseImageProcessor,
     DataCollator,
@@ -155,6 +155,12 @@ class StepwiseRewardTrainer(Trainer):
                     num_proc=args.dataset_num_proc,
                     remove_columns=train_dataset.features,
                     desc="Tokenizing train dataset",
+                    features=features.Features(  # needed to avoid map to cast labels to bool
+                        {
+                            "labels": features.Sequence(features.Value("int64")),
+                            "input_ids": features.Sequence(features.Value("int64")),
+                        }
+                    ),
                 )
 
                 eval_fn_kwargs = {**fn_kwargs, "is_eval": True}
@@ -165,6 +171,12 @@ class StepwiseRewardTrainer(Trainer):
                         num_proc=args.dataset_num_proc,
                         remove_columns=eval_dataset.features,
                         desc="Tokenizing eval dataset",
+                        features=features.Features(  # needed to avoid map to cast labels to bool
+                            {
+                                "labels": features.Sequence(features.Value("int64")),
+                                "input_ids": features.Sequence(features.Value("int64")),
+                            }
+                        ),
                     )
 
         super().__init__(
