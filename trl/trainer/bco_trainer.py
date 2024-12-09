@@ -1,4 +1,3 @@
-# BCO Authors: Seungjae Jung, Gunsoo Han, Daniel Wontae Nam and Kyoung-Woon On
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import inspect
 import os
 import random

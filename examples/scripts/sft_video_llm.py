@@ -1,4 +1,4 @@
-# Copyright 2024. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """
 Example usage:
 accelerate launch \
@@ -53,20 +54,9 @@ import wandb
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
-from transformers import (
-    AutoModelForVision2Seq,
-    AutoProcessor,
-    BitsAndBytesConfig,
-    Qwen2VLProcessor,
-)
+from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
-from trl import (
-    SFTConfig,
-    SFTTrainer,
-    get_kbit_device_map,
-)
-from trl.commands.cli_utils import SFTScriptArguments, TrlParser
-from trl.trainer import ModelConfig
+from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
 
 
 def download_video(url: str, cache_dir: str) -> str:
@@ -161,7 +151,7 @@ def collate_fn(examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
 
 
 @dataclass
-class CustomScriptArguments(SFTScriptArguments):
+class CustomScriptArguments(ScriptArguments):
     video_cache_dir: str = "/tmp/videos/"
 
 

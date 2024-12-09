@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO: push them under trl-org
 MODELS_TO_TEST = [
     "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
     "trl-internal-testing/tiny-MistralForCausalLM-0.2",
