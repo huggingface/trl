@@ -64,17 +64,17 @@ from trl import (
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, GKDConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_and_config()
+    script_args, training_args, model_args = parser.parse_args_and_config()
 
     ################
     # Model & Tokenizer
     ################
-    quantization_config = get_quantization_config(model_config)
+    quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
-        revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
-        attn_implementation=model_config.attn_implementation,
-        torch_dtype=model_config.torch_dtype,
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
+        torch_dtype=model_args.torch_dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
@@ -82,10 +82,10 @@ if __name__ == "__main__":
     training_args.model_init_kwargs = model_kwargs
 
     teacher_model_kwargs = dict(
-        revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
-        attn_implementation=model_config.attn_implementation,
-        torch_dtype=model_config.torch_dtype,
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
+        torch_dtype=model_args.torch_dtype,
         use_cache=True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
@@ -93,9 +93,9 @@ if __name__ == "__main__":
     training_args.teacher_model_init_kwargs = teacher_model_kwargs
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path,
-        revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
+        model_args.model_name_or_path,
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
         padding_side="left",
     )
     if tokenizer.pad_token is None:
@@ -118,13 +118,13 @@ if __name__ == "__main__":
     # Training
     ################
     trainer = GKDTrainer(
-        model=model_config.model_name_or_path,
+        model=model_args.model_name_or_path,
         teacher_model=training_args.teacher_model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
-        peft_config=get_peft_config(model_config),
+        peft_config=get_peft_config(model_args),
     )
 
     if training_args.eval_strategy != "no":
