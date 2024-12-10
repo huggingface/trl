@@ -509,55 +509,55 @@ class DPOTrainerTester(unittest.TestCase):
 
     
 
-    # Tokenize inputs
-    tokenized_inputs = {
-        "prompt": tokenizer(prompt, add_special_tokens=False),
-        "chosen": tokenizer(chosen, add_special_tokens=False),
-        "rejected": tokenizer(rejected, add_special_tokens=False)
-    }
+            # Tokenize inputs
+            tokenized_inputs = {
+                "prompt": tokenizer(prompt, add_special_tokens=False),
+                "chosen": tokenizer(chosen, add_special_tokens=False),
+                "rejected": tokenizer(rejected, add_special_tokens=False)
+            }
 
-    # Create batches
-    batch = collator([tokenized_inputs])
-    batch_paddingfree = collator_paddingfree([tokenized_inputs])
+        # Create batches
+        batch = collator([tokenized_inputs])
+        batch_paddingfree = collator_paddingfree([tokenized_inputs])
 
-    # Test padding-free specific features
-    self.assertNotIn("prompt_attention_mask", batch_paddingfree)
-    self.assertNotIn("chosen_attention_mask", batch_paddingfree)
-    self.assertNotIn("rejected_attention_mask", batch_paddingfree)
+        # Test padding-free specific features
+        self.assertNotIn("prompt_attention_mask", batch_paddingfree)
+        self.assertNotIn("chosen_attention_mask", batch_paddingfree)
+        self.assertNotIn("rejected_attention_mask", batch_paddingfree)
 
-    self.assertIn("prompt_input_ids", batch_paddingfree)
-    self.assertIn("completion_input_ids", batch_paddingfree)
-    self.assertIn("prompt_position_ids", batch_paddingfree)
-    self.assertIn("completion_position_ids", batch_paddingfree)
+        self.assertIn("prompt_input_ids", batch_paddingfree)
+        self.assertIn("completion_input_ids", batch_paddingfree)
+        self.assertIn("prompt_position_ids", batch_paddingfree)
+        self.assertIn("completion_position_ids", batch_paddingfree)
 
-    # Verify sizes match
-    self.assertEqual(
-        batch_paddingfree["prompt_input_ids"].size(1), 
-        batch_paddingfree["prompt_position_ids"].size(1)
-    )
-    self.assertEqual(
-        batch_paddingfree["completion_input_ids"].size(1), 
-        batch_paddingfree["completion_position_ids"].size(1)
-    )
+        # Verify sizes match
+        self.assertEqual(
+                batch_paddingfree["prompt_input_ids"].size(1), 
+                batch_paddingfree["prompt_position_ids"].size(1)
+        )
+        self.assertEqual(
+                batch_paddingfree["completion_input_ids"].size(1), 
+                batch_paddingfree["completion_position_ids"].size(1)
+        )
 
-    # Verify position IDs are correct
-    # Get original attention masks from padded batch
-    prompt_attn_mask = batch["prompt_attention_mask"]
-    chosen_attn_mask = batch["chosen_attention_mask"]
-    rejected_attn_mask = batch["rejected_attention_mask"]
+        # Verify position IDs are correct
+        # Get original attention masks from padded batch
+        prompt_attn_mask = batch["prompt_attention_mask"]
+        chosen_attn_mask = batch["chosen_attention_mask"]
+        rejected_attn_mask = batch["rejected_attention_mask"]
 
-    # Calculate expected values
-    expected_prompt_ids = batch["prompt_input_ids"][prompt_attn_mask.bool()].unsqueeze(0)
-    expected_prompt_positions = prompt_attn_mask.cumsum(1)[prompt_attn_mask.bool()].unsqueeze(0) - 1
+        # Calculate expected values
+        expected_prompt_ids = batch["prompt_input_ids"][prompt_attn_mask.bool()].unsqueeze(0)
+        expected_prompt_positions = prompt_attn_mask.cumsum(1)[prompt_attn_mask.bool()].unsqueeze(0) - 1
 
-    # Verify results match expectations
-    self.assertTrue(torch.all(batch_paddingfree["prompt_input_ids"] == expected_prompt_ids))
-    self.assertTrue(torch.all(batch_paddingfree["prompt_position_ids"] == expected_prompt_positions))
+        # Verify results match expectations
+        self.assertTrue(torch.all(batch_paddingfree["prompt_input_ids"] == expected_prompt_ids))
+        self.assertTrue(torch.all(batch_paddingfree["prompt_position_ids"] == expected_prompt_positions))
 
-    # Test that completion positions continue from where prompt ends
-    prompt_length = batch_paddingfree["prompt_input_ids"].size(1)
-    first_completion_position = batch_paddingfree["completion_position_ids"][0][0]
-    self.assertEqual(first_completion_position, prompt_length)
+        # Test that completion positions continue from where prompt ends
+        prompt_length = batch_paddingfree["prompt_input_ids"].size(1)
+        first_completion_position = batch_paddingfree["completion_position_ids"][0][0]
+        self.assertEqual(first_completion_position, prompt_length)
 
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
