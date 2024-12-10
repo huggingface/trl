@@ -53,7 +53,7 @@ from trl import (
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_and_config()
+    script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.remove_unused_columns = False
     training_args.dataset_kwargs = {"skip_prepare_dataset": True}
@@ -62,24 +62,22 @@ if __name__ == "__main__":
     # Model, Tokenizer & Processor
     ################
     torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
+        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
     )
-    quantization_config = get_quantization_config(model_config)
+    quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
-        revision=model_config.model_revision,
-        attn_implementation=model_config.attn_implementation,
+        revision=model_args.model_revision,
+        attn_implementation=model_args.attn_implementation,
         torch_dtype=torch_dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     processor = AutoProcessor.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
 
     model = AutoModelForVision2Seq.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
 
     ################
@@ -121,7 +119,7 @@ if __name__ == "__main__":
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=processor.tokenizer,
-        peft_config=get_peft_config(model_config),
+        peft_config=get_peft_config(model_args),
     )
 
     trainer.train()
