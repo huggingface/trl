@@ -154,11 +154,8 @@ class PreferenceCollator(DataCollatorMixin):
             # If padding_free is True, return the tensors without padding
             output = {
                 "prompt_input_ids": prompt_input_ids,
-                "prompt_attention_mask":prompt_attention_mask,
                 "chosen_input_ids": chosen_input_ids,
-                "chosen_attention_mask": chosen_attention_mask,
                 "rejected_input_ids": rejected_input_ids,
-                "rejected_attention_mask": rejected_attention_mask,
             }
             if "pixel_values" in examples[0]:
                 output["pixel_values"] = pixel_values
@@ -887,7 +884,6 @@ class DPOTrainer(Trainer):
             chosen_attn_mask = batch.pop("chosen_attention_mask")
             rejected_attn_mask = batch.pop("rejected_attention_mask")
 
-            # TO DO : this will not work cos prompt_input_ids and prompt_attn_mask are list
             # Process inputs using attention masks
             prompt_ids = batch["prompt_input_ids"][prompt_attn_mask.bool()].unsqueeze(0)
             chosen_ids = batch["chosen_input_ids"][chosen_attn_mask.bool()].unsqueeze(0)

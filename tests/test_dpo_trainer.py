@@ -546,6 +546,7 @@ class DPOTrainerTester(unittest.TestCase):
             expected_rejected_ids = batch_padded["rejected_input_ids"][rejected_attn_mask.bool()]
 
             # Verify that padding-free batch matches the non-padded tokens from padded batch
+            # TO DO: will not flatten because it is a list not tensor
             self.assertTrue(torch.equal(batch_paddingfree["prompt_input_ids"].flatten(), expected_prompt_ids))
             self.assertTrue(torch.equal(batch_paddingfree["chosen_input_ids"].flatten(), expected_chosen_ids))
             self.assertTrue(torch.equal(batch_paddingfree["rejected_input_ids"].flatten(), expected_rejected_ids))
