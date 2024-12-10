@@ -284,7 +284,10 @@ class OnlineDPOTrainer(Trainer):
                 self.reward_model = prepare_deepspeed(
                     self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
                 )
-            self.ref_model = prepare_deepspeed(self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16)
+            if self.ref_model is not None:
+                self.ref_model = prepare_deepspeed(
+                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
         else:
             if self.ref_model is not None:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
