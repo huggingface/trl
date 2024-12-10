@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,12 +24,12 @@ class ScriptArguments:
     Args:
         dataset_name (`str`):
             Dataset name.
+        dataset_config (`str` or `None`, *optional*, defaults to `None`):
+            Dataset configuration name. Corresponds to the `name` argument of the [`~datasets.load_dataset`] function.
         dataset_train_split (`str`, *optional*, defaults to `"train"`):
             Dataset split to use for training.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
             Dataset split to use for evaluation.
-        config (`str` or `None`, *optional*, defaults to `None`):
-            Path to the optional config file.
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
             Whether to apply `use_reentrant` for gradient_checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
@@ -38,8 +38,8 @@ class ScriptArguments:
     """
 
     dataset_name: str
+    dataset_config: Optional[str] = None
     dataset_train_split: str = "train"
     dataset_test_split: str = "test"
-    config: Optional[str] = None
     gradient_checkpointing_use_reentrant: bool = False
     ignore_bias_buffers: bool = False
