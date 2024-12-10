@@ -127,13 +127,12 @@ class PreferenceCollator(DataCollatorMixin):
         chosen_attention_mask = [torch.ones_like(input_ids) for input_ids in chosen_input_ids]
         rejected_input_ids = [torch.tensor(example["rejected_input_ids"]) for example in examples]
         rejected_attention_mask = [torch.ones_like(input_ids) for input_ids in rejected_input_ids]
+        
         if "pixel_values" in examples[0]:
             pixel_values = [torch.tensor(example["pixel_values"]) for example in examples]
         if "pixel_attention_mask" in examples[0]:
             pixel_attention_mask = [torch.tensor(example["pixel_attention_mask"]) for example in examples]
 
-   
-        # Pad only if padding_free is False
         if not self.padding_free:
             # Pad
             output = {}
@@ -152,19 +151,19 @@ class PreferenceCollator(DataCollatorMixin):
         else:
             # If padding_free is True, return the tensors without padding
             output = {
-                "prompt_input_ids": torch.stack(prompt_input_ids),
-                "prompt_attention_mask": torch.stack(prompt_attention_mask),
-                "chosen_input_ids": torch.stack(chosen_input_ids),
-                "chosen_attention_mask": torch.stack(chosen_attention_mask),
-                "rejected_input_ids": torch.stack(rejected_input_ids),
-                "rejected_attention_mask": torch.stack(rejected_attention_mask),
+                "prompt_input_ids": prompt_input_ids,
+                "prompt_attention_mask":prompt_attention_mask,
+                "chosen_input_ids": chosen_input_ids,
+                "chosen_attention_mask": chosen_attention_mask,
+                "rejected_input_ids": rejected_input_ids,
+                "rejected_attention_mask": rejected_attention_mask,
             }
             if "pixel_values" in examples[0]:
-                output["pixel_values"] = torch.stack(pixel_values)
+                output["pixel_values"] = pixel_values
             if "pixel_attention_mask" in examples[0]:
-                output["pixel_attention_mask"] = torch.stack(pixel_attention_mask)
+                output["pixel_attention_mask"] = pixel_attention_mask
             if "image_sizes" in examples[0]:
-                output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
+                output["image_sizes"] = [example["image_sizes"] for example in examples]
 
         return output
 
@@ -234,7 +233,7 @@ class DPOTrainer(Trainer):
         padding_free:bool=False
     ):  
         
-        self.padding_free = padding_free 
+       
         if model is None:
             raise ValueError("No model provided. Please provide a model to train.")
 
@@ -392,7 +391,7 @@ class DPOTrainer(Trainer):
                 )
 
         if data_collator is None:
-            data_collator = PreferenceCollator(pad_token_id=self.padding_value,padding_free=self.padding_free)
+            data_collator = PreferenceCollator(pad_token_id=self.padding_value,padding_free=padding_free)
 
         if args.disable_dropout:
             disable_dropout_in_model(model)
@@ -904,8 +903,6 @@ class DPOTrainer(Trainer):
                 )
             if "image_sizes" in batch:
                 output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
-                    
-
         
         else:
             # For the prompt, the input_ids are the same for both the chosen and rejected responses
@@ -1134,7 +1131,7 @@ class DPOTrainer(Trainer):
         """
         num_examples = batch["prompt_input_ids"].shape[0]
 
-        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value,padding_free=self.padding_free)
+        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
 
         model_kwargs = {}
         if self.aux_loss_enabled:
@@ -1267,6 +1264,8 @@ class DPOTrainer(Trainer):
             output["aux_loss"] = outputs.aux_loss
 
         return output
+
+    
 
     def get_batch_loss_metrics(
         self,
