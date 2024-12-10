@@ -120,7 +120,7 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(
-        script_args.dataset_name, name=script_args.dataset_config_name, split=script_args.dataset_train_split
+        script_args.dataset_name, name=script_args.dataset_config, split=script_args.dataset_train_split
     )
     eval_samples = 100
     train_dataset = dataset.select(range(len(dataset) - eval_samples))
