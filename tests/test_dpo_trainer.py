@@ -476,8 +476,7 @@ class DPOTrainerTester(unittest.TestCase):
     
     
 
-    @require_no_wandb
-    def test_dpo_trainer_training_with_no_padding(self):
+    def test_dpo_trainer_padding_free(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
@@ -493,72 +492,64 @@ class DPOTrainerTester(unittest.TestCase):
 
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-            with self.assertRaisesRegex(
-                ValueError,
-                expected_regex="`generate_during_eval=True` requires Weights and Biases to be installed."
-                " Please install `wandb` to resolve.",
-            ):
-                DPOTrainer(
-                    model=self.model,
-                    ref_model=None,
-                    args=training_args,
-                    processing_class=self.tokenizer,
-                    padding_free=True,
-                    train_dataset=dummy_dataset["train"],
-                    eval_dataset=dummy_dataset["test"],)
+            # Test with padding_free=True
+            trainer_padding_free = DPOTrainer(
+                model=self.model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                padding_free=True,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
 
-    
+            batch_paddingfree = next(iter(trainer_padding_free.get_train_dataloader()))
+            
+            # Check for correct keys in padding-free format
+            self.assertIn("prompt_input_ids", batch_paddingfree)
+            self.assertIn("chosen_input_ids", batch_paddingfree)
+            self.assertIn("rejected_input_ids", batch_paddingfree)
+            # Attention masks should not be present in padding-free mode
+            self.assertNotIn("prompt_attention_mask", batch_paddingfree)
+            self.assertNotIn("chosen_attention_mask", batch_paddingfree)
+            self.assertNotIn("rejected_attention_mask", batch_paddingfree)
 
-            # Tokenize inputs
-            tokenized_inputs = {
-                "prompt": tokenizer(prompt, add_special_tokens=False),
-                "chosen": tokenizer(chosen, add_special_tokens=False),
-                "rejected": tokenizer(rejected, add_special_tokens=False)
-            }
+            # Test with padding_free=False
+            trainer_with_padding = DPOTrainer(
+                model=self.model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                padding_free=False,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
 
-        # Create batches
-        batch = collator([tokenized_inputs])
-        batch_paddingfree = collator_paddingfree([tokenized_inputs])
+            batch_padded = next(iter(trainer_with_padding.get_train_dataloader()))
+            
+            # Check for correct keys in padded format
+            self.assertIn("prompt_input_ids", batch_padded)
+            self.assertIn("chosen_input_ids", batch_padded)
+            self.assertIn("rejected_input_ids", batch_padded)
+            self.assertIn("prompt_attention_mask", batch_padded)
+            self.assertIn("chosen_attention_mask", batch_padded)
+            self.assertIn("rejected_attention_mask", batch_padded)
 
-        # Test padding-free specific features
-        self.assertNotIn("prompt_attention_mask", batch_paddingfree)
-        self.assertNotIn("chosen_attention_mask", batch_paddingfree)
-        self.assertNotIn("rejected_attention_mask", batch_paddingfree)
+            # Compare padded and padding-free batches
+            prompt_attn_mask = batch_padded["prompt_attention_mask"]
+            chosen_attn_mask = batch_padded["chosen_attention_mask"]
+            rejected_attn_mask = batch_padded["rejected_attention_mask"]
 
-        self.assertIn("prompt_input_ids", batch_paddingfree)
-        self.assertIn("completion_input_ids", batch_paddingfree)
-        self.assertIn("prompt_position_ids", batch_paddingfree)
-        self.assertIn("completion_position_ids", batch_paddingfree)
+            # Get the non-padded tokens using attention masks
+            expected_prompt_ids = batch_padded["prompt_input_ids"][prompt_attn_mask.bool()]
+            expected_chosen_ids = batch_padded["chosen_input_ids"][chosen_attn_mask.bool()]
+            expected_rejected_ids = batch_padded["rejected_input_ids"][rejected_attn_mask.bool()]
 
-        # Verify sizes match
-        self.assertEqual(
-                batch_paddingfree["prompt_input_ids"].size(1), 
-                batch_paddingfree["prompt_position_ids"].size(1)
-        )
-        self.assertEqual(
-                batch_paddingfree["completion_input_ids"].size(1), 
-                batch_paddingfree["completion_position_ids"].size(1)
-        )
-
-        # Verify position IDs are correct
-        # Get original attention masks from padded batch
-        prompt_attn_mask = batch["prompt_attention_mask"]
-        chosen_attn_mask = batch["chosen_attention_mask"]
-        rejected_attn_mask = batch["rejected_attention_mask"]
-
-        # Calculate expected values
-        expected_prompt_ids = batch["prompt_input_ids"][prompt_attn_mask.bool()].unsqueeze(0)
-        expected_prompt_positions = prompt_attn_mask.cumsum(1)[prompt_attn_mask.bool()].unsqueeze(0) - 1
-
-        # Verify results match expectations
-        self.assertTrue(torch.all(batch_paddingfree["prompt_input_ids"] == expected_prompt_ids))
-        self.assertTrue(torch.all(batch_paddingfree["prompt_position_ids"] == expected_prompt_positions))
-
-        # Test that completion positions continue from where prompt ends
-        prompt_length = batch_paddingfree["prompt_input_ids"].size(1)
-        first_completion_position = batch_paddingfree["completion_position_ids"][0][0]
-        self.assertEqual(first_completion_position, prompt_length)
-
+            # Verify that padding-free batch matches the non-padded tokens from padded batch
+            self.assertTrue(torch.equal(batch_paddingfree["prompt_input_ids"].flatten(), expected_prompt_ids))
+            self.assertTrue(torch.equal(batch_paddingfree["chosen_input_ids"].flatten(), expected_chosen_ids))
+            self.assertTrue(torch.equal(batch_paddingfree["rejected_input_ids"].flatten(), expected_rejected_ids))
+        
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
