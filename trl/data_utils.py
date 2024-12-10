@@ -62,7 +62,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
 def apply_chat_template(example: dict[str, list[dict[str, str]]], tokenizer: PreTrainedTokenizer, tools: Optional[list[dict]] = None) -> dict[str, str]:
     r"""
-    Apply a chat template to a conversational example.
+    Apply a chat template to a conversational example along with the schema for a list of functions in `tools`.
 
     For more details, see [`maybe_apply_chat_template`].
     """
