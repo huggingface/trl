@@ -64,16 +64,16 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, CPOConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
 
     ################
     # Model & Tokenizer
     ################
     model = AutoModelForCausalLM.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -94,7 +94,7 @@ if __name__ == "__main__":
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
-        peft_config=get_peft_config(model_config),
+        peft_config=get_peft_config(model_args),
     )
 
     # train and save the model

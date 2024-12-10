@@ -158,7 +158,7 @@ class CustomScriptArguments(ScriptArguments):
 if __name__ == "__main__":
     # Parse arguments
     parser = TrlParser((CustomScriptArguments, SFTConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_and_config()
+    script_args, training_args, model_args = parser.parse_args_and_config()
 
     # Configure training args
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
@@ -170,9 +170,7 @@ if __name__ == "__main__":
 
     # Setup model
     torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
+        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
     )
 
     # Quantization configuration for 4-bit training
@@ -185,14 +183,14 @@ if __name__ == "__main__":
 
     # Model initialization
     model_kwargs = dict(
-        revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
         torch_dtype=torch_dtype,
         device_map=get_kbit_device_map(),
         quantization_config=bnb_config,
     )
 
-    model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model = AutoModelForVision2Seq.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     peft_config = LoraConfig(
         task_type="CAUSAL_LM",
@@ -210,7 +208,7 @@ if __name__ == "__main__":
         model.enable_input_require_grads()
 
     processor = AutoProcessor.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
 
     # Prepare dataset

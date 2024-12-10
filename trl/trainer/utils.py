@@ -48,6 +48,7 @@ from transformers.utils import (
     is_torch_npu_available,
     is_torch_xpu_available,
 )
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
@@ -871,16 +872,17 @@ def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
     return kwargs
 
 
-def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesConfig]:
-    if model_config.load_in_4bit:
+@deprecate_kwarg("model_config", "0.14.0", "model_args", warn_if_greater_or_equal_version=True)
+def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesConfig]:
+    if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
-            bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
-            bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
-            bnb_4bit_quant_storage=model_config.torch_dtype,
+            bnb_4bit_compute_dtype=model_args.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
+            bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
+            bnb_4bit_use_double_quant=model_args.use_bnb_nested_quant,
+            bnb_4bit_quant_storage=model_args.torch_dtype,
         )
-    elif model_config.load_in_8bit:
+    elif model_args.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
             load_in_8bit=True,
         )
@@ -899,8 +901,9 @@ def get_kbit_device_map() -> Optional[dict[str, int]]:
         return None
 
 
-def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
-    if model_config.use_peft is False:
+@deprecate_kwarg("model_config", "0.14.0", "model_args", warn_if_greater_or_equal_version=True)
+def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
+    if model_args.use_peft is False:
         return None
 
     if not is_peft_available():
@@ -910,14 +913,14 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         )
 
     peft_config = LoraConfig(
-        task_type=model_config.lora_task_type,
-        r=model_config.lora_r,
-        target_modules=model_config.lora_target_modules,
-        lora_alpha=model_config.lora_alpha,
-        lora_dropout=model_config.lora_dropout,
+        task_type=model_args.lora_task_type,
+        r=model_args.lora_r,
+        target_modules=model_args.lora_target_modules,
+        lora_alpha=model_args.lora_alpha,
+        lora_dropout=model_args.lora_dropout,
         bias="none",
-        use_rslora=model_config.use_rslora,
-        modules_to_save=model_config.lora_modules_to_save,
+        use_rslora=model_args.use_rslora,
+        modules_to_save=model_args.lora_modules_to_save,
     )
 
     return peft_config
