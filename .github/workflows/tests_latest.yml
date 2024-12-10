@@ -1,8 +1,11 @@
-name: Tests
+name: Tests latest release
 
 on:
   push:
     branches: [ v0.12-release ]
+  schedule:
+    - cron: '0 0 * * *'  # Runs daily at midnight UTC
+      branches: [ v0.12-release ]
 
 env:
   TQDM_DISABLE: 1
