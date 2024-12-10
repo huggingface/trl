@@ -876,6 +876,7 @@ class DPOTrainer(Trainer):
             chosen_attn_mask = batch.pop("chosen_attention_mask")
             rejected_attn_mask = batch.pop("rejected_attention_mask")
 
+            # TO DO : this will not work cos prompt_input_ids and prompt_attn_mask are list
             # Process inputs using attention masks
             prompt_ids = batch["prompt_input_ids"][prompt_attn_mask.bool()].unsqueeze(0)
             chosen_ids = batch["chosen_input_ids"][chosen_attn_mask.bool()].unsqueeze(0)
