@@ -166,7 +166,7 @@ if __name__ == "__main__":
     training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
     # Load dataset
-    dataset = load_dataset(script_args.dataset_name, split="train")
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config, split="train")
 
     # Setup model
     torch_dtype = (
