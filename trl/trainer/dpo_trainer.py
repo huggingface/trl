@@ -944,7 +944,7 @@ class DPOTrainer(Trainer):
         # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the
         # labels and calculates a conservative DPO loss.
-        if self.loss_type == "sigmoid":
+        if self.loss_type == "sigmoid"  or self.loss_type == "dpo_norm":
             losses = (
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
                 - F.logsigmoid(-self.beta * logits) * self.label_smoothing
@@ -1057,7 +1057,7 @@ class DPOTrainer(Trainer):
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', 'apo_down']"
+                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', 'apo_down', 'dpo_norm']"
             )
 
         chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
@@ -1169,6 +1169,11 @@ class DPOTrainer(Trainer):
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
         per_token_logps[~loss_mask] = 0
         all_logps = per_token_logps.sum(-1)
+
+        if self.loss_type == "dpo_norm":
+            all_logps = (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+        else:
+            all_logps = per_token_logps.sum(-1)
 
         output = {}
 

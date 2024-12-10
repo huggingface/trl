@@ -67,6 +67,7 @@ class DPOConfig(TrainingArguments):
                 - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"dpo_norm"`: length-normalized DPO from [Tulu 3](https://huggingface.co/papers/2411.15124) papers, but first introduced in [SimPO](https://huggingface.co/papers/2405.14734) paper.
         use_weighting (`bool`, *optional*, defaults to `False`):
             Whether or not to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
@@ -165,6 +166,7 @@ class DPOConfig(TrainingArguments):
         "discopop",
         "apo_zero",
         "apo_down",
+        "dpo_norm",
     ] = "sigmoid"
     use_weighting: bool = False
     label_pad_token_id: int = -100
