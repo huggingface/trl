@@ -66,37 +66,35 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_and_config()
+    script_args, training_args, model_args = parser.parse_args_and_config()
 
     ################
     # Model & Tokenizer
     ###################
     torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
+        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
     )
-    quantization_config = get_quantization_config(model_config)
+    quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
-        revision=model_config.model_revision,
-        attn_implementation=model_config.attn_implementation,
+        revision=model_args.model_revision,
+        attn_implementation=model_args.attn_implementation,
         torch_dtype=torch_dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
     model = AutoModelForCausalLM.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
-    peft_config = get_peft_config(model_config)
+    peft_config = get_peft_config(model_args)
     if peft_config is None:
         ref_model = AutoModelForCausalLM.from_pretrained(
-            model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, **model_kwargs
+            model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
         )
     else:
         ref_model = None
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
