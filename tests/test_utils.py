@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -91,8 +91,8 @@ class TestPad(unittest.TestCase):
 class TestGetPEFTConfig(unittest.TestCase):
     def test_create_peft_config_use_peft_false(self):
         """Test that when use_peft is False, the function returns None."""
-        model_config = ModelConfig(use_peft=False)
-        peft_config = get_peft_config(model_config)
+        model_args = ModelConfig(use_peft=False)
+        peft_config = get_peft_config(model_args)
         self.assertIsNone(peft_config)
 
     def test_create_peft_config_use_peft_true(self):
@@ -107,8 +107,8 @@ class TestGetPEFTConfig(unittest.TestCase):
             "lora_target_modules": ["up_proj", "down_proj"],
             "lora_modules_to_save": ["up_proj"],
         }
-        model_config = ModelConfig(use_peft=True, **peft_kwargs)
-        peft_config = get_peft_config(model_config)
+        model_args = ModelConfig(use_peft=True, **peft_kwargs)
+        peft_config = get_peft_config(model_args)
         self.assertTrue(isinstance(peft_config, LoraConfig))
         for arg, value in peft_kwargs.items():
             # Test that lists of modules are converted to sets
