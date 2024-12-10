@@ -89,7 +89,7 @@ def main(script_args, training_args, model_args):
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config_name)
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
     ################
     # Training

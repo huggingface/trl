@@ -24,7 +24,7 @@ from trl.cli import main
 class TestCLI(unittest.TestCase):
     def test_dpo(self):
         with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
-            command = f"trl dpo --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_preference --report_to none"
+            command = f"trl dpo --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none"
             with patch("sys.argv", command.split(" ")):
                 main()
 
@@ -37,13 +37,13 @@ class TestCLI(unittest.TestCase):
 
     def test_kto(self):
         with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
-            command = f"trl kto --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_unpaired_preference --report_to none"
+            command = f"trl kto --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_unpaired_preference --report_to none"
             with patch("sys.argv", command.split(" ")):
                 main()
 
     def test_sft(self):
         with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
-            command = f"trl sft --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config_name standard_language_modeling --report_to none"
+            command = f"trl sft --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
             with patch("sys.argv", command.split(" ")):
                 main()
 
