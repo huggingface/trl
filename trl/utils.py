@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -23,6 +24,8 @@ class ScriptArguments:
     Args:
         dataset_name (`str`):
             Dataset name.
+        dataset_config (`str` or `None`, *optional*, defaults to `None`):
+            Dataset configuration name. Corresponds to the `name` argument of the [`~datasets.load_dataset`] function.
         dataset_train_split (`str`, *optional*, defaults to `"train"`):
             Dataset split to use for training.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
@@ -35,6 +38,7 @@ class ScriptArguments:
     """
 
     dataset_name: str
+    dataset_config: Optional[str] = None
     dataset_train_split: str = "train"
     dataset_test_split: str = "test"
     gradient_checkpointing_use_reentrant: bool = False
