@@ -17,14 +17,13 @@ import unittest
 from unittest.mock import MagicMock
 
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from parameterized import parameterized
-from transformers import AutoModelForTokenClassification, AutoTokenizer, EvalPrediction, PreTrainedTokenizerBase
+from transformers import AutoModelForTokenClassification, AutoTokenizer, PreTrainedTokenizerBase
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import StepwiseRewardConfig, StepwiseRewardTrainer
-from trl.trainer import compute_accuracy
 
 
 if is_peft_available():
@@ -192,18 +191,9 @@ class TestTokenizeRow(unittest.TestCase):
 
 class StepwiseRewardTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        self.model = AutoModelForTokenClassification.from_pretrained(self.model_id)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-
-    def test_token_level_accuracy(self):
-        dummy_eval_predictions = EvalPrediction(
-            torch.FloatTensor([[[0.1, 0.9], [0.1, 0.9]], [[0.1, 0.9], [0.9, 0.1]]]),
-            torch.LongTensor([[-100, 1], [-100, 1]]),
-        )
-        accuracy = compute_accuracy(dummy_eval_predictions)
-        self.assertEqual(accuracy["accuracy"], 0.5)
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.model = AutoModelForTokenClassification.from_pretrained(model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @parameterized.expand([True, False])
     def test_train_full(self, train_on_last_step_only):
@@ -211,7 +201,6 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
             training_args = StepwiseRewardConfig(
                 output_dir=tmp_dir,
-                max_steps=3,
                 report_to="none",
                 train_on_last_step_only=train_on_last_step_only,
             )
@@ -231,25 +220,44 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
 
     def test_train_full_pretokenized(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
-
-            dummy_dataset = dummy_dataset.map(
-                StepwiseRewardTrainer.tokenize_row,
-                fn_kwargs={
-                    "tokenizer": self.tokenizer,
-                    "max_length": None,
-                    "max_completion_length": None,
-                    "step_separator": "\n",
-                    "train_on_last_step_only": False,
-                },
-                remove_columns=dummy_dataset.features,
+            dummy_dataset = Dataset.from_dict(
+                {
+                    "labels": [
+                        [-100, -100, -100, -100, -100, -100, -100, -100, -100, 0, -100, -100, 1],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, 0, -100, -100, 1, -100, -100, -100, -100, 0],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0, -100, -100, 1],
+                        [-100, -100, -100, -100, -100, -100, -100, 1, -100, -100, 1],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, 0],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, -100, 1],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, -100, 0],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, 0, -100, -100, 0],
+                        [-100, -100, -100, -100, -100, -100, 0, -100, -100, -100, -100, 0],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 1],
+                        [-100, -100, -100, -100, -100, -100, 0],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, 1],
+                        [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
+                    ],
+                    "input_ids": [
+                        [46518, 374, 2664, 1091, 11, 1077, 752, 1744, 1112, 198, 27261, 13, 198],
+                        [98923, 374, 2664, 1091, 11, 315, 3308, 11, 198, 17995, 13, 198, 1576, 31273, 12850, 13, 198],
+                        [16374, 374, 2664, 1091, 1112, 1077, 594, 2506, 432, 6770, 11, 198, 6351, 13, 198],
+                        [31137, 374, 2664, 1091, 979, 4362, 11, 198, 16965, 13, 198],
+                        [31019, 374, 2664, 1091, 304, 3793, 315, 5944, 11, 198, 24034, 13, 198],
+                        [98491, 374, 2664, 1091, 1112, 5310, 369, 91494, 13, 198],
+                        [4418, 2897, 14579, 5310, 979, 3800, 1349, 432, 13, 198],
+                        [20366, 5048, 7629, 944, 3281, 3322, 11, 7241, 1112, 198, 807, 1795, 279, 5601, 13, 198],
+                        [15802, 14976, 487, 33327, 1045, 31787, 63443, 11, 198, 52400, 13, 198],
+                        [13877, 1265, 2581, 1494, 49394, 11, 198, 7241, 20975, 91681, 13, 198],
+                        [641, 279, 3579, 315, 71768, 11, 25066, 279, 61361, 311, 7942, 13, 198],
+                        [7039, 374, 2664, 1091, 2937, 13, 198],
+                        [26155, 374, 3545, 2664, 1091, 34933, 26537, 13, 198],
+                        [2679, 279, 8129, 374, 4135, 311, 10339, 11, 432, 2578, 387, 264, 1661, 2884, 13, 198],
+                    ],
+                }
             )
 
-            training_args = StepwiseRewardConfig(
-                output_dir=tmp_dir,
-                max_steps=3,
-                report_to="none",
-            )
+            training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none")
             trainer = StepwiseRewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
