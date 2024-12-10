@@ -126,7 +126,7 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         model, tokenizer = setup_chat_format(model, tokenizer)
 
-    dataset = load_dataset(script_args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
