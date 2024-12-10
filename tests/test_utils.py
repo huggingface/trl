@@ -374,7 +374,7 @@ class TestComputeAccuracy(unittest.TestCase):
 
         with self.assertWarns(UserWarning) as cm:
             result = compute_accuracy(eval_pred)
-        
+
         self.assertAlmostEqual(result["accuracy"], expected_accuracy)
         expected_warning = (
             "There are 1 out of 3 instances where the predictions for both options are equal. "
