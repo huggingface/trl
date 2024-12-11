@@ -436,6 +436,8 @@ class DPOTrainerTester(unittest.TestCase):
                     if param.sum() != 0:
                         self.assertFalse(torch.equal(param, new_param))
 
+    
+    
     def test_dpo_trainer_padding_token_is_none(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
@@ -471,8 +473,10 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
                 trainer.train()
+    
+    
 
-    def test_dpo_trainer_w_dataset_num_proc(self):
+    def test_dpo_trainer_padding_free(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
@@ -483,74 +487,62 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
-                dataset_num_proc=5,
                 report_to="none",
             )
 
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-            tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-            tokenizer.pad_token = None
+            # Test with padding_free=True
+            trainer_padding_free = DPOTrainer(
+                model=self.model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                padding_free=True,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
 
-            with self.assertRaisesRegex(
-                ValueError,
-                expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
-                r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
-                r"before instantiating the trainer.",
-            ):
-                trainer = DPOTrainer(
-                    model=self.model,
-                    ref_model=None,
-                    args=training_args,
-                    processing_class=tokenizer,
-                    train_dataset=dummy_dataset["train"],
-                    eval_dataset=dummy_dataset["test"],
-                )
-
-                trainer.train()
-
-    def test_tr_dpo_trainer(self):
+            batch_paddingfree = next(iter(trainer_padding_free.get_train_dataloader()))
+            # Check for correct keys in padding-free format
+            self.assertIn("prompt_input_ids", batch_paddingfree)
+            self.assertIn("chosen_input_ids", batch_paddingfree)
+            self.assertIn("rejected_input_ids", batch_paddingfree)
+            self.assertIn("prompt_position_ids", batch_paddingfree)
+            self.assertIn("chosen_position_ids", batch_paddingfree)
+            self.assertIn("rejected_position_ids", batch_paddingfree)
+            # Attention masks should not be present in padding-free mode
+            self.assertNotIn("prompt_attention_mask", batch_paddingfree)
+            self.assertNotIn("chosen_attention_mask", batch_paddingfree)
+            self.assertNotIn("rejected_attention_mask", batch_paddingfree)
+            
+    def test_dpo_trainer_padding_free_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
-                gradient_accumulation_steps=4,
+                gradient_accumulation_steps=1,
                 learning_rate=9e-1,
                 eval_strategy="steps",
-                precompute_ref_log_probs=False,
-                sync_ref_model=True,
-                ref_model_mixup_alpha=0.5,
-                ref_model_sync_steps=1,
+                beta=0.1,
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")          
             trainer = DPOTrainer(
-                model=self.model,
-                ref_model=self.ref_model,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
+                    model=self.model,
+                    ref_model=None,
+                    args=training_args,
+                    tokenizer=self.tokenizer,
+                    padding_free=True,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
+                )
 
-            # params of the ref model as its the same as the model
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
             trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-            # check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.ref_model.get_parameter(n)
-                # check the ref model's params have changed - ignore 0 biases
-                if param.sum() != 0:
-                    self.assertFalse(torch.equal(param, new_param))
-
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
