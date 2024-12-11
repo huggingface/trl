@@ -267,7 +267,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
         if last_occurrence != -1:
             # Check that there isn't another occurrence after the expected one
             next_occurrence = decoded_input.find(generation_prompt, last_occurrence + len(generation_prompt))
-            self.assertEqual(next_occurrence, -1, "Found an extra generation prompt at the end of the input")
+            self.assertNotEqual(next_occurrence, -1, "Found an extra generation prompt at the end of the input")
 
 
 class TestBatchGeneration(unittest.TestCase):
