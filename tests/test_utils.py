@@ -265,7 +265,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
         generation_prompt = "<|im_start|>assistant"
         self.assertFalse(
             decoded_input.strip().endswith(generation_prompt),
-            f"Input should not end with generation prompt '{generation_prompt}'"
+            f"Input should not end with generation prompt '{generation_prompt}'",
         )
 
         self.assertEqual(
