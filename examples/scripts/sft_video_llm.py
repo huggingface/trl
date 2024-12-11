@@ -1,4 +1,4 @@
-# Copyright 2024. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """
 Example usage:
 accelerate launch \
@@ -53,20 +54,9 @@ import wandb
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
-from transformers import (
-    AutoModelForVision2Seq,
-    AutoProcessor,
-    BitsAndBytesConfig,
-    Qwen2VLProcessor,
-)
+from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
-from trl import (
-    SFTConfig,
-    SFTTrainer,
-    get_kbit_device_map,
-)
-from trl.commands.cli_utils import SFTScriptArguments, TrlParser
-from trl.trainer import ModelConfig
+from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
 
 
 def download_video(url: str, cache_dir: str) -> str:
@@ -161,14 +151,14 @@ def collate_fn(examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
 
 
 @dataclass
-class CustomScriptArguments(SFTScriptArguments):
+class CustomScriptArguments(ScriptArguments):
     video_cache_dir: str = "/tmp/videos/"
 
 
 if __name__ == "__main__":
     # Parse arguments
     parser = TrlParser((CustomScriptArguments, SFTConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_and_config()
+    script_args, training_args, model_args = parser.parse_args_and_config()
 
     # Configure training args
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
@@ -176,13 +166,11 @@ if __name__ == "__main__":
     training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
     # Load dataset
-    dataset = load_dataset(script_args.dataset_name, split="train")
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config, split="train")
 
     # Setup model
     torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
+        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
     )
 
     # Quantization configuration for 4-bit training
@@ -195,14 +183,14 @@ if __name__ == "__main__":
 
     # Model initialization
     model_kwargs = dict(
-        revision=model_config.model_revision,
-        trust_remote_code=model_config.trust_remote_code,
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
         torch_dtype=torch_dtype,
         device_map=get_kbit_device_map(),
         quantization_config=bnb_config,
     )
 
-    model = AutoModelForVision2Seq.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+    model = AutoModelForVision2Seq.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     peft_config = LoraConfig(
         task_type="CAUSAL_LM",
@@ -220,7 +208,7 @@ if __name__ == "__main__":
         model.enable_input_require_grads()
 
     processor = AutoProcessor.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
 
     # Prepare dataset
