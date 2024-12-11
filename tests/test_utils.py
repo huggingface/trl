@@ -91,8 +91,8 @@ class TestPad(unittest.TestCase):
 class TestGetPEFTConfig(unittest.TestCase):
     def test_create_peft_config_use_peft_false(self):
         """Test that when use_peft is False, the function returns None."""
-        model_args = ModelConfig(use_peft=False)
-        peft_config = get_peft_config(model_args)
+        model_config = ModelConfig(use_peft=False)
+        peft_config = get_peft_config(model_config)
         self.assertIsNone(peft_config)
 
     def test_create_peft_config_use_peft_true(self):
