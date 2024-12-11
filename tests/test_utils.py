@@ -262,7 +262,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
         )
 
         # Verify there isn't a generation prompt at the end
-        generation_prompt = "<|im_start|>assistant\n"
+        generation_prompt = "<|im_start|>assistant"
         self.assertFalse(
             decoded_input.strip().endswith(generation_prompt),
             f"Input should not end with generation prompt '{generation_prompt}'"
