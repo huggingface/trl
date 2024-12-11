@@ -30,9 +30,6 @@ class SFTConfig(TrainingArguments):
         dataset_text_field (`str`, *optional*, defaults to `"text"`):
             Name of the text field of the dataset. If provided, the trainer will automatically create a
             [`ConstantLengthDataset`] based on `dataset_text_field`.
-        tools (`Optional[list]`, *optional*, defaults to `None`):
-            List of functions that define the available tools for a function calling model.
-            The trainer uses these functions to generate a schema that gets incorporated into the system prompt.
         packing (`bool`, *optional*, defaults to `False`):
             Controls whether the [`ConstantLengthDataset`] packs the sequences of the dataset.
         learning_rate (`float`, *optional*, defaults to `2e-5`):
@@ -62,7 +59,6 @@ class SFTConfig(TrainingArguments):
     """
 
     dataset_text_field: str = "text"
-    tools: Optional[list] = None
     packing: bool = False
     learning_rate: float = 2.0e-5
     max_seq_length: Optional[int] = None

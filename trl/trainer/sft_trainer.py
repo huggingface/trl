@@ -248,7 +248,7 @@ class SFTTrainer(Trainer):
         if formatting_func is None:
             # check if dataset has ChatML format or instruction format and is supported
             # if not stays None
-            formatting_func = get_formatting_func_from_dataset(train_dataset, processing_class, tools=args.tools)
+            formatting_func = get_formatting_func_from_dataset(train_dataset, processing_class)
             # if a template is detected, we don't need to add special tokens again
             if formatting_func is not None:
                 args.dataset_kwargs["add_special_tokens"] = False

@@ -16,7 +16,7 @@ import unittest
 
 from datasets import Dataset, DatasetDict
 from parameterized import parameterized
-from transformers import AutoTokenizer,AutoProcessor
+from transformers import AutoProcessor, AutoTokenizer
 
 from trl.data_utils import (
     apply_chat_template,
@@ -196,8 +196,8 @@ class ApplyChatTemplateTester(unittest.TestCase):
             self.assertEqual(result["label"], example["label"])
 
     def test_apply_chat_template_with_tools(self):
-        tokenizer = AutoProcessor.from_pretrained("NousResearch/Hermes-2-Pro-Llama-3-8B")
-        
+        tokenizer = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+
         # Define dummy test tools
         def get_current_temperature(location: str):
             """
@@ -207,9 +207,14 @@ class ApplyChatTemplateTester(unittest.TestCase):
                 location: The location to get the temperature for
             """
             return 22.0
+
         # Define test case
-        test_case = {'messages': [{'content': 'Whats the weather?', 'role': 'user'},
-                                  {'content': 'Let me check', 'role': 'assistant'}]}
+        test_case = {
+            "messages": [
+                {"content": "Whats the weather?", "role": "user"},
+                {"content": "Let me check", "role": "assistant"},
+            ]
+        }
         # Test with tools
         result_with_tools = apply_chat_template(test_case, tokenizer, tools=[get_current_temperature])
 
@@ -217,7 +222,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         self.assertIn("get_current_temperature", result_with_tools["text"])
 
         # Test without tools
-        result_without_tools = apply_chat_template(test_case, tokenizer,tools=None)
+        result_without_tools = apply_chat_template(test_case, tokenizer, tools=None)
 
         # Verify tools are not included in the output
         self.assertNotIn("get_current_temperature", result_without_tools["text"])

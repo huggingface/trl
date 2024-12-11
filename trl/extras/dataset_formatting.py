@@ -27,7 +27,9 @@ FORMAT_MAPPING = {
 }
 
 
-def conversations_formatting_function(tokenizer: AutoTokenizer, messages_field: Literal["messages", "conversations"], tools: Optional[list] = None):
+def conversations_formatting_function(
+    tokenizer: AutoTokenizer, messages_field: Literal["messages", "conversations"], tools: Optional[list] = None
+):
     r"""
     return a callable function that takes in a "messages" dataset and returns a formatted dataset, based on the tokenizer
     apply chat template to the dataset along with the schema of the list of functions in the tools list.
@@ -37,7 +39,9 @@ def conversations_formatting_function(tokenizer: AutoTokenizer, messages_field: 
         if isinstance(examples[messages_field][0], list):
             output_texts = []
             for i in range(len(examples[messages_field])):
-                output_texts.append(tokenizer.apply_chat_template(examples[messages_field][i], tokenize=False, tools=tools))
+                output_texts.append(
+                    tokenizer.apply_chat_template(examples[messages_field][i], tokenize=False, tools=tools)
+                )
             return output_texts
         else:
             return tokenizer.apply_chat_template(examples[messages_field], tokenize=False, tools=tools)
