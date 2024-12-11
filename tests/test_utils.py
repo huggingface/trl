@@ -261,13 +261,18 @@ class TestDataCollatorForChatML(unittest.TestCase):
             "Labels should match assistant response tokens",
         )
 
-        # Verify there isn't an extra generation prompt at the end
+        # Verify there isn't a generation prompt at the end
         generation_prompt = "<|im_start|>assistant\n"
-        last_occurrence = decoded_input.rfind(generation_prompt)
-        if last_occurrence != -1:
-            # Check that there isn't another occurrence after the expected one
-            next_occurrence = decoded_input.find(generation_prompt, last_occurrence + len(generation_prompt))
-            self.assertNotEqual(next_occurrence, -1, "Found an extra generation prompt at the end of the input")
+        self.assertFalse(
+            decoded_input.strip().endswith(generation_prompt),
+            f"Input should not end with generation prompt '{generation_prompt}'"
+        )
+
+        self.assertEqual(
+            response_labels,
+            last_assistant_response_tokens,
+            "Labels should match assistant response tokens",
+        )
 
 
 class TestBatchGeneration(unittest.TestCase):
