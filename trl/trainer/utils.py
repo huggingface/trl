@@ -1414,6 +1414,7 @@ def generate_model_card(
     trainer_citation: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
+    comet_url: Optional[str] = None,
 ) -> ModelCard:
     """
     Generate a `ModelCard` from a template.
@@ -1431,6 +1432,8 @@ def generate_model_card(
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
+        comet_url (`str` or `None`):
+            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
@@ -1460,6 +1463,7 @@ def generate_model_card(
         hub_model_id=hub_model_id,
         dataset_name=dataset_name,
         wandb_url=wandb_url,
+        comet_url=comet_url,
         trainer_name=trainer_name,
         trainer_citation=trainer_citation,
         paper_title=paper_title,

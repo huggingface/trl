@@ -35,6 +35,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
+from ..integration_utils import get_comet_experiment_url
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_trainer import OnlineDPOTrainer
@@ -555,6 +556,7 @@ class XPOTrainer(OnlineDPOTrainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="XPO",
             trainer_citation=citation,
             paper_title="Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",

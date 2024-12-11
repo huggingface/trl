@@ -49,6 +49,7 @@ from transformers.utils import is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..core import masked_mean, masked_whiten
+from ..integration_utils import get_comet_experiment_url
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .ppo_config import PPOConfig
@@ -778,6 +779,7 @@ class PPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="PPO",
             trainer_citation=citation,
             paper_title="Fine-Tuning Language Models from Human Preferences",
