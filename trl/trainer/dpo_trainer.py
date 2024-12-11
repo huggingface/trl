@@ -126,7 +126,12 @@ class PreferenceCollator(DataCollatorMixin):
         chosen_attention_mask = [torch.ones_like(input_ids) for input_ids in chosen_input_ids]
         rejected_input_ids = [torch.tensor(example["rejected_input_ids"]) for example in examples]
         rejected_attention_mask = [torch.ones_like(input_ids) for input_ids in rejected_input_ids]
-        
+
+        # Compute cumulative sum for positional IDs
+        prompt_positions = [mask.cumsum(0) - 1 for mask in prompt_attention_mask]
+        chosen_positions = [mask.cumsum(0) - 1 for mask in chosen_attention_mask]
+        rejected_positions = [mask.cumsum(0) - 1 for mask in rejected_attention_mask]
+
         if "pixel_values" in examples[0]:
             pixel_values = [torch.tensor(example["pixel_values"]) for example in examples]
         if "pixel_attention_mask" in examples[0]:
@@ -156,6 +161,9 @@ class PreferenceCollator(DataCollatorMixin):
                 "prompt_input_ids": prompt_input_ids,
                 "chosen_input_ids": chosen_input_ids,
                 "rejected_input_ids": rejected_input_ids,
+                "prompt_position_ids": prompt_positions,
+                "chosen_position_ids": chosen_positions,
+                "rejected_position_ids": rejected_positions,
             }
             if "pixel_values" in examples[0]:
                 output["pixel_values"] = pixel_values
@@ -163,7 +171,7 @@ class PreferenceCollator(DataCollatorMixin):
                 output["pixel_attention_mask"] = pixel_attention_mask
             if "image_sizes" in examples[0]:
                 output["image_sizes"] = [example["image_sizes"] for example in examples]
-      
+
         return output
 
 class DPOTrainer(Trainer):
@@ -878,46 +886,16 @@ class DPOTrainer(Trainer):
             - Optional pixel-related features are handled the same way in both modes
         """
         output = {}
-        if padding_free:
-            # Get and pop attention masks since we won't need them after processing
-            prompt_attn_mask = batch.pop("prompt_attention_mask")
-            chosen_attn_mask = batch.pop("chosen_attention_mask")
-            rejected_attn_mask = batch.pop("rejected_attention_mask")
 
-            # Process inputs using attention masks
-            prompt_ids = batch["prompt_input_ids"][prompt_attn_mask.bool()].unsqueeze(0)
-            chosen_ids = batch["chosen_input_ids"][chosen_attn_mask.bool()].unsqueeze(0)
-            rejected_ids = batch["rejected_input_ids"][rejected_attn_mask.bool()].unsqueeze(0)
-
-            # Create position IDs using cumsum of attention masks
-            prompt_positions = prompt_attn_mask.cumsum(1)[prompt_attn_mask.bool()].unsqueeze(0) - 1
-            chosen_positions = chosen_attn_mask.cumsum(1)[chosen_attn_mask.bool()].unsqueeze(0) - 1
-            rejected_positions = rejected_attn_mask.cumsum(1)[rejected_attn_mask.bool()].unsqueeze(0) - 1
-
-            # Duplicate prompt and its positions for both chosen and rejected
-            output["prompt_input_ids"] = torch.cat([prompt_ids, prompt_ids], dim=0)
-            output["prompt_position_ids"] = torch.cat([prompt_positions, prompt_positions], dim=0)
-            
-            # Concatenate chosen and rejected
-            output["completion_input_ids"] = torch.cat([chosen_ids, rejected_ids], dim=0)
-            output["completion_position_ids"] = torch.cat([chosen_positions, rejected_positions], dim=0)
-
-            # Handle optional pixel-related features
-            if "pixel_values" in batch:
-                output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
-            if "pixel_attention_mask" in batch:
-                output["pixel_attention_mask"] = torch.cat(
-                    [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
-                )
-            if "image_sizes" in batch:
-                output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
-        
-        else:
+        if not padding_free:
             # For the prompt, the input_ids are the same for both the chosen and rejected responses
             output["prompt_input_ids"] = torch.cat([batch["prompt_input_ids"], batch["prompt_input_ids"]], dim=0)
-            output["prompt_attention_mask"] = torch.cat(
-                [batch["prompt_attention_mask"], batch["prompt_attention_mask"]], dim=0
-            )
+
+            if "prompt_attention_mask" in batch:
+                output["prompt_attention_mask"] = torch.cat(
+                    [batch["prompt_attention_mask"], batch["prompt_attention_mask"]], dim=0
+                )
+
             if "pixel_values" in batch:
                 output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
 
@@ -925,6 +903,7 @@ class DPOTrainer(Trainer):
                 output["pixel_attention_mask"] = torch.cat(
                     [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
                 )
+
             if "image_sizes" in batch:
                 output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
 
@@ -935,13 +914,46 @@ class DPOTrainer(Trainer):
                     pad_to_length(batch["chosen_input_ids"], max_completion_length, pad_value=padding_value),
                     pad_to_length(batch["rejected_input_ids"], max_completion_length, pad_value=padding_value),
                 ),
+                dim=0
             )
-            output["completion_attention_mask"] = torch.cat(
-                (
-                    pad_to_length(batch["chosen_attention_mask"], max_completion_length, pad_value=0),
-                    pad_to_length(batch["rejected_attention_mask"], max_completion_length, pad_value=0),
-                ),
+
+            if "chosen_attention_mask" in batch and "rejected_attention_mask" in batch:
+                output["completion_attention_mask"] = torch.cat(
+                    (
+                        pad_to_length(batch["chosen_attention_mask"], max_completion_length, pad_value=0),
+                        pad_to_length(batch["rejected_attention_mask"], max_completion_length, pad_value=0),
+                    ),
+                    dim=0
+                )
+
+        else:
+            output["prompt_input_ids"] = torch.cat([batch["prompt_input_ids"], batch["prompt_input_ids"]], dim=0)
+
+            if "prompt_position_ids" in batch:
+                output["prompt_position_ids"] = torch.cat(
+                    [batch["prompt_position_ids"], batch["prompt_position_ids"]], dim=0
+                )
+
+            output["completion_input_ids"] = torch.cat(
+                [batch["chosen_input_ids"], batch["rejected_input_ids"]], dim=0
             )
+
+            if "chosen_position_ids" in batch and "rejected_position_ids" in batch:
+                output["completion_position_ids"] = torch.cat(
+                    [batch["chosen_position_ids"], batch["rejected_position_ids"]], dim=0
+                )
+
+            # Handle optional pixel-related features
+            if "pixel_values" in batch:
+                output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
+
+            if "pixel_attention_mask" in batch:
+                output["pixel_attention_mask"] = torch.cat(
+                    [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
+                )
+
+            if "image_sizes" in batch:
+                output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
 
         return output
 
@@ -1137,7 +1149,7 @@ class DPOTrainer(Trainer):
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
-        num_examples = batch["prompt_input_ids"].shape[0]
+        num_examples = batch["prompt_input_ids"][0].shape[0]
 
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value, padding_free=self.padding_free)
 

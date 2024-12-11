@@ -509,6 +509,9 @@ class DPOTrainerTester(unittest.TestCase):
             self.assertIn("prompt_input_ids", batch_paddingfree)
             self.assertIn("chosen_input_ids", batch_paddingfree)
             self.assertIn("rejected_input_ids", batch_paddingfree)
+            self.assertIn("prompt_position_ids", batch_paddingfree)
+            self.assertIn("chosen_position_ids", batch_paddingfree)
+            self.assertIn("rejected_position_ids", batch_paddingfree)
             # Attention masks should not be present in padding-free mode
             self.assertNotIn("prompt_attention_mask", batch_paddingfree)
             self.assertNotIn("chosen_attention_mask", batch_paddingfree)
@@ -546,11 +549,12 @@ class DPOTrainerTester(unittest.TestCase):
             expected_rejected_ids = batch_padded["rejected_input_ids"][rejected_attn_mask.bool()]
 
             # Verify that padding-free batch matches the non-padded tokens from padded batch
-            # TO DO: will not flatten because it is a list not tensor
-            self.assertTrue(torch.equal(batch_paddingfree["prompt_input_ids"].flatten(), expected_prompt_ids))
-            self.assertTrue(torch.equal(batch_paddingfree["chosen_input_ids"].flatten(), expected_chosen_ids))
-            self.assertTrue(torch.equal(batch_paddingfree["rejected_input_ids"].flatten(), expected_rejected_ids))
-        
+            prompt_input_ids_tensor = torch.tensor(batch_paddingfree["prompt_input_ids"], dtype=torch.long)
+            self.assertTrue(torch.equal(prompt_input_ids_tensor.flatten(),expected_chosen_ids))
+            chosen_input_ids_tensor = torch.tensor(batch_paddingfree["chosen_input_ids"], dtype=torch.long)
+            self.assertTrue(torch.equal(chosen_input_ids_tensor.flatten(),expected_chosen_ids))
+            rejected_input_ids_tensor = torch.tensor(batch_paddingfree["rejected_input_ids"], dtype=torch.long)
+            self.assertTrue(torch.equal(rejected_input_ids_tensor.flatten(),expected_chosen_ids))
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
