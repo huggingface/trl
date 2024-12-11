@@ -530,11 +530,7 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-            tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-
-          
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")          
             trainer = DPOTrainer(
                     model=self.model,
                     ref_model=None,
