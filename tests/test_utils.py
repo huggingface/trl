@@ -14,13 +14,15 @@
 
 import unittest
 
+import numpy as np
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl.trainer.model_config import ModelConfig
+from trl import ModelConfig
+from trl.trainer import compute_accuracy
 from trl.trainer.utils import (
     DataCollatorForChatML,
     batch_generation,
@@ -332,3 +334,70 @@ class TestBatchGeneration(unittest.TestCase):
         self.assertGreater(max_length_query, context_length)
         self.assertEqual(query_responses.shape, (bs, max_length_query))
         self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
+
+
+class TestComputeAccuracy(unittest.TestCase):
+    def test_token_classification_task(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[0, 1], [1, 0]]),
+        )
+        expected_accuracy = 0.5  # 2 matches, 2 mismatches
+        result = compute_accuracy(eval_pred)
+        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+
+    def test_token_classification_task_with_ignored_tokens_0(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[1, 0], [1, -100]]),
+        )
+        expected_accuracy = 1.0  # All non-ignored tokens match
+        result = compute_accuracy(eval_pred)
+        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+
+    def test_token_classification_task_with_ignored_tokens_1(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[1, 1], [0, -100]]),
+        )
+        expected_accuracy = 1 / 3  # 1 match, 2 mismatch, 1 ignored
+        result = compute_accuracy(eval_pred)
+        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+
+    def test_rewards_comparison_task(self):
+        eval_pred = (
+            np.array(
+                [
+                    [0.9, 0.1],  # Batch 1
+                    [0.6, 0.4],  # Batch 2
+                    [0.5, 0.5],  # Batch 3 (equal)
+                ]
+            ),
+            np.array([0, 1, 1]),
+        )
+        expected_accuracy = 0.5  # 1 match, 1 mismatch, 1 equal (ignored)
+
+        with self.assertWarns(UserWarning) as cm:
+            result = compute_accuracy(eval_pred)
+
+        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+        expected_warning = (
+            "There are 1 out of 3 instances where the predictions for both options are equal. "
+            "These instances are ignored in the accuracy computation."
+        )
+        self.assertEqual(str(cm.warning), expected_warning)
