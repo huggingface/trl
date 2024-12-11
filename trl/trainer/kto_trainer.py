@@ -52,8 +52,8 @@ from transformers.utils import is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
-from ..integration_utils import get_comet_experiment_url
 from ..models import PreTrainedModelWrapper, create_reference_model
+from ..utils import get_comet_experiment_url
 from .kto_config import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,

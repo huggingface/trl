@@ -48,7 +48,7 @@ from transformers.utils import is_peft_available, is_torch_fx_proxy
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
-from ..integration_utils import get_comet_experiment_url
+from ..utils import get_comet_experiment_url
 from .cpo_config import CPOConfig
 from .utils import (
     DPODataCollatorWithPadding,

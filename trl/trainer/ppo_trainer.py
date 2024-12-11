@@ -49,9 +49,9 @@ from transformers.utils import is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..core import masked_mean, masked_whiten
-from ..integration_utils import get_comet_experiment_url
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
+from ..utils import get_comet_experiment_url
 from .ppo_config import PPOConfig
 from .utils import (
     OnlineTrainerState,

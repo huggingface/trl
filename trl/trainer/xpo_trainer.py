@@ -35,8 +35,8 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
-from ..integration_utils import get_comet_experiment_url
 from ..models.utils import unwrap_model_for_generation
+from ..utils import get_comet_experiment_url
 from .judges import BasePairwiseJudge
 from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import SIMPLE_CHAT_TEMPLATE, empty_cache, generate_model_card, get_reward, truncate_right

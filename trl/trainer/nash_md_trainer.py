@@ -35,9 +35,9 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import is_apex_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
-from ..integration_utils import get_comet_experiment_url
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
+from ..utils import get_comet_experiment_url
 from .judges import BasePairwiseJudge
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer

@@ -38,9 +38,9 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
-from ..integration_utils import get_comet_experiment_url
 from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
+from ..utils import get_comet_experiment_url
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
 from .utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache, generate_model_card

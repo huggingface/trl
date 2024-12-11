@@ -25,8 +25,8 @@ from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from transformers import is_wandb_available
 
-from ..integration_utils import get_comet_experiment_url
 from ..models import DDPOStableDiffusionPipeline
+from ..utils import get_comet_experiment_url
 from . import BaseTrainer, DDPOConfig
 from .utils import PerPromptStatTracker, generate_model_card
 

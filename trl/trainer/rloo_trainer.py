@@ -46,7 +46,6 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils.deprecation import deprecate_kwarg
 
-from ..integration_utils import get_comet_experiment_url
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
     OnlineTrainerState,
@@ -60,6 +59,7 @@ from ..trainer.utils import (
     print_rich_table,
     truncate_response,
 )
+from ..utils import get_comet_experiment_url
 from .rloo_config import RLOOConfig
 from .utils import generate_model_card
 

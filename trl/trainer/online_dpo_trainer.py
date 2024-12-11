@@ -48,9 +48,9 @@ from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, loggi
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
-from ..integration_utils import get_comet_experiment_url
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
+from ..utils import get_comet_experiment_url
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (

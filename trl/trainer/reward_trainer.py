@@ -42,7 +42,7 @@ from transformers.utils import is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template
-from ..integration_utils import get_comet_experiment_url
+from ..utils import get_comet_experiment_url
 from .reward_config import RewardConfig
 from .utils import (
     RewardDataCollatorWithPadding,
