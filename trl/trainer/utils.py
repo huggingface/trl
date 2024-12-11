@@ -276,7 +276,7 @@ class DataCollatorForChatML:
             if "input_ids" not in example:
                 message = example[self.messages_key]
                 formatted_message = self.tokenizer.apply_chat_template(
-                    message, tokenize=False, add_generation_prompt=True
+                    message, tokenize=False, add_generation_prompt=False
                 )
                 tokenized_message = self.tokenizer(
                     formatted_message,
