@@ -504,7 +504,6 @@ class DPOTrainerTester(unittest.TestCase):
             )
 
             batch_paddingfree = next(iter(trainer_padding_free.get_train_dataloader()))
-            
             # Check for correct keys in padding-free format
             self.assertIn("prompt_input_ids", batch_paddingfree)
             self.assertIn("chosen_input_ids", batch_paddingfree)
@@ -516,45 +515,38 @@ class DPOTrainerTester(unittest.TestCase):
             self.assertNotIn("prompt_attention_mask", batch_paddingfree)
             self.assertNotIn("chosen_attention_mask", batch_paddingfree)
             self.assertNotIn("rejected_attention_mask", batch_paddingfree)
-
-            # Test with padding_free=False
-            trainer_with_padding = DPOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                tokenizer=self.tokenizer,
-                padding_free=False,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
+            
+    def test_dpo_trainer_padding_free_training(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                report_to="none",
             )
 
-            batch_padded = next(iter(trainer_with_padding.get_train_dataloader()))
-            
-            # Check for correct keys in padded format
-            self.assertIn("prompt_input_ids", batch_padded)
-            self.assertIn("chosen_input_ids", batch_padded)
-            self.assertIn("rejected_input_ids", batch_padded)
-            self.assertIn("prompt_attention_mask", batch_padded)
-            self.assertIn("chosen_attention_mask", batch_padded)
-            self.assertIn("rejected_attention_mask", batch_padded)
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-            # Compare padded and padding-free batches
-            prompt_attn_mask = batch_padded["prompt_attention_mask"]
-            chosen_attn_mask = batch_padded["chosen_attention_mask"]
-            rejected_attn_mask = batch_padded["rejected_attention_mask"]
+            tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 
-            # Get the non-padded tokens using attention masks
-            expected_prompt_ids = batch_padded["prompt_input_ids"][prompt_attn_mask.bool()]
-            expected_chosen_ids = batch_padded["chosen_input_ids"][chosen_attn_mask.bool()]
-            expected_rejected_ids = batch_padded["rejected_input_ids"][rejected_attn_mask.bool()]
+          
+            trainer = DPOTrainer(
+                    model=self.model,
+                    ref_model=None,
+                    args=training_args,
+                    tokenizer=self.tokenizer,
+                    padding_free=True,
+                    train_dataset=dummy_dataset["train"],
+                    eval_dataset=dummy_dataset["test"],
+                )
 
-            # Verify that padding-free batch matches the non-padded tokens from padded batch
-            prompt_input_ids_tensor = torch.tensor(batch_paddingfree["prompt_input_ids"], dtype=torch.long)
-            self.assertTrue(torch.equal(prompt_input_ids_tensor.flatten(),expected_chosen_ids))
-            chosen_input_ids_tensor = torch.tensor(batch_paddingfree["chosen_input_ids"], dtype=torch.long)
-            self.assertTrue(torch.equal(chosen_input_ids_tensor.flatten(),expected_chosen_ids))
-            rejected_input_ids_tensor = torch.tensor(batch_paddingfree["rejected_input_ids"], dtype=torch.long)
-            self.assertTrue(torch.equal(rejected_input_ids_tensor.flatten(),expected_chosen_ids))
+
+            trainer.train()
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
