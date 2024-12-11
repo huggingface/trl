@@ -14,22 +14,16 @@
 
 import os
 import platform
-import subprocess
-import sys
 from importlib.metadata import version
-from subprocess import CalledProcessError
 
 import torch
 from accelerate.commands.config import default_config_file, load_config_from_file
-from rich.console import Console
 from transformers import is_bitsandbytes_available
 from transformers.utils import is_liger_kernel_available, is_openai_available, is_peft_available
 
-from .. import __version__, is_deepspeed_available, is_diffusers_available, is_llm_blender_available
-from .cli_utils import get_git_commit_hash
-
-
-SUPPORTED_COMMANDS = ["sft", "dpo", "chat", "kto", "env"]
+from .. import __version__
+from ..import_utils import is_deepspeed_available, is_diffusers_available, is_llm_blender_available
+from .utils import get_git_commit_hash
 
 
 def print_env():
@@ -74,71 +68,5 @@ def print_env():
     print(f"\nCopy-paste the following information when reporting an issue:\n\n{info_str}\n")  # noqa
 
 
-def train(command_name):
-    console = Console()
-    # Make sure to import things locally to avoid verbose from third party libs.
-    with console.status("[bold purple]Welcome! Initializing the TRL CLI..."):
-        from trl.commands.cli_utils import init_zero_verbose
-
-        init_zero_verbose()
-        command_name = sys.argv[1]
-        trl_examples_dir = os.path.dirname(__file__)
-
-    command = f"accelerate launch {trl_examples_dir}/scripts/{command_name}.py {' '.join(sys.argv[2:])}"
-
-    try:
-        subprocess.run(
-            command.split(),
-            text=True,
-            check=True,
-            encoding="utf-8",
-            cwd=os.getcwd(),
-            env=os.environ.copy(),
-        )
-    except (CalledProcessError, ChildProcessError) as exc:
-        console.log(f"TRL - {command_name.upper()} failed on ! See the logs above for further details.")
-        raise ValueError("TRL CLI failed! Check the traceback above..") from exc
-
-
-def chat():
-    console = Console()
-    # Make sure to import things locally to avoid verbose from third party libs.
-    with console.status("[bold purple]Welcome! Initializing the TRL CLI..."):
-        from trl.commands.cli_utils import init_zero_verbose
-
-        init_zero_verbose()
-        trl_examples_dir = os.path.dirname(__file__)
-
-    command = f"python {trl_examples_dir}/scripts/chat.py {' '.join(sys.argv[2:])}"
-
-    try:
-        subprocess.run(
-            command.split(),
-            text=True,
-            check=True,
-            encoding="utf-8",
-            cwd=os.getcwd(),
-            env=os.environ.copy(),
-        )
-    except (CalledProcessError, ChildProcessError) as exc:
-        console.log("TRL - CHAT failed! See the logs above for further details.")
-        raise ValueError("TRL CLI failed! Check the traceback above..") from exc
-
-
-def main():
-    command_name = sys.argv[1]
-
-    if command_name in ["sft", "dpo", "kto"]:
-        train(command_name)
-    elif command_name == "chat":
-        chat()
-    elif command_name == "env":
-        print_env()
-    else:
-        raise ValueError(
-            f"Please use one of the supported commands, got {command_name} - supported commands are {SUPPORTED_COMMANDS}"
-        )
-
-
 if __name__ == "__main__":
-    main()
+    print_env()
