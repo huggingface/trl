@@ -35,6 +35,7 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import is_apex_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
+from ..integration_utils import get_comet_experiment_url
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
@@ -500,6 +501,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="Nash-MD",
             trainer_citation=citation,
             paper_title="Nash Learning from Human Feedback",

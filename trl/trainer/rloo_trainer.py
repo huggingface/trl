@@ -46,6 +46,7 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils.deprecation import deprecate_kwarg
 
+from ..integration_utils import get_comet_experiment_url
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
     OnlineTrainerState,
@@ -606,6 +607,7 @@ class RLOOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="RLOO",
             trainer_citation=citation,
             paper_title="Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",

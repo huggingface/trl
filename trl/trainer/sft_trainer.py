@@ -44,6 +44,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
+from ..integration_utils import get_comet_experiment_url
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -540,6 +541,7 @@ class SFTTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="SFT",
         )
 

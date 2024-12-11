@@ -38,6 +38,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
+from ..integration_utils import get_comet_experiment_url
 from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
@@ -378,6 +379,7 @@ class GKDTrainer(SFTTrainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="GKD",
             trainer_citation=citation,
             paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",

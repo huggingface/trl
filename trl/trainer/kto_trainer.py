@@ -52,6 +52,7 @@ from transformers.utils import is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
+from ..integration_utils import get_comet_experiment_url
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .kto_config import KTOConfig
 from .utils import (
@@ -1526,6 +1527,7 @@ class KTOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="KTO",
             trainer_citation=citation,
             paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",

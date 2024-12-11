@@ -48,6 +48,7 @@ from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, loggi
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..integration_utils import get_comet_experiment_url
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
@@ -734,6 +735,7 @@ class OnlineDPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="Online DPO",
             trainer_citation=citation,
             paper_title="Direct Language Model Alignment from Online AI Feedback",
