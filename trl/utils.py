@@ -15,6 +15,8 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from transformers import is_comet_available
+
 
 @dataclass
 class ScriptArguments:
@@ -43,3 +45,17 @@ class ScriptArguments:
     dataset_test_split: str = "test"
     gradient_checkpointing_use_reentrant: bool = False
     ignore_bias_buffers: bool = False
+
+
+def get_comet_experiment_url() -> Optional[str]:
+    """If Comet integration is enabled returns the URL of the current Comet experiment
+    or None if disabled or no Comet experiment is currently running."""
+    if not is_comet_available():
+        return None
+
+    import comet_ml
+
+    if comet_ml.get_running_experiment() is not None:
+        return comet_ml.get_running_experiment().url
+
+    return None

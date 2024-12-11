@@ -59,6 +59,7 @@ from ..trainer.utils import (
     print_rich_table,
     truncate_response,
 )
+from ..utils import get_comet_experiment_url
 from .rloo_config import RLOOConfig
 from .utils import generate_model_card
 
@@ -606,6 +607,7 @@ class RLOOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="RLOO",
             trainer_citation=citation,
             paper_title="Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",

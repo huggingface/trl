@@ -51,6 +51,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
+from ..utils import get_comet_experiment_url
 from .ppo_config import PPOConfig
 from .utils import (
     OnlineTrainerState,
@@ -324,7 +325,8 @@ class PPOTrainer(Trainer):
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         backup_model = self.policy_and_value
-        self.policy_and_value = self.policy_and_value.policy  # save only the policy
+        if hasattr(self.policy_and_value, "policy"):
+            self.policy_and_value = self.policy_and_value.policy  # save only the policy
 
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
@@ -778,6 +780,7 @@ class PPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="PPO",
             trainer_citation=citation,
             paper_title="Fine-Tuning Language Models from Human Preferences",

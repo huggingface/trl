@@ -52,6 +52,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper
+from ..utils import get_comet_experiment_url
 from .orpo_config import ORPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
@@ -1077,6 +1078,7 @@ class ORPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="ORPO",
             trainer_citation=citation,
             paper_title="ORPO: Monolithic Preference Optimization without Reference Model",

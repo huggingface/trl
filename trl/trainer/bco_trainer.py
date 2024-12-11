@@ -53,6 +53,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import maybe_apply_chat_template
 from ..models import PreTrainedModelWrapper, create_reference_model
+from ..utils import get_comet_experiment_url
 from .bco_config import BCOConfig
 from .utils import (
     DPODataCollatorWithPadding,
@@ -1514,6 +1515,7 @@ class BCOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="BCO",
             trainer_citation=citation,
             paper_title="Binary Classifier Optimization for Large Language Model Alignment",
