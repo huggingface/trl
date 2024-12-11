@@ -107,8 +107,8 @@ class TestGetPEFTConfig(unittest.TestCase):
             "lora_target_modules": ["up_proj", "down_proj"],
             "lora_modules_to_save": ["up_proj"],
         }
-        model_args = ModelConfig(use_peft=True, **peft_kwargs)
-        peft_config = get_peft_config(model_args)
+        model_config = ModelConfig(use_peft=True, **peft_kwargs)
+        peft_config = get_peft_config(model_config)
         self.assertTrue(isinstance(peft_config, LoraConfig))
         for arg, value in peft_kwargs.items():
             # Test that lists of modules are converted to sets
