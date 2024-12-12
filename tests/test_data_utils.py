@@ -211,22 +211,21 @@ class ApplyChatTemplateTester(unittest.TestCase):
 
         # Define test case
         test_case = {
-            "messages": [
-                {"content": "Whats the weather?", "role": "user"},
-                {"content": "Let me check", "role": "assistant"},
+            "prompt": [
+                {"content": "Whats the temperature in London?", "role": "user"},
             ]
         }
         # Test with tools
         result_with_tools = apply_chat_template(test_case, tokenizer, tools=[get_current_temperature])
 
         # Verify tools are included in the output
-        self.assertIn("get_current_temperature", result_with_tools["text"])
+        self.assertIn("get_current_temperature", result_with_tools["prompt"])
 
         # Test without tools
         result_without_tools = apply_chat_template(test_case, tokenizer, tools=None)
 
         # Verify tools are not included in the output
-        self.assertNotIn("get_current_temperature", result_without_tools["text"])
+        self.assertNotIn("get_current_temperature", result_without_tools["prompt"])
 
 
 class UnpairPreferenceDatasetTester(unittest.TestCase):
