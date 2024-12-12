@@ -322,9 +322,8 @@ class PPOTrainer(Trainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        backup_model = self.policy_and_value
-        if hasattr(self.policy_and_value, "policy"):
-            self.policy_and_value = self.policy_and_value.policy  # save only the policy
+        backup_model = self.model
+        self.model = self.model.policy  # save only the policy
 
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
