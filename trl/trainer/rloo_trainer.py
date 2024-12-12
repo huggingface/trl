@@ -59,7 +59,7 @@ from ..trainer.utils import (
     print_rich_table,
     truncate_response,
 )
-from ..utils import get_comet_experiment_url
+from ..utils import get_comet_experiment_url, log_table_to_comet_experiment
 from .rloo_config import RLOOConfig
 from .utils import generate_model_card
 
@@ -556,6 +556,12 @@ class RLOOTrainer(Trainer):
 
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
+
+            if "comet_ml" in args.report_to:
+                log_table_to_comet_experiment(
+                    name="completions.csv",
+                    table=df,
+                )
 
     def create_model_card(
         self,

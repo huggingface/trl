@@ -42,7 +42,7 @@ from transformers.utils import is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template
-from ..utils import get_comet_experiment_url
+from ..utils import get_comet_experiment_url, log_table_to_comet_experiment
 from .reward_config import RewardConfig
 from .utils import (
     RewardDataCollatorWithPadding,
@@ -359,6 +359,12 @@ class RewardTrainer(Trainer):
 
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
+
+            if "comet_ml" in self.args.report_to:
+                log_table_to_comet_experiment(
+                    name="completions.csv",
+                    table=df,
+                )
 
     def create_model_card(
         self,
