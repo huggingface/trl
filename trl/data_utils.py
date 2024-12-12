@@ -171,14 +171,11 @@ def maybe_apply_chat_template(
 
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
             messages, where each message is a dictionary with keys `"role"` and `"content"`.
-
         tokenizer (`PreTrainedTokenizer`):
             The tokenizer to apply the chat template with.
-
         tools (`Optional[list[Union[dict, Callable]]]`, *optional*, defaults to `None`):
             A list of tools (callable functions) that will be accessible to the model.
             If the template does not support function calling, this argument will have no effect
-
 
     Returns:
         `dict[str, str]`: The formatted example with the chat template applied.
