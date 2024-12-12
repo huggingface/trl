@@ -19,6 +19,7 @@ from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffu
 
 _import_structure = {
     "modeling_base": ["GeometricMixtureWrapper", "PreTrainedModelWrapper", "create_reference_model"],
+    "modeling_cloud_head": ["AutoModelForCausalLMWithCloudHead", "AutoModelForSeq2SeqLMWithCloudHead"],
     "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
     "utils": ["SUPPORTED_ARCHITECTURES", "setup_chat_format", "unwrap_model_for_generation"],
 }
@@ -38,6 +39,7 @@ else:
 
 if TYPE_CHECKING:
     from .modeling_base import GeometricMixtureWrapper, PreTrainedModelWrapper, create_reference_model
+    from .modeling_cloud_head import AutoModelForCausalLMWithCloudHead, AutoModelForSeq2SeqLMWithCloudHead
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
     from .utils import SUPPORTED_ARCHITECTURES, setup_chat_format, unwrap_model_for_generation
 
