@@ -45,33 +45,8 @@ class TestPPOTrainer(unittest.TestCase):
         )
 
         # Load dataset
-        raw_dataset = load_dataset(
-            "trl-internal-testing/descriptiveness-sentiment-trl-style",
-            split="descriptiveness",
-        )
-
-        def prepare_dataset(dataset, tokenizer):
-            """pre-tokenize the dataset before training"""
-
-            def tokenize(element):
-                outputs = tokenizer(
-                    element["prompt"],
-                    padding=False,
-                )
-                return {"input_ids": outputs["input_ids"]}
-
-            return dataset.map(
-                tokenize,
-                batched=True,
-                remove_columns=dataset.column_names,
-                load_from_cache_file=False,
-            )
-
-        # Process the dataset
-        # Split into train and eval datasets as in ppo.py
-        eval_samples = 100
-        train_dataset = raw_dataset.select(range(len(raw_dataset) - eval_samples))
-        eval_dataset = raw_dataset.select(range(len(raw_dataset) - eval_samples, len(raw_dataset)))
+        raw_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        self.raw_dataset = raw_dataset.map(lambda x: self.tokenizer(x["prompt"]))
 
         # Process both datasets
         self.train_dataset = prepare_dataset(train_dataset, self.tokenizer)
