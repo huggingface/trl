@@ -45,37 +45,8 @@ class TestPPOTrainer(unittest.TestCase):
         )
 
         # Load dataset
-        raw_dataset = load_dataset(
-            "trl-internal-testing/descriptiveness-sentiment-trl-style",
-            split="descriptiveness",
-        )
-
-        def prepare_dataset(dataset, tokenizer):
-            """pre-tokenize the dataset before training"""
-
-            def tokenize(element):
-                outputs = tokenizer(
-                    element["prompt"],
-                    padding=False,
-                )
-                return {"input_ids": outputs["input_ids"]}
-
-            return dataset.map(
-                tokenize,
-                batched=True,
-                remove_columns=dataset.column_names,
-                load_from_cache_file=False,
-            )
-
-        # Process the dataset
-        # Split into train and eval datasets as in ppo.py
-        eval_samples = 100
-        train_dataset = raw_dataset.select(range(len(raw_dataset) - eval_samples))
-        eval_dataset = raw_dataset.select(range(len(raw_dataset) - eval_samples, len(raw_dataset)))
-
-        # Process both datasets
-        self.train_dataset = prepare_dataset(train_dataset, self.tokenizer)
-        self.eval_dataset = prepare_dataset(eval_dataset, self.tokenizer)
+        raw_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        self.raw_dataset = raw_dataset.map(lambda x: self.tokenizer(x["prompt"]), remove_columns=["prompt"])
 
     def test_basic_training(self):
         """Test basic PPO training configuration and verify model updates."""
@@ -92,10 +63,7 @@ class TestPPOTrainer(unittest.TestCase):
             training_args = PPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=4,
-                gradient_accumulation_steps=1,
-                learning_rate=3e-6,
-                total_episodes=10,
-                save_strategy="no",
+                per_device_eval_batch_size=2,
                 report_to="none",
                 missing_eos_penalty=1.0,
                 vf_coef=1.0,  # Increase value function coefficient
@@ -110,8 +78,8 @@ class TestPPOTrainer(unittest.TestCase):
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
                 value_model=self.value_model,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
+                train_dataset=self.raw_dataset["train"],
+                eval_dataset=self.raw_dataset["test"],
             )
 
             # Train
@@ -152,10 +120,7 @@ class TestPPOTrainer(unittest.TestCase):
             training_args = PPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=4,
-                gradient_accumulation_steps=1,
-                learning_rate=3e-6,
-                total_episodes=10,
-                save_strategy="no",
+                per_device_eval_batch_size=2,
                 report_to="none",
                 missing_eos_penalty=1.0,
             )
@@ -177,8 +142,8 @@ class TestPPOTrainer(unittest.TestCase):
                 ref_model=None,
                 reward_model=self.reward_model,
                 value_model=self.value_model,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
+                train_dataset=self.raw_dataset["train"],
+                eval_dataset=self.raw_dataset["test"],
                 peft_config=peft_config,
             )
 
@@ -221,10 +186,7 @@ class TestPPOTrainer(unittest.TestCase):
             training_args = PPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=4,
-                gradient_accumulation_steps=1,
-                learning_rate=3e-6,
-                num_train_epochs=0.003,  # As used in original test
-                save_strategy="no",
+                per_device_eval_batch_size=2,
                 report_to="none",
                 missing_eos_penalty=1.0,
             )
@@ -237,8 +199,8 @@ class TestPPOTrainer(unittest.TestCase):
                 ref_model=self.ref_model,
                 reward_model=self.reward_model,
                 value_model=self.value_model,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
+                train_dataset=self.raw_dataset["train"],
+                eval_dataset=self.raw_dataset["test"],
             )
 
             # Train and verify no exceptions are raised
