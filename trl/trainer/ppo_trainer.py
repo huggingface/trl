@@ -51,7 +51,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
-from ..utils import get_comet_experiment_url
+from ..utils import get_comet_experiment_url, log_table_to_comet_experiment
 from .ppo_config import PPOConfig
 from .utils import (
     OnlineTrainerState,
@@ -728,6 +728,12 @@ class PPOTrainer(Trainer):
 
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
+
+            if "comet_ml" in args.report_to:
+                log_table_to_comet_experiment(
+                    name="completions.csv",
+                    table=df,
+                )
 
     def create_model_card(
         self,

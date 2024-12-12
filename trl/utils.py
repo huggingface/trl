@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional
 
 import pandas as pd
 from transformers import is_comet_available
