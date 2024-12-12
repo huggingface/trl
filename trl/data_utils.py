@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional, Sequence, TypeVar
+from typing import Any, Callable, Optional, Sequence, TypeVar, Union
 
 from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizer
@@ -61,9 +61,13 @@ def is_conversational(example: dict[str, Any]) -> bool:
     return False
 
 
-def apply_chat_template(example: dict[str, list[dict[str, str]]], tokenizer: PreTrainedTokenizer) -> dict[str, str]:
+def apply_chat_template(
+    example: dict[str, list[dict[str, str]]],
+    tokenizer: PreTrainedTokenizer,
+    tools: Optional[list[Union[dict, Callable]]] = None,
+) -> dict[str, str]:
     r"""
-    Apply a chat template to a conversational example.
+    Apply a chat template to a conversational example along with the schema for a list of functions in `tools`.
 
     For more details, see [`maybe_apply_chat_template`].
     """
@@ -82,30 +86,36 @@ def apply_chat_template(example: dict[str, list[dict[str, str]]], tokenizer: Pre
 
     # Apply the chat template to the whole conversation
     if "messages" in example:
-        messages = tokenizer.apply_chat_template(example["messages"], tokenize=False)
+        messages = tokenizer.apply_chat_template(example["messages"], tools=tools, tokenize=False)
 
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
-        prompt = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
+        prompt = tokenizer.apply_chat_template(
+            example["prompt"], tools=tools, tokenize=False, add_generation_prompt=True
+        )
 
     # Apply the chat template to the entire prompt + completion
     if "prompt" in example:  # explicit prompt and prompt-completion case
         if "chosen" in example:
-            prompt_chosen = tokenizer.apply_chat_template(example["prompt"] + example["chosen"], tokenize=False)
+            prompt_chosen = tokenizer.apply_chat_template(
+                example["prompt"] + example["chosen"], tools=tools, tokenize=False
+            )
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
-            prompt_rejected = tokenizer.apply_chat_template(example["prompt"] + example["rejected"], tokenize=False)
+            prompt_rejected = tokenizer.apply_chat_template(
+                example["prompt"] + example["rejected"], tools=tools, tokenize=False
+            )
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
-                example["prompt"] + example["completion"], tokenize=False
+                example["prompt"] + example["completion"], tools=tools, tokenize=False
             )
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
-            chosen = tokenizer.apply_chat_template(example["chosen"], tokenize=False)
+            chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False)
         if "rejected" in example:
-            rejected = tokenizer.apply_chat_template(example["rejected"], tokenize=False)
+            rejected = tokenizer.apply_chat_template(example["rejected"], tools=tools, tokenize=False)
 
     # Ensure that the prompt is the initial part of the prompt-completion string
     if "prompt" in example:
@@ -140,7 +150,9 @@ def apply_chat_template(example: dict[str, list[dict[str, str]]], tokenizer: Pre
 
 
 def maybe_apply_chat_template(
-    example: dict[str, list[dict[str, str]]], tokenizer: PreTrainedTokenizer
+    example: dict[str, list[dict[str, str]]],
+    tokenizer: PreTrainedTokenizer,
+    tools: Optional[list[Union[dict, Callable]]] = None,
 ) -> dict[str, str]:
     r"""
     If the example is in a conversational format, apply a chat template to it.
@@ -159,9 +171,11 @@ def maybe_apply_chat_template(
 
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
             messages, where each message is a dictionary with keys `"role"` and `"content"`.
-
         tokenizer (`PreTrainedTokenizer`):
             The tokenizer to apply the chat template with.
+        tools (`Optional[list[Union[dict, Callable]]]`, *optional*, defaults to `None`):
+            A list of tools (callable functions) that will be accessible to the model.
+            If the template does not support function calling, this argument will have no effect
 
     Returns:
         `dict[str, str]`: The formatted example with the chat template applied.
@@ -184,7 +198,7 @@ def maybe_apply_chat_template(
     ```
     """
     if is_conversational(example):
-        return apply_chat_template(example, tokenizer)
+        return apply_chat_template(example, tokenizer, tools)
     else:
         return example
 
