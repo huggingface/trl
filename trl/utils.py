@@ -13,8 +13,9 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
 
+import pandas as pd
 from transformers import is_comet_available
 
 
@@ -59,3 +60,23 @@ def get_comet_experiment_url() -> Optional[str]:
         return comet_ml.get_running_experiment().url
 
     return None
+
+
+def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
+    """
+    If Comet integration is enabled logs a table to the Comet experiment if it is currently running.
+
+    Args:
+        name (`str`):
+            Table name.
+        table (`pd.DataFrame`):
+            The Pandas DataFrame containing the table to log.
+    """
+    if not is_comet_available():
+        return
+
+    import comet_ml
+
+    experiment = comet_ml.get_running_experiment()
+    if experiment is not None:
+        experiment.log_table(tabular_data=table, filename=name)
