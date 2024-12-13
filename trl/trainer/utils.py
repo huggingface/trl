@@ -1500,7 +1500,8 @@ def generate_model_card(
 
 
 def get_comet_experiment_url() -> Optional[str]:
-    """If Comet integration is enabled returns the URL of the current Comet experiment
+    """
+    If Comet integration is enabled, return the URL of the current Comet experiment; otherwise, return `None`.
     or None if disabled or no Comet experiment is currently running."""
     if not is_comet_available():
         return None
