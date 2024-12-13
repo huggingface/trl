@@ -26,6 +26,7 @@ from trl.data_utils import (
     maybe_apply_chat_template,
     maybe_extract_prompt,
     maybe_unpair_preference_dataset,
+    pack_examples,
     unpair_preference_dataset,
 )
 
@@ -390,6 +391,48 @@ class ExtractPromptTester(unittest.TestCase):
             self.example_explicit_prompt_standard,
             "The prompt should remain unchanged.",
         )
+
+
+class TestPackExamples(unittest.TestCase):
+    def test_pack_examples_larger_chunks(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        seq_length = 5
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4, 5], [6, 7, 8]],
+            "attention_mask": [[0, 1, 1, 0, 0], [1, 1, 1]],
+        }
+        result = pack_examples(examples, seq_length)
+        self.assertEqual(result, expected_output)
+
+    def test_pack_examples_smaller_chunks(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        seq_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [3, 4], [5, 6], [7, 8]],
+            "attention_mask": [[0, 1], [1, 0], [0, 1], [1, 1]],
+        }
+        result = pack_examples(examples, seq_length)
+        self.assertEqual(result, expected_output)
+
+    def test_pack_with_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 3
+        expected_output = {
+            "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
+        }
+        dataset = dataset.map(pack_examples, batched=True, fn_kwargs={"seq_length": seq_length})
+        self.assertEqual(dataset.to_dict(), expected_output)
 
 
 # Run the tests
