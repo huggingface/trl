@@ -539,11 +539,11 @@ class DPOTrainerTester(unittest.TestCase):
                     padding_free=True,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
-                    
                 )
 
 
             trainer.train()
+            
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
