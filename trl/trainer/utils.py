@@ -56,6 +56,9 @@ from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
 
+if is_comet_available():
+    import comet_ml
+
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
 
@@ -1502,11 +1505,9 @@ def generate_model_card(
 def get_comet_experiment_url() -> Optional[str]:
     """
     If Comet integration is enabled, return the URL of the current Comet experiment; otherwise, return `None`.
-    or None if disabled or no Comet experiment is currently running."""
+    """
     if not is_comet_available():
         return None
-
-    import comet_ml
 
     if comet_ml.get_running_experiment() is not None:
         return comet_ml.get_running_experiment().url
@@ -1526,8 +1527,6 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     """
     if not is_comet_available():
         raise ModuleNotFoundError("The comet-ml is not installed. Please install it first: pip install comet-ml")
-
-    import comet_ml
 
     experiment = comet_ml.get_running_experiment()
     if experiment is not None:
