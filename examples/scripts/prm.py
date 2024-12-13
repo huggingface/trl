@@ -14,7 +14,7 @@
 
 """
 Full training:
-python examples/scripts/stepwise_reward_modeling.py \
+python examples/scripts/prm.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/prm800k \
     --output_dir Qwen2-0.5B-Reward \
@@ -27,7 +27,7 @@ python examples/scripts/stepwise_reward_modeling.py \
     --eval_steps 50
 
 LoRA:
-python examples/scripts/stepwise_reward_modeling.py \
+python examples/scripts/prm.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/prm800k \
     --output_dir Qwen2-0.5B-Reward-LoRA \
@@ -52,8 +52,8 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer, HfArgum
 from trl import (
     ModelConfig,
     ScriptArguments,
-    StepwiseRewardConfig,
-    StepwiseRewardTrainer,
+    PRMConfig,
+    PRMTrainer,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
@@ -61,7 +61,7 @@ from trl import (
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, StepwiseRewardConfig, ModelConfig))
+    parser = HfArgumentParser((ScriptArguments, PRMConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_into_dataclasses()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     ##########
     # Training
     ##########
-    trainer = StepwiseRewardTrainer(
+    trainer = PRMTrainer(
         model=model,
         processing_class=tokenizer,
         args=training_args,

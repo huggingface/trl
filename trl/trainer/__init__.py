@@ -132,14 +132,14 @@ if TYPE_CHECKING:
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
+    from .prm_config import PRMConfig
+    from .prm_trainer import PRMTrainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
     from .rloo_config import RLOOConfig
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
-    from .stepwise_reward_config import StepwiseRewardConfig
-    from .stepwise_reward_trainer import StepwiseRewardTrainer
     from .utils import (
         AdaptiveKLController,
         ConstantLengthDataset,

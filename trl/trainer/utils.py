@@ -762,7 +762,7 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
     predictions, labels = eval_pred
     if predictions.ndim == 3:
         # Token classification task. Shapes are (batch_size, seq_len, num_labels) and (batch_size, seq_len)
-        # Used to compute the accuracy in the stepwise_reward_trainer.
+        # Used to compute the accuracy in the prm_trainer.
         predictions = np.argmax(predictions, axis=2)
 
         # Flatten the predictions and labels to remove the ignored tokens.

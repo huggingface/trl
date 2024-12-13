@@ -38,7 +38,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from .stepwise_reward_config import StepwiseRewardConfig
+from .prm_config import PRMConfig
 from .utils import compute_accuracy, generate_model_card
 
 
@@ -49,13 +49,13 @@ if is_wandb_available():
     import wandb
 
 
-class StepwiseRewardTrainer(Trainer):
-    _tag_names = ["trl", "stepwise-reward-trainer"]
+class PRMTrainer(Trainer):
+    _tag_names = ["trl", "prm-trainer"]
 
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module]] = None,
-        args: Optional[StepwiseRewardConfig] = None,
+        args: Optional[PRMConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
@@ -73,12 +73,12 @@ class StepwiseRewardTrainer(Trainer):
         peft_config: Optional[dict] = None,
     ):
         """
-        Initialize StepwiseRewardTrainer.
+        Initialize PRMTrainer.
 
         Args:
             model (`transformers.PreTrainedModel`):
                 The model to train, preferably an `AutoModelForTokenClassification`.
-            args (`StepwiseRewardConfig`):
+            args (`PRMConfig`):
                 The arguments to use for training.
             data_collator (`transformers.DataCollator`):
                 The data collator to use for training. If None is specified, the default data collator (`DataCollatorForTokenClassification`) will be used
@@ -233,7 +233,7 @@ class StepwiseRewardTrainer(Trainer):
         ...             "completions": ["11 is greater than 8.",
         ...                             "Hence, 9.11 > 9.8."],
         ...             "labels": [True, False]}
-        >>> StepwiseRewardTrainer.tokenize_row(features, tokenizer, "\n", max_completion_length=None, train_on_last_step_only=False, is_eval=False)
+        >>> PRMTrainer.tokenize_row(features, tokenizer, "\n", max_completion_length=None, train_on_last_step_only=False, is_eval=False)
         {'input_ids': [23085, 1372, 374, 8131, 11, 220, 24, 13, 23, 476, 220, 24, 13, 16, 16, 30, 16, 16, 374, 7046, 1091, 220, 23, 13, 198, 39, 763, 11, 220, 24, 13, 16, 16, 861, 220, 24, 13, 23, 13, 198],
          'labels': [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0]}
         ```
@@ -321,7 +321,7 @@ class StepwiseRewardTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
-            trainer_name="Stepwise Reward",
+            trainer_name="PRM",
             trainer_citation=citation,
             paper_title="Solving math word problems with process-and outcome-based feedback",
         )

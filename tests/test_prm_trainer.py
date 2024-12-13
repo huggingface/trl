@@ -23,7 +23,7 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer, PreTrai
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import StepwiseRewardConfig, StepwiseRewardTrainer
+from trl import PRMConfig, PRMTrainer
 
 
 if is_peft_available():
@@ -63,7 +63,7 @@ class TestTokenizeRow(unittest.TestCase):
         }
 
         # Call the method with no truncation
-        result = StepwiseRewardTrainer.tokenize_row(
+        result = PRMTrainer.tokenize_row(
             features=features,
             tokenizer=self.tokenizer,
             step_separator="\n",
@@ -89,7 +89,7 @@ class TestTokenizeRow(unittest.TestCase):
             "labels": [True, False],
         }
 
-        result = StepwiseRewardTrainer.tokenize_row(
+        result = PRMTrainer.tokenize_row(
             features=features,
             tokenizer=self.tokenizer,
             step_separator="\n",
@@ -116,7 +116,7 @@ class TestTokenizeRow(unittest.TestCase):
         }
 
         # Call the method with truncation on the completion
-        result = StepwiseRewardTrainer.tokenize_row(
+        result = PRMTrainer.tokenize_row(
             features=features,
             tokenizer=self.tokenizer,
             step_separator="\n",
@@ -143,7 +143,7 @@ class TestTokenizeRow(unittest.TestCase):
         }
 
         # Call the method with truncation on the prompt and completion
-        result = StepwiseRewardTrainer.tokenize_row(
+        result = PRMTrainer.tokenize_row(
             features=features,
             tokenizer=self.tokenizer,
             step_separator="\n",
@@ -170,7 +170,7 @@ class TestTokenizeRow(unittest.TestCase):
         }
 
         # Call the method using multiple tokens as step_separator
-        result = StepwiseRewardTrainer.tokenize_row(
+        result = PRMTrainer.tokenize_row(
             features=features,
             tokenizer=self.tokenizer,
             step_separator="\n\n",
@@ -189,7 +189,7 @@ class TestTokenizeRow(unittest.TestCase):
         )
 
 
-class StepwiseRewardTrainerTester(unittest.TestCase):
+class PRMTrainerTester(unittest.TestCase):
     def setUp(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForTokenClassification.from_pretrained(model_id)
@@ -199,12 +199,12 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
     def test_train_full(self, train_on_last_step_only):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
-            training_args = StepwiseRewardConfig(
+            training_args = PRMConfig(
                 output_dir=tmp_dir,
                 report_to="none",
                 train_on_last_step_only=train_on_last_step_only,
             )
-            trainer = StepwiseRewardTrainer(
+            trainer = PRMTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -257,8 +257,8 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
                 }
             )
 
-            training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none")
-            trainer = StepwiseRewardTrainer(
+            training_args = PRMConfig(output_dir=tmp_dir, report_to="none")
+            trainer = PRMTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
 
@@ -284,8 +284,8 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
-            training_args = StepwiseRewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
-            trainer = StepwiseRewardTrainer(
+            training_args = PRMConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            trainer = PRMTrainer(
                 model=self.model,
                 args=training_args,
                 processing_class=self.tokenizer,
@@ -322,8 +322,8 @@ class StepwiseRewardTrainerTester(unittest.TestCase):
     def test_tags(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
-            training_args = StepwiseRewardConfig(output_dir=tmp_dir, report_to="none")
-            trainer = StepwiseRewardTrainer(
+            training_args = PRMConfig(output_dir=tmp_dir, report_to="none")
+            trainer = PRMTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             self.assertEqual(trainer.model.model_tags, trainer._tag_names)

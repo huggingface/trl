@@ -19,9 +19,9 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class StepwiseRewardConfig(TrainingArguments):
+class PRMConfig(TrainingArguments):
     r"""
-    Configuration class for the [`StepwiseRewardTrainer`].
+    Configuration class for the [`PRMTrainer`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the

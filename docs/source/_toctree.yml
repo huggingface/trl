@@ -44,8 +44,8 @@
       title: PPO
     - local: reward_trainer
       title: Reward
-    - local: stepwise_reward_trainer
-      title: Stepwise Reward
+    - local: prm_trainer
+      title: PRM
     - local: rloo_trainer
       title: RLOO
     - local: sft_trainer

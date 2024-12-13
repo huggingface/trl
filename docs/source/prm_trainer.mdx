@@ -1,8 +1,8 @@
-# Stepwise Reward Modeling
+# Process-supervised reward modeling
 
 ## Overview
 
-Stepwise or process reward models were proposed in [Solving math word problems with process- and outcome-based feedback](https://huggingface.co/papers/2211.14275) by Jonathan Uesato, Nate Kushman, Ramana Kumar, Francis Song, Noah Siegel, Lisa Wang, Antonia Creswell, Geoffrey Irving, and Irina Higgins.
+Process reward models were proposed in [Solving math word problems with process- and outcome-based feedback](https://huggingface.co/papers/2211.14275) by Jonathan Uesato, Nate Kushman, Ramana Kumar, Francis Song, Noah Siegel, Lisa Wang, Antonia Creswell, Geoffrey Irving, and Irina Higgins.
 
 The abstract from the paper is the following:
 
@@ -27,15 +27,15 @@ Below is the script to train the model:
 ```python
 # train_prm.py
 from datasets import load_dataset
-from trl import StepwiseRewardConfig, StepwiseRewardTrainer
+from trl import PRMConfig, PRMTrainer
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
 model = AutoModelForTokenClassification.from_pretrained("Qwen/Qwen2-0.5B", num_labels=2)
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B")
 train_dataset = load_dataset("trl-lib/math_shepherd", split="train[:10%]")
 
-training_args = StepwiseRewardConfig(output_dir="Qwen2-0.5B-Reward-Math-Sheperd", logging_steps=10)
-trainer = StepwiseRewardTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
+training_args = PRMConfig(output_dir="Qwen2-0.5B-Reward-Math-Sheperd", logging_steps=10)
+trainer = PRMTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
 
@@ -88,19 +88,19 @@ It's a win!
 
 ## Expected dataset type
 
-Stepwise supervision reward modeling requires a [stepwise supervision](dataset_formats#stepwise-supervision).
+Process-supervised reward modeling requires a [stepwise supervision](dataset_formats#stepwise-supervision).
 The dataset should contain the following columns: `prompt`, `completions` and `labels`, where `completions` contains a list of reasoning steps and `labels` a list of booleans or floats indicating the correctness of each step.
 
-The [`StepwiseRewardTrainer`] only supports [standard](dataset_formats#standard) dataset format.
+The [`PRMTrainer`] only supports [standard](dataset_formats#standard) dataset format.
 
 ## Example script
 
-We provide an example script to train a model using the stepwise reward modeling method. The script is available in [`examples/scripts/stepwise_reward_trainer.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/stepwise_reward_trainer.py)
+We provide an example script to train a model using the process-supervised reward modeling method. The script is available in [`examples/scripts/prm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/prm.py)
 
-To use the stepwise reward modeling script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) on the [Math Shepherd dataset](https://huggingface.co/datasets/trl-lib/math_shepherd), run the following command:
+To use the process-supervised reward modeling script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) on the [Math Shepherd dataset](https://huggingface.co/datasets/trl-lib/math_shepherd), run the following command:
 
 ```bash
-accelerate launch examples/scripts/stepwise_reward_modeling.py \
+accelerate launch examples/scripts/prm.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/math_shepherd \
     --num_train_epochs 1 \
@@ -108,10 +108,10 @@ accelerate launch examples/scripts/stepwise_reward_modeling.py \
     --output_dir Qwen2-0.5B-Reward-Math-Sheperd
 ```
 
-## StepwiseRewardTrainer
+## PRMTrainer
 
-[[autodoc]] StepwiseRewardTrainer
+[[autodoc]] PRMTrainer
 
-## StepwiseRewardConfig
+## PRMConfig
 
-[[autodoc]] StepwiseRewardConfig
+[[autodoc]] PRMConfig
