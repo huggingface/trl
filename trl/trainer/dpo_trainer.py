@@ -80,19 +80,21 @@ if is_deepspeed_available():
 @dataclass
 class PreferenceCollator(DataCollatorMixin):
     """
-    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they
-    are not all of the same length.
+    Data collator used for preference data. Inputs are either dynamically padded to the maximum length of a batch 
+    or returned without padding, based on the `padding_free` setting.
 
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
+        padding_free (`bool`, *optional*, defaults to `False`):
+            If `True`, returns tensors without padding. Otherwise, inputs are padded to the maximum batch length.
 
     Examples:
     ```python
     >>> from trl import PreferenceCollator
-    >>> collator = PreferenceCollator(pad_token_id=0)
+    >>> collator = PreferenceCollator(pad_token_id=0, padding_free=False)
     >>> examples = [
     ...     {"prompt_input_ids": [1, 2, 3], "chosen_input_ids": [4, 5], "rejected_input_ids": [6]},
     ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]}
@@ -111,6 +113,15 @@ class PreferenceCollator(DataCollatorMixin):
      'rejected_attention_mask': tensor([[1, 0, 0],
                                         [1, 1, 1]])
     }
+    >>> # Example with padding_free=True
+    >>> collator.padding_free = True
+    >>> collator(examples)
+    {'prompt_input_ids': [tensor([1, 2, 3]), tensor([7, 8])],
+     'chosen_input_ids': [tensor([4, 5]), tensor([9, 10])],
+     'rejected_input_ids': [tensor([6]), tensor([11, 12, 13])],
+     'prompt_position_ids': [tensor([0, 1, 2]), tensor([0, 1])],
+     'chosen_position_ids': [tensor([0, 1]), tensor([0, 1])],
+     'rejected_position_ids': [tensor([0]), tensor([0, 1, 2])]}
     ```
     """
 
