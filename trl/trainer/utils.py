@@ -42,6 +42,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
+    is_comet_available,
 )
 from transformers.utils import (
     is_peft_available,
@@ -54,6 +55,9 @@ from transformers.utils.deprecation import deprecate_kwarg
 from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
+
+if is_comet_available():
+    import comet_ml
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
@@ -1435,6 +1439,7 @@ def generate_model_card(
     trainer_citation: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
+    comet_url: Optional[str] = None,
 ) -> ModelCard:
     """
     Generate a `ModelCard` from a template.
@@ -1452,6 +1457,8 @@ def generate_model_card(
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
+        comet_url (`str` or `None`):
+            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
@@ -1481,6 +1488,7 @@ def generate_model_card(
         hub_model_id=hub_model_id,
         dataset_name=dataset_name,
         wandb_url=wandb_url,
+        comet_url=comet_url,
         trainer_name=trainer_name,
         trainer_citation=trainer_citation,
         paper_title=paper_title,
@@ -1492,3 +1500,34 @@ def generate_model_card(
         tokenizers_version=version("tokenizers"),
     )
     return card
+
+
+def get_comet_experiment_url() -> Optional[str]:
+    """
+    If Comet integration is enabled, return the URL of the current Comet experiment; otherwise, return `None`.
+    """
+    if not is_comet_available():
+        return None
+
+    if comet_ml.get_running_experiment() is not None:
+        return comet_ml.get_running_experiment().url
+
+    return None
+
+
+def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
+    """
+    If Comet integration is enabled logs a table to the Comet experiment if it is currently running.
+
+    Args:
+        name (`str`):
+            Table name.
+        table (`pd.DataFrame`):
+            The Pandas DataFrame containing the table to log.
+    """
+    if not is_comet_available():
+        raise ModuleNotFoundError("The comet-ml is not installed. Please install it first: pip install comet-ml")
+
+    experiment = comet_ml.get_running_experiment()
+    if experiment is not None:
+        experiment.log_table(tabular_data=table, filename=name)
