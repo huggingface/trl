@@ -51,9 +51,9 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer, HfArgum
 
 from trl import (
     ModelConfig,
-    ScriptArguments,
     PRMConfig,
     PRMTrainer,
+    ScriptArguments,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,

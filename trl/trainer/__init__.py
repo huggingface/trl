@@ -68,8 +68,8 @@ _import_structure = {
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
-    "stepwise_reward_config": ["StepwiseRewardConfig"],
-    "stepwise_reward_trainer": ["StepwiseRewardTrainer"],
+    "prm_config": ["PRMConfig"],
+    "prm_trainer": ["PRMTrainer"],
     "utils": [
         "AdaptiveKLController",
         "ConstantLengthDataset",
