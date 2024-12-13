@@ -33,7 +33,7 @@ For something slightly more challenging, you can also take a look at the [Good S
 Before you start contributing make sure you have installed all the dev tools:
 
 ```bash
-make dev
+pip install -e .[dev]
 ```
 
 ## Fixing outstanding issues
@@ -152,7 +152,7 @@ Follow these steps to start contributing:
 4. Set up a development environment by running the following command in a conda or a virtual environment you've created for working on this library:
 
    ```bash
-   $ make dev
+   $ pip install -e .[dev]
    ```
 
    (If TRL was already installed in the virtual environment, remove
