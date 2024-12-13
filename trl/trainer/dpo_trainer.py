@@ -1253,36 +1253,38 @@ class DPOTrainer(Trainer):
         else:
           if self.padding_free:
               # Padding-free processing for decoder-only models
-              input_ids = [torch.cat((p, c), dim=0) for p, c in zip(prompt_input_ids, completion_input_ids)]
-              position_ids = [torch.cat((p, c), dim=0) for p, c in zip(concatenated_batch['prompt_position_ids'], concatenated_batch['completion_position_ids'])]
-              loss_mask = [(pos >= 0).long() for pos in position_ids]
-              
-              model_kwargs["position_ids"] = position_ids
+                  input_ids = [torch.cat((p, c), dim=0) for p, c in zip(batch["prompt_input_ids"], batch["chosen_input_ids"])]
+                  position_ids = [torch.cat((p, c), dim=0) for p, c in zip(batch['prompt_position_ids'], batch['chosen_position_ids'])]
+                  
+                  # Process each sequence individually
+                  all_logits = []
+                  all_labels = []
+                  all_loss_masks = []
 
-              # Apply max length truncation
-              if self.args.max_length is not None:
-                  input_ids = [ids[:self.args.max_length] for ids in input_ids]
-                  model_kwargs["position_ids"] = [pos[:self.args.max_length] for pos in model_kwargs["position_ids"]]
-                  loss_mask = [mask[:self.args.max_length] for mask in loss_mask]
+                  for ids, pos_ids in zip(input_ids, position_ids):
+                      # Ensure both ids and pos_ids are 2D tensors
+                      ids = ids.unsqueeze(0) if ids.dim() == 1 else ids
+                      pos_ids = pos_ids.unsqueeze(0) if pos_ids.dim() == 1 else pos_ids
 
-              # Process each sequence individually
-              all_logits = []
-              all_labels = []
-              all_loss_masks = []
+                      # Debug print
+                      print("Input IDs shape:", ids.shape)
+                      print("Position IDs shape:", pos_ids.shape)
+                      print("Input IDs shape:", ids[0][0])
+                      print("Position IDs shape:", pos_ids[0][0])
+                      single_output = model(
+                          input_ids=ids,
+                          position_ids=pos_ids,
+                      )
+                      
+                      all_logits.append(single_output.logits.squeeze(0))
+                      all_labels.append(ids[0, 1:])  # Labels are input_ids shifted by 1
+                      all_loss_masks.append(torch.ones_like(ids[0, 1:]).bool())
 
-              for ids, pos_ids in zip(input_ids, model_kwargs["position_ids"]):
-                  single_output = model(
-                      input_ids=ids.unsqueeze(0),
-                      position_ids=pos_ids.unsqueeze(0),
-                      **{k: v for k, v in model_kwargs.items() if k != "position_ids"}
-                  )
-                  all_logits.append(single_output.logits.squeeze(0))
-                  all_labels.append(ids[1:])
-                  all_loss_masks.append(torch.ones_like(ids[1:]).bool())
-
-              logits = torch.cat(all_logits, dim=0)
-              labels = torch.cat(all_labels, dim=0)
-              loss_mask = torch.cat(all_loss_masks, dim=0)
+                  # Concatenate results
+                  logits = torch.cat(all_logits, dim=0)
+                  labels = torch.cat(all_labels, dim=0)
+                  loss_mask = torch.cat(all_loss_masks, dim=0)
+     
 
           else:
               # Non-padding-free processing
@@ -1320,7 +1322,8 @@ class DPOTrainer(Trainer):
 
               labels = input_ids[:, 1:].clone()
               loss_mask = loss_mask[:, 1:].bool()
-
+              
+            
           # Common processing for both padding-free and non-padding-free cases
           if self.use_num_logits_to_keep:
               first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
@@ -1331,11 +1334,12 @@ class DPOTrainer(Trainer):
               labels = labels[:, -num_logits_to_keep:]
               loss_mask = loss_mask[:, -num_logits_to_keep:]
 
-          # Handle LLaVA-style models
+           
+          #Handle LLaVA-style models
           if logits.shape[:2] != labels.shape[:2]:
               seq_len = labels.shape[1]
               logits = logits[:, -seq_len:]
-
+                  
           # Compute log probabilities
           labels[~loss_mask] = 0
           per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
