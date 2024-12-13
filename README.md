@@ -198,7 +198,7 @@ If you want to contribute to `trl` or customize it to your needs make sure to re
 ```bash
 git clone https://github.com/huggingface/trl.git
 cd trl/
-make dev
+pip install -e .[dev]
 ```
 
 ## Citation

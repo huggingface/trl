@@ -55,23 +55,23 @@ python trl/scripts/kto.py \
     --lora_alpha=16
 """
 
+import argparse
+
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
     KTOConfig,
     KTOTrainer,
     ModelConfig,
     ScriptArguments,
+    TrlParser,
     get_peft_config,
     setup_chat_format,
 )
 
 
-if __name__ == "__main__":
-    parser = HfArgumentParser((ScriptArguments, KTOConfig, ModelConfig))
-    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
-
+def main(script_args, training_args, model_args):
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
@@ -111,3 +111,18 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+
+def make_parser(subparsers: argparse._SubParsersAction = None):
+    dataclass_types = (ScriptArguments, KTOConfig, ModelConfig)
+    if subparsers is not None:
+        parser = subparsers.add_parser("kto", help="Run the KTO training script", dataclass_types=dataclass_types)
+    else:
+        parser = TrlParser(dataclass_types)
+    return parser
+
+
+if __name__ == "__main__":
+    parser = make_parser()
+    script_args, training_args, model_args = parser.parse_args_and_config()
+    main(script_args, training_args, model_args)
