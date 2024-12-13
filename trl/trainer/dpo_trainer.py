@@ -1424,7 +1424,11 @@ class DPOTrainer(Trainer):
         train_eval = "train" if "loss" in logs else "eval"
         # Add averaged stored metrics to logs
         for key, metrics in self._stored_metrics[train_eval].items():
-            logs[key] = torch.tensor(metrics).mean().item()
+            if isinstance(metrics[0], torch.Tensor):
+                gathered = self._nested_gather([m.cuda() for m in metrics])
+                metrics = [g.mean() for g in gathered]
+            meaned = torch.tensor(metrics).mean()
+            logs[key] = meaned.item()
         del self._stored_metrics[train_eval]
 
         if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
