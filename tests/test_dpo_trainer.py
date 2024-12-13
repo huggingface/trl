@@ -539,6 +539,7 @@ class DPOTrainerTester(unittest.TestCase):
                     padding_free=True,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
+                    
                 )
 
 
@@ -1158,7 +1159,7 @@ class DPOTrainerTester(unittest.TestCase):
             trainer.train()
 
 
-@require_vision
+@require_vision 
 class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
