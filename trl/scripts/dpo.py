@@ -13,23 +13,45 @@
 # limitations under the License.
 
 """
-accelerate launch examples/scripts/dpo_vlm.py \
-    --dataset_name HuggingFaceH4/rlaif-v_formatted \
-    --model_name_or_path HuggingFaceM4/idefics2-8b \
+# Full training
+python trl/scripts/dpo.py \
+    --dataset_name trl-lib/ultrafeedback_binarized \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --learning_rate 5.0e-7 \
+    --num_train_epochs 1 \
     --per_device_train_batch_size 2 \
-    --gradient_accumulation_steps 32 \
-    --dataset_num_proc 32 \
-    --output_dir dpo_idefics_rlaif-v \
-    --bf16 \
-    --torch_dtype bfloat16 \
+    --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --output_dir Qwen2-0.5B-DPO \
+    --no_remove_unused_columns
+
+# LoRA:
+python trl/scripts/dpo.py \
+    --dataset_name trl-lib/ultrafeedback_binarized \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --learning_rate 5.0e-6 \
+    --num_train_epochs 1 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 50 \
+    --output_dir Qwen2-0.5B-DPO \
+    --no_remove_unused_columns \
     --use_peft \
-    --lora_target_modules=all-linear
+    --lora_r 32 \
+    --lora_alpha 16
 """
+
+import argparse
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
     DPOConfig,
@@ -41,56 +63,42 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
-if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
-    script_args, training_args, model_args = parser.parse_args_and_config()
-
+def main(script_args, training_args, model_args):
     ################
     # Model & Tokenizer
-    ################
+    ###################
     torch_dtype = (
         model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
     )
     quantization_config = get_quantization_config(model_args)
-
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=torch_dtype,
+        use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForVision2Seq.from_pretrained(
-        model_args.model_name_or_path,
-        trust_remote_code=model_args.trust_remote_code,
-        **model_kwargs,
+    model = AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
     peft_config = get_peft_config(model_args)
     if peft_config is None:
-        ref_model = AutoModelForVision2Seq.from_pretrained(
-            model_args.model_name_or_path,
-            trust_remote_code=model_args.trust_remote_code,
-            **model_kwargs,
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
         )
     else:
         ref_model = None
-    processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, do_image_splitting=False
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
-    tokenizer = processor.tokenizer
-
-    # Set up the chat template
-    if model.config.model_type == "idefics2":
-        pass  # the processor already has a valid chat template
-    elif model.config.model_type == "paligemma":
-        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}<|im_start|>{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] if item['type'] == 'text' %}{{ item['text'] }}<|im_end|>{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-    elif model.config.model_type == "llava":
-        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.chat_template is None:
+        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     if script_args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -102,7 +110,7 @@ if __name__ == "__main__":
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
-    ################
+    ##########
     # Training
     ################
     trainer = DPOTrainer(
@@ -111,13 +119,33 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=processor,
+        processing_class=tokenizer,
         peft_config=peft_config,
     )
 
     trainer.train()
 
+    if training_args.eval_strategy != "no":
+        metrics = trainer.evaluate()
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+
+def make_parser(subparsers: argparse._SubParsersAction = None):
+    dataclass_types = (ScriptArguments, DPOConfig, ModelConfig)
+    if subparsers is not None:
+        parser = subparsers.add_parser("dpo", help="Run the DPO training script", dataclass_types=dataclass_types)
+    else:
+        parser = TrlParser(dataclass_types)
+    return parser
+
+
+if __name__ == "__main__":
+    parser = make_parser()
+    script_args, training_args, model_args = parser.parse_args_and_config()
+    main(script_args, training_args, model_args)

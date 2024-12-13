@@ -20,7 +20,7 @@ from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffus
 
 
 _import_structure = {
-    "commands.cli_utils": ["DPOScriptArguments", "SFTScriptArguments", "TrlParser", "init_zero_verbose"],
+    "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
     "core": ["set_seed"],
     "data_utils": [
         "apply_chat_template",
@@ -96,7 +96,6 @@ _import_structure = {
     ],
     "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
-    "utils": ["ScriptArguments"],
 }
 
 try:
@@ -116,7 +115,6 @@ else:
     _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
-    from .commands.cli_utils import DPOScriptArguments, SFTScriptArguments, TrlParser, init_zero_verbose
     from .core import set_seed
     from .data_utils import (
         apply_chat_template,
@@ -138,6 +136,7 @@ if TYPE_CHECKING:
         create_reference_model,
         setup_chat_format,
     )
+    from .scripts import ScriptArguments, TrlParser, init_zero_verbose
     from .trainer import (
         AlignPropConfig,
         AlignPropTrainer,
@@ -188,7 +187,6 @@ if TYPE_CHECKING:
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
-    from .utils import ScriptArguments
 
     try:
         if not is_diffusers_available():

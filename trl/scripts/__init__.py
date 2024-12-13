@@ -14,15 +14,15 @@
 
 from typing import TYPE_CHECKING
 
-from ..import_utils import OptionalDependencyNotAvailable, _LazyModule
+from ..import_utils import _LazyModule
 
 
 _import_structure = {
-    "cli_utils": ["DPOScriptArguments", "SFTScriptArguments", "TrlParser", "YamlConfigParser", "init_zero_verbose"],
+    "utils": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
 }
 
 if TYPE_CHECKING:
-    from .cli_utils import DPOScriptArguments, SFTScriptArguments, TrlParser, YamlConfigParser, init_zero_verbose
+    from .utils import ScriptArguments, TrlParser, init_zero_verbose
 else:
     import sys
 

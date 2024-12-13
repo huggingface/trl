@@ -4,8 +4,14 @@ You can use TRL to fine-tune your Language Model with Supervised Fine-Tuning (SF
 
 Currently supported CLIs are:
 
-- `trl sft`: fine-tune a LLM on a text/instruction dataset
-- `trl dpo`: fine-tune a LLM with DPO on a preference dataset 
+#### Training commands
+
+- `trl dpo`: fine-tune a LLM with DPO
+- `trl kto`: fine-tune a LLM with KTO
+- `trl sft`: fine-tune a LLM with SFT
+
+#### Other commands
+
 - `trl chat`: quickly spin up a LLM fine-tuned for chatting
 - `trl env`: get the system information
 
@@ -58,7 +64,7 @@ Follow the basic instructions above and run `trl sft --output_dir <output_dir> <
 trl sft --model_name_or_path facebook/opt-125m --dataset_name stanfordnlp/imdb --output_dir opt-sft-imdb
 ```
 
-The SFT CLI is based on the `examples/scripts/sft.py` script.
+The SFT CLI is based on the `trl/scripts/sft.py` script.
 
 ### Direct Policy Optimization (DPO)
 
@@ -81,7 +87,7 @@ trl dpo --model_name_or_path facebook/opt-125m --output_dir trl-hh-rlhf --datase
 ```
 
 
-The DPO CLI is based on the `examples/scripts/dpo.py` script.
+The DPO CLI is based on the `trl/scripts/dpo.py` script.
 
 
 #### Custom preference dataset
@@ -116,8 +122,6 @@ Besides talking to the model there are a few commands you can use:
 - `reset`: same as clear but also resets the generation configs to defaults if they have been changed by `set`
 - `save` or `save {SAVE_NAME}`: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
 - `exit`: closes the interface
-
-The default examples are defined in `examples/scripts/config/default_chat_config.yaml` but you can pass your own with `--config CONFIG_FILE` where you can also specify the default generation parameters.
 
 ## Getting the system information
 
