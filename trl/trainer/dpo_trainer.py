@@ -1171,10 +1171,9 @@ class DPOTrainer(Trainer):
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
         """
-        if isinstance(num_examples, list):
-            num_examples = batch["prompt_input_ids"][0].shape[0]
-        else:
-            num_examples = batch["prompt_input_ids"].shape[0]
+        
+        num_examples = batch["prompt_input_ids"][0].shape[0]
+       
             
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value, padding_free=self.padding_free)
 
