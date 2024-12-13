@@ -16,7 +16,7 @@
 Run the KTO training script with the commands below. In general, the optimal configuration for KTO will be similar to that of DPO.
 
 # Full training:
-python examples/scripts/kto.py \
+python trl/scripts/kto.py \
     --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
@@ -33,7 +33,7 @@ python examples/scripts/kto.py \
     --logging_first_step
 
 # QLoRA:
-python examples/scripts/kto.py \
+python trl/scripts/kto.py \
     --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 8 \

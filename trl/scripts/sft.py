@@ -14,7 +14,7 @@
 
 """
 # Full training
-python examples/scripts/sft.py \
+python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --learning_rate 2.0e-5 \
@@ -30,7 +30,7 @@ python examples/scripts/sft.py \
     --push_to_hub
 
 # LoRA
-python examples/scripts/sft.py \
+python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --learning_rate 2.0e-4 \
