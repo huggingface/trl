@@ -1525,7 +1525,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
             The Pandas DataFrame containing the table to log.
     """
     if not is_comet_available():
-        return
+        raise ModuleNotFoundError("The comet-ml is not installed. Please install it first: pip install comet-ml")
 
     import comet_ml
 
