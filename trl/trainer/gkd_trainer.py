@@ -40,10 +40,15 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
-from ..utils import get_comet_experiment_url
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
-from .utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache, generate_model_card
+from .utils import (
+    DataCollatorForChatML,
+    disable_dropout_in_model,
+    empty_cache,
+    generate_model_card,
+    get_comet_experiment_url,
+)
 
 
 if is_deepspeed_available():

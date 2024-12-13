@@ -50,7 +50,6 @@ from transformers.utils.deprecation import deprecate_kwarg
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
-from ..utils import get_comet_experiment_url
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
@@ -59,6 +58,7 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     generate_model_card,
+    get_comet_experiment_url,
     get_reward,
     prepare_deepspeed,
     truncate_right,

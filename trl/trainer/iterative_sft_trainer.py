@@ -36,8 +36,7 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available
 
 from ..core import PPODecorators
-from ..utils import get_comet_experiment_url
-from .utils import generate_model_card
+from .utils import generate_model_card, get_comet_experiment_url
 
 
 if is_peft_available():

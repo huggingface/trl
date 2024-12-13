@@ -37,11 +37,17 @@ from transformers.utils import is_apex_available
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
-from ..utils import get_comet_experiment_url
 from .judges import BasePairwiseJudge
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import SIMPLE_CHAT_TEMPLATE, empty_cache, generate_model_card, get_reward, truncate_right
+from .utils import (
+    SIMPLE_CHAT_TEMPLATE,
+    empty_cache,
+    generate_model_card,
+    get_comet_experiment_url,
+    get_reward,
+    truncate_right,
+)
 
 
 if is_apex_available():

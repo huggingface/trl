@@ -53,7 +53,6 @@ from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper, create_reference_model
-from ..utils import get_comet_experiment_url
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
@@ -61,6 +60,7 @@ from .utils import (
     cap_exp,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
     pad,
     pad_to_length,
     peft_module_casting_to_bf16,

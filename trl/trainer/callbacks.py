@@ -41,8 +41,8 @@ from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_mergekit_available
 from ..mergekit_utils import MergeConfig, merge_models, upload_model_to_hf
 from ..models.utils import unwrap_model_for_generation
-from ..utils import log_table_to_comet_experiment
 from .judges import BasePairwiseJudge
+from .utils import log_table_to_comet_experiment
 
 
 if is_deepspeed_available():

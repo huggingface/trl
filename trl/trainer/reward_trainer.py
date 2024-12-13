@@ -42,13 +42,14 @@ from transformers.utils import is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template
-from ..utils import get_comet_experiment_url, log_table_to_comet_experiment
 from .reward_config import RewardConfig
 from .utils import (
     RewardDataCollatorWithPadding,
     compute_accuracy,
     decode_and_strip_padding,
     generate_model_card,
+    get_comet_experiment_url,
+    log_table_to_comet_experiment,
     print_rich_table,
 )
 

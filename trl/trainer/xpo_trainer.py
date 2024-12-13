@@ -36,10 +36,16 @@ from transformers.training_args import OptimizerNames
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
-from ..utils import get_comet_experiment_url
 from .judges import BasePairwiseJudge
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import SIMPLE_CHAT_TEMPLATE, empty_cache, generate_model_card, get_reward, truncate_right
+from .utils import (
+    SIMPLE_CHAT_TEMPLATE,
+    empty_cache,
+    generate_model_card,
+    get_comet_experiment_url,
+    get_reward,
+    truncate_right,
+)
 from .xpo_config import XPOConfig
 
 

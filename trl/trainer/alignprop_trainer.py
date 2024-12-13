@@ -25,9 +25,8 @@ from accelerate.utils import ProjectConfiguration, set_seed
 from transformers import is_wandb_available
 
 from ..models import DDPOStableDiffusionPipeline
-from ..utils import get_comet_experiment_url
 from . import AlignPropConfig, BaseTrainer
-from .utils import generate_model_card
+from .utils import generate_model_card, get_comet_experiment_url
 
 
 if is_wandb_available():

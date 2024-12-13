@@ -44,12 +44,12 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
-from ..utils import get_comet_experiment_url
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
     generate_model_card,
+    get_comet_experiment_url,
     peft_module_casting_to_bf16,
 )
 

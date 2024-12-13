@@ -51,7 +51,6 @@ from transformers.utils.deprecation import deprecate_kwarg
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
-from ..utils import get_comet_experiment_url, log_table_to_comet_experiment
 from .ppo_config import PPOConfig
 from .utils import (
     OnlineTrainerState,
@@ -61,7 +60,9 @@ from .utils import (
     first_true_indices,
     forward,
     generate_model_card,
+    get_comet_experiment_url,
     get_reward,
+    log_table_to_comet_experiment,
     peft_module_casting_to_bf16,
     prepare_deepspeed,
     print_rich_table,

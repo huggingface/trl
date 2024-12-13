@@ -59,9 +59,8 @@ from ..trainer.utils import (
     print_rich_table,
     truncate_response,
 )
-from ..utils import get_comet_experiment_url, log_table_to_comet_experiment
 from .rloo_config import RLOOConfig
-from .utils import generate_model_card
+from .utils import generate_model_card, get_comet_experiment_url, log_table_to_comet_experiment
 
 
 if is_wandb_available():
