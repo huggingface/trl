@@ -36,7 +36,7 @@ CMD="""
 accelerate launch $EXTRA_ACCELERATE_ARGS \
     --num_processes $NUM_GPUS \
     --mixed_precision 'fp16' \
-    `pwd`/examples/scripts/sft.py \
+    `pwd`/trl/scripts/sft.py \
     --model_name $MODEL_NAME \
     --dataset_name $DATASET_NAME \
     --output_dir $OUTPUT_DIR \
