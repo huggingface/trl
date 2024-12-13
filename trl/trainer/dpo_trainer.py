@@ -1222,8 +1222,6 @@ class DPOTrainer(Trainer):
             loss_mask = completion_attention_mask.bool()
         else:
             # Concatenate the prompt and completion inputs
-            print("prompt_input_ids",prompt_input_ids)
-            print("completion_input_ids",completion_input_ids)
             input_ids = torch.cat((prompt_input_ids, completion_input_ids), dim=1)
             attention_mask = torch.cat((torch.ones_like(prompt_input_ids), torch.ones_like(completion_input_ids)), dim=1)
 
