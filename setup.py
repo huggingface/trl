@@ -119,7 +119,9 @@ setup(
         "console_scripts": ["trl=trl.cli:main"],
     },
     include_package_data=True,
-    package_data={"trl": ["templates/*.md"],},
+    package_data={
+        "trl": ["templates/*.md"],
+    },
     packages=find_packages(exclude={"tests", "tests.slow"}),
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
