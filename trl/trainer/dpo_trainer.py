@@ -240,7 +240,7 @@ class DPOTrainer(Trainer):
         padding_free:bool=False
     ):  
         
-       
+        self.padding_free =padding_free
         if model is None:
             raise ValueError("No model provided. Please provide a model to train.")
 
