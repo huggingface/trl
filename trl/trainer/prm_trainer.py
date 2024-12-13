@@ -50,7 +50,7 @@ if is_wandb_available():
 
 
 class PRMTrainer(Trainer):
-    _tag_names = ["trl", "prm-trainer"]
+    _tag_names = ["trl", "prm"]
 
     def __init__(
         self,

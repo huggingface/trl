@@ -1,8 +1,8 @@
-# PRM
+# PRM Trainer
 
 ## Overview
 
-Process reward models were proposed in [Solving math word problems with process- and outcome-based feedback](https://huggingface.co/papers/2211.14275) by Jonathan Uesato, Nate Kushman, Ramana Kumar, Francis Song, Noah Siegel, Lisa Wang, Antonia Creswell, Geoffrey Irving, and Irina Higgins.
+Process-supervised Reward Models (PRM) were proposed in [Solving math word problems with process- and outcome-based feedback](https://huggingface.co/papers/2211.14275) by Jonathan Uesato, Nate Kushman, Ramana Kumar, Francis Song, Noah Siegel, Lisa Wang, Antonia Creswell, Geoffrey Irving, and Irina Higgins.
 
 The abstract from the paper is the following:
 
@@ -88,16 +88,16 @@ It's a win!
 
 ## Expected dataset type
 
-Process-supervised reward modeling requires a [stepwise supervision](dataset_formats#stepwise-supervision).
+PRM requires a [stepwise supervision](dataset_formats#stepwise-supervision).
 The dataset should contain the following columns: `prompt`, `completions` and `labels`, where `completions` contains a list of reasoning steps and `labels` a list of booleans or floats indicating the correctness of each step.
 
 The [`PRMTrainer`] only supports [standard](dataset_formats#standard) dataset format.
 
 ## Example script
 
-We provide an example script to train a model using the process-supervised reward modeling method. The script is available in [`examples/scripts/prm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/prm.py)
+We provide an example script to train a model using the PRM method. The script is available in [`examples/scripts/prm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/prm.py)
 
-To use the process-supervised reward modeling script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) on the [Math Shepherd dataset](https://huggingface.co/datasets/trl-lib/math_shepherd), run the following command:
+To use the PRM script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) on the [Math Shepherd dataset](https://huggingface.co/datasets/trl-lib/math_shepherd), run the following command:
 
 ```bash
 accelerate launch examples/scripts/prm.py \
