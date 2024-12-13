@@ -1220,40 +1220,6 @@ class DPOTrainer(Trainer):
                 )
             else:
               # Padding-free processing
-              if self.padding_free:
-                input_ids = [torch.cat((p, c), dim=0) for p, c in zip(prompt_input_ids, completion_input_ids)]
-                position_ids = [torch.cat((p, c), dim=0) for p, c in zip(concatenated_batch['prompt_position_ids'], concatenated_batch['completion_position_ids'])]
-                loss_mask = [(pos >= 0).long() for pos in position_ids]
-                
-                model_kwargs["position_ids"] = position_ids
-
-                # Apply max length truncation
-                if self.args.max_length is not None:
-                    input_ids = [ids[:self.args.max_length] for ids in input_ids]
-                    model_kwargs["position_ids"] = [pos[:self.args.max_length] for pos in model_kwargs["position_ids"]]
-                    loss_mask = [mask[:self.args.max_length] for mask in loss_mask]
-
-                # Process each sequence individually
-                all_logits = []
-                all_labels = []
-                all_loss_masks = []
-
-                for ids, pos_ids in zip(input_ids, model_kwargs["position_ids"]):
-                    single_output = model(
-                        input_ids=ids.unsqueeze(0),
-                        position_ids=pos_ids.unsqueeze(0),
-                    )
-                    all_logits.append(single_output.logits.squeeze(0))
-                    all_labels.append(ids[1:])
-                    all_loss_masks.append(torch.ones_like(ids[1:]).bool())
-
-                logits = torch.cat(all_logits, dim=0)
-                labels = torch.cat(all_labels, dim=0)
-                loss_mask = torch.cat(all_loss_masks, dim=0)
-                  
-        else:
-          if self.padding_free:
-              # Padding-free processing for decoder-only models
               input_ids = [torch.cat((p, c), dim=0) for p, c in zip(prompt_input_ids, completion_input_ids)]
               position_ids = [torch.cat((p, c), dim=0) for p, c in zip(concatenated_batch['prompt_position_ids'], concatenated_batch['completion_position_ids'])]
               loss_mask = [(pos >= 0).long() for pos in position_ids]
@@ -1283,6 +1249,41 @@ class DPOTrainer(Trainer):
               logits = torch.cat(all_logits, dim=0)
               labels = torch.cat(all_labels, dim=0)
               loss_mask = torch.cat(all_loss_masks, dim=0)
+                  
+        else:
+          if self.padding_free:
+              # Padding-free processing for decoder-only models
+              input_ids = [torch.cat((p, c), dim=0) for p, c in zip(prompt_input_ids, completion_input_ids)]
+              position_ids = [torch.cat((p, c), dim=0) for p, c in zip(concatenated_batch['prompt_position_ids'], concatenated_batch['completion_position_ids'])]
+              loss_mask = [(pos >= 0).long() for pos in position_ids]
+              
+              model_kwargs["position_ids"] = position_ids
+
+              # Apply max length truncation
+              if self.args.max_length is not None:
+                  input_ids = [ids[:self.args.max_length] for ids in input_ids]
+                  model_kwargs["position_ids"] = [pos[:self.args.max_length] for pos in model_kwargs["position_ids"]]
+                  loss_mask = [mask[:self.args.max_length] for mask in loss_mask]
+
+              # Process each sequence individually
+              all_logits = []
+              all_labels = []
+              all_loss_masks = []
+
+              for ids, pos_ids in zip(input_ids, model_kwargs["position_ids"]):
+                  single_output = model(
+                      input_ids=ids.unsqueeze(0),
+                      position_ids=pos_ids.unsqueeze(0),
+                      **{k: v for k, v in model_kwargs.items() if k != "position_ids"}
+                  )
+                  all_logits.append(single_output.logits.squeeze(0))
+                  all_labels.append(ids[1:])
+                  all_loss_masks.append(torch.ones_like(ids[1:]).bool())
+
+              logits = torch.cat(all_logits, dim=0)
+              labels = torch.cat(all_labels, dim=0)
+              loss_mask = torch.cat(all_loss_masks, dim=0)
+
           else:
               # Non-padding-free processing
               input_ids = torch.cat((prompt_input_ids, completion_input_ids), dim=1)
@@ -1293,117 +1294,102 @@ class DPOTrainer(Trainer):
                   (torch.zeros_like(prompt_attention_mask), completion_attention_mask),
                   dim=1)
 
-              # Flush left to reduce memory usage (only for non-padding-free case)
-              if not self.padding_free:
-                for i in range(attention_mask.size(0)):
-                    first_one_idx = torch.nonzero(attention_mask[i])[0].item()
-                    input_ids[i] = torch.roll(input_ids[i], shifts=-first_one_idx)
-                    attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
-                    loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
+              # Flush left to reduce memory usage
+              for i in range(attention_mask.size(0)):
+                  first_one_idx = torch.nonzero(attention_mask[i])[0].item()
+                  input_ids[i] = torch.roll(input_ids[i], shifts=-first_one_idx)
+                  attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
+                  loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
 
-                # Remove empty columns (only for non-padding-free case)
-                empty_cols = torch.sum(attention_mask, dim=0) == 0
-                first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-                input_ids = input_ids[:, :first_empty_col]
-                attention_mask = attention_mask[:, :first_empty_col]
-                loss_mask = loss_mask[:, :first_empty_col]
+              # Remove empty columns
+              empty_cols = torch.sum(attention_mask, dim=0) == 0
+              first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
+              input_ids = input_ids[:, :first_empty_col]
+              attention_mask = attention_mask[:, :first_empty_col]
+              loss_mask = loss_mask[:, :first_empty_col]
 
-              #Apply max length truncation
+              # Apply max length truncation
               if self.args.max_length is not None:
-                          input_ids = input_ids[:, :self.args.max_length]
-                          attention_mask = attention_mask[:, :self.args.max_length]
-                          loss_mask = loss_mask[:, :self.args.max_length]
+                  input_ids = input_ids[:, :self.args.max_length]
+                  attention_mask = attention_mask[:, :self.args.max_length]
+                  loss_mask = loss_mask[:, :self.args.max_length]
 
-              #forward pass 
-              if self.padding_free:
-                  all_logits = []
-                  for ids, pos_ids in zip(input_ids, model_kwargs["position_ids"]):
-                      single_output = model(
-                          input_ids=ids.unsqueeze(0),
-                          position_ids=pos_ids.unsqueeze(0),
-                          **{k: v for k, v in model_kwargs.items() if k != "position_ids"}
-                      )
-                      all_logits.append(single_output.logits.squeeze(0))
-                  logits = torch.cat(all_logits, dim=0)
-              else:
-                  outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
-                  logits = outputs.logits
+              # Forward pass
+              outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
+              logits = outputs.logits
 
-              if self.padding_free:
-                  labels = torch.cat([ids[1:] for ids in input_ids])
-                  loss_mask = torch.cat([mask[1:] for mask in loss_mask]).bool()
-              else:
-                  labels = input_ids[:, 1:].clone()
-                  loss_mask = loss_mask[:, 1:].bool()
+              labels = input_ids[:, 1:].clone()
+              loss_mask = loss_mask[:, 1:].bool()
 
+          # Common processing for both padding-free and non-padding-free cases
+          if self.use_num_logits_to_keep:
+              first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
+              num_logits_to_keep = loss_mask.shape[1] - first_compute_index
+              model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1
 
-              if self.use_num_logits_to_keep:
-                      first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
-                      num_logits_to_keep = loss_mask.shape[1] - first_compute_index
-                      model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1
+              # Truncate labels and loss mask
+              labels = labels[:, -num_logits_to_keep:]
+              loss_mask = loss_mask[:, -num_logits_to_keep:]
 
-              # Common processing for both padding-free and non-padding-free cases
-              if self.use_num_logits_to_keep:
-                      labels = labels[:, -num_logits_to_keep:]
-                      loss_mask = loss_mask[:, -num_logits_to_keep:]
+          # Handle LLaVA-style models
+          if logits.shape[:2] != labels.shape[:2]:
+              seq_len = labels.shape[1]
+              logits = logits[:, -seq_len:]
 
-        # Handle LLaVA-style models
-        if logits.shape[:2] != labels.shape[:2]:
-            seq_len = labels.shape[1]
-            logits = logits[:, -seq_len:]
+          # Compute log probabilities
+          labels[~loss_mask] = 0
+          per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+          per_token_logps[~loss_mask] = 0
+          all_logps = per_token_logps.sum(-1)
 
-        # Compute log probabilities
-        labels[~loss_mask] = 0
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-        per_token_logps[~loss_mask] = 0
-        all_logps = per_token_logps.sum(-1)
+          output = {}
 
-        output = {}
+          # Handle weighting if enabled
+          if self.use_weighting:
+              with torch.no_grad():
+                  logprobs = F.log_softmax(logits, dim=-1)
+                  weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)
+                  per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
+                  all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
+                  chosen_weights = all_weights[:num_examples]
+                  rejected_weights = all_weights[num_examples:]
+                  output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
 
-        # Handle weighting if enabled
-        if self.use_weighting:
-            with torch.no_grad():
-                logprobs = F.log_softmax(logits, dim=-1)
-                weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)
-                per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
-                all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
-                chosen_weights = all_weights[:num_examples]
-                rejected_weights = all_weights[num_examples:]
-                output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
+          # Handle RPO loss if alpha is set
+          if self.args.rpo_alpha is not None:
+              chosen_logits = logits[:num_examples]
+              chosen_labels = labels[:num_examples]
+              output["nll_loss"] = F.cross_entropy(
+                  torch.flatten(chosen_logits, end_dim=1),
+                  torch.flatten(chosen_labels, end_dim=1),
+                  ignore_index=0
+              )
 
-        #Handle RPO loss if alpha is set
-        if self.args.rpo_alpha is not None:
-            chosen_logits = logits[:num_examples]
-            chosen_labels = labels[:num_examples]
-            output["nll_loss"] = F.cross_entropy(
-                torch.flatten(chosen_logits, end_dim=1),
-                torch.flatten(chosen_labels, end_dim=1),
-                ignore_index=0
-            )
+          # Normalize logps for IPO loss type
+          if self.loss_type == "ipo":
+              all_logps = all_logps / loss_mask.sum(-1)
 
-        # Normalize logps for IPO loss type
-        if self.loss_type == "ipo":
-            all_logps = all_logps / loss_mask.sum(-1)
+          # Split logps into chosen and rejected
+          output["chosen_logps"] = all_logps[:num_examples]
+          output["rejected_logps"] = all_logps[num_examples:]
+          
+          # Calculate mean logits
+          output["mean_chosen_logits"] = logits[:num_examples][loss_mask[:num_examples]].mean()
+          output["mean_rejected_logits"] = logits[num_examples:][loss_mask[num_examples:]].mean()
 
-        # Split logps into chosen and rejected
-        output["chosen_logps"] = all_logps[:num_examples]
-        output["rejected_logps"] = all_logps[num_examples:]
+          # Add auxiliary loss if enabled
+          if self.aux_loss_enabled:
+              output["aux_loss"] = outputs.aux_loss
+
+          # Ensure all tensors that need gradients have them
+          for key in output:
+              if isinstance(output[key], torch.Tensor):
+                  if not output[key].requires_grad and output[key].is_floating_point():
+                      output[key] = output[key].requires_grad_(True)
+
+          return output
+
         
-        # Calculate mean logits
-        output["mean_chosen_logits"] = logits[:num_examples][loss_mask[:num_examples]].mean()
-        output["mean_rejected_logits"] = logits[num_examples:][loss_mask[num_examples:]].mean()
-
-        # Add auxiliary loss if enabled
-        if self.aux_loss_enabled:
-            output["aux_loss"] = outputs.aux_loss
-
-        # Ensure all tensors that need gradients have them
-        for key in output:
-            if isinstance(output[key], torch.Tensor):
-                if not output[key].requires_grad and output[key].is_floating_point():
-                    output[key] = output[key].requires_grad_(True)
-
-        return output
 
     
     def get_batch_loss_metrics(
