@@ -130,16 +130,16 @@ class PPOTrainer(Trainer):
 
         self.args = args
         self.processing_class = processing_class
-        self.model = model
+        self.policy_model = model
 
         # Define the collator if not provided
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
 
-        self.model.generation_config.eos_token_id = (
+        self.policy_model.generation_config.eos_token_id = (
             None  # disable `pad_token_id` and `eos_token_id` because we just want to
         )
-        self.model.generation_config.pad_token_id = None  # generate tokens without truncation / padding
+        self.policy_model.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
         # peft support
         if not is_peft_available() and peft_config is not None:
@@ -148,15 +148,15 @@ class PPOTrainer(Trainer):
             )
         elif is_peft_available() and peft_config is not None:
             # if model is a peft model and we have a peft_confg, we merge and unload it first
-            if isinstance(self.model, PeftModel):
-                self.model = self.model.merge_and_unload()
+            if isinstance(self.policy_model, PeftModel):
+                self.policy_model = self.policy_model.merge_and_unload()
 
             # get peft model with the given config
-            self.model = get_peft_model(self.model, peft_config)
-            if args.bf16 and getattr(self.model, "is_loaded_in_4bit", False):
-                peft_module_casting_to_bf16(self.model)
+            self.policy_model = get_peft_model(self.policy_model, peft_config)
+            if args.bf16 and getattr(self.policy_model, "is_loaded_in_4bit", False):
+                peft_module_casting_to_bf16(self.policy_model)
 
-        self.is_peft_model = is_peft_available() and isinstance(self.model, PeftModel)
+        self.is_peft_model = is_peft_available() and isinstance(self.policy_model, PeftModel)
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
 
@@ -165,7 +165,7 @@ class PPOTrainer(Trainer):
         elif self.is_peft_model:
             self.ref_model = None
         else:
-            self.ref_model = create_reference_model(self.model)
+            self.ref_model = create_reference_model(self.policy_model)
 
         self.reward_model = reward_model
         self.train_dataset = train_dataset
@@ -215,13 +215,13 @@ class PPOTrainer(Trainer):
         #########
         # setup model, optimizer, and others
         #########
-        for module in [self.model, self.ref_model, self.value_model, self.reward_model]:
+        for module in [self.policy_model, self.ref_model, self.value_model, self.reward_model]:
             if module is not None:
                 disable_dropout_in_model(module)
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = processing_class.eos_token_id
-        self.policy_and_value = PolicyAndValueWrapper(self.model, self.value_model)
-        self.policy_and_value.config = self.model.config  # needed for pushing to hub
+        self.model = PolicyAndValueWrapper(self.policy_model, self.value_model)
+        self.model.config = self.policy_model.config  # needed for pushing to hub
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
@@ -232,7 +232,7 @@ class PPOTrainer(Trainer):
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
-            self.callbacks, self.policy_and_value, self.processing_class, self.optimizer, self.lr_scheduler
+            self.callbacks, self.model, self.processing_class, self.optimizer, self.lr_scheduler
         )
         self.add_callback(PrinterCallback if self.args.disable_tqdm else DEFAULT_PROGRESS_CALLBACK)
         self.control = TrainerControl()
@@ -255,8 +255,8 @@ class PPOTrainer(Trainer):
             os.makedirs(self.args.output_dir, exist_ok=True)
 
         # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.policy_and_value, "add_model_tags"):
-            self.policy_and_value.add_model_tags(self._tag_names)
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
 
         #########
         ### setup dataloader
@@ -271,9 +271,7 @@ class PPOTrainer(Trainer):
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
         # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
         torch.manual_seed(args.seed)
-        self.policy_and_value, self.optimizer, self.dataloader = accelerator.prepare(
-            self.policy_and_value, self.optimizer, self.dataloader
-        )
+        self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
         torch.manual_seed(self.local_seed)  # reset the local seed again
 
         self.eval_dataloader = DataLoader(
@@ -314,25 +312,25 @@ class PPOTrainer(Trainer):
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
         with self.accelerator.unwrap_model(
-            self.policy_and_value.policy
+            self.model.policy
         ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
             if self.ref_adapter_name:
-                self.policy_and_value.policy.set_adapter(self.ref_adapter_name)
+                self.model.policy.set_adapter(self.ref_adapter_name)
             yield
             if self.ref_adapter_name:
-                self.policy_and_value.policy.set_adapter(self.model_adapter_name or "default")
+                self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        backup_model = self.policy_and_value
-        self.policy_and_value = self.policy_and_value.policy  # save only the policy
+        backup_model = self.model
+        self.model = self.model.policy  # save only the policy
 
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
-            self.deepspeed = self.policy_and_value
+            self.deepspeed = self.model
 
         super().save_model(output_dir, _internal_call)
 
-        self.policy_and_value = backup_model
+        self.model = backup_model
 
         if self.is_deepspeed_enabled:
             self.deepspeed = backup_deepspeed
@@ -341,7 +339,7 @@ class PPOTrainer(Trainer):
         args = self.args
         accelerator = self.accelerator
         optimizer = self.optimizer
-        model = self.policy_and_value
+        model = self.model
         ref_policy = self.ref_model
         reward_model = self.reward_model
         processing_class = self.processing_class
@@ -398,8 +396,8 @@ class PPOTrainer(Trainer):
 
         # backward compatibility
         if self.is_deepspeed_enabled:
-            self.deepspeed = self.policy_and_value
-            self.model_wrapped = self.policy_and_value
+            self.deepspeed = self.model
+            self.model_wrapped = self.model
 
         for update in range(1, args.num_total_batches + 1):
             self.state.episode += 1 * args.batch_size
@@ -686,7 +684,7 @@ class PPOTrainer(Trainer):
         )
 
         table = defaultdict(list)
-        with unwrap_model_for_generation(self.policy_and_value, self.accelerator) as unwrapped_model:
+        with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]
                 with torch.no_grad():
@@ -749,10 +747,8 @@ class PPOTrainer(Trainer):
         if not self.is_world_process_zero():
             return
 
-        if hasattr(self.policy_and_value.config, "_name_or_path") and not os.path.isdir(
-            self.policy_and_value.config._name_or_path
-        ):
-            base_model = self.policy_and_value.config._name_or_path
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
         else:
             base_model = None
 
@@ -760,7 +756,7 @@ class PPOTrainer(Trainer):
         if isinstance(tags, str):
             tags = [tags]
 
-        if hasattr(self.policy_and_value.config, "unsloth_version"):
+        if hasattr(self.model.config, "unsloth_version"):
             tags.append("unsloth")
 
         citation = textwrap.dedent("""\

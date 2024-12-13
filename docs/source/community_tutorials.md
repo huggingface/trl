@@ -11,6 +11,8 @@ Community tutorials are made by active members of the Hugging Face community tha
 | Preference Optimization | [`DPOTrainer`]  | Align Mistral-7b using Direct Preference Optimization for human preference alignment     | [Maxime Labonne](https://huggingface.co/mlabonne)              | [Link](https://mlabonne.github.io/blog/posts/Fine_tune_Mistral_7b_with_DPO.html)                                     | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mlabonne/llm-course/blob/main/Fine_tune_a_Mistral_7b_model_with_DPO.ipynb)                                             |
 | Preference Optimization | [`ORPOTrainer`] | Fine-tuning Llama 3 with ORPO combining instruction tuning and preference alignment      | [Maxime Labonne](https://huggingface.co/mlabonne)              | [Link](https://mlabonne.github.io/blog/posts/2024-04-19_Fine_tune_Llama_3_with_ORPO.html)                            | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1eHNWg9gnaXErdAa8_mcvjMupbSS6rDvi)                                                                                      |
 
+<Youtube id="cnGyyM0vOes" />
+
 # Vision Language Models
 
 | Task            | Class          | Description                                                                  | Author                                                 | Tutorial                                                             | Colab                                                                                                                                                                                                                           |
