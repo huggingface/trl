@@ -58,6 +58,7 @@ from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
     pad_to_length,
     peft_module_casting_to_bf16,
 )
@@ -1526,6 +1527,7 @@ class KTOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="KTO",
             trainer_citation=citation,
             paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",
