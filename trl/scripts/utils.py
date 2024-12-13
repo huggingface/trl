@@ -19,7 +19,7 @@ import os
 import subprocess
 import sys
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterable, Optional, Union
 
 import yaml
@@ -29,6 +29,35 @@ from transformers.utils.deprecation import deprecate_kwarg
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ScriptArguments:
+    """
+    Arguments common to all scripts.
+
+    Args:
+        dataset_name (`str`):
+            Dataset name.
+        dataset_config (`str` or `None`, *optional*, defaults to `None`):
+            Dataset configuration name. Corresponds to the `name` argument of the [`~datasets.load_dataset`] function.
+        dataset_train_split (`str`, *optional*, defaults to `"train"`):
+            Dataset split to use for training.
+        dataset_test_split (`str`, *optional*, defaults to `"test"`):
+            Dataset split to use for evaluation.
+        gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
+            Whether to apply `use_reentrant` for gradient_checkpointing.
+        ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
+            Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar
+            type, inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
+    """
+
+    dataset_name: str
+    dataset_config: Optional[str] = None
+    dataset_train_split: str = "train"
+    dataset_test_split: str = "test"
+    gradient_checkpointing_use_reentrant: bool = False
+    ignore_bias_buffers: bool = False
 
 
 class YamlConfigParser:
@@ -90,84 +119,13 @@ def init_zero_verbose():
     warnings.showwarning = warning_handler
 
 
-@dataclass
-class ChatArguments:
-    # general settings
-    model_name_or_path: str = field(metadata={"help": "Name of the pre-trained model"})
-    user: str = field(default=None, metadata={"help": "Username to display in chat interface"})
-    system_prompt: str = field(default=None, metadata={"help": "System prompt"})
-    save_folder: str = field(default="./chat_history/", metadata={"help": "Folder to save chat history"})
-    device: str = field(
-        default="cpu",
-        metadata={"help": "device to use for inference."},
-    )
-    config: str = field(
-        default="default",
-        metadata={
-            "help": "Config file used for setting the configs. If `default` uses examples/scripts/config/default_chat_config.yaml"
-        },
-    )
-    examples: str = field(default=None, metadata={"help": "Empty placeholder needs to be set via config."})
-    # generation settings
-    max_new_tokens: int = field(default=256, metadata={"help": "Maximum number of tokens to generate"})
-    do_sample: bool = field(default=True, metadata={"help": "Whether to sample outputs during generation"})
-    num_beams: int = field(default=1, metadata={"help": "Number of beams for beam search"})
-    temperature: float = field(default=1.0, metadata={"help": "Temperature parameter for generation"})
-    top_k: int = field(default=50, metadata={"help": "Value of k for top-k sampling"})
-    top_p: float = field(default=1.0, metadata={"help": "Value of p for nucleus sampling"})
-    repetition_penalty: float = field(default=1.0, metadata={"help": "Repetition penalty"})
-    eos_tokens: str = field(
-        default=None,
-        metadata={"help": "EOS tokens to stop the generation. If multiple they should be comma separated"},
-    )
-    eos_token_ids: str = field(
-        default=None,
-        metadata={"help": "EOS token IDs to stop the generation. If multiple they should be comma separated"},
-    )
-    # model loading
-    model_revision: str = field(
-        default="main",
-        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
-    )
-    torch_dtype: str = field(
-        default=None,
-        metadata={
-            "help": (
-                "Override the default `torch.dtype` and load the model under this dtype. If `auto` is passed, the "
-                "dtype will be automatically derived from the model's weights."
-            ),
-            "choices": ["auto", "bfloat16", "float16", "float32"],
-        },
-    )
-    trust_remote_code: bool = field(default=False, metadata={"help": "Trust remote code when loading a model."})
-    attn_implementation: str = field(
-        default=None,
-        metadata={
-            "help": (
-                "Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in which case you must install this manually by running `pip install flash-attn --no-build-isolation`"
-            )
-        },
-    )
-    load_in_8bit: bool = field(
-        default=False,
-        metadata={"help": "use 8 bit precision for the base model - works only with LoRA"},
-    )
-    load_in_4bit: bool = field(
-        default=False,
-        metadata={"help": "use 4 bit precision for the base model - works only with LoRA"},
-    )
-
-    bnb_4bit_quant_type: str = field(default="nf4", metadata={"help": "precise the quantization type (fp4 or nf4)"})
-    use_bnb_nested_quant: bool = field(default=False, metadata={"help": "use nested quantization"})
-
-
 class TrlParser(HfArgumentParser):
     """
     A subclass of [`transformers.HfArgumentParser`] designed for parsing command-line arguments with dataclass-backed
     configurations, while also supporting configuration file loading and environment variable management.
 
     Args:
-        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]`):
+        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]` or `None`, *optional*, defaults to `None`):
             Dataclass types to use for argument parsing.
         **kwargs:
             Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.
@@ -215,12 +173,15 @@ class TrlParser(HfArgumentParser):
     )
     def __init__(
         self,
-        dataclass_types: Union[DataClassType, Iterable[DataClassType]],
+        dataclass_types: Optional[Union[DataClassType, Iterable[DataClassType]]] = None,
         ignore_extra_args: Optional[bool] = None,
         **kwargs,
     ):
-        super().__init__(dataclass_types=dataclass_types, **kwargs)
-        self._ignore_extra_args = ignore_extra_args
+        # Make sure dataclass_types is an iterable
+        if dataclass_types is None:
+            dataclass_types = []
+        elif not isinstance(dataclass_types, Iterable):
+            dataclass_types = [dataclass_types]
 
         # Check that none of the dataclasses have the "config" field
         for dataclass_type in dataclass_types:
@@ -229,6 +190,9 @@ class TrlParser(HfArgumentParser):
                     f"Dataclass {dataclass_type.__name__} has a field named 'config'. This field is reserved for the "
                     f"config file path and should not be used in the dataclass."
                 )
+
+        super().__init__(dataclass_types=dataclass_types, **kwargs)
+        self._ignore_extra_args = ignore_extra_args
 
     def post_process_dataclasses(self, dataclasses):
         """
