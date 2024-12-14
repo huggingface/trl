@@ -445,7 +445,7 @@ class DPOTrainer(Trainer):
             )
             train_dataset = train_dataset.map(
                 maybe_apply_chat_template,
-                fn_kwargs={"tokenizer": processing_class},
+                fn_kwargs={"tokenizer": processing_class, "tools": args.tools},
                 num_proc=args.dataset_num_proc,
                 desc="Applying chat template to train dataset",
             )
@@ -455,7 +455,7 @@ class DPOTrainer(Trainer):
                 )
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
+                    fn_kwargs={"tokenizer": processing_class, "tools": args.tools},
                     num_proc=args.dataset_num_proc,
                     desc="Applying chat template to eval dataset",
                 )

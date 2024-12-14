@@ -15,7 +15,7 @@
 import warnings
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional,Callable,Union
 
 from transformers import TrainingArguments
 
@@ -51,6 +51,9 @@ class DPOConfig(TrainingArguments):
         label_smoothing (`float`, *optional*, defaults to `0.0`):
             Robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and
             [Robust DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
+        tools (`Optional[list[Union[dict, Callable]]]`, *optional*, defaults to `None`):
+            A list of tools (callable functions) that will be accessible to the model.
+            If the template does not support function calling, this argument will have no effect            
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
@@ -151,6 +154,7 @@ class DPOConfig(TrainingArguments):
     learning_rate: float = 1e-6
     beta: float = 0.1
     label_smoothing: float = 0.0
+    tools: Optional[list[Union[dict, Callable]]] = None
     loss_type: Literal[
         "sigmoid",
         "hinge",
