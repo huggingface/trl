@@ -60,7 +60,7 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .rloo_config import RLOOConfig
-from .utils import generate_model_card
+from .utils import generate_model_card, get_comet_experiment_url, log_table_to_comet_experiment
 
 
 if is_wandb_available():
@@ -556,6 +556,12 @@ class RLOOTrainer(Trainer):
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
+            if "comet_ml" in args.report_to:
+                log_table_to_comet_experiment(
+                    name="completions.csv",
+                    table=df,
+                )
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -606,6 +612,7 @@ class RLOOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="RLOO",
             trainer_citation=citation,
             paper_title="Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",

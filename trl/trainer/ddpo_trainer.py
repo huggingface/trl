@@ -28,7 +28,7 @@ from transformers import is_wandb_available
 
 from ..models import DDPOStableDiffusionPipeline
 from .ddpo_config import DDPOConfig
-from .utils import PerPromptStatTracker, generate_model_card
+from .utils import PerPromptStatTracker, generate_model_card, get_comet_experiment_url
 
 
 if is_wandb_available():
@@ -642,6 +642,7 @@ class DDPOTrainer(PyTorchModelHubMixin):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="DDPO",
             trainer_citation=citation,
             paper_title="Training Diffusion Models with Reinforcement Learning",

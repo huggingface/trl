@@ -27,7 +27,7 @@ from transformers import is_wandb_available
 
 from ..models import DDPOStableDiffusionPipeline
 from .alignprop_config import AlignPropConfig
-from .utils import generate_model_card
+from .utils import generate_model_card, get_comet_experiment_url
 
 
 if is_wandb_available():
@@ -439,6 +439,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="AlignProp",
             trainer_citation=citation,
             paper_title="Aligning Text-to-Image Diffusion Models with Reward Backpropagation",

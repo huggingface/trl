@@ -147,6 +147,7 @@ class TestGenerateModelCard(unittest.TestCase):
             dataset_name="username/my_dataset",
             tags=["trl", "trainer-tag"],
             wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
+            comet_url="https://www.comet.com/username/project_id/experiment_id",
             trainer_name="My Trainer",
             trainer_citation="@article{my_trainer, ...}",
             paper_title="My Paper",
@@ -158,6 +159,7 @@ class TestGenerateModelCard(unittest.TestCase):
         self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
         self.assertIn("datasets: username/my_dataset", card_text)
         self.assertIn("](https://wandb.ai/username/project_id/runs/abcd1234)", card_text)
+        self.assertIn("](https://www.comet.com/username/project_id/experiment_id", card_text)
         self.assertIn("My Trainer", card_text)
         self.assertIn("```bibtex\n@article{my_trainer, ...}\n```", card_text)
         self.assertIn("[My Paper](https://huggingface.co/papers/1234.56789)", card_text)
@@ -170,6 +172,7 @@ class TestGenerateModelCard(unittest.TestCase):
             dataset_name=None,
             tags=[],
             wandb_url=None,
+            comet_url=None,
             trainer_name="My Trainer",
             trainer_citation=None,
             paper_title=None,
