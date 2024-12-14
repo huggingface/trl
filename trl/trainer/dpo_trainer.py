@@ -844,141 +844,142 @@ class DPOTrainer(Trainer):
                 ref_model_output = self.concatenated_forward(self.ref_model, batch)
         return ref_model_output["chosen_logps"], ref_model_output["rejected_logps"]
 
-        @staticmethod
-        def concatenated_inputs(
-            batch: dict[str, Union[list, torch.LongTensor]], padding_value: int, padding_free: bool
-        ) -> dict[str, torch.LongTensor]:
-            """
-            Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
-            and completion sequences. Also handles position IDs for models that require them.
+    @staticmethod
+    def concatenated_inputs(
+        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int, padding_free: bool
+    ) -> dict[str, torch.LongTensor]:
+        """
+        Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
+        and completion sequences. Also handles position IDs for models that require them.
 
-            Args:
-                batch (`dict[str, Union[list, torch.LongTensor]]`):
-                    A batch of input data. The batch must contain the following keys:
-                    - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input IDs.
-                    - `"chosen_input_ids"`: Tensor of shape `(batch_size, chosen_length)` representing the chosen completion input IDs.
-                    - `"rejected_input_ids"`: Tensor of shape `(batch_size, rejected_length)` representing the rejected completion input IDs.
-                    - `"prompt_attention_mask"`: Tensor of shape `(batch_size, prompt_length)` for prompt attention masks.
-                    - `"chosen_attention_mask"`: Tensor of shape `(batch_size, chosen_length)` for chosen completion attention masks.
-                    - `"rejected_attention_mask"`: Tensor of shape `(batch_size, rejected_length)` for rejected completion attention masks.
-                    - `"prompt_pixel_values"` (optional): Tensor for pixel values, if available.
-                    - `"prompt_pixel_attention_mask"` (optional): Tensor for pixel attention masks, if available.
-                    - `"image_sizes"` (optional): Tensor for image sizes, if available.
+        Args:
+            batch (`dict[str, Union[list, torch.LongTensor]]`):
+                A batch of input data. The batch must contain the following keys:
+                - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input IDs.
+                - `"chosen_input_ids"`: Tensor of shape `(batch_size, chosen_length)` representing the chosen completion input IDs.
+                - `"rejected_input_ids"`: Tensor of shape `(batch_size, rejected_length)` representing the rejected completion input IDs.
+                - `"prompt_attention_mask"`: Tensor of shape `(batch_size, prompt_length)` for prompt attention masks.
+                - `"chosen_attention_mask"`: Tensor of shape `(batch_size, chosen_length)` for chosen completion attention masks.
+                - `"rejected_attention_mask"`: Tensor of shape `(batch_size, rejected_length)` for rejected completion attention masks.
+                - `"prompt_pixel_values"` (optional): Tensor for pixel values, if available.
+                - `"prompt_pixel_attention_mask"` (optional): Tensor for pixel attention masks, if available.
+                - `"image_sizes"` (optional): Tensor for image sizes, if available.
 
-                padding_value (`int`):
-                    The padding value to use for the concatenated completion sequences.
+            padding_value (`int`):
+                The padding value to use for the concatenated completion sequences.
 
-                padding_free (`bool`):
-                    Whether to operate in padding-free mode. When True, removes padding and generates position IDs.
+            padding_free (`bool`):
+                Whether to operate in padding-free mode. When True, removes padding and generates position IDs.
 
-            Returns:
-                `dict[str, torch.LongTensor]`: A dictionary containing:
-                    If padding_free=True:
-                        - `"prompt_input_ids"`: Concatenated prompt input IDs without padding
-                        - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs without padding
-                        - `"prompt_position_ids"`: Position IDs for prompt sequences
-                        - `"completion_position_ids"`: Position IDs for completion sequences
-                        - `"pixel_values"` (optional): Concatenated pixel values if present
-                        - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if present
-                        - `"image_sizes"` (optional): Concatenated image sizes if present
+        Returns:
+            `dict[str, torch.LongTensor]`: A dictionary containing:
+                If padding_free=True:
+                    - `"prompt_input_ids"`: Concatenated prompt input IDs without padding
+                    - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs without padding
+                    - `"prompt_position_ids"`: Position IDs for prompt sequences
+                    - `"completion_position_ids"`: Position IDs for completion sequences
+                    - `"pixel_values"` (optional): Concatenated pixel values if present
+                    - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if present
+                    - `"image_sizes"` (optional): Concatenated image sizes if present
 
-                    If padding_free=False:
-                        - `"prompt_input_ids"`: Concatenated prompt input IDs with padding
-                        - `"prompt_attention_mask"`: Concatenated prompt attention masks
-                        - `"completion_input_ids"`: Concatenated and padded chosen/rejected completion input IDs
-                        - `"completion_attention_mask"`: Concatenated and padded chosen/rejected attention masks
-                        - `"pixel_values"` (optional): Concatenated pixel values if present
-                        - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if present
-                        - `"image_sizes"` (optional): Concatenated image sizes if present
+                If padding_free=False:
+                    - `"prompt_input_ids"`: Concatenated prompt input IDs with padding
+                    - `"prompt_attention_mask"`: Concatenated prompt attention masks
+                    - `"completion_input_ids"`: Concatenated and padded chosen/rejected completion input IDs
+                    - `"completion_attention_mask"`: Concatenated and padded chosen/rejected attention masks
+                    - `"pixel_values"` (optional): Concatenated pixel values if present
+                    - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if present
+                    - `"image_sizes"` (optional): Concatenated image sizes if present
 
-            Notes:
-                - In padding-free mode, attention masks are removed after being used to create position IDs
-                - Position IDs in padding-free mode are generated to maintain continuous positions across prompt and completion
-                - Optional pixel-related features are handled the same way in both modes
-            """
-            output = {}
+        Notes:
+            - In padding-free mode, attention masks are removed after being used to create position IDs
+            - Position IDs in padding-free mode are generated to maintain continuous positions across prompt and completion
+            - Optional pixel-related features are handled the same way in both modes
+        """
+        output = {}
 
-            if not padding_free:
-                # For the prompt, the input_ids are the same for both the chosen and rejected responses
-                output["prompt_input_ids"] = torch.cat([batch["prompt_input_ids"], batch["prompt_input_ids"]], dim=0)
+        if not padding_free:
+            # For the prompt, the input_ids are the same for both the chosen and rejected responses
+            output["prompt_input_ids"] = torch.cat([batch["prompt_input_ids"], batch["prompt_input_ids"]], dim=0)
 
-                if "prompt_attention_mask" in batch:
-                    output["prompt_attention_mask"] = torch.cat(
-                        [batch["prompt_attention_mask"], batch["prompt_attention_mask"]], dim=0
-                    )
+            if "prompt_attention_mask" in batch:
+                output["prompt_attention_mask"] = torch.cat(
+                    [batch["prompt_attention_mask"], batch["prompt_attention_mask"]], dim=0
+                )
 
-                if "pixel_values" in batch:
-                    output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
+            if "pixel_values" in batch:
+                output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
 
-                if "pixel_attention_mask" in batch:
-                    output["pixel_attention_mask"] = torch.cat(
-                        [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
-                    )
+            if "pixel_attention_mask" in batch:
+                output["pixel_attention_mask"] = torch.cat(
+                    [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
+                )
 
-                if "image_sizes" in batch:
-                    output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
+            if "image_sizes" in batch:
+                output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
 
-                # Concatenate the chosen and rejected completions
-                max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
-                output["completion_input_ids"] = torch.cat(
+            # Concatenate the chosen and rejected completions
+            max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
+            output["completion_input_ids"] = torch.cat(
+                (
+                    pad_to_length(batch["chosen_input_ids"], max_completion_length, pad_value=padding_value),
+                    pad_to_length(batch["rejected_input_ids"], max_completion_length, pad_value=padding_value),
+                ),
+                dim=0
+            )
+
+            if "chosen_attention_mask" in batch and "rejected_attention_mask" in batch:
+                output["completion_attention_mask"] = torch.cat(
                     (
-                        pad_to_length(batch["chosen_input_ids"], max_completion_length, pad_value=padding_value),
-                        pad_to_length(batch["rejected_input_ids"], max_completion_length, pad_value=padding_value),
+                        pad_to_length(batch["chosen_attention_mask"], max_completion_length, pad_value=0),
+                        pad_to_length(batch["rejected_attention_mask"], max_completion_length, pad_value=0),
                     ),
                     dim=0
                 )
 
-                if "chosen_attention_mask" in batch and "rejected_attention_mask" in batch:
-                    output["completion_attention_mask"] = torch.cat(
-                        (
-                            pad_to_length(batch["chosen_attention_mask"], max_completion_length, pad_value=0),
-                            pad_to_length(batch["rejected_attention_mask"], max_completion_length, pad_value=0),
-                        ),
-                        dim=0
-                    )
+        else:
+            prompt_tensors = batch["prompt_input_ids"]
+            all_prompts = []
+            for prompt in prompt_tensors:
+                all_prompts.extend([prompt, prompt]) 
+            output["prompt_input_ids"] = all_prompts  # List of tensors, no padding applied
 
-            else:
-                prompt_tensors = batch["prompt_input_ids"]
-                all_prompts = []
-                for prompt in prompt_tensors:
-                    all_prompts.extend([prompt, prompt]) 
-                output["prompt_input_ids"] = all_prompts  # List of tensors, no padding applied
+            chosen_tensors = batch["chosen_input_ids"]
+            rejected_tensors = batch["rejected_input_ids"]
+            all_completions = []
+            all_completions.extend(chosen_tensors)    
+            all_completions.extend(rejected_tensors)
+            output["completion_input_ids"] = all_completions  # List of tensors, no padding applied
 
-                chosen_tensors = batch["chosen_input_ids"]
-                rejected_tensors = batch["rejected_input_ids"]
-                all_completions = []
-                all_completions.extend(chosen_tensors)    
-                all_completions.extend(rejected_tensors)
-                output["completion_input_ids"] = all_completions  # List of tensors, no padding applied
+            # Handle position IDs if present
+            if "prompt_position_ids" in batch:
+                position_tensors = batch["prompt_position_ids"]
+                all_positions = []
+                for pos in position_tensors:
+                    all_positions.extend([pos, pos])  
+                output["prompt_position_ids"] = all_positions
 
-                # Handle position IDs if present
-                if "prompt_position_ids" in batch:
-                    position_tensors = batch["prompt_position_ids"]
-                    all_positions = []
-                    for pos in position_tensors:
-                        all_positions.extend([pos, pos])  
-                    output["prompt_position_ids"] = all_positions
+            if "chosen_position_ids" in batch and "rejected_position_ids" in batch:
+                chosen_positions = batch["chosen_position_ids"]
+                rejected_positions = batch["rejected_position_ids"]
+                all_completion_positions = []
+                all_completion_positions.extend(chosen_positions)
+                all_completion_positions.extend(rejected_positions)
+                output["completion_position_ids"] = all_completion_positions
 
-                if "chosen_position_ids" in batch and "rejected_position_ids" in batch:
-                    chosen_positions = batch["chosen_position_ids"]
-                    rejected_positions = batch["rejected_position_ids"]
-                    all_completion_positions = []
-                    all_completion_positions.extend(chosen_positions)
-                    all_completion_positions.extend(rejected_positions)
-                    output["completion_position_ids"] = all_completion_positions
+            # Handle optional pixel-related features (if present)
+            for key in ["pixel_values", "pixel_attention_mask", "image_sizes"]:
+                if key in batch:
+                    if isinstance(batch[key], list):
+                        all_values = []
+                        for tensor in batch[key]:
+                            all_values.extend([tensor, tensor]) 
+                        output[key] = all_values
+                    else:
+                        output[key] = torch.cat([batch[key], batch[key]], dim=0)
 
-                # Handle optional pixel-related features (if present)
-                for key in ["pixel_values", "pixel_attention_mask", "image_sizes"]:
-                    if key in batch:
-                        if isinstance(batch[key], list):
-                            all_values = []
-                            for tensor in batch[key]:
-                                all_values.extend([tensor, tensor]) 
-                            output[key] = all_values
-                        else:
-                            output[key] = torch.cat([batch[key], batch[key]], dim=0)
-
-            return output
+        return output
+    
     def dpo_loss(
         self,
         chosen_logps: torch.FloatTensor,
@@ -1169,13 +1170,11 @@ class DPOTrainer(Trainer):
     def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together."""        
         # Get number of examples
-        if isinstance(batch["prompt_input_ids"], list):
-            num_examples = batch["prompt_input_ids"][0].shape[0]
-        else:
-            num_examples = batch["prompt_input_ids"].shape[0]
+        num_examples = batch["prompt_input_ids"][0].shape[0] if isinstance(batch["prompt_input_ids"], list) else batch["prompt_input_ids"].shape[0]
                 
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value, padding_free=self.padding_free)
 
+        # Prepare model kwargs
         model_kwargs = {}
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
@@ -1183,7 +1182,6 @@ class DPOTrainer(Trainer):
         # Handle vision model inputs
         for key in ["pixel_values", "pixel_attention_mask", "image_sizes"]:
             if key in concatenated_batch:
-                # Only set requires_grad for floating point tensors
                 if isinstance(concatenated_batch[key], torch.Tensor) and concatenated_batch[key].is_floating_point():
                     concatenated_batch[key] = concatenated_batch[key].requires_grad_(True)
                 model_kwargs[key] = concatenated_batch[key]
@@ -1192,24 +1190,21 @@ class DPOTrainer(Trainer):
         prompt_input_ids = concatenated_batch["prompt_input_ids"]
         completion_input_ids = concatenated_batch["completion_input_ids"]
 
-        # Handle lists of tensors
-        if isinstance(prompt_input_ids, list):
-            prompt_input_ids = torch.cat(prompt_input_ids, dim=0)
-        if isinstance(completion_input_ids, list):
-            completion_input_ids = torch.cat(completion_input_ids, dim=0)
+        # Handle lists of tensors and ensure 2D
+        for tensor in [prompt_input_ids, completion_input_ids]:
+            if isinstance(tensor, list):
+                tensor = torch.cat(tensor, dim=0)
+            if tensor.dim() == 1:
+                tensor = tensor.unsqueeze(0)
 
-        # Add dimensions if needed
-        if prompt_input_ids.dim() == 1:
-            prompt_input_ids = prompt_input_ids.unsqueeze(0)
-        if completion_input_ids.dim() == 1:
-            completion_input_ids = completion_input_ids.unsqueeze(0)
-
+        output = {}
+        
         if self.is_encoder_decoder:
             if not self.padding_free:
                 prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
                 completion_attention_mask = concatenated_batch["completion_attention_mask"]
                 
-                labels = completion_input_ids
+                labels = completion_input_ids.clone()
                 labels[completion_attention_mask == 0] = self.label_pad_token_id
                 
                 outputs = model(
@@ -1219,297 +1214,188 @@ class DPOTrainer(Trainer):
                     **model_kwargs,
                 )
             else:
-              # Padding-free processing
-              input_ids = [torch.cat((p, c), dim=0) for p, c in zip(prompt_input_ids, completion_input_ids)]
-              position_ids = [torch.cat((p, c), dim=0) for p, c in zip(concatenated_batch['prompt_position_ids'], concatenated_batch['completion_position_ids'])]
-              loss_mask = [(pos >= 0).long() for pos in position_ids]
-              
-              model_kwargs["position_ids"] = position_ids
+                input_ids = [torch.cat((p, c), dim=0) for p, c in zip(prompt_input_ids, completion_input_ids)]
+                position_ids = [torch.cat((p, c), dim=0) for p, c in zip(concatenated_batch['prompt_position_ids'], concatenated_batch['completion_position_ids'])]
+                model_kwargs["position_ids"] = position_ids
 
-              # Apply max length truncation
-              if self.args.max_length is not None:
-                  input_ids = [ids[:self.args.max_length] for ids in input_ids]
-                  model_kwargs["position_ids"] = [pos[:self.args.max_length] for pos in model_kwargs["position_ids"]]
-                  loss_mask = [mask[:self.args.max_length] for mask in loss_mask]
+                if self.args.max_length:
+                    input_ids = [ids[:self.args.max_length] for ids in input_ids]
+                    model_kwargs["position_ids"] = [pos[:self.args.max_length] for pos in model_kwargs["position_ids"]]
 
-              # Process each sequence individually
-              all_logits = []
-              all_labels = []
-              all_loss_masks = []
+                all_outputs = [model(input_ids=ids.unsqueeze(0), position_ids=pos_ids.unsqueeze(0))
+                            for ids, pos_ids in zip(input_ids, model_kwargs["position_ids"])]
+                
+                outputs = type('Outputs', (), {
+                    'logits': torch.cat([output.logits.squeeze(0) for output in all_outputs], dim=0),
+                    'labels': torch.stack([ids[1:] for ids in input_ids]) if len(input_ids) > 1 else input_ids[0][1:].unsqueeze(0),
+                    'loss_mask': torch.stack([torch.ones_like(ids[1:]).bool() for ids in input_ids]) if len(input_ids) > 1 else torch.ones_like(input_ids[0][1:]).bool().unsqueeze(0)
+                })
 
-              for ids, pos_ids in zip(input_ids, model_kwargs["position_ids"]):
-                  single_output = model(
-                      input_ids=ids.unsqueeze(0),
-                      position_ids=pos_ids.unsqueeze(0),
-                  )
-                  all_logits.append(single_output.logits.squeeze(0))
-                  all_labels.append(ids[1:])
-                  all_loss_masks.append(torch.ones_like(ids[1:]).bool())
-
-
-              # Concatenate results
-              logits = torch.cat(all_logits, dim=0)
-              
-              # Ensure labels is 2D
-              labels = torch.stack(all_labels) if len(all_labels) > 1 else all_labels[0].unsqueeze(0)
-              loss_mask = torch.stack(all_loss_masks) if len(all_loss_masks) > 1 else all_loss_masks[0].unsqueeze(0)
-
-              # Debug prints
-              print("Logits shape:", logits.shape)
-              print("Labels shape:", labels.shape)
-              print("Loss mask shape:", loss_mask.shape)
-
-
-        else:
+        else:  # decoder-only model
           if self.padding_free:
-              # Padding-free processing for decoder-only models
-              input_ids = [torch.cat((p, c), dim=0) for p, c in zip(batch["prompt_input_ids"], batch["chosen_input_ids"])]
-              position_ids = [torch.cat((p, c), dim=0) for p, c in zip(batch['prompt_position_ids'], batch['chosen_position_ids'])]
-              
-              # Separate input_ids and position_ids for chosen and rejected
-              chosen_input_ids = batch["prompt_input_ids"] + batch["chosen_input_ids"]
-              rejected_input_ids = batch["prompt_input_ids"] + batch["rejected_input_ids"]
-              chosen_position_ids = batch['prompt_position_ids'] + batch['chosen_position_ids']
-              rejected_position_ids = batch['prompt_position_ids'] + batch['rejected_position_ids']
+            # Prepare sequences
+            chosen_input_ids = batch["prompt_input_ids"] + batch["chosen_input_ids"]
+            rejected_input_ids = batch["prompt_input_ids"] + batch["rejected_input_ids"]
+            chosen_position_ids = batch['prompt_position_ids'] + batch['chosen_position_ids']
+            rejected_position_ids = batch['prompt_position_ids'] + batch['rejected_position_ids']
 
-              # Process chosen sequences
-              chosen_logits = []
-              chosen_labels = []
-              chosen_loss_masks = []
+            def process_sequences(input_ids_list, position_ids_list):
+                # Group sequences of same length together for batched processing
+                length_groups = {}
+                for idx, (ids, pos_ids) in enumerate(zip(input_ids_list, position_ids_list)):
+                    length = ids.size(-1)
+                    if length not in length_groups:
+                        length_groups[length] = {'ids': [], 'pos_ids': [], 'indices': []}
+                    length_groups[length]['ids'].append(ids)
+                    length_groups[length]['pos_ids'].append(pos_ids)
+                    length_groups[length]['indices'].append(idx)
 
-              for ids, pos_ids in zip(chosen_input_ids, chosen_position_ids):
-                  # Ensure both ids and pos_ids are 2D tensors
-                  ids = ids.unsqueeze(0) if ids.dim() == 1 else ids
-                  pos_ids = pos_ids.unsqueeze(0) if pos_ids.dim() == 1 else pos_ids
+                all_logits, all_labels, all_loss_masks = [], [], []
+                original_order_logps = [None] * len(input_ids_list)
 
-                  single_output = model(
-                      input_ids=ids,
-                      position_ids=pos_ids,
-                  )
-                  
-                  # Labels are input_ids shifted by 1
-                  labels_for_seq = ids[0, 1:]
-                  
-                  chosen_logits.append(single_output.logits.squeeze(0))
-                  chosen_labels.append(labels_for_seq)
-                  chosen_loss_masks.append(torch.ones_like(labels_for_seq).bool())
-
-              # Process rejected sequences
-              rejected_logits = []
-              rejected_labels = []
-              rejected_loss_masks = []
-
-              for ids, pos_ids in zip(rejected_input_ids, rejected_position_ids):
-                  # Ensure both ids and pos_ids are 2D tensors
-                  ids = ids.unsqueeze(0) if ids.dim() == 1 else ids
-                  pos_ids = pos_ids.unsqueeze(0) if pos_ids.dim() == 1 else pos_ids
-
-
-                  single_output = model(
-                      input_ids=ids,
-                      position_ids=pos_ids,
-                  )
-                  
-                  # Labels are input_ids shifted by 1
-                  labels_for_seq = ids[0, 1:]
-                  
-                  rejected_logits.append(single_output.logits.squeeze(0))
-                  rejected_labels.append(labels_for_seq)
-                  rejected_loss_masks.append(torch.ones_like(labels_for_seq).bool())
-
-              # Compute log probabilities for chosen sequences
-              chosen_logps = []
-              for logits, labels, loss_mask in zip(chosen_logits, chosen_labels, chosen_loss_masks):
-                  masked_labels = torch.where(loss_mask, labels, torch.tensor(0, device=labels.device, dtype=labels.dtype))
-                  per_token_logps = torch.gather(logits.log_softmax(-1), dim=1, index=masked_labels.unsqueeze(1)).squeeze(1)
-                  per_token_logps = torch.where(loss_mask, per_token_logps, torch.tensor(0, device=per_token_logps.device, dtype=per_token_logps.dtype))
-                  chosen_logps.append(per_token_logps.sum(-1))
-
-              # Compute log probabilities for rejected sequences
-              rejected_logps = []
-              for logits, labels, loss_mask in zip(rejected_logits, rejected_labels, rejected_loss_masks):
-                  masked_labels = torch.where(loss_mask, labels, torch.tensor(0, device=labels.device, dtype=labels.dtype))
-                  per_token_logps = torch.gather(logits.log_softmax(-1), dim=1, index=masked_labels.unsqueeze(1)).squeeze(1)
-                  per_token_logps = torch.where(loss_mask, per_token_logps, torch.tensor(0, device=per_token_logps.device, dtype=per_token_logps.dtype))
-                  rejected_logps.append(per_token_logps.sum(-1))
-
-              # Convert to tensors with requires_grad
-              chosen_logps = torch.stack(chosen_logps).requires_grad_(True)
-              rejected_logps = torch.stack(rejected_logps).requires_grad_(True)
-
-              output = {
-                  "chosen_logps": chosen_logps,
-                  "rejected_logps": rejected_logps,
-              }
-
-              # Calculate mean logits
-              output["mean_chosen_logits"] = torch.mean(torch.stack([logits.mean() for logits in chosen_logits]))
-              output["mean_rejected_logits"] = torch.mean(torch.stack([logits.mean() for logits in rejected_logits]))
-
-              # Handle weighting if enabled
-              if self.use_weighting:
-                  with torch.no_grad():
-                      all_weights = []
-                      for logits, per_token_logps, loss_mask in zip(chosen_logits + rejected_logits, 
-                                                                    chosen_logps.tolist() + rejected_logps.tolist(), 
-                                                                    chosen_loss_masks + rejected_loss_masks):
-                          logprobs = F.log_softmax(logits, dim=-1)
-                          weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)
-                          per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
-                          weight = (per_token_logps_adjusted * loss_mask).sum() / loss_mask.sum()
-                          all_weights.append(weight)
-                      
-                      all_weights = torch.stack(all_weights)
-                      chosen_weights = all_weights[:len(chosen_logps)]
-                      rejected_weights = all_weights[len(chosen_logps):]
-                      output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
-
-              # Handle RPO loss if alpha is set
-              if self.args.rpo_alpha is not None:
-                  chosen_logits = torch.cat(chosen_logits)
-                  chosen_labels = torch.cat(chosen_labels)
-                  
-                  output["nll_loss"] = F.cross_entropy(
-                      torch.flatten(chosen_logits, end_dim=1),
-                      torch.flatten(chosen_labels, end_dim=1),
-                      ignore_index=0
-                  )
-
-              # Normalize logps for IPO loss type
-              if self.loss_type == "ipo":
-                  # Normalize by sequence length
-                  chosen_logps_normalized = chosen_logps / torch.tensor([mask.sum() for mask in chosen_loss_masks], 
-                                                                        dtype=chosen_logps.dtype, 
-                                                                        device=chosen_logps.device)
-                  rejected_logps_normalized = rejected_logps / torch.tensor([mask.sum() for mask in rejected_loss_masks], 
-                                                                            dtype=rejected_logps.dtype, 
-                                                                            device=rejected_logps.device)
-                  
-                  output["chosen_logps"] = chosen_logps_normalized.requires_grad_(True)
-                  output["rejected_logps"] = rejected_logps_normalized.requires_grad_(True)
-
-              # Add auxiliary loss if enabled
-              if self.aux_loss_enabled:
-                  # You might need to adjust this based on your model's output
-                  output["aux_loss"] = torch.tensor(0.0, requires_grad=True)
-
-              # Ensure all tensors that need gradients have them
-              for key in output:
-                  if isinstance(output[key], torch.Tensor):
-                      if not output[key].requires_grad:
-                          output[key] = output[key].requires_grad_(True)
-
-              return output
+                # Process each length group as a batch
+                for length, group in length_groups.items():
+                    batch_ids = torch.stack(group['ids'])
+                    batch_pos_ids = torch.stack(group['pos_ids'])
                     
+                    # Forward pass with batch of same-length sequences
+                    outputs = model(
+                        input_ids=batch_ids,
+                        position_ids=batch_pos_ids
+                    )
+                    
+                    # Compute logits and labels for this batch
+                    batch_logits = outputs.logits[:, :-1]  # Remove last prediction
+                    batch_labels = batch_ids[:, 1:]  # Shift right
+                    batch_loss_mask = torch.ones_like(batch_labels, dtype=torch.bool)
+                    
+                    # Compute log probabilities for batch
+                    log_probs = F.log_softmax(batch_logits, dim=-1)
+                    per_token_logps = torch.gather(log_probs, dim=-1, index=batch_labels.unsqueeze(-1)).squeeze(-1)
+                    sequence_logps = per_token_logps.sum(-1)
+                    
+                    # Store results in original sequence order
+                    for idx, orig_idx in enumerate(group['indices']):
+                        original_order_logps[orig_idx] = sequence_logps[idx]
+                        all_logits.append(batch_logits[idx])
+                        all_labels.append(batch_labels[idx])
+                        all_loss_masks.append(batch_loss_mask[idx])
+
+                return {
+                    'logits': all_logits,
+                    'labels': all_labels,
+                    'loss_masks': all_loss_masks,
+                    'logps': torch.stack(original_order_logps).requires_grad_(True)
+                }
+
+              # Process chosen and rejected sequences
+            chosen_outputs = process_sequences(chosen_input_ids, chosen_position_ids)
+            rejected_outputs = process_sequences(rejected_input_ids, rejected_position_ids)
+
+            output.update({
+                  "chosen_logps": chosen_outputs['logps'],
+                  "rejected_logps": rejected_outputs['logps'],
+                  "mean_chosen_logits": torch.mean(torch.stack([logits.mean() for logits in chosen_outputs['logits']])),
+                  "mean_rejected_logits": torch.mean(torch.stack([logits.mean() for logits in rejected_outputs['logits']]))
+              })
+
           else:
-              # Non-padding-free processing
-              input_ids = torch.cat((prompt_input_ids, completion_input_ids), dim=1)
-              attention_mask = torch.cat((torch.ones_like(prompt_input_ids), torch.ones_like(completion_input_ids)), dim=1)
-              prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
-              completion_attention_mask = concatenated_batch["completion_attention_mask"]
-              loss_mask = torch.cat(
-                  (torch.zeros_like(prompt_attention_mask), completion_attention_mask),
-                  dim=1)
+                # Standard processing for decoder-only models
+                attention_mask = concatenated_batch.get("attention_mask")
+                position_ids = concatenated_batch.get("position_ids")
+                
+                outputs = model(
+                    input_ids=concatenated_batch["input_ids"],
+                    attention_mask=attention_mask,
+                    position_ids=position_ids
+                )
+                
+                logits = outputs.logits
+                chosen_logits, rejected_logits = logits[:num_examples], logits[num_examples:]
+                chosen_input_ids = concatenated_batch["input_ids"][:num_examples]
+                rejected_input_ids = concatenated_batch["input_ids"][num_examples:]
+                
+                chosen_attention_mask = attention_mask[:num_examples] if attention_mask is not None else None
+                rejected_attention_mask = attention_mask[num_examples:] if attention_mask is not None else None
 
-              # Flush left to reduce memory usage
-              for i in range(attention_mask.size(0)):
-                  first_one_idx = torch.nonzero(attention_mask[i])[0].item()
-                  input_ids[i] = torch.roll(input_ids[i], shifts=-first_one_idx)
-                  attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
-                  loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
+                output.update({
+                    "chosen_logps": self.get_batch_logps(
+                        chosen_logits,
+                        chosen_input_ids,
+                        chosen_attention_mask
+                    ),
+                    "rejected_logps": self.get_batch_logps(
+                        rejected_logits,
+                        rejected_input_ids,
+                        rejected_attention_mask
+                    ),
+                    "mean_chosen_logits": chosen_logits.mean(),
+                    "mean_rejected_logits": rejected_logits.mean()
+                })
 
-              # Remove empty columns
-              empty_cols = torch.sum(attention_mask, dim=0) == 0
-              first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-              input_ids = input_ids[:, :first_empty_col]
-              attention_mask = attention_mask[:, :first_empty_col]
-              loss_mask = loss_mask[:, :first_empty_col]
+        # Handle common post-processing for all model types
+        # Handle RPO loss if alpha is set
+        if self.args.rpo_alpha is not None:
+            if self.padding_free:
+                chosen_logits = torch.cat(chosen_outputs['logits'])
+                chosen_labels = torch.cat(chosen_outputs['labels'])
+            output["nll_loss"] = F.cross_entropy(
+                chosen_logits.view(-1, chosen_logits.size(-1)),
+                chosen_labels.view(-1),
+                ignore_index=self.padding_value if not self.padding_free else 0
+            )
 
-              # Apply max length truncation
-              if self.args.max_length is not None:
-                  input_ids = input_ids[:, :self.args.max_length]
-                  attention_mask = attention_mask[:, :self.args.max_length]
-                  loss_mask = loss_mask[:, :self.args.max_length]
+        # Handle weighting if enabled
+        if self.use_weighting and self.padding_free:
+            with torch.no_grad():
+                all_logits = chosen_outputs['logits'] + rejected_outputs['logits']
+                all_logps = output["chosen_logps"].tolist() + output["rejected_logps"].tolist()
+                all_loss_masks = chosen_outputs['loss_masks'] + rejected_outputs['loss_masks']
+                
+                all_weights = []
+                for logits, per_token_logps, loss_mask in zip(all_logits, all_logps, all_loss_masks):
+                    logprobs = F.log_softmax(logits, dim=-1)
+                    weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)
+                    per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
+                    weight = (per_token_logps_adjusted * loss_mask).sum() / loss_mask.sum()
+                    all_weights.append(weight)
+                
+                all_weights = torch.stack(all_weights)
+                chosen_weights = all_weights[:len(output["chosen_logps"])]
+                rejected_weights = all_weights[len(output["chosen_logps"]):]
+                output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
 
-              # Forward pass
-              outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
-              logits = outputs.logits
-
-              labels = input_ids[:, 1:].clone()
-              loss_mask = loss_mask[:, 1:].bool()
-              
+        # Normalize logps for IPO loss type
+        if self.loss_type == "ipo" and self.padding_free:
+            chosen_loss_masks = chosen_outputs['loss_masks']
+            rejected_loss_masks = rejected_outputs['loss_masks']
             
-          # Common processing for both padding-free and non-padding-free cases
-          if self.use_num_logits_to_keep:
-              first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
-              num_logits_to_keep = loss_mask.shape[1] - first_compute_index
-              model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1
+            output["chosen_logps"] = output["chosen_logps"] / torch.tensor(
+                [mask.sum() for mask in chosen_loss_masks],
+                dtype=output["chosen_logps"].dtype,
+                device=output["chosen_logps"].device
+            ).requires_grad_(True)
+            
+            output["rejected_logps"] = output["rejected_logps"] / torch.tensor(
+                [mask.sum() for mask in rejected_loss_masks],
+                dtype=output["rejected_logps"].dtype,
+                device=output["rejected_logps"].device
+            ).requires_grad_(True)
 
-              # Truncate labels and loss mask
-              labels = labels[:, -num_logits_to_keep:]
-              loss_mask = loss_mask[:, -num_logits_to_keep:]
+        # Add auxiliary loss if enabled
+        if self.aux_loss_enabled:
+            output["aux_loss"] = outputs.aux_loss
 
-           
-          #Handle LLaVA-style models
-          if logits.shape[:2] != labels.shape[:2]:
-              seq_len = labels.shape[1]
-              logits = logits[:, -seq_len:]
-                  
-          # Compute log probabilities
-          labels[~loss_mask] = 0
-          per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-          per_token_logps[~loss_mask] = 0
-          all_logps = per_token_logps.sum(-1)
+        # Ensure all tensors that need gradients have them
+        for key in output:
+            if isinstance(output[key], torch.Tensor):
+                if not output[key].requires_grad and output[key].is_floating_point():
+                    output[key] = output[key].requires_grad_(True)
 
-          output = {}
-
-          # Handle weighting if enabled
-          if self.use_weighting:
-              with torch.no_grad():
-                  logprobs = F.log_softmax(logits, dim=-1)
-                  weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)
-                  per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
-                  all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
-                  chosen_weights = all_weights[:num_examples]
-                  rejected_weights = all_weights[num_examples:]
-                  output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
-
-          # Handle RPO loss if alpha is set
-          if self.args.rpo_alpha is not None:
-              chosen_logits = logits[:num_examples]
-              chosen_labels = labels[:num_examples]
-              output["nll_loss"] = F.cross_entropy(
-                  torch.flatten(chosen_logits, end_dim=1),
-                  torch.flatten(chosen_labels, end_dim=1),
-                  ignore_index=0
-              )
-
-          # Normalize logps for IPO loss type
-          if self.loss_type == "ipo":
-              all_logps = all_logps / loss_mask.sum(-1)
-
-          # Split logps into chosen and rejected
-          output["chosen_logps"] = all_logps[:num_examples]
-          output["rejected_logps"] = all_logps[num_examples:]
-          
-          # Calculate mean logits
-          output["mean_chosen_logits"] = logits[:num_examples][loss_mask[:num_examples]].mean()
-          output["mean_rejected_logits"] = logits[num_examples:][loss_mask[num_examples:]].mean()
-
-          # Add auxiliary loss if enabled
-          if self.aux_loss_enabled:
-              output["aux_loss"] = outputs.aux_loss
-
-          # Ensure all tensors that need gradients have them
-          for key in output:
-              if isinstance(output[key], torch.Tensor):
-                  if not output[key].requires_grad and output[key].is_floating_point():
-                      output[key] = output[key].requires_grad_(True)
-
-          return output
-        
-
+        return output
     
+
+
     def get_batch_loss_metrics(
         self,
         model,
