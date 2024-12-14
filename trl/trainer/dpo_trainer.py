@@ -94,7 +94,7 @@ class PreferenceCollator(DataCollatorMixin):
     Examples:
     ```python
     >>> from trl import PreferenceCollator
-    >>> collator = PreferenceCollator(pad_token_id=0, padding_free=False)
+    >>> collator = PreferenceCollator(pad_token_id=0)
     >>> examples = [
     ...     {"prompt_input_ids": [1, 2, 3], "chosen_input_ids": [4, 5], "rejected_input_ids": [6]},
     ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]}
@@ -114,7 +114,7 @@ class PreferenceCollator(DataCollatorMixin):
                                         [1, 1, 1]])
     }
     >>> # Example with padding_free=True
-    >>> collator.padding_free = True
+    >>> collator = PreferenceCollator(pad_token_id=0, padding_free=True)
     >>> collator(examples)
     {'prompt_input_ids': [tensor([1, 2, 3]), tensor([7, 8])],
      'chosen_input_ids': [tensor([4, 5]), tensor([9, 10])],
@@ -1300,38 +1300,76 @@ class DPOTrainer(Trainer):
               })
 
           else:
-                # Standard processing for decoder-only models
-                attention_mask = concatenated_batch.get("attention_mask")
-                position_ids = concatenated_batch.get("position_ids")
-                
-                outputs = model(
-                    input_ids=concatenated_batch["input_ids"],
-                    attention_mask=attention_mask,
-                    position_ids=position_ids
-                )
-                
-                logits = outputs.logits
-                chosen_logits, rejected_logits = logits[:num_examples], logits[num_examples:]
-                chosen_input_ids = concatenated_batch["input_ids"][:num_examples]
-                rejected_input_ids = concatenated_batch["input_ids"][num_examples:]
-                
-                chosen_attention_mask = attention_mask[:num_examples] if attention_mask is not None else None
-                rejected_attention_mask = attention_mask[num_examples:] if attention_mask is not None else None
+              prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
+              completion_attention_mask = concatenated_batch["completion_attention_mask"]
+              # Concatenate the prompt and completion inputs
+              input_ids = torch.cat((prompt_input_ids, completion_input_ids), dim=1)
+              attention_mask = torch.cat((prompt_attention_mask, completion_attention_mask), dim=1)
+              # Mask the prompt but not the completion for the loss
+              loss_mask = torch.cat(
+                  (torch.zeros_like(prompt_attention_mask), completion_attention_mask),
+                  dim=1,
+              )
 
-                output.update({
-                    "chosen_logps": self.get_batch_logps(
-                        chosen_logits,
-                        chosen_input_ids,
-                        chosen_attention_mask
-                    ),
-                    "rejected_logps": self.get_batch_logps(
-                        rejected_logits,
-                        rejected_input_ids,
-                        rejected_attention_mask
-                    ),
-                    "mean_chosen_logits": chosen_logits.mean(),
-                    "mean_rejected_logits": rejected_logits.mean()
-                })
+              # Flush left to reduce the memory usage
+              # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+              #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+              for i in range(attention_mask.size(0)):
+                  first_one_idx = torch.nonzero(attention_mask[i])[0].item()
+                  input_ids[i] = torch.roll(input_ids[i], shifts=-first_one_idx)
+                  attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
+                  loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
+
+              # Get the first column idx that is all zeros and remove every column after that
+              empty_cols = torch.sum(attention_mask, dim=0) == 0
+              first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
+              input_ids = input_ids[:, :first_empty_col]
+              attention_mask = attention_mask[:, :first_empty_col]
+              loss_mask = loss_mask[:, :first_empty_col]
+
+              # Truncate right
+              if self.args.max_length is not None:
+                  input_ids = input_ids[:, : self.args.max_length]
+                  attention_mask = attention_mask[:, : self.args.max_length]
+                  loss_mask = loss_mask[:, : self.args.max_length]
+
+              if self.use_num_logits_to_keep:
+                  # Compute num_logits_to_keep based on loss_mask pattern:
+                  # [[0, 0, 0, x, x, x, x],
+                  #  [0, 0, 0, x, x, x, 0]]
+                  #         ^ start computing logits from here ([:, -(7-3+1):])
+                  first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
+                  num_logits_to_keep = loss_mask.shape[1] - first_compute_index
+                  model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
+
+              outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
+
+              # Offset the logits by one to align with the labels
+              logits = outputs.logits[:, :-1, :]
+              labels = input_ids[:, 1:].clone()
+              loss_mask = loss_mask[:, 1:].bool()
+
+              if self.use_num_logits_to_keep:
+                # Align labels with logits
+                # logits:    -,  -, [x2, x3, x4, x5, x6]
+                #                     ^ --------- ^       after logits[:, :-1, :]
+                # labels:   [y0, y1, y2, y3, y4, y5, y6]
+                #                         ^ --------- ^   with num_logits_to_keep=4, [:, -4:]
+                # loss_mask: [0,  0,  0,  1,  1,  1,  1]
+                labels = labels[:, -num_logits_to_keep:]
+                loss_mask = loss_mask[:, -num_logits_to_keep:]
+
+        if logits.shape[:2] != labels.shape[:2]:
+            # for llava, the returned logits include the image tokens (placed before the text tokens)
+            seq_len = labels.shape[1]
+            logits = logits[:, -seq_len:]
+
+        # Compute the log probabilities of the labels
+        labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
+        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps[~loss_mask] = 0
+        all_logps = per_token_logps.sum(-1)
+
 
         # Handle common post-processing for all model types
         # Handle RPO loss if alpha is set
@@ -1392,7 +1430,14 @@ class DPOTrainer(Trainer):
                 if not output[key].requires_grad and output[key].is_floating_point():
                     output[key] = output[key].requires_grad_(True)
 
+        if not self.padding_free:
+          output["chosen_logps"] = all_logps[:num_examples]
+          output["rejected_logps"] = all_logps[num_examples:]
+          output["mean_chosen_logits"] = logits[:num_examples][loss_mask[:num_examples]].mean()
+          output["mean_rejected_logits"] = logits[num_examples:][loss_mask[num_examples:]].mean()
+        
         return output
+        
     
 
 
