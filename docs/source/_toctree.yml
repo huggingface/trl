@@ -23,10 +23,12 @@
     title: Reducing Memory Usage
   - local: speeding_up_training
     title: Speeding Up Training
-  - local: peft_integration
-    title: PEFT Integration
   - local: deepspeed_integration
     title: DeepSpeed Integration
+  - local: peft_integration
+    title: PEFT Integration
+  - local: unsloth_integration
+    title: Unsloth Integration
   - local: use_model
     title: Using Trained Models
   title: How-to guides
