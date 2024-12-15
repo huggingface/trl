@@ -61,6 +61,8 @@ class ORPOConfig(TrainingArguments):
             string.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use Liger loss.
     """
 
     learning_rate: float = 1e-6
@@ -76,3 +78,4 @@ class ORPOConfig(TrainingArguments):
     is_encoder_decoder: Optional[bool] = None
     model_init_kwargs: Optional[dict[str, Any]] = None
     dataset_num_proc: Optional[int] = None
+    use_liger_loss: bool = False

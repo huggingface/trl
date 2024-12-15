@@ -47,7 +47,7 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
-from transformers.utils import is_peft_available, is_torch_fx_proxy
+from transformers.utils import is_liger_kernel_available, is_peft_available, is_torch_fx_proxy
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
@@ -67,7 +67,6 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-
 
 if is_wandb_available():
     import wandb
@@ -356,6 +355,22 @@ class ORPOTrainer(Trainer):
             raise AttributeError(
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
+
+        # Import Liger loss if enabled
+        if self.args.use_liger_loss and is_liger_kernel_available():
+            try:
+                from liger_kernel.chunked_loss import LigerFusedLinearORPOLoss
+
+                self.orpo_loss_fn = LigerFusedLinearORPOLoss(ignore_index=self.label_pad_token_id, beta=self.beta)
+                self._using_liger = True
+            except ImportError:
+                warnings.warn(
+                    "Liger package not found. Falling back to default ORPO loss implementation. "
+                    "Install liger-kernel for optimized performance."
+                )
+                self._using_liger = False
+        else:
+            self._using_liger = False
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
@@ -756,51 +771,74 @@ class ORPOTrainer(Trainer):
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
             use_cache=False,
+            output_hidden_states=True if self._using_liger else False,
             **model_kwargs,
         )
-        all_logits = outputs.logits
 
-        def cross_entropy_loss(logits, labels):
-            if not self.is_encoder_decoder:
-                # Shift so that tokens < n predict n
-                logits = logits[..., :-1, :].contiguous()
-                labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = nn.CrossEntropyLoss()
-            logits = logits.view(-1, logits.shape[-1])
-            labels = labels.view(-1)
-            # Enable model parallelism
-            labels = labels.to(logits.device)
-            loss = loss_fct(logits, labels)
-            return loss
+        if self._using_liger:
+            lm_head = model.get_output_embeddings()
 
-        if self.is_encoder_decoder:
-            labels = concatenated_batch["concatenated_labels"].clone()
+            # Get the last hidden state from hidden_states tuple
+            last_hidden_state = outputs.hidden_states[-1]
+
+            # return the final loss and aux_outputs tuple
+            return self.orpo_loss_fn(
+                lm_head.weight,
+                last_hidden_state,
+                concatenated_batch["concatenated_labels"],
+                lm_head.bias if hasattr(lm_head, "bias") else None,
+            )
         else:
-            labels = concatenated_batch["concatenated_input_ids"].clone()
-            attention_mask = concatenated_batch["concatenated_attention_mask"]
-            labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
+            all_logits = outputs.logits
 
-        chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
+            def cross_entropy_loss(logits, labels):
+                if not self.is_encoder_decoder:
+                    # Shift so that tokens < n predict n
+                    logits = logits[..., :-1, :].contiguous()
+                    labels = labels[..., 1:].contiguous()
+                # Flatten the tokens
+                loss_fct = nn.CrossEntropyLoss()
+                logits = logits.view(-1, logits.shape[-1])
+                labels = labels.view(-1)
+                # Enable model parallelism
+                labels = labels.to(logits.device)
+                loss = loss_fct(logits, labels)
+                return loss
 
-        all_logps = self.get_batch_logps(
-            all_logits,
-            concatenated_batch["concatenated_labels"],
-            average_log_prob=True,
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-        )
+            if self.is_encoder_decoder:
+                labels = concatenated_batch["concatenated_labels"].clone()
+            else:
+                labels = concatenated_batch["concatenated_input_ids"].clone()
+                attention_mask = concatenated_batch["concatenated_attention_mask"]
+                labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
 
-        chosen_logps = all_logps[:len_chosen]
-        rejected_logps = all_logps[len_chosen:]
+            chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
-        chosen_logits = all_logits[:len_chosen]
-        rejected_logits = all_logits[len_chosen:]
+            all_logps = self.get_batch_logps(
+                all_logits,
+                concatenated_batch["concatenated_labels"],
+                average_log_prob=True,
+                is_encoder_decoder=self.is_encoder_decoder,
+                label_pad_token_id=self.label_pad_token_id,
+            )
 
-        if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss, outputs.aux_loss)
+            chosen_logps = all_logps[:len_chosen]
+            rejected_logps = all_logps[len_chosen:]
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss)
+            chosen_logits = all_logits[:len_chosen]
+            rejected_logits = all_logits[len_chosen:]
+
+            if self.aux_loss_enabled:
+                return (
+                    chosen_logps,
+                    rejected_logps,
+                    chosen_logits,
+                    rejected_logits,
+                    chosen_nll_loss,
+                    outputs.aux_loss,
+                )
+
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss)
 
     def get_batch_loss_metrics(
         self,
@@ -812,21 +850,41 @@ class ORPOTrainer(Trainer):
         metrics = {}
 
         forward_output = self.concatenated_forward(model, batch)
-        (
-            policy_chosen_logps,
-            policy_rejected_logps,
-            policy_chosen_logits,
-            policy_rejected_logits,
-            policy_nll_loss,
-        ) = forward_output[:5]
-        if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
+        if self._using_liger:
+            # full ORPO loss and aux outputs
+            (
+                loss,
+                (
+                    policy_chosen_logps,
+                    policy_rejected_logps,
+                    policy_chosen_logits,
+                    policy_rejected_logits,
+                    policy_nll_loss,
+                    chosen_rewards,
+                    rejected_rewards,
+                    log_odds_ratio,
+                    log_odds_chosen,
+                ),
+            ) = forward_output
+        else:
+            (
+                policy_chosen_logps,
+                policy_rejected_logps,
+                policy_chosen_logits,
+                policy_rejected_logits,
+                policy_nll_loss,
+            ) = forward_output[:5]
+            if self.aux_loss_enabled:
+                aux_loss = forward_output[5]
 
-        losses, chosen_rewards, rejected_rewards, log_odds_ratio, log_odds_chosen = self.odds_ratio_loss(
-            policy_chosen_logps, policy_rejected_logps
-        )
-        # full ORPO loss
-        loss = policy_nll_loss - losses.mean()
+            losses, chosen_rewards, rejected_rewards, log_odds_ratio, log_odds_chosen = self.odds_ratio_loss(
+                policy_chosen_logps, policy_rejected_logps
+            )
+            # full ORPO loss
+            loss = policy_nll_loss - losses.mean()
+
+            if self.aux_loss_enabled:
+                loss += self.aux_loss_coef * aux_loss
 
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
@@ -846,8 +904,6 @@ class ORPOTrainer(Trainer):
             xm.mark_step()  # needed because .item() calls
         for k, v in metrics.items():
             metrics[k] = v.item()
-        if self.aux_loss_enabled:
-            loss += self.aux_loss_coef * aux_loss
 
         return loss, metrics
 
@@ -859,7 +915,6 @@ class ORPOTrainer(Trainer):
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
         compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
-
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
