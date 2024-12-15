@@ -19,6 +19,8 @@
     title: Command Line Interface (CLI)
   - local: customization
     title: Customizing the Training
+  - local: reducing_memory_usage
+    title: Reducing Memory Usage
   - local: lora_tuning_peft
     title: Training with PEFT
   - local: use_model
