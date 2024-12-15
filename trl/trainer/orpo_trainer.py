@@ -357,18 +357,22 @@ class ORPOTrainer(Trainer):
             )
 
         # Import Liger loss if enabled
-        if self.args.use_liger_loss and is_liger_kernel_available():
+        if self.args.use_liger_loss:
+            if not is_liger_kernel_available():
+                raise ValueError(
+                    "You set `use_liger_loss=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
             try:
                 from liger_kernel.chunked_loss import LigerFusedLinearORPOLoss
 
                 self.orpo_loss_fn = LigerFusedLinearORPOLoss(ignore_index=self.label_pad_token_id, beta=self.beta)
                 self._using_liger = True
             except ImportError:
-                warnings.warn(
-                    "Liger package not found. Falling back to default ORPO loss implementation. "
-                    "Install liger-kernel for optimized performance."
+                raise ImportError(
+                    "Failed to import LigerFusedLinearORPOLoss from liger-kernel. "
+                    "Please ensure you have the correct liger-kernel version installed."
                 )
-                self._using_liger = False
         else:
             self._using_liger = False
 
