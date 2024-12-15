@@ -169,9 +169,6 @@ class ORPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-            # Verify Liger is being used
-            self.assertTrue(trainer._using_liger)
-
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
             trainer.train()

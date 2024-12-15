@@ -363,18 +363,9 @@ class ORPOTrainer(Trainer):
                     "You set `use_liger_loss=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
-            try:
-                from liger_kernel.chunked_loss import LigerFusedLinearORPOLoss
+            from liger_kernel.chunked_loss import LigerFusedLinearORPOLoss
 
-                self.orpo_loss_fn = LigerFusedLinearORPOLoss(ignore_index=self.label_pad_token_id, beta=self.beta)
-                self._using_liger = True
-            except ImportError:
-                raise ImportError(
-                    "Failed to import LigerFusedLinearORPOLoss from liger-kernel. "
-                    "Please ensure you have the correct liger-kernel version installed."
-                )
-        else:
-            self._using_liger = False
+            self.orpo_loss_fn = LigerFusedLinearORPOLoss(ignore_index=self.label_pad_token_id, beta=self.beta)
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
@@ -775,23 +766,28 @@ class ORPOTrainer(Trainer):
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
             use_cache=False,
-            output_hidden_states=True if self._using_liger else False,
+            output_hidden_states=True if self.args.use_liger_loss else False,
             **model_kwargs,
         )
 
-        if self._using_liger:
+        if self.args.use_liger_loss:
             lm_head = model.get_output_embeddings()
 
             # Get the last hidden state from hidden_states tuple
             last_hidden_state = outputs.hidden_states[-1]
 
             # return the final loss and aux_outputs tuple
-            return self.orpo_loss_fn(
+            loss, aux_outputs = self.orpo_loss_fn(
                 lm_head.weight,
                 last_hidden_state,
                 concatenated_batch["concatenated_labels"],
                 lm_head.bias if hasattr(lm_head, "bias") else None,
             )
+
+            if self.aux_loss_enabled:
+                loss += self.aux_loss_coef * outputs.aux_loss
+
+            return loss, aux_outputs
         else:
             all_logits = outputs.logits
 
@@ -854,7 +850,7 @@ class ORPOTrainer(Trainer):
         metrics = {}
 
         forward_output = self.concatenated_forward(model, batch)
-        if self._using_liger:
+        if self.args.use_liger_loss:
             # full ORPO loss and aux outputs
             (
                 loss,
