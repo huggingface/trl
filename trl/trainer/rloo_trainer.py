@@ -44,7 +44,6 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
@@ -72,9 +71,6 @@ INVALID_LOGPROB = 1.0
 class RLOOTrainer(Trainer):
     _tag_names = ["trl", "rloo"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.14.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         config: RLOOConfig,
