@@ -155,14 +155,6 @@ class ORPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = ORPOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                logging_steps=1,
-                beta=0.1,
                 report_to="none",
                 use_liger_loss=True,  # Enable Liger loss
             )
