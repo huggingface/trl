@@ -21,6 +21,8 @@
     title: Customizing the Training
   - local: reducing_memory_usage
     title: Reducing Memory Usage
+  - local: speeding_up_training
+    title: Speeding Up Training
   - local: peft_integration
     title: PEFT Integration
   - local: deepspeed_integration
