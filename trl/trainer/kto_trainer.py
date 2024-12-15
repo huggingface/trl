@@ -49,7 +49,6 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -318,9 +317,6 @@ class KTOTrainer(Trainer):
 
     _tag_names = ["trl", "kto"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.14.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module, str] = None,
