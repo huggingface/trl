@@ -77,6 +77,9 @@ if is_deepspeed_available():
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
 
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearORPOLoss
+
 
 class ORPOTrainer(Trainer):
     r"""
@@ -363,8 +366,6 @@ class ORPOTrainer(Trainer):
                     "You set `use_liger_loss=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
-            from liger_kernel.chunked_loss import LigerFusedLinearORPOLoss
-
             self.orpo_loss_fn = LigerFusedLinearORPOLoss(ignore_index=self.label_pad_token_id, beta=self.beta)
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
