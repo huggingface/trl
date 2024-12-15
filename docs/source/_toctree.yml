@@ -18,11 +18,11 @@
   - local: clis
     title: Command Line Interface (CLI)
   - local: customization
-    title: Customize the Training
+    title: Customizing the Training
   - local: lora_tuning_peft
     title: Training with PEFT
   - local: use_model
-    title: Use Trained Models
+    title: Using Trained Models
   title: How-to guides
 - sections:
   - local: example_overview
