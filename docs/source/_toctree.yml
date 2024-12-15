@@ -21,8 +21,10 @@
     title: Customizing the Training
   - local: reducing_memory_usage
     title: Reducing Memory Usage
-  - local: integration_with_peft
-    title: Integration with PEFT
+  - local: peft_integration
+    title: PEFT Integration
+  - local: deepspeed_integration
+    title: DeepSpeed Integration
   - local: use_model
     title: Using Trained Models
   title: How-to guides

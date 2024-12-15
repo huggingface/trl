@@ -1,4 +1,4 @@
-# Reducing Memory Usage
+# DeepSpeed Integration
 
 <Tip warning={true}>
 
