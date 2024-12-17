@@ -765,7 +765,10 @@ class ORPOTrainer(Trainer):
 
         if self.args.use_liger_loss:
             # skip the lm head and get the last hidden state
-            base_model = model.get_decoder()
+            if hasattr(model, "get_decoder"):
+                base_model = model.get_decoder()
+            else:
+                base_model = getattr(model, self.args.base_model_attribute_name)
             outputs = base_model(
                 concatenated_batch["concatenated_input_ids"],
                 attention_mask=concatenated_batch["concatenated_attention_mask"],
@@ -777,7 +780,7 @@ class ORPOTrainer(Trainer):
             # return the final loss and aux_outputs tuple
             loss, aux_outputs = self.orpo_loss_fn(
                 lm_head.weight,
-                outputs[0],
+                outputs.last_hidden_state,
                 concatenated_batch["concatenated_labels"],
                 lm_head.bias if hasattr(lm_head, "bias") else None,
             )
