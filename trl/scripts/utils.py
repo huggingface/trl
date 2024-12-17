@@ -18,14 +18,12 @@ import logging
 import os
 import subprocess
 import sys
-import warnings
 from dataclasses import dataclass
 from typing import Iterable, Optional, Union
 
 import yaml
 from transformers import HfArgumentParser
 from transformers.hf_argparser import DataClass, DataClassType
-from transformers.utils.deprecation import deprecate_kwarg
 
 
 logger = logging.getLogger(__name__)
@@ -58,45 +56,6 @@ class ScriptArguments:
     dataset_test_split: str = "test"
     gradient_checkpointing_use_reentrant: bool = False
     ignore_bias_buffers: bool = False
-
-
-class YamlConfigParser:
-    """ """
-
-    def __init__(self) -> None:
-        warnings.warn(
-            "The `YamlConfigParser` class is deprecated and will be removed in version 0.14. "
-            "If you need to use this class, please copy the code to your own project.",
-            DeprecationWarning,
-        )
-
-    def parse_and_set_env(self, config_path: str) -> dict:
-        with open(config_path) as yaml_file:
-            config = yaml.safe_load(yaml_file)
-
-        if "env" in config:
-            env_vars = config.pop("env")
-            if isinstance(env_vars, dict):
-                for key, value in env_vars.items():
-                    os.environ[key] = str(value)
-            else:
-                raise ValueError("`env` field should be a dict in the YAML file.")
-
-        return config
-
-    def to_string(self, config):
-        final_string = ""
-        for key, value in config.items():
-            if isinstance(value, (dict, list)):
-                if len(value) != 0:
-                    value = str(value)
-                    value = value.replace("'", '"')
-                    value = f"'{value}'"
-                else:
-                    continue
-
-            final_string += f"--{key} {value} "
-        return final_string
 
 
 def init_zero_verbose():
@@ -165,16 +124,9 @@ class TrlParser(HfArgumentParser):
     ```
     """
 
-    @deprecate_kwarg(
-        "ignore_extra_args",
-        "0.14.0",
-        warn_if_greater_or_equal_version=True,
-        additional_message="Use the `return_remaining_strings` in the `parse_args_and_config` method instead.",
-    )
     def __init__(
         self,
         dataclass_types: Optional[Union[DataClassType, Iterable[DataClassType]]] = None,
-        ignore_extra_args: Optional[bool] = None,
         **kwargs,
     ):
         # Make sure dataclass_types is an iterable
@@ -192,18 +144,6 @@ class TrlParser(HfArgumentParser):
                 )
 
         super().__init__(dataclass_types=dataclass_types, **kwargs)
-        self._ignore_extra_args = ignore_extra_args
-
-    def post_process_dataclasses(self, dataclasses):
-        """
-        Post process dataclasses to merge the TrainingArguments with the SFTScriptArguments or DPOScriptArguments.
-        """
-        warnings.warn(
-            "The `post_process_dataclasses` method is deprecated and will be removed in version 0.14. "
-            "It is no longer functional and can be safely removed from your code.",
-            DeprecationWarning,
-        )
-        return dataclasses
 
     def parse_args_and_config(
         self, args: Optional[Iterable[str]] = None, return_remaining_strings: bool = False
@@ -216,9 +156,6 @@ class TrlParser(HfArgumentParser):
         default values in the dataclasses. Command line arguments can override values set by the config file. The
         method also sets any environment variables specified in the `env` field of the config file.
         """
-        if self._ignore_extra_args is not None:
-            return_remaining_strings = not self._ignore_extra_args
-
         args = list(args) if args is not None else sys.argv[1:]
         if "--config" in args:
             # Get the config file path from
