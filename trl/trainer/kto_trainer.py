@@ -49,7 +49,6 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -58,6 +57,7 @@ from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
     pad_to_length,
     peft_module_casting_to_bf16,
 )
@@ -317,9 +317,6 @@ class KTOTrainer(Trainer):
 
     _tag_names = ["trl", "kto"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.14.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module, str] = None,
@@ -1526,6 +1523,7 @@ class KTOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="KTO",
             trainer_citation=citation,
             paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",

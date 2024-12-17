@@ -40,7 +40,14 @@ from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import SIMPLE_CHAT_TEMPLATE, empty_cache, generate_model_card, get_reward, truncate_right
+from .utils import (
+    SIMPLE_CHAT_TEMPLATE,
+    empty_cache,
+    generate_model_card,
+    get_comet_experiment_url,
+    get_reward,
+    truncate_right,
+)
 
 
 if is_apex_available():
@@ -500,6 +507,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="Nash-MD",
             trainer_citation=citation,
             paper_title="Nash Learning from Human Feedback",
