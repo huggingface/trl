@@ -763,24 +763,21 @@ class ORPOTrainer(Trainer):
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
-        outputs = model(
-            concatenated_batch["concatenated_input_ids"],
-            attention_mask=concatenated_batch["concatenated_attention_mask"],
-            use_cache=False,
-            output_hidden_states=True if self.args.use_liger_loss else False,
-            **model_kwargs,
-        )
-
         if self.args.use_liger_loss:
+            # skip the lm head and get the last hidden state
+            base_model = getattr(model, self.args.base_model_class_name)
+            outputs = base_model(
+                concatenated_batch["concatenated_input_ids"],
+                attention_mask=concatenated_batch["concatenated_attention_mask"],
+                use_cache=False,
+                **model_kwargs,
+            )
             lm_head = model.get_output_embeddings()
-
-            # Get the last hidden state from hidden_states tuple
-            last_hidden_state = outputs.hidden_states[-1]
 
             # return the final loss and aux_outputs tuple
             loss, aux_outputs = self.orpo_loss_fn(
                 lm_head.weight,
-                last_hidden_state,
+                outputs[0],
                 concatenated_batch["concatenated_labels"],
                 lm_head.bias if hasattr(lm_head, "bias") else None,
             )
@@ -790,6 +787,13 @@ class ORPOTrainer(Trainer):
 
             return loss, aux_outputs
         else:
+            outputs = model(
+                concatenated_batch["concatenated_input_ids"],
+                attention_mask=concatenated_batch["concatenated_attention_mask"],
+                use_cache=False,
+                output_hidden_states=False,
+                **model_kwargs,
+            )
             all_logits = outputs.logits
 
             def cross_entropy_loss(logits, labels):
