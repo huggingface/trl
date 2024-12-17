@@ -7,7 +7,7 @@
 If your reward function is differentiable, directly backpropagating gradients from the reward models to the diffusion model is significantly more sample and compute efficient (25x) than doing policy gradient algorithm like DDPO.
 AlignProp does full backpropagation through time, which allows updating the earlier steps of denoising via reward backpropagation.
 
-<div style="text-align: center"><img src="https://align-prop.github.io/reward_tuning.png"/></div>
+<div style="text-align: center"><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/reward_tuning.png"/></div>
 
 
 ## Getting started with `examples/scripts/alignprop.py`
