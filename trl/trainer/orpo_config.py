@@ -63,9 +63,6 @@ class ORPOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Liger loss.
-        base_model_class_name (`str`, *optional*, defaults to `"model"`):
-            The name of the base model class (e.g. `"model"` for `LlamaForCausalLM`) to use for skipping the
-            LM head when `use_liger_loss` is `True`.
     """
 
     learning_rate: float = 1e-6
@@ -82,4 +79,3 @@ class ORPOConfig(TrainingArguments):
     model_init_kwargs: Optional[dict[str, Any]] = None
     dataset_num_proc: Optional[int] = None
     use_liger_loss: bool = False
-    base_model_class_name: str = "model"

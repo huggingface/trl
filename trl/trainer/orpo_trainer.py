@@ -765,7 +765,7 @@ class ORPOTrainer(Trainer):
 
         if self.args.use_liger_loss:
             # skip the lm head and get the last hidden state
-            base_model = getattr(model, self.args.base_model_class_name)
+            base_model = model.get_decoder()
             outputs = base_model(
                 concatenated_batch["concatenated_input_ids"],
                 attention_mask=concatenated_batch["concatenated_attention_mask"],
