@@ -54,6 +54,8 @@
       title: Iterative SFT
     - local: xpo_trainer
       title: XPO
+    - local: vas_trainer
+      title: VAS
     title: Trainers
   - local: models
     title: Model Classes

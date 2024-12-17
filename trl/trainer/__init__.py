@@ -60,6 +60,8 @@ _import_structure = {
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
+    "vas_config": ["VASConfig"],
+    "vas_trainer": ["VASTrainer"],
     "ppov2_config": ["PPOv2Config"],
     "ppov2_trainer": ["PPOv2Trainer"],
     "prm_config": ["PRMConfig"],
@@ -150,6 +152,8 @@ if TYPE_CHECKING:
         empty_cache,
         peft_module_casting_to_bf16,
     )
+    from .vas_config import VASConfig
+    from .vas_trainer import VASTrainer
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer
 
