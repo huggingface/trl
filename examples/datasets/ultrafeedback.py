@@ -65,10 +65,8 @@ class ScriptArguments:
     aspect: str = field(
         default="helpfulness",
         metadata={
-            "help": (
-                "Aspect to target. Possible values are: 'helpfulness' (default), 'honesty', 'instruction-following', "
-                "'truthfulness'."
-            ),
+            "help": "Aspect to target. Possible values are: 'helpfulness' (default), 'honesty', "
+            "'instruction-following', 'truthfulness'.",
             "choices": ["helpfulness", "honesty", "instruction-following", "truthfulness"],
         },
     )

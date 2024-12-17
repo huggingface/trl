@@ -54,10 +54,8 @@ class ScriptArguments:
     dataset_config: Optional[str] = field(
         default=None,
         metadata={
-            "help": (
-                "Dataset configuration name. Corresponds to the `name` argument of the `datasets.load_dataset` "
-                "function."
-            )
+            "help": "Dataset configuration name. Corresponds to the `name` argument of the `datasets.load_dataset` "
+            "function."
         },
     )
     dataset_train_split: str = field(default="train", metadata={"help": "Dataset split to use for training."})
@@ -69,11 +67,9 @@ class ScriptArguments:
     ignore_bias_buffers: bool = field(
         default=False,
         metadata={
-            "help": (
-                "Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid "
-                "scalar type, inplace operation. See "
-                "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992."
-            )
+            "help": "Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid "
+            "scalar type, inplace operation. See "
+            "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992."
         },
     )
 

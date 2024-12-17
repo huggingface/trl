@@ -166,10 +166,8 @@ class AlignPropConfig:
     truncated_backprop_timestep: int = field(
         default=49,
         metadata={
-            "help": (
-                "Absolute timestep to which the gradients are backpropagated. Used only if "
-                "`truncated_backprop_rand=False`."
-            )
+            "help": "Absolute timestep to which the gradients are backpropagated. Used only if "
+            "`truncated_backprop_rand=False`."
         },
     )
     truncated_rand_backprop_minmax: tuple[int, int] = field(

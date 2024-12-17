@@ -64,10 +64,8 @@ class ScriptArguments:
     judge_model: str = field(
         default="meta-llama/Meta-Llama-3-70B-Instruct",
         metadata={
-            "help": (
-                "Model name or path to the model to use as a judge. E.g., 'gpt-3.5-turbo-0125' or "
-                "'meta-llama/Meta-Llama-3-70B-Instruct'."
-            )
+            "help": "Model name or path to the model to use as a judge. E.g., 'gpt-3.5-turbo-0125' or "
+            "'meta-llama/Meta-Llama-3-70B-Instruct'."
         },
     )
     num_examples: Optional[int] = field(default=None, metadata={"help": "Number of examples to evaluate."})

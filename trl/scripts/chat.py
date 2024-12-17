@@ -169,10 +169,8 @@ class ChatArguments:
     torch_dtype: Optional[str] = field(
         default=None,
         metadata={
-            "help": (
-                "Override the default `torch.dtype` and load the model under this dtype. If `'auto'` is passed, the "
-                "dtype will be automatically derived from the model's weights."
-            ),
+            "help": "Override the default `torch.dtype` and load the model under this dtype. If `'auto'` is passed, "
+            "the dtype will be automatically derived from the model's weights.",
             "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
@@ -182,10 +180,8 @@ class ChatArguments:
     attn_implementation: Optional[str] = field(
         default=None,
         metadata={
-            "help": (
-                "Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in which "
-                "case you must install this manually by running `pip install flash-attn --no-build-isolation`."
-            )
+            "help": "Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in "
+            "which case you must install this manually by running `pip install flash-attn --no-build-isolation`."
         },
     )
     load_in_8bit: bool = field(
