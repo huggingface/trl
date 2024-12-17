@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tempfile
 from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
-from huggingface_hub import Repository
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -81,33 +80,15 @@ def to_unpaired_preference(example, model_name, aspect):
     return {"prompt": prompt, "completion": completion, "label": label}
 
 
-def add_read_me(readme_content: str, pushed_dataset_url: str) -> None:
-    """
-    Appends the README content to the repository and pushes the changes.
+model_card = ModelCard("""
+---
+tags: [trl]
+---
 
-    Args:
-        readme_content (str): The content of the README file in markdown format.
-        pushed_dataset_url (str): The URL of the pushed dataset repository on Hugging Face.
-    """
-    # Use tempfile to create a temporary directory
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Clone the repository
-        repo = Repository(local_dir=temp_dir, clone_from=pushed_dataset_url)
-
-        # Write the README content to a README.md file (appending)
-        with open(f"{repo.local_dir}/README.md", "a") as f:
-            f.write(readme_content)
-
-        # Commit and push the README.md file
-        repo.git_add("README.md")
-        repo.git_commit("Added README.md")
-        repo.git_push()
-
-
-# README content as a string
-readme_content = """
 This dataset is a processed version of [openbmb/UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback) with this [script](https://github.com/huggingface/trl/blob/main/examples/datasets/ultrafeedback.py).
-"""
+
+""")
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
@@ -128,6 +109,5 @@ if __name__ == "__main__":
     dataset = dataset.train_test_split(test_size=0.05, seed=42)
 
     if script_args.push_to_hub:
-        commit_url = dataset.push_to_hub(script_args.repo_id)
-        pushed_dataset_url = commit_url.split("/commit")[0]
-        add_read_me(readme_content=readme_content, pushed_dataset_url=pushed_dataset_url)
+        dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")
