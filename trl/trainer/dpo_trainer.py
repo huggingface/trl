@@ -1142,7 +1142,8 @@ class DPOTrainer(Trainer):
                 #         ^ start computing logits from here ([:, -(7-3+1):])
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[0].min()
                 num_logits_to_keep = loss_mask.shape[0] - first_compute_index
-                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first 
+                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label 
+                
             if self.padding_free:
                 # Pre-calculate sequence lengths
                 seq_lengths = attention_mask.sum(1)
