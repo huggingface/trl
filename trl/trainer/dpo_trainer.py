@@ -1129,26 +1129,18 @@ class DPOTrainer(Trainer):
                 attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
                 loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
 
-            # Truncate right
-            if self.args.max_length is not None:
-                input_ids = input_ids[: self.args.max_length]
-                attention_mask = attention_mask[: self.args.max_length]
-                loss_mask = loss_mask[: self.args.max_length]
-
-            if self.use_num_logits_to_keep:
-                # Compute num_logits_to_keep based on loss_mask pattern:
-                # [[0, 0, 0, x, x, x, x],
-                #  [0, 0, 0, x, x, x, 0]]
-                #         ^ start computing logits from here ([:, -(7-3+1):])
-                first_compute_index = loss_mask.nonzero(as_tuple=True)[0].min()
-                num_logits_to_keep = loss_mask.shape[0] - first_compute_index
-                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label 
-                
             if self.padding_free:
                 # Pre-calculate sequence lengths
                 seq_lengths = attention_mask.sum(1)
-                total_length = seq_lengths.sum().item()
                 
+                # we should apply it to individual sequence lengths before concatenation 
+                if self.args.max_length is not None:
+                    seq_lengths = torch.clamp(seq_lengths, max=self.args.max_length)
+                
+                # truncate the input_ids as well based on the input_ids
+                input_ids = input_ids[:, :self.args.max_length]
+                total_length = seq_lengths.sum().item()
+                            
                 # Pre-allocate tensors
                 concatenated_input_ids = torch.zeros(total_length, dtype=input_ids.dtype, device=input_ids.device)
                 
@@ -1196,6 +1188,22 @@ class DPOTrainer(Trainer):
                 all_logps = torch.stack(batch_logps)
 
             else:
+
+                # Truncate right
+                if self.args.max_length is not None:
+                    input_ids = input_ids[: self.args.max_length]
+                    attention_mask = attention_mask[: self.args.max_length]
+                    loss_mask = loss_mask[: self.args.max_length]
+
+                if self.use_num_logits_to_keep:
+                    # Compute num_logits_to_keep based on loss_mask pattern:
+                    # [[0, 0, 0, x, x, x, x],
+                    #  [0, 0, 0, x, x, x, 0]]
+                    #         ^ start computing logits from here ([:, -(7-3+1):])
+                    first_compute_index = loss_mask.nonzero(as_tuple=True)[0].min()
+                    num_logits_to_keep = loss_mask.shape[0] - first_compute_index
+                    model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label 
+
                 # Get the first column idx that is all zeros and remove every column after that
                 empty_cols = torch.sum(attention_mask, dim=0) == 0
                 first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(0)
@@ -1222,6 +1230,7 @@ class DPOTrainer(Trainer):
                 per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
                 per_token_logps[~loss_mask] = 0
                 all_logps = per_token_logps.sum(-1)
+
 
         output = {}
 
