@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Optional
 
 from datasets import load_dataset
 from transformers import HfArgumentParser
@@ -37,35 +37,39 @@ class ScriptArguments:
             Number of workers to use for dataset processing.
     """
 
-    model_name: Literal[
-        "alpaca-7b",
-        "bard",
-        "falcon-40b-instruct",
-        "gpt-3.5-turbo",
-        "gpt-4",
-        "llama-2-13b-chat",
-        "llama-2-70b-chat",
-        "llama-2-7b-chat",
-        "mpt-30b-chat",
-        "pythia-12b",
-        "starchat",
-        "ultralm-13b",
-        "ultralm-65b",
-        "vicuna-33b",
-        "wizardlm-13b",
-        "wizardlm-70b",
-        "wizardlm-7b",
-    ] = field(
+    model_name: str = field(
         default="gpt-3.5-turbo",
-        metadata={"help": "Language model to target."},
+        metadata={
+            "help": "Language model to target.",
+            "choices": [
+                "alpaca-7b",
+                "bard",
+                "falcon-40b-instruct",
+                "gpt-3.5-turbo",
+                "gpt-4",
+                "llama-2-13b-chat",
+                "llama-2-70b-chat",
+                "llama-2-7b-chat",
+                "mpt-30b-chat",
+                "pythia-12b",
+                "starchat",
+                "ultralm-13b",
+                "ultralm-65b",
+                "vicuna-33b",
+                "wizardlm-13b",
+                "wizardlm-70b",
+                "wizardlm-7b",
+            ],
+        },
     )
-    aspect: Literal["helpfulness", "honesty", "instruction-following", "truthfulness"] = field(
+    aspect: str = field(
         default="helpfulness",
         metadata={
             "help": (
                 "Aspect to target. Possible values are: 'helpfulness' (default), 'honesty', 'instruction-following', "
                 "'truthfulness'."
-            )
+            ),
+            "choices": ["helpfulness", "honesty", "instruction-following", "truthfulness"],
         },
     )
     push_to_hub: bool = field(
