@@ -14,10 +14,37 @@ To reduce memory usage, it’s important to truncate sequences to a reasonable l
 
 <hfoptions id="dpo">
 <hfoption id="DPO">
-Markdown for DPO
+
+DPO truncation is applied first to the prompt and then to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is used to truncate the resulting sequence.
+
+<div class="flex justify-center">
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="Truncation prompt completion" width="600"/>
+</div>
+
+To set the truncation parameters, use the following code snippet:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., max_prompt_length=..., max_completion_length=..., max_length=...)
+```
+
 </hfoption>
 <hfoption id="SFT">
-Markdown for SFT
+
+SFT truncation is applied to the input sequence via the `max_length` parameter.
+
+<div class="flex justify-center">
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_input_ids.png" alt="Truncation input ids" width="600"/>
+</div>
+
+To set the truncation parameter, use the following code snippet:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., max_length=...)
+```
+
 </hfoption>
-something else
 </hfoptions>
