@@ -15,7 +15,7 @@ To reduce memory usage, it’s important to truncate sequences to a reasonable l
 <hfoptions id="dpo">
 <hfoption id="DPO">
 
-DPO truncation is applied first to the prompt and then to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is used to truncate the resulting sequence.
+DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
 
 <div class="flex justify-center">
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="Truncation prompt completion" width="600"/>
