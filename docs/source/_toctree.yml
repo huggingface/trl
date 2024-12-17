@@ -29,6 +29,8 @@
     title: PEFT Integration
   - local: unsloth_integration
     title: Unsloth Integration
+  - local: liger_kernel_integration
+    title: Liger Kernel Integration
   - local: use_model
     title: Using Trained Models
   title: How-to guides
