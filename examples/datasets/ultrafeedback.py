@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Literal, Optional
 
 from datasets import load_dataset
 from transformers import HfArgumentParser
@@ -27,33 +27,8 @@ class ScriptArguments:
     Args:
         model_name (`str`, *optional*, defaults to `"gpt-3.5-turbo"`):
             Language model to target. Possible values are:
-
-                - `"alpaca-7b"`
-                - `"bard"`
-                - `"falcon-40b-instruct"`
-                - `"gpt-3.5-turbo"` (default)
-                - `"gpt-4"`
-                - `"llama-2-13b-chat"`
-                - `"llama-2-70b-chat"`
-                - `"llama-2-7b-chat"`
-                - `"mpt-30b-chat"`
-                - `"pythia-12b"`
-                - `"starchat"`
-                - `"ultralm-13b"`
-                - `"ultralm-65b"`
-                - `"vicuna-33b"`
-                - `"wizardlm-13b"`
-                - `"wizardlm-70b"`
-                - `"wizardlm-7b"`
-
         aspect (`str`, *optional*, defaults to `"helpfulness"`):
-            Aspect to target. Possible values are:
-
-                - `"helpfulness"` (default)
-                - `"honesty"`
-                - `"instruction-following"`
-                - `"truthfulness"`
-
+            Aspect to target.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the dataset to the Hugging Face Hub.
         repo_id (`str`, *optional*, defaults to `"trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness"`):
@@ -62,11 +37,49 @@ class ScriptArguments:
             Number of workers to use for dataset processing.
     """
 
-    model_name: str = "gpt-3.5-turbo"
-    aspect: str = "helpfulness"
-    push_to_hub: bool = False
-    repo_id: str = "trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness"
-    dataset_num_proc: Optional[int] = None
+    model_name: Literal[
+        "alpaca-7b",
+        "bard",
+        "falcon-40b-instruct",
+        "gpt-3.5-turbo",
+        "gpt-4",
+        "llama-2-13b-chat",
+        "llama-2-70b-chat",
+        "llama-2-7b-chat",
+        "mpt-30b-chat",
+        "pythia-12b",
+        "starchat",
+        "ultralm-13b",
+        "ultralm-65b",
+        "vicuna-33b",
+        "wizardlm-13b",
+        "wizardlm-70b",
+        "wizardlm-7b",
+    ] = field(
+        default="gpt-3.5-turbo",
+        metadata={"help": "Language model to target."},
+    )
+    aspect: Literal["helpfulness", "honesty", "instruction-following", "truthfulness"] = field(
+        default="helpfulness",
+        metadata={
+            "help": (
+                "Aspect to target. Possible values are: 'helpfulness' (default), 'honesty', 'instruction-following', "
+                "'truthfulness'."
+            )
+        },
+    )
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the dataset to the Hugging Face Hub."},
+    )
+    repo_id: str = field(
+        default="trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness",
+        metadata={"help": "Hugging Face repository ID to push the dataset to."},
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of workers to use for dataset processing."},
+    )
 
 
 def to_unpaired_preference(example, model_name, aspect):
