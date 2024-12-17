@@ -23,17 +23,19 @@
     title: Reducing Memory Usage
   - local: speeding_up_training
     title: Speeding Up Training
-  - local: deepspeed_integration
-    title: DeepSpeed Integration
-  - local: peft_integration
-    title: PEFT Integration
-  - local: unsloth_integration
-    title: Unsloth Integration
-  - local: liger_kernel_integration
-    title: Liger Kernel Integration
   - local: use_model
     title: Using Trained Models
   title: How-to guides
+- sections:
+  - local: deepspeed_integration
+    title: DeepSpeed
+  - local: peft_integration
+    title: PEFT
+  - local: unsloth_integration
+    title: Unsloth
+  - local: liger_kernel_integration
+    title: Liger Kernel
+  title: Integrations
 - sections:
   - local: example_overview
     title: Example Overview
