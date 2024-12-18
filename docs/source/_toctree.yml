@@ -5,21 +5,55 @@
     title: Installation
   - local: quickstart
     title: Quickstart
-  - local: clis
-    title: Get started with Command Line Interfaces (CLIs)
+  title: Getting started
+- sections:
   - local: dataset_formats
     title: Dataset Formats
   - local: how_to_train
-    title: PPO Training FAQ
-  - local: use_model
-    title: Use Trained Models
-  - local: customization
-    title: Customize the Training
+    title: Training FAQ
   - local: logging
     title: Understanding Logs
-  title: Get started
+  title: Conceptual Guides
 - sections:
-  - sections: # Sort alphabetically
+  - local: clis
+    title: Command Line Interface (CLI)
+  - local: customization
+    title: Customizing the Training
+  - local: reducing_memory_usage
+    title: Reducing Memory Usage
+  - local: speeding_up_training
+    title: Speeding Up Training
+  - local: use_model
+    title: Using Trained Models
+  title: How-to guides
+- sections:
+  - local: deepspeed_integration
+    title: DeepSpeed
+  - local: liger_kernel_integration
+    title: Liger Kernel
+  - local: peft_integration
+    title: PEFT
+  - local: unsloth_integration
+    title: Unsloth
+  title: Integrations
+- sections:
+  - local: example_overview
+    title: Example Overview
+  - local: community_tutorials
+    title: Community Tutorials
+  - local: sentiment_tuning
+    title: Sentiment Tuning
+  - local: using_llama_models
+    title: Training StackLlama
+  - local: detoxifying_a_lm
+    title: Detoxifying a Language Model
+  - local: learning_tools
+    title: Learning to Use Tools
+  - local: multi_adapter_rl
+    title: Multi Adapter RLHF
+  title: Examples
+- sections:
+  - sections: # Sorted alphabetically
     - local: alignprop_trainer
       title: AlignProp
     - local: bco_trainer
@@ -70,21 +104,3 @@
   - local: script_utils
     title: Script Utilities
   title: API
-- sections:
-  - local: community_tutorials
-    title: Community Tutorials
-  - local: example_overview
-    title: Example Overview
-  - local: sentiment_tuning
-    title: Sentiment Tuning
-  - local: lora_tuning_peft
-    title: Training with PEFT
-  - local: detoxifying_a_lm
-    title: Detoxifying a Language Model
-  - local: using_llama_models
-    title: Training StackLlama
-  - local: learning_tools
-    title: Learning to Use Tools
-  - local: multi_adapter_rl
-    title: Multi Adapter RLHF
-  title: Examples
