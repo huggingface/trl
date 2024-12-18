@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from datasets import load_dataset
@@ -34,9 +34,16 @@ class ScriptArguments:
             Number of workers to use for dataset processing.
     """
 
-    push_to_hub: bool = False
-    repo_id: str = "trl-lib/hh-rlhf-helpful-base"
-    dataset_num_proc: Optional[int] = None
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the dataset to the Hugging Face Hub."},
+    )
+    repo_id: str = field(
+        default="trl-lib/hh-rlhf-helpful-base", metadata={"help": "Hugging Face repository ID to push the dataset to."}
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None, metadata={"help": "Number of workers to use for dataset processing."}
+    )
 
 
 def common_start(str1: str, str2: str) -> str:

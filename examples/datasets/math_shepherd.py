@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import chain
 from typing import Optional
 
@@ -35,9 +35,18 @@ class ScriptArguments:
             Number of workers to use for dataset processing.
     """
 
-    push_to_hub: bool = False
-    repo_id: str = "trl-lib/math_shepherd"
-    dataset_num_proc: Optional[int] = None
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the dataset to the Hugging Face Hub."},
+    )
+    repo_id: str = field(
+        default="trl-lib/math_shepherd",
+        metadata={"help": "Hugging Face repository ID to push the dataset to."},
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of workers to use for dataset processing."},
+    )
 
 
 def process_example(example):

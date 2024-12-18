@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from datasets import Dataset
 from transformers import HfArgumentParser
@@ -32,9 +32,18 @@ class ScriptArguments:
             Hugging Face repository ID to push the dataset to.
     """
 
-    test_size: float = 0.1
-    push_to_hub: bool = False
-    repo_id: str = "trl-internal-testing/zen"
+    test_size: float = field(
+        default=0.1,
+        metadata={"help": "Fraction of the dataset to include in the test split."},
+    )
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the dataset to the Hugging Face Hub."},
+    )
+    repo_id: str = field(
+        default="trl-internal-testing/zen",
+        metadata={"help": "Hugging Face repository ID to push the dataset to."},
+    )
 
 
 def main(test_size, push_to_hub, repo_id):
