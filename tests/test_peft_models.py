@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import os
 import tempfile
 import unittest
@@ -33,7 +34,7 @@ if is_peft_available():
 @require_peft
 class PeftModelTester(unittest.TestCase):
     def setUp(self):
-        self.causal_lm_model_id = "trl-internal-testing/tiny-random-GPTNeoXForCausalLM"
+        self.causal_lm_model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.lora_config = LoraConfig(
             r=16,
             lora_alpha=32,
@@ -74,12 +75,12 @@ class PeftModelTester(unittest.TestCase):
 
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        self.assertEqual(nb_trainable_params, 10273)
+        self.assertEqual(nb_trainable_params, 905)
 
         # Check that the number of trainable param for the non-peft model is correct
         non_peft_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.causal_lm_model_id)
         nb_trainable_params = sum(p.numel() for p in non_peft_model.parameters() if p.requires_grad)
-        self.assertEqual(nb_trainable_params, 99578)
+        self.assertEqual(nb_trainable_params, 2428641)
 
     def test_create_peft_model_from_config(self):
         r"""
@@ -90,13 +91,13 @@ class PeftModelTester(unittest.TestCase):
         )
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
-        self.assertEqual(nb_trainable_params, 10273)
+        self.assertEqual(nb_trainable_params, 905)
 
         causal_lm_model = AutoModelForCausalLM.from_pretrained(self.causal_lm_model_id)
         trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
-        self.assertEqual(nb_trainable_params, 10273)
+        self.assertEqual(nb_trainable_params, 905)
 
     @require_torch_gpu_if_bnb_not_multi_backend_enabled
     def test_create_bnb_peft_model_from_config(self):
@@ -110,7 +111,7 @@ class PeftModelTester(unittest.TestCase):
         )
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
-        self.assertEqual(nb_trainable_params, 10273)
+        self.assertEqual(nb_trainable_params, 905)
         self.assertEqual(trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__, Linear8bitLt)
 
         causal_lm_model = AutoModelForCausalLM.from_pretrained(
@@ -119,7 +120,7 @@ class PeftModelTester(unittest.TestCase):
         trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
-        self.assertEqual(nb_trainable_params, 10273)
+        self.assertEqual(nb_trainable_params, 905)
         self.assertEqual(trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__, Linear8bitLt)
 
     def test_save_pretrained_peft(self):
@@ -201,4 +202,4 @@ class PeftModelTester(unittest.TestCase):
             model = AutoModelForCausalLMWithValueHead.from_pretrained(tmp_dir, is_trainable=True)
             # Check that the number of trainable parameters is correct
             nb_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            self.assertEqual(nb_trainable_params, 10273)
+            self.assertEqual(nb_trainable_params, 905)

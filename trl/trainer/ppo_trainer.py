@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import textwrap
 import time
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -51,20 +51,23 @@ from transformers.utils.deprecation import deprecate_kwarg
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
-from ..trainer.utils import (
+from .ppo_config import PPOConfig
+from .utils import (
     OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
     exact_div,
     first_true_indices,
     forward,
+    generate_model_card,
+    get_comet_experiment_url,
     get_reward,
+    log_table_to_comet_experiment,
+    peft_module_casting_to_bf16,
     prepare_deepspeed,
     print_rich_table,
     truncate_response,
 )
-from .ppo_config import PPOConfig
-from .utils import generate_model_card, peft_module_casting_to_bf16
 
 
 if is_peft_available():
@@ -87,9 +90,7 @@ class PolicyAndValueWrapper(nn.Module):
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
 
     def forward(self, **kwargs):
-        output = self.critic_backbone(
-            **kwargs,
-        )
+        output = self.critic_backbone(**kwargs)
         logits = self.value_model.score(output.hidden_states[-1])
         return self.policy(**kwargs), logits
 
@@ -97,44 +98,50 @@ class PolicyAndValueWrapper(nn.Module):
 class PPOTrainer(Trainer):
     _tag_names = ["trl", "ppo"]
 
-    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.15.0", raise_if_both_names=True)
+    @deprecate_kwarg("config", "0.15.0", "args", warn_if_greater_or_equal_version=True, raise_if_both_names=True)
+    @deprecate_kwarg(
+        "tokenizer", "0.15.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
+    @deprecate_kwarg("policy", "0.15.0", "model", warn_if_greater_or_equal_version=True, raise_if_both_names=True)
+    @deprecate_kwarg(
+        "ref_policy", "0.15.0", "ref_model", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
     def __init__(
         self,
-        config: PPOConfig,
+        args: PPOConfig,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ],
-        policy: nn.Module,
-        ref_policy: Optional[nn.Module],
+        model: nn.Module,
+        ref_model: Optional[nn.Module],
         reward_model: nn.Module,
         train_dataset: Dataset,
         value_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         # less commonly used
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        callbacks: Optional[list[TrainerCallback]] = None,
         peft_config: Optional["PeftConfig"] = None,
     ) -> None:
-        if ref_policy is policy:
+        if ref_model is model:
             raise ValueError(
-                "`policy` and `ref_policy` cannot be the same object. If you want `ref_policy` to be the "
-                "same as `policy`, you must make a copy of it, or `None` if you use peft."
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must make a copy of it, or `None` if you use peft."
             )
 
-        self.args = config
-        args = config
+        self.args = args
         self.processing_class = processing_class
-        self.policy = policy
+        self.policy_model = model
 
         # Define the collator if not provided
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
 
-        self.policy.generation_config.eos_token_id = (
+        self.policy_model.generation_config.eos_token_id = (
             None  # disable `pad_token_id` and `eos_token_id` because we just want to
         )
-        self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
+        self.policy_model.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
         # peft support
         if not is_peft_available() and peft_config is not None:
@@ -143,24 +150,24 @@ class PPOTrainer(Trainer):
             )
         elif is_peft_available() and peft_config is not None:
             # if model is a peft model and we have a peft_confg, we merge and unload it first
-            if isinstance(self.policy, PeftModel):
-                self.policy = self.policy.merge_and_unload()
+            if isinstance(self.policy_model, PeftModel):
+                self.policy_model = self.policy_model.merge_and_unload()
 
             # get peft model with the given config
-            self.policy = get_peft_model(self.policy, peft_config)
-            if args.bf16 and getattr(self.policy, "is_loaded_in_4bit", False):
-                peft_module_casting_to_bf16(self.policy)
+            self.policy_model = get_peft_model(self.policy_model, peft_config)
+            if args.bf16 and getattr(self.policy_model, "is_loaded_in_4bit", False):
+                peft_module_casting_to_bf16(self.policy_model)
 
-        self.is_peft_model = is_peft_available() and isinstance(self.policy, PeftModel)
+        self.is_peft_model = is_peft_available() and isinstance(self.policy_model, PeftModel)
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
 
-        if ref_policy:
-            self.ref_policy = ref_policy
+        if ref_model:
+            self.ref_model = ref_model
         elif self.is_peft_model:
-            self.ref_policy = None
+            self.ref_model = None
         else:
-            self.ref_policy = create_reference_model(self.policy)
+            self.ref_model = create_reference_model(self.policy_model)
 
         self.reward_model = reward_model
         self.train_dataset = train_dataset
@@ -210,13 +217,13 @@ class PPOTrainer(Trainer):
         #########
         # setup model, optimizer, and others
         #########
-        for module in [self.policy, self.ref_policy, self.value_model, self.reward_model]:
+        for module in [self.policy_model, self.ref_model, self.value_model, self.reward_model]:
             if module is not None:
                 disable_dropout_in_model(module)
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = processing_class.eos_token_id
-        self.model = PolicyAndValueWrapper(self.policy, self.value_model)
-        self.model.config = self.policy.config  # needed for pushing to hub
+        self.model = PolicyAndValueWrapper(self.policy_model, self.value_model)
+        self.model.config = self.policy_model.config  # needed for pushing to hub
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
@@ -282,19 +289,19 @@ class PPOTrainer(Trainer):
                 self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
 
-            if self.ref_policy is None:
+            if self.ref_model is None:
                 if not self.is_peft_model:
                     raise ValueError("No reference model and model is not a Peft model.")
             else:
-                self.ref_policy = prepare_deepspeed(
-                    self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
+                self.ref_model = prepare_deepspeed(
+                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
                 )
         else:
-            if self.ref_policy is None:
+            if self.ref_model is None:
                 if not self.is_peft_model:
                     raise ValueError("No reference model and model is not a Peft model.")
             else:
-                self.ref_policy = self.ref_policy.to(self.accelerator.device)
+                self.ref_model = self.ref_model.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
@@ -335,7 +342,7 @@ class PPOTrainer(Trainer):
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
-        ref_policy = self.ref_policy
+        ref_policy = self.ref_model
         reward_model = self.reward_model
         processing_class = self.processing_class
         dataloader = self.dataloader
@@ -722,11 +729,17 @@ class PPOTrainer(Trainer):
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
+            if "comet_ml" in args.report_to:
+                log_table_to_comet_experiment(
+                    name="completions.csv",
+                    table=df,
+                )
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -736,7 +749,7 @@ class PPOTrainer(Trainer):
                 The name of the model.
             dataset_name (`str`, *optional*, defaults to `None`):
                 The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -769,6 +782,7 @@ class PPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="PPO",
             trainer_citation=citation,
             paper_title="Fine-Tuning Language Models from Human Preferences",

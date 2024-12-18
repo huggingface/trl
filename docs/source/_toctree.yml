@@ -42,6 +42,8 @@
       title: ORPO
     - local: ppo_trainer
       title: PPO
+    - local: prm_trainer
+      title: PRM
     - local: reward_trainer
       title: Reward
     - local: rloo_trainer
@@ -65,8 +67,12 @@
     title: Data Utilities
   - local: text_environments
     title: Text Environments
+  - local: script_utils
+    title: Script Utilities
   title: API
 - sections:
+  - local: community_tutorials
+    title: Community Tutorials
   - local: example_overview
     title: Example Overview
   - local: sentiment_tuning

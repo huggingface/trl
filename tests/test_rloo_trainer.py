@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import platform
 import subprocess
 import tempfile
@@ -33,9 +34,9 @@ python examples/scripts/rloo/rloo.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10 \
-    --model_name_or_path EleutherAI/pythia-14m \
-    --sft_model_path EleutherAI/pythia-14m \
-    --reward_model_path EleutherAI/pythia-14m \
+    --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 \
+    --sft_model_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 \
+    --reward_model_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 \
     --missing_eos_penalty 1.0 \
     --save_strategy no \
     --stop_token eos
@@ -53,15 +54,13 @@ python examples/scripts/rloo/rloo.py \
 
 class RLOOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.sft_model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-        self.reward_model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
-        self.policy_model = AutoModelForCausalLM.from_pretrained(self.sft_model_id)
-        self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id)
-        self.policy_ref_model = AutoModelForCausalLM.from_pretrained(self.sft_model_id)
+        self.policy_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
+        self.policy_ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.sft_model_id, padding_side="left")
-        self.tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'user' %}{{ ' ' }}{% endif %}{{ message['content'] }}{% if not loop.last %}{{ '  ' }}{% endif %}{% endfor %}{{ eos_token }}"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="left")
         self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     def test_rloo_checkpoint(self):
@@ -73,7 +72,7 @@ class RLOOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_text = {"content": "Hello World!", "role": "user"}
+            dummy_text = [{"content": "Hello World!", "role": "user"}]
             dummy_data = self.tokenizer.apply_chat_template(dummy_text)
             dummy_dataset = Dataset.from_dict({"input_ids": dummy_data})
 

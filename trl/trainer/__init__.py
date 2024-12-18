@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,13 @@ _import_structure = {
     "base": ["BaseTrainer"],
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
-    "callbacks": ["LogCompletionsCallback", "RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
+    "callbacks": [
+        "LogCompletionsCallback",
+        "MergeModelCallback",
+        "RichProgressCallback",
+        "SyncRefModelCallback",
+        "WinRateCallback",
+    ],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
     "ddpo_config": ["DDPOConfig"],
@@ -56,6 +62,8 @@ _import_structure = {
     "ppo_trainer": ["PPOTrainer"],
     "ppov2_config": ["PPOv2Config"],
     "ppov2_trainer": ["PPOv2Trainer"],
+    "prm_config": ["PRMConfig"],
+    "prm_trainer": ["PRMTrainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer", "compute_accuracy"],
     "rloo_config": ["RLOOConfig"],
@@ -88,7 +96,13 @@ if TYPE_CHECKING:
     from .base import BaseTrainer
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
-    from .callbacks import LogCompletionsCallback, RichProgressCallback, SyncRefModelCallback, WinRateCallback
+    from .callbacks import (
+        LogCompletionsCallback,
+        MergeModelCallback,
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+    )
     from .cpo_config import CPOConfig
     from .cpo_trainer import CPOTrainer
     from .ddpo_config import DDPOConfig
@@ -118,6 +132,8 @@ if TYPE_CHECKING:
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
+    from .prm_config import PRMConfig
+    from .prm_trainer import PRMTrainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer, compute_accuracy
     from .rloo_config import RLOOConfig

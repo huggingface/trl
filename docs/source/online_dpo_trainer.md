@@ -51,7 +51,7 @@ accelerate launch train_online_dpo.py
 
 Distributed across 8 GPUs, the training takes approximately 1 hour. You can verify the training progress by checking the reward graph. An increasing trend in both the reward for rejected and chosen completions indicates that the model is improving and generating better responses over time.
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/online-dpo-qwen2.png)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/online-dpo-qwen2.png)
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-OnlineDPO) performs, you can use the [TRL Chat CLI](clis#chat-interface).
 
@@ -110,7 +110,7 @@ trainer.add_callback(completions_callback)
 
 This callback logs the model's generated completions directly to Weights & Biases.
 
-![Logged Completions](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/wandb_completions.png)
+![Logged Completions](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/wandb_completions.png)
 
 
 ## Example script
@@ -265,7 +265,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/online_dpo_scaling.png)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/online_dpo_scaling.png)
 
 The online DPO checkpoint gets increasingly more win rate as we scale up the model sizes. This is a good sign that the online DPO implementation is working as intended.
 

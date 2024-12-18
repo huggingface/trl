@@ -1,5 +1,4 @@
-# DPO Authors: Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D. Manning, and Chelsea Finn 2023
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,15 +21,17 @@ from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Literal, Optional, Union
 
 import torch
 import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset
+from packaging import version
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -59,6 +60,7 @@ from .utils import (
     cap_exp,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
     pad,
     pad_to_length,
     peft_module_casting_to_bf16,
@@ -116,7 +118,7 @@ class PreferenceCollator(DataCollatorMixin):
     pad_token_id: int
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
         prompt_input_ids = [torch.tensor(example["prompt_input_ids"]) for example in examples]
         prompt_attention_mask = [torch.ones_like(input_ids) for input_ids in prompt_input_ids]
@@ -128,6 +130,9 @@ class PreferenceCollator(DataCollatorMixin):
             pixel_values = [torch.tensor(example["pixel_values"]) for example in examples]
         if "pixel_attention_mask" in examples[0]:
             pixel_attention_mask = [torch.tensor(example["pixel_attention_mask"]) for example in examples]
+        if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
+            ref_chosen_logps = torch.tensor([example["ref_chosen_logps"] for example in examples])
+            ref_rejected_logps = torch.tensor([example["ref_rejected_logps"] for example in examples])
 
         # Pad
         output = {}
@@ -141,6 +146,11 @@ class PreferenceCollator(DataCollatorMixin):
             output["pixel_values"] = pad(pixel_values, padding_value=0.0)
         if "pixel_attention_mask" in examples[0]:
             output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
+        if "image_sizes" in examples[0]:
+            output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
+        if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
+            output["ref_chosen_logps"] = ref_chosen_logps
+            output["ref_rejected_logps"] = ref_rejected_logps
 
         return output
 
@@ -158,7 +168,7 @@ class DPOTrainer(Trainer):
         args (`DPOConfig`):
             The DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
+            The data collator to use for training. If None is specified, the default data collator (`PreferenceCollator`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
@@ -171,22 +181,24 @@ class DPOTrainer(Trainer):
             This supercedes the `tokenizer` argument, which is now deprecated.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
-        callbacks (`List[transformers.TrainerCallback]`):
+        callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
-        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`Dict`, defaults to `None`):
+        peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
     """
 
     _tag_names = ["trl", "dpo"]
 
-    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.16.0", raise_if_both_names=True)
+    @deprecate_kwarg(
+        "tokenizer", "0.16.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
@@ -194,17 +206,20 @@ class DPOTrainer(Trainer):
         args: Optional[DPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
+        callbacks: Optional[list[TrainerCallback]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[Dict] = None,
+        peft_config: Optional[dict] = None,
     ):
+        if model is None:
+            raise ValueError("No model provided. Please provide a model to train.")
+
         if not isinstance(model, str) and ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
@@ -250,17 +265,9 @@ class DPOTrainer(Trainer):
                 ref_model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
-            warnings.warn(
-                "You passed a model_id to the DPOTrainer. This will automatically create an "
-                "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
-            )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         if isinstance(ref_model, str):
-            warnings.warn(
-                "You passed a ref model_id to the DPOTrainer. This will automatically create an "
-                "`AutoModelForCausalLM`"
-            )
             ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
@@ -334,23 +341,8 @@ class DPOTrainer(Trainer):
                 " Please install `wandb` to resolve."
             )
 
-        if model is not None:
-            self.is_encoder_decoder = model.config.is_encoder_decoder
-        elif args.is_encoder_decoder is None:
-            raise ValueError(
-                "When no model is provided, you need to pass the parameter is_encoder_decoder to the DPOTrainer/DPOConfig."
-            )
-        else:
-            self.is_encoder_decoder = args.is_encoder_decoder
-
-        if model is not None:
-            self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
-        else:
-            warnings.warn(
-                "No model provided, cannot determine if it is a vision model. Setting is_vision_model to False."
-            )
-            self.is_vision_model = False
-
+        self.is_encoder_decoder = model.config.is_encoder_decoder
+        self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
@@ -408,7 +400,9 @@ class DPOTrainer(Trainer):
             and args.label_smoothing > 0
         ):
             warnings.warn(
-                "You are using a loss type that does not support label smoothing. Ignoring label_smoothing parameter."
+                f"You are using the {args.loss_type} loss type that does not support label smoothing. The "
+                "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
+                UserWarning,
             )
         if args.loss_type == "kto_pair":
             raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
@@ -421,14 +415,26 @@ class DPOTrainer(Trainer):
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
             warnings.warn(
-                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
-                " meaning the auxiliary loss will not be used."
+                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
+                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
+                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
+                "loss.",
+                UserWarning,
             )
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
         self.f_divergence_type = args.f_divergence_type
         self.f_divergence_params = {FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY: args.f_alpha_divergence_coef}
         self.dataset_num_proc = args.dataset_num_proc
+
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
+        # "input_ids" key. Instead, the available keys are "prompt_input_ids", "chosen_input_ids", and
+        # "rejected_input_ids". As a result, the trainer issues the warning: "Could not estimate the number of tokens
+        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
+        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
+        # that the warning has already been issued.
+        model.warnings_issued["estimate_tokens"] = True
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
@@ -540,7 +546,7 @@ class DPOTrainer(Trainer):
         Tokenize a row of the dataset.
 
         Args:
-            features (`Dict[str, str]`):
+            features (`dict[str, str]`):
                 Row of the dataset, should contain the keys `"prompt"`, `"chosen"`, and `"rejected"`.
             processing_class (`PreTrainedTokenizerBase`):
                 Processing class used to process the data.
@@ -554,7 +560,7 @@ class DPOTrainer(Trainer):
                 completion sequences will have an eos token appended.
 
         Returns:
-            `Dict[str, List[int]]`:
+            `dict[str, list[int]]`:
                 Tokenized sequences with the keys `"prompt_input_ids"`, `"chosen_input_ids"`, and
                 `"rejected_input_ids".
 
@@ -632,6 +638,8 @@ class DPOTrainer(Trainer):
 
         if "pixel_attention_mask" in processed_features:
             output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
+        if "image_sizes" in processed_features:
+            output["image_sizes"] = processed_features["image_sizes"][0]
 
         return output
 
@@ -670,9 +678,16 @@ class DPOTrainer(Trainer):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
         # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
-        # Instead, we set them to the columns expected by `DPODataCollatorWithPadding`, hence the override.
+        # Instead, we set them to the columns expected by `PreferenceCollator`, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids"]
+            self._signature_columns = [
+                "prompt_input_ids",
+                "chosen_input_ids",
+                "rejected_input_ids",
+                "image_sizes",
+                "ref_chosen_logps",
+                "ref_rejected_logps",
+            ]
 
     def get_train_dataloader(self) -> DataLoader:
         """
@@ -682,8 +697,9 @@ class DPOTrainer(Trainer):
         """
 
         if self.precompute_ref_log_probs and not self._precomputed_train_ref_log_probs:
+            batch_size = self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size
             dataloader_params = {
-                "batch_size": self.args.per_device_train_batch_size,
+                "batch_size": batch_size,
                 "collate_fn": self.data_collator,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
@@ -735,8 +751,9 @@ class DPOTrainer(Trainer):
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
 
         if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
+            batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
             dataloader_params = {
-                "batch_size": self.args.per_device_eval_batch_size,
+                "batch_size": batch_size,
                 "collate_fn": self.data_collator,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
@@ -781,7 +798,7 @@ class DPOTrainer(Trainer):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
 
-    def compute_ref_log_probs(self, batch: Dict[str, torch.LongTensor]) -> Dict:
+    def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
         compte_ref_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
         with torch.no_grad(), compte_ref_context_manager:
@@ -794,14 +811,14 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: Dict[str, Union[List, torch.LongTensor]], padding_value: int
-    ) -> Dict[str, torch.LongTensor]:
+        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int
+    ) -> dict[str, torch.LongTensor]:
         """
         Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
         and completion sequences.
 
         Args:
-            batch (`Dict[str, Union[List, torch.LongTensor]]`):
+            batch (`dict[str, Union[list, torch.LongTensor]]`):
                 A batch of input data. The batch must contain the following keys:
 
                 - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input IDs.
@@ -815,7 +832,7 @@ class DPOTrainer(Trainer):
                 `rejected_input_ids`).
 
         Returns:
-            `Dict[str, torch.LongTensor]`: A dictionary containing:
+            `dict[str, torch.LongTensor]`: A dictionary containing:
 
                 - `"prompt_input_ids"`: Concatenated prompt input IDs of shape `(2 * batch_size, prompt_length)`.
                 - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs of shape `(2 * batch_size, max_completion_length)`.
@@ -842,6 +859,8 @@ class DPOTrainer(Trainer):
             output["pixel_attention_mask"] = torch.cat(
                 [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
             )
+        if "image_sizes" in batch:
+            output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
 
         # Concatenate the chosen and rejected completions
         max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
@@ -866,7 +885,7 @@ class DPOTrainer(Trainer):
         rejected_logps: torch.FloatTensor,
         ref_chosen_logps: torch.FloatTensor,
         ref_rejected_logps: torch.FloatTensor,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """
         Compute the DPO loss for a batch of policy and reference model log probabilities.
 
@@ -1047,7 +1066,7 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    def concatenated_forward(self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]):
+    def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
@@ -1065,6 +1084,8 @@ class DPOTrainer(Trainer):
             model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
         if "pixel_attention_mask" in concatenated_batch:
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+        if "image_sizes" in concatenated_batch:
+            model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
 
         prompt_input_ids = concatenated_batch["prompt_input_ids"]
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
@@ -1189,7 +1210,7 @@ class DPOTrainer(Trainer):
     def get_batch_loss_metrics(
         self,
         model,
-        batch: Dict[str, Union[List, torch.LongTensor]],
+        batch: dict[str, Union[list, torch.LongTensor]],
         train_eval: Literal["train", "eval"] = "train",
     ):
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
@@ -1237,10 +1258,10 @@ class DPOTrainer(Trainer):
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
         num_items_in_batch=None,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
         compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
@@ -1255,7 +1276,7 @@ class DPOTrainer(Trainer):
 
         return loss
 
-    def generate_from_model_and_ref(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def generate_from_model_and_ref(self, model, batch: dict[str, torch.LongTensor]) -> tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
@@ -1304,9 +1325,9 @@ class DPOTrainer(Trainer):
     def prediction_step(
         self,
         model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = None,
+        ignore_keys: Optional[list[str]] = None,
     ):
         if ignore_keys is None:
             if hasattr(model, "config"):
@@ -1336,7 +1357,7 @@ class DPOTrainer(Trainer):
 
         return (loss.detach(), logits, labels)
 
-    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+    def store_metrics(self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
 
@@ -1345,7 +1366,7 @@ class DPOTrainer(Trainer):
         dataloader: DataLoader,
         description: str,
         prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[List[str]] = None,
+        ignore_keys: Optional[list[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
@@ -1390,13 +1411,15 @@ class DPOTrainer(Trainer):
 
         return initial_output
 
-    def log(self, logs: Dict[str, float]) -> None:
+    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         """
         Log `logs` on the various objects watching training, including stored metrics.
 
         Args:
-            logs (`Dict[str, float]`):
+            logs (`dict[str, float]`):
                 The values to log.
+            start_time (`float` or `None`, *optional*, defaults to `None`):
+                Start time of the training.
         """
         # logs either has 'loss' or 'eval_loss'
         train_eval = "train" if "loss" in logs else "eval"
@@ -1404,13 +1427,17 @@ class DPOTrainer(Trainer):
         for key, metrics in self._stored_metrics[train_eval].items():
             logs[key] = torch.tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]
-        return super().log(logs)
+
+        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+            return super().log(logs, start_time)
+        else:  # transformers<=4.46
+            return super().log(logs)
 
     def create_model_card(
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -1420,7 +1447,7 @@ class DPOTrainer(Trainer):
                 The name of the model.
             dataset_name (`str`, *optional*, defaults to `None`):
                 The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -1457,6 +1484,7 @@ class DPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="DPO",
             trainer_citation=citation,
             paper_title="Direct Preference Optimization: Your Language Model is Secretly a Reward Model",

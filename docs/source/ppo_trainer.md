@@ -66,7 +66,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/dd2o3g35), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif?download=true)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2_completions.gif)
 
 
 In the logs the sampled generations look like 
@@ -210,7 +210,7 @@ The PPO checkpoint gets a 64.7% preferred rate vs the 33.0% preference rate of t
 
 Metrics:
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/pr-1540/ppov2.png)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2.png)
 
 
 ```bash

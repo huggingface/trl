@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@ import os
 import textwrap
 import warnings
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 
 import datasets
 import jinja2
@@ -25,6 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+import transformers
 from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
@@ -44,7 +45,6 @@ from transformers import (
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model
@@ -57,6 +57,7 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     generate_model_card,
+    get_comet_experiment_url,
     get_reward,
     prepare_deepspeed,
     truncate_right,
@@ -111,14 +112,14 @@ class OnlineDPOTrainer(Trainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-        peft_config (`Dict`):
+        peft_config (`dict`):
             The peft config to use for training.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
-        callbacks (`List[transformers.TrainerCallback]`):
+        callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
-        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
@@ -126,7 +127,6 @@ class OnlineDPOTrainer(Trainer):
 
     _tag_names = ["trl", "online-dpo"]
 
-    @deprecate_kwarg("tokenizer", new_name="processing_class", version="0.14.0", raise_if_both_names=True)
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -136,15 +136,15 @@ class OnlineDPOTrainer(Trainer):
         args: Optional[OnlineDPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset], "datasets.Dataset"]] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset], "datasets.Dataset"]] = None,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
-        peft_config: Optional[Dict] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        peft_config: Optional[dict] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
+        callbacks: Optional[list[TrainerCallback]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ) -> None:
         if ref_model is model:
@@ -158,7 +158,8 @@ class OnlineDPOTrainer(Trainer):
         if reward_model is not None and judge is not None:
             warnings.warn(
                 "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
-                "Ignoring `judge` and using `reward_model`."
+                "Ignoring `judge` and using `reward_model`.",
+                UserWarning,
             )
             judge = None
         elif reward_model is None and judge is None:
@@ -247,6 +248,14 @@ class OnlineDPOTrainer(Trainer):
             use_cache=False if args.gradient_checkpointing else True,
         )
 
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
+        # the "input_ids" key. As a result, the trainer issues the warning: "Could not estimate the number of tokens
+        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
+        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
+        # that the warning has already been issued.
+        model.warnings_issued["estimate_tokens"] = True
+
         super().__init__(
             model=model,
             args=args,
@@ -272,7 +281,10 @@ class OnlineDPOTrainer(Trainer):
                 self.reward_model = prepare_deepspeed(
                     self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
                 )
-            self.ref_model = prepare_deepspeed(self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16)
+            if self.ref_model is not None:
+                self.ref_model = prepare_deepspeed(
+                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
         else:
             if self.ref_model is not None:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
@@ -288,7 +300,7 @@ class OnlineDPOTrainer(Trainer):
             return self._beta
 
     @staticmethod
-    def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> Dict[str, Any]:
+    def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> dict[str, Any]:
         """Tokenize a single row from a DPO specific dataset."""
         if not is_encoder_decoder:
             batch = tokenizer(feature["prompt"], add_special_tokens=False)
@@ -377,7 +389,7 @@ class OnlineDPOTrainer(Trainer):
         return self.accelerator.prepare(eval_dataloader)
 
     def training_step(
-        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
     ) -> torch.Tensor:
         model.train()
 
@@ -587,10 +599,11 @@ class OnlineDPOTrainer(Trainer):
 
         return loss.detach() / self.args.gradient_accumulation_steps
 
-    # Same as Trainer.evaluate but log our metrics
-    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval):
+    # Same as Trainer._maybe_log_save_evaluate but log our metrics
+    # start_time defaults to None to allow compatibility with transformers<=4.46
+    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None):
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
-            logs: Dict[str, float] = {}
+            logs: dict[str, float] = {}
 
             # all_gather + mean() to get average loss over all processes
             tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
@@ -612,7 +625,10 @@ class OnlineDPOTrainer(Trainer):
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
 
-            self.log(logs)
+            if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+                self.log(logs, start_time)
+            else:  # transformers<=4.46
+                self.log(logs)
 
         metrics = None
         if self.control.should_evaluate:
@@ -672,7 +688,7 @@ class OnlineDPOTrainer(Trainer):
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -682,7 +698,7 @@ class OnlineDPOTrainer(Trainer):
                 The name of the model.
             dataset_name (`str`, *optional*, defaults to `None`):
                 The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -715,6 +731,7 @@ class OnlineDPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="Online DPO",
             trainer_citation=citation,
             paper_title="Direct Language Model Alignment from Online AI Feedback",

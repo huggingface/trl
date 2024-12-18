@@ -118,7 +118,7 @@ The `trl` library also supports naive pipeline parallelism (NPP) for large model
 This paradigm, termed as "Naive Pipeline Parallelism" (NPP) is a simple way to parallelize the model across multiple GPUs. We load the model and the adapters across multiple GPUs and the activations and gradients will be naively communicated across the GPUs. This supports `int8` models as well as other `dtype` models.
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-npp.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-npp.png">
 </div>
 
 ### How to use NPP?
@@ -140,5 +140,5 @@ python PATH_TO_SCRIPT
 You can easily fine-tune Llama2 model using `SFTTrainer` and the official script! For example to fine-tune llama2-7b on the Guanaco dataset, run (tested on a single NVIDIA T4-16GB):
 
 ```bash
-python examples/scripts/sft.py --output_dir sft_openassistant-guanaco  --model_name meta-llama/Llama-2-7b-hf --dataset_name timdettmers/openassistant-guanaco --load_in_4bit --use_peft --per_device_train_batch_size 4 --gradient_accumulation_steps 2
+python trl/scripts/sft.py --output_dir sft_openassistant-guanaco  --model_name meta-llama/Llama-2-7b-hf --dataset_name timdettmers/openassistant-guanaco --load_in_4bit --use_peft --per_device_train_batch_size 4 --gradient_accumulation_steps 2
 ```

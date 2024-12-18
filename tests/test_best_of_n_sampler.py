@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ class BestOfNSamplerTester(unittest.TestCase):
     Tests the BestOfNSampler class
     """
 
-    ref_model_name = "trl-internal-testing/dummy-GPT2-correct-vocab"
+    ref_model_name = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
     output_length_sampler = LengthSampler(2, 6)
     model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_model_name)
     tokenizer = AutoTokenizer.from_pretrained(ref_model_name)
