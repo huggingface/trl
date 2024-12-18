@@ -29,12 +29,12 @@
 - sections:
   - local: deepspeed_integration
     title: DeepSpeed
+  - local: liger_kernel_integration
+    title: Liger Kernel
   - local: peft_integration
     title: PEFT
   - local: unsloth_integration
     title: Unsloth
-  - local: liger_kernel_integration
-    title: Liger Kernel
   title: Integrations
 - sections:
   - local: example_overview
