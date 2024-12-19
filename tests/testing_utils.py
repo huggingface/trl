@@ -15,7 +15,7 @@
 import random
 import unittest
 
-from transformers import is_bitsandbytes_available, is_sklearn_available, is_wandb_available
+from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge, is_diffusers_available, is_llm_blender_available
 from trl.import_utils import is_mergekit_available
@@ -63,6 +63,13 @@ def require_sklearn(test_case):
     Decorator marking a test that requires sklearn. Skips the test if sklearn is not available.
     """
     return unittest.skipUnless(is_sklearn_available(), "test requires sklearn")(test_case)
+
+
+def require_comet(test_case):
+    """
+    Decorator marking a test that requires Comet. Skips the test if Comet is not available.
+    """
+    return unittest.skipUnless(is_comet_available(), "test requires comet_ml")(test_case)
 
 
 class RandomBinaryJudge(BaseBinaryJudge):
