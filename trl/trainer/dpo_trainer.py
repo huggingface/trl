@@ -217,9 +217,7 @@ class DPOTrainer(Trainer):
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[dict] = None,
-        padding_free: bool = False,
     ):
-        self.padding_free = padding_free
         if model is None:
             raise ValueError("No model provided. Please provide a model to train.")
 
@@ -350,7 +348,7 @@ class DPOTrainer(Trainer):
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
         self.reference_free = args.reference_free
-
+        self.padding_free = args.padding_free
         if ref_model:
             self.ref_model = ref_model
         elif self.is_peft_model or args.precompute_ref_log_probs:
