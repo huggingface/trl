@@ -30,7 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
-from accelerate.utils import is_deepspeed_available, tqdm
+from accelerate.utils import is_deepspeed_available
 from datasets import Dataset, concatenate_datasets
 from packaging import version
 from torch.utils.data import DataLoader, SequentialSampler
@@ -168,105 +168,83 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
         f"{kwargs['prefix']}label": example["label"],
     }
 
-    if not kwargs["is_encoder_decoder"]:
-        # Check issues below for more details
-        #  1. https://github.com/huggingface/trl/issues/907
-        #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
-        #  3. https://github.com/LianjiaTech/BELLE/issues/337
+    # Check issues below for more details
+    #  1. https://github.com/huggingface/trl/issues/907
+    #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
+    #  3. https://github.com/LianjiaTech/BELLE/issues/337
 
-        if not isinstance(prompt, str):
-            raise ValueError(f"prompt should be an str but got {type(prompt)}")
+    if not isinstance(prompt, str):
+        raise ValueError(f"prompt should be an str but got {type(prompt)}")
 
-        if not isinstance(completion, str):
-            raise ValueError(f"completion should be an str but got {type(completion)}")
+    if not isinstance(completion, str):
+        raise ValueError(f"completion should be an str but got {type(completion)}")
 
-        # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
-        all_tokens = {
-            "prompt_input_ids": example["prompt_input_ids"],
-            "prompt_attention_mask": example["prompt_attention_mask"],
-            "answer_input_ids": example["answer_input_ids"],
-            "answer_attention_mask": example["answer_attention_mask"],
-        }
+    # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
+    all_tokens = {
+        "prompt_input_ids": example["prompt_input_ids"],
+        "prompt_attention_mask": example["prompt_attention_mask"],
+        "answer_input_ids": example["answer_input_ids"],
+        "answer_attention_mask": example["answer_attention_mask"],
+    }
 
-        # calculate max length by checking if BOS/EOS is already there
-        max_length = kwargs["max_length"]
-        bos_token_id = kwargs["tokenizer"].bos_token_id
-        eos_token_id = kwargs["tokenizer"].eos_token_id
-        if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
-            max_length -= 1
-        if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
-            max_length -= 1
+    # calculate max length by checking if BOS/EOS is already there
+    max_length = kwargs["max_length"]
+    bos_token_id = kwargs["tokenizer"].bos_token_id
+    eos_token_id = kwargs["tokenizer"].eos_token_id
+    if len(all_tokens["prompt_input_ids"]) > 0 and bos_token_id != all_tokens["prompt_input_ids"][0]:
+        max_length -= 1
+    if len(all_tokens["answer_input_ids"]) > 0 and eos_token_id != all_tokens["answer_input_ids"][-1]:
+        max_length -= 1
 
-        # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
-        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-            for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                if kwargs["truncation_mode"] == "keep_start":
-                    all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
-                elif kwargs["truncation_mode"] == "keep_end":
-                    all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
-                else:
-                    raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
+    # if combined sequence is too long (> max_length - 1 for BOS token - 1 for EOS), truncate the prompt
+    if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+        for k in ["prompt_input_ids", "prompt_attention_mask"]:
+            if kwargs["truncation_mode"] == "keep_start":
+                all_tokens[k] = all_tokens[k][: kwargs["max_prompt_length"]]
+            elif kwargs["truncation_mode"] == "keep_end":
+                all_tokens[k] = all_tokens[k][-kwargs["max_prompt_length"] :]
+            else:
+                raise ValueError(f"Unknown truncation mode: {kwargs['truncation_mode']}")
 
-        # if that's still too long, truncate the response
-        if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
-            for k in ["answer_input_ids", "answer_attention_mask"]:
-                all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
+    # if that's still too long, truncate the response
+    if len(all_tokens["prompt_input_ids"]) + len(all_tokens["answer_input_ids"]) > max_length:
+        for k in ["answer_input_ids", "answer_attention_mask"]:
+            all_tokens[k] = all_tokens[k][: max_length - kwargs["max_prompt_length"]]
 
-        # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
-        batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
-        batch[f"{kwargs['prefix']}prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
-        batch[f"{kwargs['prefix']}completion_input_ids"] = (
-            all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"]
-        )
-        batch[f"{kwargs['prefix']}completion_attention_mask"] = (
-            all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"]
-        )
+    # all input_ids and attention mask as is. We then check if we need to add BOS/EOS tokens
+    batch[f"{kwargs['prefix']}prompt_input_ids"] = all_tokens["prompt_input_ids"]
+    batch[f"{kwargs['prefix']}prompt_attention_mask"] = all_tokens["prompt_attention_mask"]
+    batch[f"{kwargs['prefix']}completion_input_ids"] = all_tokens["prompt_input_ids"] + all_tokens["answer_input_ids"]
+    batch[f"{kwargs['prefix']}completion_attention_mask"] = (
+        all_tokens["prompt_attention_mask"] + all_tokens["answer_attention_mask"]
+    )
 
-        # add BOS, which affects both prompt and the full completion
-        if bos_token_id is not None:
-            if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
-                batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
-                    f"{kwargs['prefix']}prompt_input_ids"
-                ]
-                batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[
-                    f"{kwargs['prefix']}prompt_attention_mask"
-                ]
-                batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
-                    f"{kwargs['prefix']}completion_input_ids"
-                ]
-                batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
-                    f"{kwargs['prefix']}completion_attention_mask"
-                ]
-        # add EOS, which affects only the full completion
-        if len(all_tokens["answer_input_ids"]) == 0 or eos_token_id != all_tokens["answer_input_ids"][-1]:
-            batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
-                eos_token_id
+    # add BOS, which affects both prompt and the full completion
+    if bos_token_id is not None:
+        if len(all_tokens["prompt_input_ids"]) == 0 or bos_token_id != all_tokens["prompt_input_ids"][0]:
+            batch[f"{kwargs['prefix']}prompt_input_ids"] = [bos_token_id] + batch[
+                f"{kwargs['prefix']}prompt_input_ids"
             ]
-            batch[f"{kwargs['prefix']}completion_attention_mask"] = batch[
+            batch[f"{kwargs['prefix']}prompt_attention_mask"] = [1] + batch[f"{kwargs['prefix']}prompt_attention_mask"]
+            batch[f"{kwargs['prefix']}completion_input_ids"] = [bos_token_id] + batch[
+                f"{kwargs['prefix']}completion_input_ids"
+            ]
+            batch[f"{kwargs['prefix']}completion_attention_mask"] = [1] + batch[
                 f"{kwargs['prefix']}completion_attention_mask"
-            ] + [1]
+            ]
+    # add EOS, which affects only the full completion
+    if len(all_tokens["answer_input_ids"]) == 0 or eos_token_id != all_tokens["answer_input_ids"][-1]:
+        batch[f"{kwargs['prefix']}completion_input_ids"] = batch[f"{kwargs['prefix']}completion_input_ids"] + [
+            eos_token_id
+        ]
+        batch[f"{kwargs['prefix']}completion_attention_mask"] = batch[
+            f"{kwargs['prefix']}completion_attention_mask"
+        ] + [1]
 
-        batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
-        batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
-            kwargs["label_pad_token_id"]
-        ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
-    else:
-        completion_tokens = kwargs["tokenizer"](
-            completion, truncation=True, max_length=kwargs["max_completion_length"], add_special_tokens=True
-        )
-        prompt_tokens = kwargs["tokenizer"](
-            prompt, truncation=True, max_length=kwargs["max_prompt_length"], add_special_tokens=True
-        )
-
-        batch[f"{kwargs['prefix']}prompt_input_ids"] = prompt_tokens["input_ids"]
-        batch[f"{kwargs['prefix']}prompt_attention_mask"] = prompt_tokens["attention_mask"]
-
-        batch[f"{kwargs['prefix']}completion_labels"] = completion_tokens["input_ids"]
-        batch[f"{kwargs['prefix']}completion_attention_mask"] = completion_tokens["attention_mask"]
-        if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-            batch[f"{kwargs['prefix']}completion_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                labels=torch.tensor(batch["completion_labels"])
-            )
+    batch[f"{kwargs['prefix']}completion_labels"] = batch[f"{kwargs['prefix']}completion_input_ids"][:]
+    batch[f"{kwargs['prefix']}completion_labels"][: len(batch[f"{kwargs['prefix']}prompt_input_ids"])] = [
+        kwargs["label_pad_token_id"]
+    ] * len(batch[f"{kwargs['prefix']}prompt_input_ids"])
 
     return batch
 
@@ -452,20 +430,13 @@ class KTOTrainer(Trainer):
                 " Please install with `pip install wandb` to resolve."
             )
 
-        if model is not None:
-            self.is_encoder_decoder = model.config.is_encoder_decoder
-        elif args.is_encoder_decoder is None:
-            raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
-        else:
-            self.is_encoder_decoder = args.is_encoder_decoder
-
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = model_adapter_name
         self.ref_adapter_name = ref_adapter_name
 
         if ref_model:
             self.ref_model = ref_model
-        elif self.is_peft_model or args.precompute_ref_log_probs:
+        elif self.is_peft_model or False:
             # The `model` with adapters turned off will be used as the reference model
             self.ref_model = None
         else:
@@ -496,21 +467,12 @@ class KTOTrainer(Trainer):
             max_prompt_length = args.max_prompt_length
 
         max_completion_length = None
-        if args.max_completion_length is None and self.is_encoder_decoder:
-            warnings.warn(
-                "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the KTOTrainer's init"
-                " it will be set to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
-            )
-            max_completion_length = 128
-        if args.max_completion_length is not None and self.is_encoder_decoder:
-            max_completion_length = args.max_completion_length
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=processing_class.pad_token_id,
                 label_pad_token_id=args.label_pad_token_id,
-                is_encoder_decoder=self.is_encoder_decoder,
+                is_encoder_decoder=False,
             )
 
             if args.remove_unused_columns:
@@ -531,7 +493,6 @@ class KTOTrainer(Trainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
-        self.loss_type = args.loss_type
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
@@ -540,17 +501,6 @@ class KTOTrainer(Trainer):
         self.truncation_mode = args.truncation_mode
         self.max_completion_length = max_completion_length
         self.processing_class = processing_class
-        self.precompute_ref_log_probs = args.precompute_ref_log_probs
-
-        # Not all losses require a KL calculation
-        self.calculate_KL = True
-        if self.loss_type in ["apo_zero_unpaired"]:
-            self.calculate_KL = False
-
-        # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
-        # keep track of first called to avoid computation of future calls
-        self._precomputed_train_ref_log_probs = False
-        self._precomputed_eval_ref_log_probs = False
 
         # metric
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
@@ -559,16 +509,7 @@ class KTOTrainer(Trainer):
         self.beta = args.beta
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
-        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
-        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
-                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
-                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
-                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
-                "loss.",
-                UserWarning,
-            )
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in KTO, the sampled data does not include the
@@ -622,7 +563,6 @@ class KTOTrainer(Trainer):
 
             fn_kwargs = {
                 "prefix": "",
-                "is_encoder_decoder": self.is_encoder_decoder,
                 "tokenizer": self.processing_class,
                 "max_length": self.max_length,
                 "truncation_mode": self.truncation_mode,
@@ -656,54 +596,53 @@ class KTOTrainer(Trainer):
                 )
 
             # Get KL datasets if needed
-            if self.calculate_KL:
-                if args.per_device_train_batch_size <= 1:
-                    raise ValueError(
-                        "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
-                    )
+            if args.per_device_train_batch_size <= 1:
+                raise ValueError(
+                    "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
+                )
 
-                # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
-                # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
-                train_kl_dataset = train_dataset.map(
+            # create pairs for estimating the KL term by flipping the matched pairs in each batch of size total_batch_size
+            # i.e., (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), ..., (x_n, y_1) = (x'_1, y'_1), ..., (x'_n, y'_n)
+            train_kl_dataset = train_dataset.map(
+                _get_kl_dataset,
+                batched=True,
+                batch_size=args.per_device_train_batch_size,
+                num_proc=args.dataset_num_proc,
+                desc="Extracting KL train dataset",
+            )
+
+            fn_kwargs["prefix"] = "kl_"
+            train_kl_dataset = train_kl_dataset.map(
+                _process_tokens,
+                fn_kwargs=fn_kwargs,
+                num_proc=args.dataset_num_proc,
+                remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
+                desc="Processing tokenized train KL dataset",
+            )
+
+            # merge the datasets
+            train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
+
+            if eval_dataset is not None:
+                # Get KL dataset
+                eval_kl_dataset = eval_dataset.map(
                     _get_kl_dataset,
                     batched=True,
                     batch_size=args.per_device_train_batch_size,
                     num_proc=args.dataset_num_proc,
-                    desc="Extracting KL train dataset",
+                    desc="Extracting eval KL dataset",
                 )
 
-                fn_kwargs["prefix"] = "KL_"
-                train_kl_dataset = train_kl_dataset.map(
+                eval_kl_dataset = eval_kl_dataset.map(
                     _process_tokens,
                     fn_kwargs=fn_kwargs,
                     num_proc=args.dataset_num_proc,
-                    remove_columns=[c for c in train_kl_dataset.column_names if c in train_dataset.column_names],
-                    desc="Processing tokenized train KL dataset",
+                    remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
+                    desc="Processing tokenized eval KL dataset",
                 )
 
                 # merge the datasets
-                train_dataset = concatenate_datasets([train_dataset, train_kl_dataset], axis=1)
-
-                if eval_dataset is not None:
-                    # Get KL dataset
-                    eval_kl_dataset = eval_dataset.map(
-                        _get_kl_dataset,
-                        batched=True,
-                        batch_size=args.per_device_train_batch_size,
-                        num_proc=args.dataset_num_proc,
-                        desc="Extracting eval KL dataset",
-                    )
-
-                    eval_kl_dataset = eval_kl_dataset.map(
-                        _process_tokens,
-                        fn_kwargs=fn_kwargs,
-                        num_proc=args.dataset_num_proc,
-                        remove_columns=[c for c in eval_kl_dataset.column_names if c in eval_dataset.column_names],
-                        desc="Processing tokenized eval KL dataset",
-                    )
-
-                    # merge the datasets
-                    eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
+                eval_dataset = concatenate_datasets([eval_dataset, eval_kl_dataset], axis=1)
 
             # calculate dataset desirability balance
             num_desirable = max(sum(train_dataset["label"]), 1)
@@ -753,15 +692,8 @@ class KTOTrainer(Trainer):
                 "Your `Trainer` does not have an `accelerator` object. Consider upgrading `transformers`."
             )
 
-        # Deepspeed Zero-3 does not support precompute_ref_log_probs
-        if self.is_deepspeed_enabled:
-            if self.accelerator.state.deepspeed_plugin.zero_stage == 3 and self.precompute_ref_log_probs:
-                raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with Deepspeed ZeRO-3. Please set `precompute_ref_log_probs=False`."
-                )
-
         if self.ref_model is None:
-            if not (self.is_peft_model or self.precompute_ref_log_probs):
+            if not (self.is_peft_model or False):
                 raise ValueError(
                     "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
                 )
@@ -814,346 +746,83 @@ class KTOTrainer(Trainer):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
 
-    def get_train_dataloader(self) -> DataLoader:
-        """
-        Returns the training [`~torch.utils.data.DataLoader`].
-
-        Subclass of transformers.src.transformers.trainer.get_train_dataloader to precompute `ref_log_probs`.
-        """
-
-        if self.precompute_ref_log_probs and not self._precomputed_train_ref_log_probs:
-            dataloader_params = {
-                "batch_size": self.args.per_device_train_batch_size,
-                "collate_fn": self.data_collator,
-                "num_workers": self.args.dataloader_num_workers,
-                "pin_memory": self.args.dataloader_pin_memory,
-                "shuffle": False,
-            }
-
-            # prepare dataloader
-            data_loader = self.accelerator.prepare(DataLoader(self.train_dataset, **dataloader_params))
-            reference_completion_logps = []
-            reference_KL_logps = []
-
-            for padded_batch in tqdm(iterable=data_loader, desc="Train dataset reference log probs"):
-                reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
-
-                reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
-                reference_completion_logps.append(reference_completion_logp.cpu())
-
-                if self.calculate_KL:
-                    reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                    reference_KL_logps.append(reference_KL_logp.cpu())
-
-            self.train_dataset = self.train_dataset.add_column(
-                name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
-            )
-
-            if self.calculate_KL:
-                self.train_dataset = self.train_dataset.add_column(
-                    name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
-                )
-
-            self._precomputed_train_ref_log_probs = True
-
-        return super().get_train_dataloader()
-
-    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
-        """
-        Returns the evaluation [`~torch.utils.data.DataLoader`].
-
-        Subclass of transformers.src.transformers.trainer.get_eval_dataloader to precompute `ref_log_probs`.
-
-        Args:
-            eval_dataset (`torch.utils.data.Dataset`, *optional*):
-                If provided, will override `self.eval_dataset`. If it is a [`~datasets.Dataset`], columns not accepted
-                by the `model.forward()` method are automatically removed. It must implement `__len__`.
-        """
-        if eval_dataset is None and self.eval_dataset is None:
-            raise ValueError("Trainer: evaluation requires an eval_dataset.")
-        eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
-
-        if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
-            dataloader_params = {
-                "batch_size": self.args.per_device_eval_batch_size,
-                "collate_fn": self.data_collator,
-                "num_workers": self.args.dataloader_num_workers,
-                "pin_memory": self.args.dataloader_pin_memory,
-                "shuffle": False,
-            }
-
-            # prepare dataloader
-            data_loader = self.accelerator.prepare(DataLoader(eval_dataset, **dataloader_params))
-
-            reference_completion_logps = []
-            reference_KL_logps = []
-
-            for padded_batch in tqdm(iterable=data_loader, desc="Eval dataset reference log probs"):
-                reference_completion_logp, reference_KL_logp = self.compute_reference_log_probs(padded_batch)
-
-                reference_completion_logp = self.accelerator.gather_for_metrics(reference_completion_logp)
-                reference_completion_logps.append(reference_completion_logp.cpu())
-
-                if self.calculate_KL:
-                    reference_KL_logp = self.accelerator.gather_for_metrics(reference_KL_logp)
-                    reference_KL_logps.append(reference_KL_logp.cpu())
-
-            eval_dataset = eval_dataset.add_column(
-                name="reference_logps", column=torch.cat(reference_completion_logps).float().numpy()
-            )
-            if self.calculate_KL:
-                eval_dataset = eval_dataset.add_column(
-                    name="reference_KL_logps", column=torch.cat(reference_KL_logps).float().numpy()
-                )
-
-            # Save calculated reference_chosen_logps and reference_rejected_logps to the eval_dataset for subsequent runs
-            if self.eval_dataset is not None:
-                self.eval_dataset = eval_dataset
-            self._precomputed_eval_ref_log_probs = True
-
-        return super().get_eval_dataloader(eval_dataset=eval_dataset)
-
-    def compute_reference_log_probs(self, padded_batch: dict) -> dict:
-        """Computes log probabilities of the reference model for a single padded batch of a KTO specific dataset."""
-        with torch.no_grad():
-            if self.ref_model is None:
-                with self.null_ref_context():
-                    if self.is_encoder_decoder:
-                        completion_logits = self.model(
-                            padded_batch["prompt_input_ids"],
-                            attention_mask=padded_batch["prompt_attention_mask"],
-                            decoder_input_ids=padded_batch.get("completion_decoder_input_ids"),
-                            labels=padded_batch["completion_labels"],
-                        ).logits
-
-                        if self.calculate_KL:
-                            KL_logits = self.model(
-                                padded_batch["KL_prompt_input_ids"],
-                                attention_mask=padded_batch["KL_prompt_attention_mask"],
-                                decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
-                                labels=padded_batch["KL_completion_labels"],
-                            ).logits
-                    else:
-                        completion_logits = self.model(
-                            padded_batch["completion_input_ids"],
-                            attention_mask=padded_batch["completion_attention_mask"],
-                        ).logits
-
-                        if self.calculate_KL:
-                            KL_logits = self.model(
-                                padded_batch["KL_completion_input_ids"],
-                                attention_mask=padded_batch["KL_completion_attention_mask"],
-                            ).logits
-            else:
-                if self.is_encoder_decoder:
-                    completion_logits = self.ref_model(
-                        padded_batch["prompt_input_ids"],
-                        attention_mask=padded_batch["prompt_attention_mask"],
-                        decoder_input_ids=padded_batch.get("completion_decoder_input_ids"),
-                        labels=padded_batch["completion_labels"],
-                    ).logits
-
-                    if self.calculate_KL:
-                        KL_logits = self.ref_model(
-                            padded_batch["KL_prompt_input_ids"],
-                            attention_mask=padded_batch["KL_prompt_attention_mask"],
-                            decoder_input_ids=padded_batch.get("KL_completion_decoder_input_ids"),
-                            labels=padded_batch["KL_completion_labels"],
-                        ).logits
-                else:
-                    completion_logits = self.ref_model(
-                        padded_batch["completion_input_ids"], attention_mask=padded_batch["completion_attention_mask"]
-                    ).logits
-
-                    if self.calculate_KL:
-                        KL_logits = self.ref_model(
-                            padded_batch["KL_completion_input_ids"],
-                            attention_mask=padded_batch["KL_completion_attention_mask"],
-                        ).logits
-
-        completion_logps = self.get_batch_logps(
-            completion_logits,
-            padded_batch["completion_labels"],
-            average_log_prob=False,
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-        )
-
-        if self.calculate_KL:
-            KL_logps = self.get_batch_logps(
-                KL_logits,
-                padded_batch["KL_completion_labels"],
-                average_log_prob=False,
-                is_encoder_decoder=self.is_encoder_decoder,
-                label_pad_token_id=self.label_pad_token_id,
-            )
-        else:
-            KL_logps = None
-
-        return completion_logps, KL_logps
-
-    @staticmethod
-    def get_batch_logps(
-        logits: torch.FloatTensor,
-        labels: torch.LongTensor,
-        average_log_prob: bool = False,
-        label_pad_token_id: int = -100,
-        is_encoder_decoder: bool = False,
-    ) -> torch.FloatTensor:
-        """Compute the log probabilities of the given labels under the given logits.
-
-        Args:
-            logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
-            labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
-
-        Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
-        """
-        if logits.shape[:-1] != labels.shape:
-            raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
-
-        if not is_encoder_decoder:
-            labels = labels[:, 1:].clone()
-            logits = logits[:, :-1, :]
-        else:
-            # Fixes end-dec RuntimeError
-            labels = labels.clone()
-
-        loss_mask = labels != label_pad_token_id
-
-        # dummy token; we'll ignore the losses on these tokens later
-        labels[labels == label_pad_token_id] = 0
-
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-
-        if average_log_prob:
-            return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
-        else:
-            return (per_token_logps * loss_mask).sum(-1)
-
     def forward(
         self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        if self.calculate_KL:
-            KL_logps = None
-            KL_model_kwargs = (
-                {
-                    "input_ids": batch["KL_prompt_input_ids"],
-                    "attention_mask": batch["KL_prompt_attention_mask"],
-                    "labels": batch["KL_completion_labels"],
-                    "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
-                }
-                if self.is_encoder_decoder
-                else {
-                    "input_ids": batch["KL_completion_input_ids"],
-                    "attention_mask": batch["KL_completion_attention_mask"],
-                }
-            )
-            with torch.no_grad():
-                KL_logits = model(
-                    **KL_model_kwargs,
-                ).logits
+        kl_logps = None
 
-            KL_logps = self.get_batch_logps(
-                KL_logits,
-                batch["KL_completion_labels"],
-                average_log_prob=False,
-                is_encoder_decoder=self.is_encoder_decoder,
-                label_pad_token_id=self.label_pad_token_id,
-            )
-        else:
-            KL_logps = None
+        with torch.no_grad():
+            kl_logits = model(
+                input_ids=batch["kl_completion_input_ids"], attention_mask=batch["kl_completion_attention_mask"]
+            ).logits
 
-        model_kwargs = (
-            {
-                "labels": batch["completion_labels"],
-                "decoder_input_ids": batch.get("completion_decoder_input_ids"),
-            }
-            if self.is_encoder_decoder
-            else {}
-        )
-        if self.aux_loss_enabled:
-            model_kwargs["output_router_logits"] = True
+        labels = batch["kl_completion_labels"][:, 1:].clone()
+        logits = kl_logits[:, :-1, :]
+        loss_mask = labels != self.label_pad_token_id
+        labels[labels == self.label_pad_token_id] = 0
+        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        kl_logps = (per_token_logps * loss_mask).sum(-1)
 
-        outputs = model(
-            batch["completion_input_ids"],
-            attention_mask=batch["completion_attention_mask"],
-            **model_kwargs,
-        )
+        outputs = model(batch["completion_input_ids"], attention_mask=batch["completion_attention_mask"])
         completion_logits = outputs.logits
 
-        completion_logps = self.get_batch_logps(
-            completion_logits,
-            batch["completion_labels"],
-            average_log_prob=False,
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-        )
-
-        if completion_logps.shape[0] != len(batch["label"]):
-            raise ValueError(
-                "There is a mismatch between the number of examples in this batch and the number of "
-                "examples for which an output sequence was predicted."
-            )
+        labels = batch["completion_labels"][:, 1:].clone()
+        logits = completion_logits[:, :-1, :]
+        loss_mask = labels != self.label_pad_token_id
+        labels[labels == self.label_pad_token_id] = 0
+        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        completion_logps = (per_token_logps * loss_mask).sum(-1)
 
         chosen_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is True]
         rejected_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is False]
 
-        chosen_logps = completion_logps[chosen_idx, ...]
-        rejected_logps = completion_logps[rejected_idx, ...]
+        chosen_logps = completion_logps[chosen_idx]
+        rejected_logps = completion_logps[rejected_idx]
 
-        chosen_logits = completion_logits[chosen_idx, ...]
-        rejected_logits = completion_logits[rejected_idx, ...]
+        chosen_logits = completion_logits[chosen_idx]
+        rejected_logits = completion_logits[rejected_idx]
 
-        if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs.aux_loss)
-        else:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
+        return {
+            "chosen_logps": chosen_logps,
+            "rejected_logps": rejected_logps,
+            "chosen_logits": chosen_logits,
+            "rejected_logits": rejected_logits,
+            "kl_logps": kl_logps,
+        }
 
     def kto_loss(
         self,
-        policy_chosen_logps: torch.FloatTensor,
-        policy_rejected_logps: torch.FloatTensor,
-        policy_KL_logps: torch.FloatTensor,
-        reference_chosen_logps: torch.FloatTensor,
-        reference_rejected_logps: torch.FloatTensor,
-        reference_KL_logps: torch.FloatTensor,
+        chosen_logps: torch.FloatTensor,
+        rejected_logps: torch.FloatTensor,
+        kl_logps: torch.FloatTensor,
+        ref_chosen_logps: torch.FloatTensor,
+        ref_rejected_logps: torch.FloatTensor,
+        ref_kl_logps: torch.FloatTensor,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute the KTO loss for a batch of policy and reference model log probabilities.
 
         Args:
-            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
-            policy_KL_logps: Log probabilities of the policy model for the KL responses. Shape: (batch_size,)
-            reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in batch_size,)
-            reference_KL_logps: Log probabilities of the reference model for the KL responses. Shape: (batch_size,)
+            chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (num(chosen) in batch_size,)
+            rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
+            kl_logps: Log probabilities of the policy model for the kl responses. Shape: (batch_size,)
+            ref_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
+            ref_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in batch_size,)
+            ref_kl_logps: Log probabilities of the reference model for the kl responses. Shape: (batch_size,)
 
         Returns:
-            A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, KL).
+            A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, kl).
             The losses tensor contains the KTO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
-            The KL tensor contains the detached KL divergence estimate between the policy and reference models.
+            The kl tensor contains the detached kl divergence estimate between the policy and reference models.
         """
-        if self.calculate_KL:
-            kl = (policy_KL_logps - reference_KL_logps).mean().detach()
-            kl = self.accelerator.gather(kl).mean().clamp(min=0)
-        else:
-            kl = torch.zeros(1).to(policy_chosen_logps.device)
+        kl = (kl_logps - ref_kl_logps).mean().detach()
+        kl = self.accelerator.gather(kl).mean().clamp(min=0)
 
         # Chosen losses
-        if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
-            chosen_logratios = policy_chosen_logps - reference_chosen_logps
-
-            if self.loss_type == "kto":
-                # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
-                chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
-            elif self.loss_type == "apo_zero_unpaired":
-                # Unpaired variant of Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
-                # Use this loss when you believe the chosen outputs are better than your model's default output
-                chosen_losses = 1 - F.sigmoid(self.beta * chosen_logratios)
-
+        if chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
+            chosen_logratios = chosen_logps - ref_chosen_logps
+            # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
+            chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
             chosen_rewards = self.beta * chosen_logratios.detach()
 
         else:
@@ -1162,13 +831,9 @@ class KTOTrainer(Trainer):
             chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
 
         # Rejected losses
-        if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
-            rejected_logratios = policy_rejected_logps - reference_rejected_logps
-
-            if self.loss_type == "kto":
-                rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
-            elif self.loss_type == "apo_zero_unpaired":
-                rejected_losses = F.sigmoid(self.beta * rejected_logratios)
+        if rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
+            rejected_logratios = rejected_logps - ref_rejected_logps
+            rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
 
             rejected_rewards = self.beta * rejected_logratios.detach()
         else:
@@ -1192,55 +857,17 @@ class KTOTrainer(Trainer):
         metrics = {}
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
 
-        forward_output = self.forward(model, batch)
-        (
-            policy_chosen_logps,
-            policy_rejected_logps,
-            policy_chosen_logits,
-            policy_rejected_logits,
-            policy_KL_logps,
-        ) = forward_output[:5]
-        if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
-
-        # if reference_logps in batch use them, otherwise use the reference model
-        if "reference_logps" in batch:
-            chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is True]
-            rejected_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is False]
-
-            reference_chosen_logps = batch["reference_logps"][chosen_idx, ...]
-            reference_rejected_logps = batch["reference_logps"][rejected_idx, ...]
-            if self.calculate_KL:
-                reference_KL_logps = batch["reference_KL_logps"]
-            else:
-                reference_KL_logps = None
-        else:
-            with torch.no_grad():
-                if self.ref_model is None:
-                    with self.null_ref_context():
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            _,
-                            _,
-                            reference_KL_logps,
-                        ) = self.forward(self.model, batch)[:5]
-                else:
-                    (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        _,
-                        _,
-                        reference_KL_logps,
-                    ) = self.forward(self.ref_model, batch)[:5]
+        model_output = self.forward(model, batch)
+        with torch.no_grad():
+            ref_model_output = self.forward(self.ref_model, batch)
 
         losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
-            policy_chosen_logps,
-            policy_rejected_logps,
-            policy_KL_logps,
-            reference_chosen_logps,
-            reference_rejected_logps,
-            reference_KL_logps,
+            model_output["chosen_logps"],
+            model_output["rejected_logps"],
+            model_output["kl_logps"],
+            ref_model_output["chosen_logps"],
+            ref_model_output["rejected_logps"],
+            ref_model_output["kl_logps"],
         )
         metrics["kl"] = kl.item()
 
@@ -1252,19 +879,25 @@ class KTOTrainer(Trainer):
 
         if all_num_chosen > 0:
             metrics["rewards/chosen_sum"] = self.accelerator.gather(chosen_rewards.nansum()).nansum().item()
-            metrics["logps/chosen_sum"] = self.accelerator.gather(policy_chosen_logps.nansum()).nansum().item()
-            metrics["logits/chosen_sum"] = self.accelerator.gather(policy_chosen_logits.nansum()).nansum().item()
+            metrics["logps/chosen_sum"] = (
+                self.accelerator.gather(model_output["chosen_logps"].nansum()).nansum().item()
+            )
+            metrics["logits/chosen_sum"] = (
+                self.accelerator.gather(model_output["chosen_logits"].nansum()).nansum().item()
+            )
             metrics["count/chosen"] = all_num_chosen
 
         if all_num_rejected > 0:
             metrics["rewards/rejected_sum"] = self.accelerator.gather(rejected_rewards.nansum()).nansum().item()
-            metrics["logps/rejected_sum"] = self.accelerator.gather(policy_rejected_logps.nansum()).nansum().item()
-            metrics["logits/rejected_sum"] = self.accelerator.gather(policy_rejected_logits.nansum()).nansum().item()
+            metrics["logps/rejected_sum"] = (
+                self.accelerator.gather(model_output["rejected_logps"].nansum()).nansum().item()
+            )
+            metrics["logits/rejected_sum"] = (
+                self.accelerator.gather(model_output["rejected_logits"].nansum()).nansum().item()
+            )
             metrics["count/rejected"] = all_num_rejected
 
         loss = losses.nanmean()
-        if self.aux_loss_enabled:
-            loss += self.aux_loss_coef * aux_loss
 
         return loss, metrics
 
@@ -1315,13 +948,13 @@ class KTOTrainer(Trainer):
                 pad_token_id=self.processing_class.pad_token_id,
             )
 
-            # if reference_output in batch use that otherwise use the reference model
-            if "reference_output" in batch:
-                reference_output = batch["reference_output"]
+            # if ref_output in batch use that otherwise use the reference model
+            if "ref_output" in batch:
+                ref_output = batch["ref_output"]
             else:
                 if self.ref_model is None:
                     with self.null_ref_context():
-                        reference_output = self.model.generate(
+                        ref_output = self.model.generate(
                             input_ids=batch["prompt_input_ids"],
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
@@ -1329,7 +962,7 @@ class KTOTrainer(Trainer):
                             pad_token_id=self.processing_class.pad_token_id,
                         )
                 else:
-                    reference_output = self.ref_model.generate(
+                    ref_output = self.ref_model.generate(
                         input_ids=batch["prompt_input_ids"],
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
@@ -1340,10 +973,10 @@ class KTOTrainer(Trainer):
         policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
         policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        reference_output = pad_to_length(reference_output, self.max_length, self.processing_class.pad_token_id)
-        reference_output_decoded = self.processing_class.batch_decode(reference_output, skip_special_tokens=True)
+        ref_output = pad_to_length(ref_output, self.max_length, self.processing_class.pad_token_id)
+        ref_output_decoded = self.processing_class.batch_decode(ref_output, skip_special_tokens=True)
 
-        return policy_output_decoded, reference_output_decoded
+        return policy_output_decoded, ref_output_decoded
 
     def prediction_step(
         self,
