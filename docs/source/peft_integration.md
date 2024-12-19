@@ -118,7 +118,7 @@ The `trl` library also supports naive pipeline parallelism (NPP) for large model
 This paradigm, termed as "Naive Pipeline Parallelism" (NPP) is a simple way to parallelize the model across multiple GPUs. We load the model and the adapters across multiple GPUs and the activations and gradients will be naively communicated across the GPUs. This supports `int8` models as well as other `dtype` models.
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-npp.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-npp.png">
 </div>
 
 ### How to use NPP?

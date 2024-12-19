@@ -50,7 +50,6 @@ from transformers.utils import (
     is_torch_npu_available,
     is_torch_xpu_available,
 )
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..trainer.model_config import ModelConfig
 
@@ -850,7 +849,6 @@ def peft_module_casting_to_bf16(model):
                     module = module.to(torch.bfloat16)
 
 
-@deprecate_kwarg("model_config", "0.14.0", "model_args", warn_if_greater_or_equal_version=True)
 def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesConfig]:
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
@@ -879,7 +877,6 @@ def get_kbit_device_map() -> Optional[dict[str, int]]:
         return None
 
 
-@deprecate_kwarg("model_config", "0.14.0", "model_args", warn_if_greater_or_equal_version=True)
 def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
     if model_args.use_peft is False:
         return None
