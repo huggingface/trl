@@ -24,7 +24,7 @@ from transformers.testing_utils import require_peft, require_wandb
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
-from tests.testing_utils import require_mergekit
+from tests.testing_utils import require_comet, require_mergekit
 from trl import BasePairwiseJudge, DPOConfig, DPOTrainer, LogCompletionsCallback, MergeModelCallback, WinRateCallback
 from trl.mergekit_utils import MergeConfig
 
@@ -216,7 +216,6 @@ class WinRateCallbackTester(unittest.TestCase):
             self.assertListEqual(winrate_history, self.expected_winrates)
 
 
-@require_wandb
 class LogCompletionsCallbackTester(unittest.TestCase):
     def setUp(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -234,7 +233,8 @@ class LogCompletionsCallbackTester(unittest.TestCase):
 
         self.generation_config = GenerationConfig(max_length=32)
 
-    def test_basic(self):
+    @require_wandb
+    def test_basic_wandb(self):
         import wandb
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -270,6 +270,45 @@ class LogCompletionsCallbackTester(unittest.TestCase):
 
             # Check that the prompt is in the log
             self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
+
+    @require_comet
+    def test_basic_comet(self):
+        import comet_ml
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(
+                output_dir=tmp_dir,
+                eval_strategy="steps",
+                eval_steps=2,  # evaluate every 2 steps
+                per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
+                per_device_eval_batch_size=2,
+                report_to="comet_ml",
+            )
+            trainer = Trainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dataset["train"],
+                eval_dataset=self.dataset["test"],
+                processing_class=self.tokenizer,
+            )
+            completions_callback = LogCompletionsCallback(trainer, self.generation_config, num_prompts=2)
+            trainer.add_callback(completions_callback)
+            trainer.train()
+
+            # close experiment to make sure all pending data are flushed
+            experiment = comet_ml.get_running_experiment()
+            assert experiment is not None
+            experiment.end()
+
+            # get experiment assets and check that all required tables was logged
+            steps = len(self.dataset["train"]) + len(self.dataset["test"])
+            tables_logged = int(steps / 2) + 1  # +1 to include zero step
+
+            api_experiment = comet_ml.APIExperiment(previous_experiment=experiment.id)
+            tables = api_experiment.get_asset_list("dataframe")
+            assert tables is not None
+            assert len(tables) == tables_logged
+            assert all(table["fileName"] == "completions.csv" for table in tables)
 
 
 # On Windows, temporary directory cleanup fails when using the MergeModelCallback.
