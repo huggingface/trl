@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal, Optional
@@ -172,7 +171,6 @@ class DPOConfig(TrainingArguments):
     truncation_mode: str = "keep_end"
     max_length: Optional[int] = None
     max_prompt_length: Optional[int] = None
-    max_target_length: Optional[int] = None  # deprecated in favor of max_completion_length
     max_completion_length: Optional[int] = None
     is_encoder_decoder: Optional[bool] = None
     disable_dropout: bool = True
@@ -194,15 +192,3 @@ class DPOConfig(TrainingArguments):
     rpo_alpha: Optional[float] = None
     discopop_tau: float = 0.05
     use_num_logits_to_keep: bool = False
-
-    def __post_init__(self):
-        if self.max_target_length is not None:
-            warnings.warn(
-                "The `max_target_length` argument is deprecated in favor of `max_completion_length` and will be "
-                "removed in v0.14.",
-                FutureWarning,
-            )
-            if self.max_completion_length is None:
-                self.max_completion_length = self.max_target_length
-
-        return super().__post_init__()

@@ -111,7 +111,7 @@ trainer.add_callback(completions_callback)
 
 This callback logs the model's generated completions directly to Weights & Biases.
 
-![Logged Completions](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/wandb_completions.png)
+![Logged Completions](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/wandb_completions.png)
 
 ## Example script
 
