@@ -83,7 +83,7 @@ As a compromise between the two we took for a context window of 10 to 15 tokens 
 
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-long-vs-short-context.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-long-vs-short-context.png">
 </div>
 
 ### How to deal with OOM issues
@@ -101,7 +101,7 @@ and the optimizer will take care of computing the gradients in `bfloat16` precis
 - Use shared layers: Since PPO algorithm requires to have both the active and reference model to be on the same device, we have decided to use shared layers to reduce the memory footprint of the model. This can be achieved by specifying `num_shared_layers` argument when calling the `create_reference_model()` function. For example, if you want to share the first 6 layers of the model, you can do it like this:
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-shared-layers.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-shared-layers.png">
 </div>
 
 ```python
@@ -124,13 +124,13 @@ We have decided to keep 3 models in total that correspond to our best models:
 We have used different learning rates for each model, and have found out that the largest models were quite hard to train and can easily lead to collapse mode if the learning rate is not chosen correctly (i.e. if the learning rate is too high):
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-collapse-mode.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-collapse-mode.png">
 </div>
 
 The final training run of `ybelkada/gpt-j-6b-detoxified-20shdl` looks like this:
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-gpt-j-final-run-2.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-gpt-j-final-run-2.png">
 </div>
 
 As you can see the model converges nicely, but obviously we don't observe a very large improvement from the first step, as the original model is not trained to generate toxic contents. 
@@ -138,7 +138,7 @@ As you can see the model converges nicely, but obviously we don't observe a very
 Also we have observed that training with larger `mini_batch_size` leads to smoother convergence and better results on the test set:
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-gpt-j-mbs-run.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-gpt-j-mbs-run.png">
 </div>
 
 ## Results
@@ -159,7 +159,7 @@ We report the toxicity score of 400 sampled examples, compute its mean and stand
 
 <div class="column" style="text-align:center">
   <figure>
-    <img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-final-barplot.png" style="width:80%">
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-final-barplot.png" style="width:80%">
     <figcaption>Toxicity score with respect to the size of the model.</figcaption>
   </figure>
 </div>
@@ -167,7 +167,7 @@ We report the toxicity score of 400 sampled examples, compute its mean and stand
 Below are few generation examples of `gpt-j-6b-detox` model:
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-toxicity-examples.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-toxicity-examples.png">
 </div>
 
 The evaluation script can be found [here](https://github.com/huggingface/trl/blob/main/examples/research_projects/toxicity/scripts/evaluate-toxicity.py).
