@@ -21,7 +21,6 @@ from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffus
 
 _import_structure = {
     "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
-    "core": ["set_seed"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -115,7 +114,6 @@ else:
     _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
-    from .core import set_seed
     from .data_utils import (
         apply_chat_template,
         extract_prompt,

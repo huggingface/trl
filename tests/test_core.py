@@ -16,7 +16,7 @@ import unittest
 
 import torch
 
-from trl.core import masked_mean, masked_var, masked_whiten, whiten
+from trl.core import masked_mean, masked_var, masked_whiten
 
 
 class CoreTester(unittest.TestCase):
@@ -36,6 +36,10 @@ class CoreTester(unittest.TestCase):
         self.assertEqual(torch.var(self.test_input_unmasked), masked_var(self.test_input, self.test_mask))
 
     def test_masked_whiten(self):
+        def whiten(values: torch.Tensor) -> torch.Tensor:
+            mean, var = torch.mean(values), torch.var(values)
+            return (values - mean) * torch.rsqrt(var + 1e-8)
+
         whiten_unmasked = whiten(self.test_input_unmasked)
         whiten_masked = masked_whiten(self.test_input, self.test_mask)[1:3]
         diffs = (whiten_unmasked - whiten_masked).sum()
