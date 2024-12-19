@@ -173,12 +173,6 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     #  2. https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
     #  3. https://github.com/LianjiaTech/BELLE/issues/337
 
-    if not isinstance(prompt, str):
-        raise ValueError(f"prompt should be an str but got {type(prompt)}")
-
-    if not isinstance(completion, str):
-        raise ValueError(f"completion should be an str but got {type(completion)}")
-
     # keys of format prompt_* refers to just the prompt and answer_* refers to just the answer
     all_tokens = {
         "prompt_input_ids": example["prompt_input_ids"],
@@ -509,7 +503,6 @@ class KTOTrainer(Trainer):
         self.beta = args.beta
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
-        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in KTO, the sampled data does not include the
@@ -668,6 +661,22 @@ class KTOTrainer(Trainer):
                         "See the documentation on how to optimally set these weights.",
                         UserWarning,
                     )
+
+        train_dataset= train_dataset.remove_columns(
+            [
+                "prompt",
+                "completion",
+                "prompt_input_ids",
+                "prompt_attention_mask",
+                "answer_input_ids",
+                "answer_attention_mask",
+                "kl_prompt",
+                "kl_completion",
+                "kl_label",
+                "kl_prompt_input_ids",
+                "kl_prompt_attention_mask",
+            ]
+        )
 
         super().__init__(
             model=model,
