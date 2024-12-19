@@ -56,14 +56,14 @@ training_args = SFTConfig(..., max_length=...)
 
 ## Packing
 
-> [!NOTE]  
+> [!TIP]  
 > This technique applies only to **SFT**.
 
 [Truncation](#truncation) has several drawbacks:  
 1. **Loss of information**: Key data at the end of a sequence may be discarded.  
 2. **Choosing truncation length**: Too short loses data; too long undermines efficiency.
 
-**Packing**, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
+Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
 
 <div class="flex justify-center">
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing.png" alt="Packing" width="600"/>
@@ -78,4 +78,4 @@ training_args = SFTConfig(..., packing=True)
 ```
 
 > [!WARNING]
-> Packing may cause **batch contamination**, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).  
+> Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).  
