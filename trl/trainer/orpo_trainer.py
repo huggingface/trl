@@ -824,6 +824,9 @@ class ORPOTrainer(Trainer):
                 label_pad_token_id=self.label_pad_token_id,
             )
 
+            chosen_logps = all_logps[:len_chosen]
+            rejected_logps = all_logps[len_chosen:]
+
             if not self.is_encoder_decoder:
                 chosen_logits = all_logits[:len_chosen, :-1, :]
                 rejected_logits = all_logits[len_chosen:, :-1, :]
