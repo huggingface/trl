@@ -51,7 +51,6 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
 
@@ -60,34 +59,6 @@ if is_comet_available():
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
-
-
-class AdaptiveKLController:
-    """
-    Adaptive KL controller described in the paper:
-    https://huggingface.co/papers/1909.08593
-    """
-
-    def __init__(self, init_kl_coef, target, horizon):
-        self.value = init_kl_coef
-        self.target = target
-        self.horizon = horizon
-
-    def update(self, current, n_steps):
-        target = self.target
-        proportional_error = np.clip(current / target - 1, -0.2, 0.2)
-        mult = 1 + proportional_error * n_steps / self.horizon
-        self.value *= mult
-
-
-class FixedKLController:
-    """Fixed KL controller."""
-
-    def __init__(self, kl_coef):
-        self.value = kl_coef
-
-    def update(self, current, n_steps):
-        pass
 
 
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
@@ -876,24 +847,6 @@ def peft_module_casting_to_bf16(model):
             if hasattr(module, "weight"):
                 if module.weight.dtype == torch.float32:
                     module = module.to(torch.bfloat16)
-
-
-def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
-    if is_unsloth_available():
-        # Unsloth adds a new attribute in the model config `unsloth_version`
-        # to keep track of models that have been patched with unsloth.
-        if hasattr(model, "config") and getattr(model.config, "unsloth_version", None) is not None:
-            tag_names.append("unsloth")
-
-    if kwargs is not None:
-        if "tags" not in kwargs:
-            kwargs["tags"] = tag_names
-        elif "tags" in kwargs and isinstance(kwargs["tags"], list):
-            kwargs["tags"].extend(tag_names)
-        elif "tags" in kwargs and isinstance(kwargs["tags"], str):
-            tag_names.append(kwargs["tags"])
-            kwargs["tags"] = tag_names
-    return kwargs
 
 
 def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesConfig]:
