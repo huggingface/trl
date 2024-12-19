@@ -53,7 +53,6 @@ training_args = SFTConfig(..., max_length=...)
 </hfoption>
 </hfoptions>
 
-
 ## Packing
 
 > [!TIP]  
