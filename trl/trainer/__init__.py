@@ -56,6 +56,8 @@ _import_structure = {
     "online_dpo_trainer": ["OnlineDPOTrainer"],
     "orpo_config": ["ORPOConfig"],
     "orpo_trainer": ["ORPOTrainer"],
+    "grpo_config": ["GRPOConfig"],
+    "grpo_trainer": ["GRPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
     "prm_config": ["PRMConfig"],
@@ -125,6 +127,8 @@ if TYPE_CHECKING:
     from .online_dpo_trainer import OnlineDPOTrainer
     from .orpo_config import ORPOConfig
     from .orpo_trainer import ORPOTrainer
+    from .grpo_config import GRPOConfig
+    from .grpo_trainer import GRPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
     from .prm_config import PRMConfig
