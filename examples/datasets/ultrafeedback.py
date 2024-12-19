@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -79,6 +80,15 @@ def to_unpaired_preference(example, model_name, aspect):
     return {"prompt": prompt, "completion": completion, "label": label}
 
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+
+This dataset is a processed version of [openbmb/UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback) with this [script](https://github.com/huggingface/trl/blob/main/examples/datasets/ultrafeedback.py).
+
+""")
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
@@ -100,3 +110,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")
