@@ -65,5 +65,6 @@ class PPOConfig(OnPolicyConfig):
     cliprange: float = 0.2
     vf_coef: float = 0.1
     cliprange_value: float = 0.2
+    """Clip range for the value function."""
     gamma: float = 1.0
     lam: float = 0.95
