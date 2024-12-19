@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# There is a circular import in the PPOTrainer if we let isort sort these
 from typing import TYPE_CHECKING
 
 from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
@@ -21,7 +20,6 @@ from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffu
 _import_structure = {
     "alignprop_config": ["AlignPropConfig"],
     "alignprop_trainer": ["AlignPropTrainer"],
-    "base": ["BaseTrainer"],
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
     "callbacks": [
@@ -41,8 +39,8 @@ _import_structure = {
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
         "AllTrueJudge",
-        "BaseJudge",
         "BaseBinaryJudge",
+        "BaseJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
         "HfPairwiseJudge",
@@ -60,23 +58,21 @@ _import_structure = {
     "orpo_trainer": ["ORPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
-    "ppov2_config": ["PPOv2Config"],
-    "ppov2_trainer": ["PPOv2Trainer"],
     "prm_config": ["PRMConfig"],
     "prm_trainer": ["PRMTrainer"],
     "reward_config": ["RewardConfig"],
-    "reward_trainer": ["RewardTrainer", "compute_accuracy"],
+    "reward_trainer": ["RewardTrainer"],
     "rloo_config": ["RLOOConfig"],
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "utils": [
-        "AdaptiveKLController",
         "ConstantLengthDataset",
         "DataCollatorForCompletionOnlyLM",
-        "FixedKLController",
         "RunningMoments",
+        "compute_accuracy",
         "disable_dropout_in_model",
+        "empty_cache",
         "peft_module_casting_to_bf16",
     ],
     "xpo_config": ["XPOConfig"],
@@ -93,7 +89,6 @@ else:
 if TYPE_CHECKING:
     from .alignprop_config import AlignPropConfig
     from .alignprop_trainer import AlignPropTrainer
-    from .base import BaseTrainer
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
     from .callbacks import (
@@ -135,17 +130,16 @@ if TYPE_CHECKING:
     from .prm_config import PRMConfig
     from .prm_trainer import PRMTrainer
     from .reward_config import RewardConfig
-    from .reward_trainer import RewardTrainer, compute_accuracy
+    from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .utils import (
-        AdaptiveKLController,
         ConstantLengthDataset,
         DataCollatorForCompletionOnlyLM,
-        FixedKLController,
         RunningMoments,
+        compute_accuracy,
         disable_dropout_in_model,
         empty_cache,
         peft_module_casting_to_bf16,
