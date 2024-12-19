@@ -192,6 +192,7 @@ class DPOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+
     """
 
     _tag_names = ["trl", "dpo"]
@@ -347,7 +348,7 @@ class DPOTrainer(Trainer):
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
         self.reference_free = args.reference_free
-
+        self.padding_free = args.padding_free
         if ref_model:
             self.ref_model = ref_model
         elif self.is_peft_model or args.precompute_ref_log_probs:
@@ -1068,8 +1069,10 @@ class DPOTrainer(Trainer):
 
     def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
-
         We do this to avoid doing two forward passes, because it's faster for FSDP.
+        When padding_free=True, sequences are concatenated without padding tokens and processed as a single
+        continuous sequence with reset position IDs, improving memory efficiency and computation speed.
+        When False, uses standard padded batch processing.
         """
         num_examples = batch["prompt_input_ids"].shape[0]
 
@@ -1121,55 +1124,99 @@ class DPOTrainer(Trainer):
                 attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
                 loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
 
-            # Get the first column idx that is all zeros and remove every column after that
-            empty_cols = torch.sum(attention_mask, dim=0) == 0
-            first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-            input_ids = input_ids[:, :first_empty_col]
-            attention_mask = attention_mask[:, :first_empty_col]
-            loss_mask = loss_mask[:, :first_empty_col]
+            if self.padding_free:
+                # Pre-calculate sequence lengths
+                seq_lengths = attention_mask.sum(1)
 
-            # Truncate right
-            if self.args.max_length is not None:
+                # we should apply it to individual sequence lengths before concatenation
+                if self.args.max_length is not None:
+                    seq_lengths = torch.clamp(seq_lengths, max=self.args.max_length)
+
+                # truncate the input_ids as well based on the input_ids
                 input_ids = input_ids[:, : self.args.max_length]
-                attention_mask = attention_mask[:, : self.args.max_length]
-                loss_mask = loss_mask[:, : self.args.max_length]
+                total_length = seq_lengths.sum().item()
 
-            if self.use_num_logits_to_keep:
-                # Compute num_logits_to_keep based on loss_mask pattern:
-                # [[0, 0, 0, x, x, x, x],
-                #  [0, 0, 0, x, x, x, 0]]
-                #         ^ start computing logits from here ([:, -(7-3+1):])
-                first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
-                num_logits_to_keep = loss_mask.shape[1] - first_compute_index
-                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
+                # Pre-allocate tensors
+                concatenated_input_ids = torch.zeros(total_length, dtype=input_ids.dtype, device=input_ids.device)
 
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
+                # Fill tensors
+                current_idx = 0
+                sequence_boundaries = []
+                for i in range(input_ids.size(0)):
+                    length = seq_lengths[i].item()
+                    valid_tokens = input_ids[i, :length]
+                    concatenated_input_ids[current_idx : current_idx + length] = valid_tokens
+                    sequence_boundaries.append((current_idx, current_idx + length))
+                    current_idx += length
 
-            # Offset the logits by one to align with the labels
-            logits = outputs.logits[:, :-1, :]
-            labels = input_ids[:, 1:].clone()
-            loss_mask = loss_mask[:, 1:].bool()
+                # Create position ids
+                position_ids = torch.arange(total_length, device=input_ids.device)
 
-            if self.use_num_logits_to_keep:
-                # Align labels with logits
-                # logits:    -,  -, [x2, x3, x4, x5, x6]
-                #                     ^ --------- ^       after logits[:, :-1, :]
-                # labels:   [y0, y1, y2, y3, y4, y5, y6]
-                #                         ^ --------- ^   with num_logits_to_keep=4, [:, -4:]
-                # loss_mask: [0,  0,  0,  1,  1,  1,  1]
-                labels = labels[:, -num_logits_to_keep:]
-                loss_mask = loss_mask[:, -num_logits_to_keep:]
+                # remove attention mask
+                model_kwargs.pop("attention_mask", None)
 
-        if logits.shape[:2] != labels.shape[:2]:
-            # for llava, the returned logits include the image tokens (placed before the text tokens)
-            seq_len = labels.shape[1]
-            logits = logits[:, -seq_len:]
+                outputs = model(
+                    input_ids=concatenated_input_ids.unsqueeze(0),
+                    position_ids=position_ids.unsqueeze(0),
+                    **model_kwargs,
+                )
 
-        # Compute the log probabilities of the labels
-        labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-        per_token_logps[~loss_mask] = 0
-        all_logps = per_token_logps.sum(-1)
+                # Process outputs
+                logits = outputs.logits[0, :-1, :]
+                labels = concatenated_input_ids[1:].clone()
+
+                # Calculate per-token log probabilities
+                per_token_logps = torch.gather(logits.log_softmax(-1), dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
+
+                # Split sequences back into batch
+                start_idx = 0
+                batch_logps = []
+                for length in seq_lengths:
+                    sequence_logps = per_token_logps[start_idx : start_idx + length - 1]
+                    batch_logps.append(sequence_logps.sum())
+                    start_idx += length
+
+                all_logps = torch.stack(batch_logps)
+
+            else:
+                # Truncate right
+                if self.args.max_length is not None:
+                    input_ids = input_ids[: self.args.max_length]
+                    attention_mask = attention_mask[: self.args.max_length]
+                    loss_mask = loss_mask[: self.args.max_length]
+
+                if self.use_num_logits_to_keep:
+                    # Compute num_logits_to_keep based on loss_mask pattern:
+                    # [[0, 0, 0, x, x, x, x],
+                    #  [0, 0, 0, x, x, x, 0]]
+                    #         ^ start computing logits from here ([:, -(7-3+1):])
+                    first_compute_index = loss_mask.nonzero(as_tuple=True)[0].min()
+                    num_logits_to_keep = loss_mask.shape[0] - first_compute_index
+                    model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
+
+                # Get the first column idx that is all zeros and remove every column after that
+                empty_cols = torch.sum(attention_mask, dim=0) == 0
+                first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(0)
+                input_ids = input_ids[:first_empty_col]
+                attention_mask = attention_mask[:first_empty_col]
+                loss_mask = loss_mask[:first_empty_col]
+
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
+
+                # Offset the logits by one to align with the labels
+                logits = outputs.logits[:-1, :]
+                labels = input_ids[1:].clone()
+                loss_mask = loss_mask[1:]
+
+                if logits.shape[:2] != labels.shape[:2]:
+                    # for llava, the returned logits include the image tokens (placed before the text tokens)
+                    seq_len = labels.shape[1]
+                    logits = logits[:, -seq_len:]
+
+                labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
+                per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+                per_token_logps[~loss_mask] = 0
+                all_logps = per_token_logps.sum(-1)
 
         output = {}
 
