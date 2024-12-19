@@ -55,11 +55,15 @@ training_args = SFTConfig(..., max_length=...)
 
 ## Packing
 
-> [!TIP]  
-> This technique applies only to **SFT**.
+<Tip>
 
-[Truncation](#truncation) has several drawbacks:  
-1. **Loss of information**: Key data at the end of a sequence may be discarded.  
+This technique applies only to SFT.
+
+</Tip>
+
+
+[Truncation](#truncation) has several drawbacks:
+1. **Loss of information**: Key data at the end of a sequence may be discarded.
 2. **Choosing truncation length**: Too short loses data; too long undermines efficiency.
 
 Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
@@ -68,13 +72,16 @@ Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing.png" alt="Packing" width="600"/>
 </div>
 
-Packing eliminates padding, preserves all sequence information, and allows for flexible sequence lengths, making it a more efficient alternative to truncation. To enable packing, use `packing=True` in the [`SFTConfig`]:  
+Packing eliminates padding, preserves all sequence information, and allows for flexible sequence lengths, making it a more efficient alternative to truncation. To enable packing, use `packing=True` in the [`SFTConfig`]:
 
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., packing=True)
+training_args = SFTConfig(..., packing=True, max_seq_length=512)
 ```
 
-> [!WARNING]
-> Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).  
+<Tip warning={true}>
+
+Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).
+
+</Tip>
