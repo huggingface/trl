@@ -366,9 +366,7 @@ class ORPOTrainer(Trainer):
                     "You set `use_liger_loss=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
-            self.orpo_loss_fn = LigerFusedLinearORPOLoss(
-                ignore_index=self.label_pad_token_id, beta=self.beta, is_encoder_decoder=self.is_encoder_decoder
-            )
+            self.orpo_loss_fn = LigerFusedLinearORPOLoss(ignore_index=self.label_pad_token_id, beta=self.beta)
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
@@ -782,8 +780,10 @@ class ORPOTrainer(Trainer):
             # return the final loss and aux_outputs tuple
             loss, aux_outputs = self.orpo_loss_fn(
                 lm_head.weight,
-                outputs.last_hidden_state,
-                concatenated_batch["concatenated_labels"],
+                outputs.last_hidden_state[:, :-1] if not self.is_encoder_decoder else outputs.last_hidden_state,
+                concatenated_batch["concatenated_labels"][:, 1:]
+                if not self.is_encoder_decoder
+                else concatenated_batch["concatenated_labels"],
                 lm_head.bias if hasattr(lm_head, "bias") else None,
             )
 
