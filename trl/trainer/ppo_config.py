@@ -53,7 +53,6 @@ class PPOConfig(OnPolicyConfig):
             Discount factor.
         lam (`float`, *optional*, defaults to `0.95`):
             Lambda value for GAE.
-      
     """
 
     exp_name: str = os.path.basename(__file__)[: -len(".py")]

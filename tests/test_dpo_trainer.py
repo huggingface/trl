@@ -436,8 +436,6 @@ class DPOTrainerTester(unittest.TestCase):
                     if param.sum() != 0:
                         self.assertFalse(torch.equal(param, new_param))
 
-    
-    
     def test_dpo_trainer_padding_token_is_none(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
@@ -473,7 +471,7 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
                 trainer.train()
-           
+
     def test_dpo_trainer_padding_free_training(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
@@ -488,20 +486,19 @@ class DPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")          
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
             trainer = DPOTrainer(
-                    model=self.model,
-                    ref_model=None,
-                    args=training_args,
-                    tokenizer=self.tokenizer,
-                    padding_free=True,
-                    train_dataset=dummy_dataset["train"],
-                    eval_dataset=dummy_dataset["test"],
-                )
-
+                model=self.model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                padding_free=True,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
 
             trainer.train()
-            
+
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1117,7 +1114,7 @@ class DPOTrainerTester(unittest.TestCase):
             trainer.train()
 
 
-@require_vision 
+@require_vision
 class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [

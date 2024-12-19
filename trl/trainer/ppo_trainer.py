@@ -138,12 +138,10 @@ class PPOTrainer(Trainer):
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
 
-        # Configure generation settings based on config
-        if hasattr(self.processing_class, "eos_token_id") and self.args.use_model_eos_token:
-            # Use the tokenizer's EOS token if available
-            self.model.generation_config.eos_token_id = self.processing_class.eos_token_id
-            
-        self.model.generation_config.pad_token_id = None
+        self.policy_model.generation_config.eos_token_id = (
+            None  # disable `pad_token_id` and `eos_token_id` because we just want to
+        )
+        self.policy_model.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
         # peft support
         if not is_peft_available() and peft_config is not None:

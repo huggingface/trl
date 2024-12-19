@@ -153,7 +153,8 @@ class PreferenceCollator(DataCollatorMixin):
             output["ref_rejected_logps"] = ref_rejected_logps
 
         return output
-    
+
+
 class DPOTrainer(Trainer):
     r"""
     Initialize DPOTrainer.
@@ -191,8 +192,7 @@ class DPOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        padding_free (`bool`, defaults to `False`):
-            Whether to use padding-free training. If set to `True`, the trainer will operate in a padding-free mode.
+
     """
 
     _tag_names = ["trl", "dpo"]
@@ -217,10 +217,9 @@ class DPOTrainer(Trainer):
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[dict] = None,
-        padding_free:bool=False
-    ):  
-        
-        self.padding_free =padding_free
+        padding_free: bool = False,
+    ):
+        self.padding_free = padding_free
         if model is None:
             raise ValueError("No model provided. Please provide a model to train.")
 
@@ -393,7 +392,7 @@ class DPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
         self.use_num_logits_to_keep = args.use_num_logits_to_keep
-    
+
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
         self._precomputed_train_ref_log_probs = False
@@ -882,7 +881,7 @@ class DPOTrainer(Trainer):
         )
 
         return output
-    
+
     def dpo_loss(
         self,
         chosen_logps: torch.FloatTensor,
@@ -1069,13 +1068,10 @@ class DPOTrainer(Trainer):
         rejected_rewards = self.beta * (rejected_logps.to(device) - ref_rejected_logps.to(device)).detach()
 
         return losses, chosen_rewards, rejected_rewards
-    
-    
+
     def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
-        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs    together.
-        
+        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
         We do this to avoid doing two forward passes, because it's faster for FSDP.
-        
         When padding_free=True, sequences are concatenated without padding tokens and processed as a single
         continuous sequence with reset position IDs, improving memory efficiency and computation speed.
         When False, uses standard padded batch processing.
@@ -1133,63 +1129,58 @@ class DPOTrainer(Trainer):
             if self.padding_free:
                 # Pre-calculate sequence lengths
                 seq_lengths = attention_mask.sum(1)
-                
-                # we should apply it to individual sequence lengths before concatenation 
+
+                # we should apply it to individual sequence lengths before concatenation
                 if self.args.max_length is not None:
                     seq_lengths = torch.clamp(seq_lengths, max=self.args.max_length)
-                
+
                 # truncate the input_ids as well based on the input_ids
-                input_ids = input_ids[:, :self.args.max_length]
+                input_ids = input_ids[:, : self.args.max_length]
                 total_length = seq_lengths.sum().item()
-                            
+
                 # Pre-allocate tensors
                 concatenated_input_ids = torch.zeros(total_length, dtype=input_ids.dtype, device=input_ids.device)
-                
+
                 # Fill tensors
                 current_idx = 0
                 sequence_boundaries = []
                 for i in range(input_ids.size(0)):
                     length = seq_lengths[i].item()
                     valid_tokens = input_ids[i, :length]
-                    concatenated_input_ids[current_idx:current_idx + length] = valid_tokens
+                    concatenated_input_ids[current_idx : current_idx + length] = valid_tokens
                     sequence_boundaries.append((current_idx, current_idx + length))
                     current_idx += length
-                            
+
                 # Create position ids
                 position_ids = torch.arange(total_length, device=input_ids.device)
-                
+
                 # remove attention mask
-                model_kwargs.pop('attention_mask', None)
-                
+                model_kwargs.pop("attention_mask", None)
+
                 outputs = model(
                     input_ids=concatenated_input_ids.unsqueeze(0),
                     position_ids=position_ids.unsqueeze(0),
-                    **model_kwargs
-                )    
+                    **model_kwargs,
+                )
 
                 # Process outputs
                 logits = outputs.logits[0, :-1, :]
                 labels = concatenated_input_ids[1:].clone()
 
                 # Calculate per-token log probabilities
-                per_token_logps = torch.gather(
-                    logits.log_softmax(-1),
-                    dim=-1,
-                    index=labels.unsqueeze(-1)
-                ).squeeze(-1)
+                per_token_logps = torch.gather(logits.log_softmax(-1), dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
 
                 # Split sequences back into batch
                 start_idx = 0
                 batch_logps = []
                 for length in seq_lengths:
-                    sequence_logps = per_token_logps[start_idx:start_idx + length - 1]
+                    sequence_logps = per_token_logps[start_idx : start_idx + length - 1]
                     batch_logps.append(sequence_logps.sum())
                     start_idx += length
 
                 all_logps = torch.stack(batch_logps)
 
             else:
-
                 # Truncate right
                 if self.args.max_length is not None:
                     input_ids = input_ids[: self.args.max_length]
@@ -1203,7 +1194,7 @@ class DPOTrainer(Trainer):
                     #         ^ start computing logits from here ([:, -(7-3+1):])
                     first_compute_index = loss_mask.nonzero(as_tuple=True)[0].min()
                     num_logits_to_keep = loss_mask.shape[0] - first_compute_index
-                    model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label 
+                    model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
 
                 # Get the first column idx that is all zeros and remove every column after that
                 empty_cols = torch.sum(attention_mask, dim=0) == 0
@@ -1212,26 +1203,22 @@ class DPOTrainer(Trainer):
                 attention_mask = attention_mask[:first_empty_col]
                 loss_mask = loss_mask[:first_empty_col]
 
-    
-                outputs = model(input_ids=input_ids,attention_mask=attention_mask,**model_kwargs)
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
 
                 # Offset the logits by one to align with the labels
                 logits = outputs.logits[:-1, :]
                 labels = input_ids[1:].clone()
                 loss_mask = loss_mask[1:]
 
-
                 if logits.shape[:2] != labels.shape[:2]:
                     # for llava, the returned logits include the image tokens (placed before the text tokens)
                     seq_len = labels.shape[1]
                     logits = logits[:, -seq_len:]
 
-
                 labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
                 per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
                 per_token_logps[~loss_mask] = 0
                 all_logps = per_token_logps.sum(-1)
-
 
         output = {}
 
