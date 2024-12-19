@@ -41,20 +41,38 @@ from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 
 @dataclass
 class ScriptArguments:
+    r"""
+    Arguments for the script.
+
+    Args:
+        pretrained_model (`str`, *optional*, defaults to `"runwayml/stable-diffusion-v1-5"`):
+            Pretrained model to use.
+        pretrained_revision (`str`, *optional*, defaults to `"main"`):
+            Pretrained model revision to use.
+        hf_hub_model_id (`str`, *optional*, defaults to `"ddpo-finetuned-stable-diffusion"`):
+            HuggingFace repo to save model weights to.
+        hf_hub_aesthetic_model_id (`str`, *optional*, defaults to `"trl-lib/ddpo-aesthetic-predictor"`):
+            Hugging Face model ID for aesthetic scorer model weights.
+        hf_hub_aesthetic_model_filename (`str`, *optional*, defaults to `"aesthetic-model.pth"`):
+            Hugging Face model filename for aesthetic scorer model weights.
+        use_lora (`bool`, *optional*, defaults to `True`):
+            Whether to use LoRA.
+    """
+
     pretrained_model: str = field(
-        default="runwayml/stable-diffusion-v1-5", metadata={"help": "the pretrained model to use"}
+        default="runwayml/stable-diffusion-v1-5", metadata={"help": "Pretrained model to use."}
     )
-    pretrained_revision: str = field(default="main", metadata={"help": "the pretrained model revision to use"})
+    pretrained_revision: str = field(default="main", metadata={"help": "Pretrained model revision to use."})
     hf_hub_model_id: str = field(
-        default="ddpo-finetuned-stable-diffusion", metadata={"help": "HuggingFace repo to save model weights to"}
+        default="ddpo-finetuned-stable-diffusion", metadata={"help": "HuggingFace repo to save model weights to."}
     )
     hf_hub_aesthetic_model_id: str = field(
         default="trl-lib/ddpo-aesthetic-predictor",
-        metadata={"help": "HuggingFace model ID for aesthetic scorer model weights"},
+        metadata={"help": "Hugging Face model ID for aesthetic scorer model weights."},
     )
     hf_hub_aesthetic_model_filename: str = field(
         default="aesthetic-model.pth",
-        metadata={"help": "HuggingFace model filename for aesthetic scorer model weights"},
+        metadata={"help": "Hugging Face model filename for aesthetic scorer model weights."},
     )
     use_lora: bool = field(default=True, metadata={"help": "Whether to use LoRA."})
 
