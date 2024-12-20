@@ -32,13 +32,11 @@ class KTOConfig(TrainingArguments):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
         max_length (`Optional[int]`, *optional*, defaults to `None`):
-            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
-            to use the default data collator.
+            Maximum combined length of prompt and completion; longer sequences are truncated left.
         max_prompt_length (`Optional[int]`, *optional*, defaults to `None`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
+            Maximum length of the prompt; longer prompts are truncated based on `truncation_mode`.
         max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
-            Maximum length of the completion. This argument is required if you want to use the default data collator
-            and your model is an encoder-decoder.
+            Maximum length of the completion; longer completions are truncated right.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model.
@@ -58,7 +56,6 @@ class KTOConfig(TrainingArguments):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
-            This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B during
             evaluation.

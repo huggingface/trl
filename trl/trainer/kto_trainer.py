@@ -473,6 +473,7 @@ class KTOTrainer(Trainer):
                     "processing_class": processing_class,
                     "max_prompt_length": args.max_prompt_length,
                     "max_completion_length": args.max_completion_length,
+                    "truncation_mode": args.truncation_mode,
                     # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
                     "add_special_tokens": False,
                 },
@@ -482,7 +483,9 @@ class KTOTrainer(Trainer):
         return dataset
 
     @staticmethod
-    def tokenize_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+    def tokenize_row(
+        features, processing_class, max_prompt_length, max_completion_length, truncation_mode, add_special_tokens
+    ):
         """
         Tokenize a row of the dataset.
 
@@ -495,6 +498,8 @@ class KTOTrainer(Trainer):
                 Maximum length of the prompt sequence. If `None`, the prompt sequence is not truncated.
             max_completion_length (`int` or `None`):
                 Maximum length of the completion sequences. If `None`, the completion sequences are not truncated.
+            truncation_mode (`str`):
+                Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             add_special_tokens (`bool`):
                 Whether to add special tokens to the sequences. Typically used for encoder-decoder models. If `True`,
                 the prompt sequence will have a bos token prepended and an eos token appended. In any case, the
@@ -527,7 +532,12 @@ class KTOTrainer(Trainer):
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
-            prompt_input_ids = prompt_input_ids[-max_prompt_length:]
+            if truncation_mode == "keep_end":
+                prompt_input_ids = prompt_input_ids[-max_prompt_length:]
+            elif truncation_mode == "keep_start":
+                prompt_input_ids = prompt_input_ids[:max_prompt_length]
+            else:
+                raise ValueError(f"Invalid truncation mode: {truncation_mode}")
         if max_completion_length is not None:
             completion_input_ids = completion_input_ids[:max_completion_length]
 
@@ -610,10 +620,10 @@ class KTOTrainer(Trainer):
             labels[i] = torch.roll(labels[i], shifts=-first_one_idx)
 
         # Truncate right
-        if self.args.max_length is not None:
-            input_ids = input_ids[:, : self.args.max_length]
-            attention_mask = attention_mask[:, : self.args.max_length]
-            labels = labels[:, : self.args.max_length]
+        if self.max_length is not None:
+            input_ids = input_ids[:, -self.max_length :]
+            attention_mask = attention_mask[:, -self.max_length :]
+            labels = labels[:, -self.max_length :]
 
         logits = model(input_ids=input_ids, attention_mask=attention_mask).logits
         logits = logits[:, :-1]
@@ -650,10 +660,10 @@ class KTOTrainer(Trainer):
             kl_labels[i] = torch.roll(kl_labels[i], shifts=-first_one_idx)
 
         # Truncate right
-        if self.args.max_length is not None:
-            kl_input_ids = kl_input_ids[:, : self.args.max_length]
-            kl_attention_mask = kl_attention_mask[:, : self.args.max_length]
-            kl_labels = kl_labels[:, : self.args.max_length]
+        if self.max_length is not None:
+            kl_input_ids = kl_input_ids[:, -self.max_length :]
+            kl_attention_mask = kl_attention_mask[:, -self.max_length :]
+            kl_labels = kl_labels[:, -self.max_length :]
 
         with torch.no_grad():
             kl_logits = model(input_ids=kl_input_ids, attention_mask=kl_attention_mask).logits
