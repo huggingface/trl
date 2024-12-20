@@ -777,6 +777,12 @@ class KTOTrainer(Trainer):
             attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
             labels[i] = torch.roll(labels[i], shifts=-first_one_idx)
 
+        # Truncate right
+        if self.args.max_length is not None:
+            input_ids = input_ids[:, : self.args.max_length]
+            attention_mask = attention_mask[:, : self.args.max_length]
+            labels = labels[:, : self.args.max_length]
+
         _batch["input_ids"] = input_ids
         _batch["attention_mask"] = attention_mask
         _batch["labels"] = labels
@@ -802,12 +808,20 @@ class KTOTrainer(Trainer):
             attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
             labels[i] = torch.roll(labels[i], shifts=-first_one_idx)
 
+        # Truncate right
+        if self.args.max_length is not None:
+            input_ids = input_ids[:, : self.args.max_length]
+            attention_mask = attention_mask[:, : self.args.max_length]
+            labels = labels[:, : self.args.max_length]
+
         _batch["kl_input_ids"] = input_ids
         _batch["kl_attention_mask"] = attention_mask
         _batch["kl_labels"] = labels
         _batch["desirable"] = batch["labels"]
 
         batch = _batch
+
+
 
         model_output = self.forward(model, batch)
         with torch.no_grad():
