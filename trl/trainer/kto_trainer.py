@@ -617,44 +617,40 @@ class KTOTrainer(Trainer):
     def forward(
         self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        kl_logps = None
-
         with torch.no_grad():
             kl_logits = model(
-                input_ids=batch["kl_completion_input_ids"], attention_mask=batch["kl_completion_attention_mask"]
+                input_ids=batch["kl_input_ids"], attention_mask=batch["kl_attention_mask"]
             ).logits
 
-        labels = batch["kl_completion_labels"][:, 1:].clone()
-        logits = kl_logits[:, :-1, :]
+        labels = batch["kl_labels"][:, 1:].clone()
+        logits = kl_logits[:, :-1]
         loss_mask = labels != self.label_pad_token_id
         labels[labels == self.label_pad_token_id] = 0
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
         kl_logps = (per_token_logps * loss_mask).sum(-1)
 
-        outputs = model(batch["completion_input_ids"], attention_mask=batch["completion_attention_mask"])
-        completion_logits = outputs.logits
-
-        labels = batch["completion_labels"][:, 1:].clone()
-        logits = completion_logits[:, :-1, :]
+        logits = model(batch["input_ids"], attention_mask=batch["attention_mask"]).logits
+        labels = batch["labels"][:, 1:].clone()
+        logits = logits[:, :-1]
         loss_mask = labels != self.label_pad_token_id
         labels[labels == self.label_pad_token_id] = 0
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-        completion_logps = (per_token_logps * loss_mask).sum(-1)
+        logps = (per_token_logps * loss_mask).sum(-1)
 
-        chosen_idx = torch.nonzero(batch["labels"], as_tuple=True)[0]
-        rejected_idx = torch.nonzero(~batch["labels"], as_tuple=True)[0]
+        chosen_idx = torch.nonzero(batch["desirable"], as_tuple=True)[0]
+        rejected_idx = torch.nonzero(~batch["desirable"], as_tuple=True)[0]
 
-        chosen_logps = completion_logps[chosen_idx]
-        rejected_logps = completion_logps[rejected_idx]
+        chosen_logps = logps[chosen_idx]
+        rejected_logps = logps[rejected_idx]
 
-        chosen_logits = completion_logits[chosen_idx]
-        rejected_logits = completion_logits[rejected_idx]
+        chosen_logits_sum = logits[chosen_idx].nansum()
+        rejected_logits_sum = logits[rejected_idx].nansum()
 
         return {
             "chosen_logps": chosen_logps,
             "rejected_logps": rejected_logps,
-            "chosen_logits": chosen_logits,
-            "rejected_logits": rejected_logits,
+            "chosen_logits_sum": chosen_logits_sum,
+            "rejected_logits_sum": rejected_logits_sum,
             "kl_logps": kl_logps,
         }
 
@@ -687,12 +683,12 @@ class KTOTrainer(Trainer):
         kl = self.accelerator.gather(kl).mean().clamp(min=0)
 
         # Chosen losses
+        assert chosen_logps.shape[0] == ref_chosen_logps.shape[0]
         if chosen_logps.shape[0] != 0 or ref_chosen_logps.shape[0] != 0:
             chosen_logratios = chosen_logps - ref_chosen_logps
-            # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
+            # Eqn (8) of the KTO paper (https://huggingface.co/papers/2402.01306)
             chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
             chosen_rewards = self.beta * chosen_logratios.detach()
-
         else:
             # lists can't be empty -- if they are, then accelerate.gather will hang
             chosen_losses = torch.Tensor([]).to(self.accelerator.device)
@@ -702,7 +698,6 @@ class KTOTrainer(Trainer):
         if rejected_logps.shape[0] != 0 or ref_rejected_logps.shape[0] != 0:
             rejected_logratios = rejected_logps - ref_rejected_logps
             rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
-
             rejected_rewards = self.beta * rejected_logratios.detach()
         else:
             # lists can't be empty -- if they are, then accelerate.gather will hang
@@ -711,10 +706,48 @@ class KTOTrainer(Trainer):
 
         losses = torch.cat(
             (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
-            0,
+            dim=0,
         )
 
         return losses, chosen_rewards, rejected_rewards, kl
+
+    def meta_kto_loss(self, model, batch):
+        model_output = self.forward(model, batch)
+        with torch.no_grad():
+            ref_model_output = self.forward(self.ref_model, batch)
+
+        kl = (model_output["kl_logps"] - model_output["kl_logps"]).mean().detach()
+        kl = self.accelerator.gather(kl).mean().clamp(min=0)
+
+        # Chosen losses
+        assert model_output["chosen_logps"].shape[0] == ref_model_output["chosen_logps"].shape[0]
+        if model_output["chosen_logps"].shape[0] != 0 or ref_model_output["chosen_logps"].shape[0] != 0:
+            chosen_logratios = model_output["chosen_logps"] - ref_model_output["chosen_logps"]
+            # Eqn (8) of the KTO paper (https://huggingface.co/papers/2402.01306)
+            chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl))
+            chosen_rewards = self.beta * chosen_logratios.detach()
+        else:
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            chosen_losses = torch.Tensor([]).to(self.accelerator.device)
+            chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
+
+        # Rejected losses
+        if model_output["rejected_logps"].shape[0] != 0 or ref_model_output["rejected_logps"].shape[0] != 0:
+            rejected_logratios = model_output["rejected_logps"] - ref_model_output["rejected_logps"]
+            rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
+            rejected_rewards = self.beta * rejected_logratios.detach()
+        else:
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            rejected_losses = torch.Tensor([]).to(self.accelerator.device)
+            rejected_rewards = torch.Tensor([]).to(self.accelerator.device)
+
+        losses = torch.cat(
+            (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
+            dim=0,
+        )
+
+        return losses, chosen_rewards, rejected_rewards, kl
+
 
     def get_batch_loss_metrics(
         self,
@@ -732,8 +765,7 @@ class KTOTrainer(Trainer):
         attention_mask = torch.cat((batch["prompt_attention_mask"], batch["completion_attention_mask"]), dim=1)
         prompt_labels = torch.ones_like(batch["prompt_input_ids"]) * self.label_pad_token_id
         completions_labels = batch["completion_input_ids"].clone()
-        # replace the label pad token with -100
-        completions_labels[~batch["completion_attention_mask"].bool()] = -100
+        completions_labels[~batch["completion_attention_mask"].bool()] = -100 # replace the label pad token with -100
         labels = torch.cat((prompt_labels, completions_labels), dim=1)
 
         # Flush left to reduce the memory usage
@@ -745,9 +777,9 @@ class KTOTrainer(Trainer):
             attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
             labels[i] = torch.roll(labels[i], shifts=-first_one_idx)
 
-        _batch["completion_input_ids"] = input_ids
-        _batch["completion_attention_mask"] = attention_mask
-        _batch["completion_labels"] = labels
+        _batch["input_ids"] = input_ids
+        _batch["attention_mask"] = attention_mask
+        _batch["labels"] = labels
 
         # Roll completion to create mismatch pairs
         completion_input_ids = torch.roll(batch["completion_input_ids"], shifts=1, dims=0)
@@ -770,10 +802,10 @@ class KTOTrainer(Trainer):
             attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
             labels[i] = torch.roll(labels[i], shifts=-first_one_idx)
 
-        _batch["kl_completion_input_ids"] = input_ids
-        _batch["kl_completion_attention_mask"] = attention_mask
-        _batch["kl_completion_labels"] = labels
-        _batch["labels"] = batch["labels"]
+        _batch["kl_input_ids"] = input_ids
+        _batch["kl_attention_mask"] = attention_mask
+        _batch["kl_labels"] = labels
+        _batch["desirable"] = batch["labels"]
 
         batch = _batch
 
@@ -803,7 +835,7 @@ class KTOTrainer(Trainer):
                 self.accelerator.gather(model_output["chosen_logps"].nansum()).nansum().item()
             )
             metrics["logits/chosen_sum"] = (
-                self.accelerator.gather(model_output["chosen_logits"].nansum()).nansum().item()
+                self.accelerator.gather(model_output["chosen_logits_sum"]).nansum().item()
             )
             metrics["count/chosen"] = all_num_chosen
 
@@ -813,7 +845,7 @@ class KTOTrainer(Trainer):
                 self.accelerator.gather(model_output["rejected_logps"].nansum()).nansum().item()
             )
             metrics["logits/rejected_sum"] = (
-                self.accelerator.gather(model_output["rejected_logits"].nansum()).nansum().item()
+                self.accelerator.gather(model_output["rejected_logits_sum"]).nansum().item()
             )
             metrics["count/rejected"] = all_num_rejected
 
