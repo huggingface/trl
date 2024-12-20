@@ -268,6 +268,7 @@ class CPOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
+        # Disable dropout in the model
         if args.disable_dropout:
             disable_dropout_in_model(model)
 

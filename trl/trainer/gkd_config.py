@@ -41,7 +41,7 @@ class GKDConfig(SFTConfig):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether or not to disable dropouts in `model`.
+            Whether to disable dropout in the model.
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT
             on teacher-generated output).

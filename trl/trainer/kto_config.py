@@ -77,7 +77,7 @@ class KTOConfig(TrainingArguments):
         dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model.
+            Whether to disable dropout in the model and reference model.
     """
 
     learning_rate: float = 1e-6

@@ -376,6 +376,7 @@ class DPOTrainer(Trainer):
         if data_collator is None:
             data_collator = PreferenceCollator(pad_token_id=self.padding_value)
 
+        # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:

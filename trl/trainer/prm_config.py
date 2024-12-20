@@ -35,6 +35,8 @@ class PRMConfig(TrainingArguments):
             Maximum length of the sequences (prompt + completion) used for truncation.
         max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
             Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model.
         step_separator (`str`, *optional*, defaults to `"\n"`):
             Separator used to separate each step of the reasoning process.
         train_on_last_step_only (`bool`, *optional*, defaults to `False`):
@@ -46,6 +48,7 @@ class PRMConfig(TrainingArguments):
     learning_rate: float = 1e-5
     max_length: Optional[int] = None
     max_completion_length: Optional[int] = None
+    disable_dropout: bool = True
     step_separator: str = "\n"
     train_on_last_step_only: bool = False
     dataset_num_proc: Optional[int] = None

@@ -304,8 +304,6 @@ class KTOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        disable_dropout (`bool`, defaults to `True`):
-            Whether or not to disable dropouts in `model` and `ref_model`.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
@@ -526,6 +524,7 @@ class KTOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
+        # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
