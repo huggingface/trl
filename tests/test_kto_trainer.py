@@ -22,7 +22,6 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 from transformers.testing_utils import require_peft
 
 from trl import KTOConfig, KTOTrainer
-from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 
 from .testing_utils import require_no_wandb
 
@@ -121,91 +120,6 @@ class KTOTrainerTester(unittest.TestCase):
                     processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                 )
-
-    def test_tokenize_and_process_tokens(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = KTOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                report_to="none",
-            )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
-            trainer = KTOTrainer(
-                model=self.model,
-                ref_model=self.ref_model,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
-
-            train_dataset = dummy_dataset["train"]
-            tokenized_dataset = train_dataset.map(
-                _tokenize,
-                fn_kwargs={"tokenizer": trainer.tokenizer},
-                batched=True,
-                batch_size=2,
-            )
-            self.assertListEqual(tokenized_dataset["prompt"], train_dataset["prompt"])
-            self.assertListEqual(tokenized_dataset["completion"], train_dataset["completion"])
-            self.assertListEqual(tokenized_dataset["label"], train_dataset["label"])
-            self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
-            self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
-            self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [27261, 13])
-            self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1])
-
-            # Test corruption of (prompt, completion) pairs for KL dataset
-            for batch_size in [2, 3]:
-                tokenized_kl_dataset = tokenized_dataset.map(_get_kl_dataset, batched=True, batch_size=batch_size)
-
-                # Verify that the "answer_input_ids" have been modified, meaning the new "answer_input_ids" differ
-                # from the original ones. However, when the length of the dataset modulo batch_size equals 1,
-                # the last batch remains unaltered. This is a rare scenario that does not impact the training
-                # process, so we exclude it from testing by iterating only up to len - 1.
-                for i in range(len(tokenized_kl_dataset["answer_input_ids"]) - 1):
-                    self.assertListEqual(
-                        tokenized_dataset["prompt_input_ids"][i],
-                        tokenized_kl_dataset["prompt_input_ids"][i],
-                    )
-                    self.assertListEqual(
-                        tokenized_dataset["prompt_attention_mask"][i],
-                        tokenized_kl_dataset["prompt_attention_mask"][i],
-                    )
-                    self.assertNotEqual(
-                        tokenized_dataset["answer_input_ids"][i],
-                        tokenized_kl_dataset["answer_input_ids"][i],
-                    )
-
-            fn_kwargs = {
-                "prefix": "",
-                "is_encoder_decoder": trainer.is_encoder_decoder,
-                "tokenizer": trainer.tokenizer,
-                "max_length": trainer.max_length,
-                "truncation_mode": trainer.truncation_mode,
-                "label_pad_token_id": trainer.label_pad_token_id,
-                "max_prompt_length": trainer.max_prompt_length,
-            }
-            processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
-            self.assertListEqual(processed_dataset["prompt"], train_dataset["prompt"])
-            self.assertListEqual(processed_dataset["completion"], train_dataset["completion"])
-            self.assertListEqual(processed_dataset["label"], train_dataset["label"])
-            self.assertListEqual(processed_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
-            self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
-            self.assertListEqual(
-                processed_dataset["completion_input_ids"][0], [46518, 374, 2664, 1091, 27261, 13, 151645]
-            )
-            self.assertListEqual(processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
-            self.assertListEqual(
-                processed_dataset["completion_labels"][0], [-100, -100, -100, -100, 27261, 13, 151645]
-            )
 
     def test_kto_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
