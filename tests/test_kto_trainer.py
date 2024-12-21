@@ -316,8 +316,8 @@ class KTOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex="`generate_during_eval=True` requires Weights and Biases to be installed."
-                " Please install with `pip install wandb` to resolve.",
+                expected_regex="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+                " Please install `wandb` or `comet-ml` to resolve.",
             ):
                 KTOTrainer(
                     model=self.model,
