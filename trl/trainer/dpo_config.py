@@ -203,9 +203,8 @@ class DPOConfig(TrainingArguments):
     truncation_mode: str = field(
         default="keep_end",
         metadata={
-            "help": "Truncation mode to use when the prompt is too long. Possible values are "
-            "`keep_end` or `keep_start`. This argument is required if you want to use the "
-            "default data collator.",
+            "help": "Truncation mode to use when the prompt is too long. This argument is required if you want to use "
+            "the default data collator.",
             "choices": ["keep_end", "keep_start"],
         },
     )
