@@ -94,7 +94,7 @@ class DDPOConfig:
         train_num_inner_epochs (`int`, *optional*, defaults to `1`):
             Number of inner epochs per outer epoch.
         train_cfg (`bool`, *optional*, defaults to `True`):
-            Whether or not to use classifier-free guidance during training.
+            Whether to use classifier-free guidance during training.
         train_adv_clip_max (`float`, *optional*, defaults to `5.0`):
             Clip advantages to the range.
         train_clip_range (`float`, *optional*, defaults to `1e-4`):
@@ -242,7 +242,7 @@ class DDPOConfig:
     )
     train_cfg: bool = field(
         default=True,
-        metadata={"help": "Whether or not to use classifier-free guidance during training."},
+        metadata={"help": "Whether to use classifier-free guidance during training."},
     )
     train_adv_clip_max: float = field(
         default=5.0,

@@ -161,7 +161,7 @@ class BaseBinaryJudge(BaseJudge):
 
         This base class should be used to implement binary evaluations as done in section 4.1.4 of the
         [CGPO paper](https://huggingface.co/papers/2409.20370).
-        It is relevant for assessing whether or not a prompt completion pair satisfies a specific contraint.
+        It is relevant for assessing whether a prompt completion pair satisfies a specific contraint.
 
         Args:
             prompts (`list[str]`): List of prompts.

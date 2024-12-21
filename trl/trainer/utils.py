@@ -102,7 +102,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             differently if it does not have proper context.
         instruction_template (`Union[str, list[int]]`): the template form that indicates the start of the human instruction, typically something like
             '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
-        mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
+        mlm (`bool`, *optional*, defaults to `False`): Whether to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
         ignore_index (`int`, *optional*, defaults to `-100`):
@@ -474,7 +474,7 @@ class DPODataCollatorWithPadding:
         label_pad_token_id (`int`, defaults to -100):
             The label used for masking.
         is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
-            Whether or not you model has an encoder_decoder architecture.
+            Whether you model has an encoder_decoder architecture.
     """
 
     pad_token_id: int = 0
