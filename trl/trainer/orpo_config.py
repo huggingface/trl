@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from transformers import TrainingArguments
@@ -63,16 +63,78 @@ class ORPOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
     """
 
-    learning_rate: float = 1e-6
-    max_length: Optional[int] = None
-    max_prompt_length: Optional[int] = None
-    max_completion_length: Optional[int] = None
-    beta: float = 0.1
-    disable_dropout: bool = True
-    label_pad_token_id: int = -100
-    padding_value: Optional[int] = None
-    truncation_mode: str = "keep_end"
-    generate_during_eval: bool = False
-    is_encoder_decoder: Optional[bool] = None
-    model_init_kwargs: Optional[dict[str, Any]] = None
-    dataset_num_proc: Optional[int] = None
+    learning_rate: float = field(
+        default=1e-6,
+        metadata={
+            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
+            "transformers.TrainingArguments."
+        },
+    )
+    max_length: Optional[int] = field(
+        default=None,
+        metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
+    )
+    max_prompt_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
+            "collator and your model is an encoder-decoder."
+        },
+    )
+    max_completion_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum length of the completion. This argument is required if you want to use the default data "
+            "collator and your model is an encoder-decoder."
+        },
+    )
+    beta: float = field(
+        default=0.1,
+        metadata={
+            "help": "Parameter controlling the relative ratio loss weight in the ORPO loss. In the paper, it is "
+            "denoted by λ."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model."},
+    )
+    label_pad_token_id: int = field(
+        default=-100,
+        metadata={
+            "help": "Label pad token id. This argument is required if you want to use the default data collator."
+        },
+    )
+    padding_value: Optional[int] = field(
+        default=None,
+        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
+    )
+    truncation_mode: str = field(
+        default="keep_end",
+        metadata={
+            "help": "Truncation mode to use when the prompt is too long.",
+            "choices": ["keep_end", "keep_start"],
+        },
+    )
+    generate_during_eval: bool = field(
+        default=False,
+        metadata={"help": "If `True`, generates and logs completions from the model to W&B during evaluation."},
+    )
+    is_encoder_decoder: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "When using the `model_init` argument (callable) to instantiate the model instead of the `model` "
+            "argument, you need to specify if the model returned by the callable is an encoder-decoder model."
+        },
+    )
+    model_init_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
+            "from a string."
+        },
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
