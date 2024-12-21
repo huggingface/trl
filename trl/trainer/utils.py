@@ -18,7 +18,7 @@ import json
 import random
 import warnings
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any, Literal, Optional, Union
 
@@ -1003,26 +1003,95 @@ class OnPolicyConfig(TrainingArguments):
             Whether to push the model to the Hub after training.
     """
 
-    run_name: Optional[str] = None
-    dataset_num_proc: Optional[int] = None
-    num_mini_batches: int = 1
-    total_episodes: Optional[int] = None
-    local_rollout_forward_batch_size: int = 64
-    num_sample_generations: int = 10
-    response_length: int = 53
-    stop_token: Optional[Literal["eos"]] = None
-    stop_token_id: Optional[int] = None
-    temperature: float = 0.7
-    missing_eos_penalty: Optional[float] = None
-    sft_model_path: str = "EleutherAI/pythia-160m"
-    world_size: Optional[int] = None
-    num_total_batches: Optional[int] = None
-    micro_batch_size: Optional[int] = None
-    local_batch_size: Optional[int] = None
-    batch_size: Optional[int] = None
-    local_mini_batch_size: Optional[int] = None
-    mini_batch_size: Optional[int] = None
-    push_to_hub: bool = False
+    run_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Name of the run."},
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    num_mini_batches: int = field(
+        default=1,
+        metadata={"help": "Number of minibatches to split a batch into."},
+    )
+    total_episodes: Optional[int] = field(
+        default=None,
+        metadata={"help": "Total number of episodes in the dataset."},
+    )
+    local_rollout_forward_batch_size: int = field(
+        default=64,
+        metadata={"help": "Per rank no grad forward pass in the rollout phase."},
+    )
+    num_sample_generations: int = field(
+        default=10,
+        metadata={
+            "help": "Number of debugging samples generations (i.e., `generate_completions` calls) throughout training."
+        },
+    )
+    response_length: int = field(
+        default=53,
+        metadata={"help": "Length of the response."},
+    )
+    stop_token: Optional[Literal["eos"]] = field(
+        default=None,
+        metadata={"help": "Stop token."},
+    )
+    stop_token_id: Optional[int] = field(
+        default=None,
+        metadata={"help": "Truncation token id."},
+    )
+    temperature: float = field(
+        default=0.7,
+        metadata={"help": "Sampling temperature."},
+    )
+    missing_eos_penalty: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Penalty applied to the score when the model fails to generate an EOS token. This is useful to "
+            "encourage to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be "
+            "a positive value."
+        },
+    )
+    sft_model_path: str = field(
+        default="EleutherAI/pythia-160m",
+        metadata={"help": "Path to the SFT model."},
+    )
+    world_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes (GPUs) to use for the training."},
+    )
+    num_total_batches: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of total batches to train."},
+    )
+    micro_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)."},
+    )
+    local_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)."},
+    )
+    batch_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * "
+            "`gradient_accumulation_steps`)."
+        },
+    )
+    local_mini_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Mini batch size per GPU."},
+    )
+    mini_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Mini batch size across GPUs."},
+    )
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the model to the Hub after training."},
+    )
 
 
 def first_true_indices(bools: torch.Tensor, dtype=torch.long):
