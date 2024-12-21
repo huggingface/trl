@@ -22,11 +22,12 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
+from huggingface_hub import PyTorchModelHubMixin
 from transformers import is_wandb_available
 
 from ..models import DDPOStableDiffusionPipeline
-from . import AlignPropConfig, BaseTrainer
-from .utils import generate_model_card
+from .alignprop_config import AlignPropConfig
+from .utils import generate_model_card, get_comet_experiment_url
 
 
 if is_wandb_available():
@@ -35,7 +36,7 @@ if is_wandb_available():
 logger = get_logger(__name__)
 
 
-class AlignPropTrainer(BaseTrainer):
+class AlignPropTrainer(PyTorchModelHubMixin):
     """
     The AlignPropTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
     Note, this trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
@@ -438,6 +439,7 @@ class AlignPropTrainer(BaseTrainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="AlignProp",
             trainer_citation=citation,
             paper_title="Aligning Text-to-Image Diffusion Models with Reward Backpropagation",

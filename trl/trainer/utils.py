@@ -42,6 +42,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
+    is_comet_available,
 )
 from transformers.utils import (
     is_peft_available,
@@ -49,42 +50,15 @@ from transformers.utils import (
     is_torch_npu_available,
     is_torch_xpu_available,
 )
-from transformers.utils.deprecation import deprecate_kwarg
 
-from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
 
+if is_comet_available():
+    import comet_ml
+
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
-
-
-class AdaptiveKLController:
-    """
-    Adaptive KL controller described in the paper:
-    https://huggingface.co/papers/1909.08593
-    """
-
-    def __init__(self, init_kl_coef, target, horizon):
-        self.value = init_kl_coef
-        self.target = target
-        self.horizon = horizon
-
-    def update(self, current, n_steps):
-        target = self.target
-        proportional_error = np.clip(current / target - 1, -0.2, 0.2)
-        mult = 1 + proportional_error * n_steps / self.horizon
-        self.value *= mult
-
-
-class FixedKLController:
-    """Fixed KL controller."""
-
-    def __init__(self, kl_coef):
-        self.value = kl_coef
-
-    def update(self, current, n_steps):
-        pass
 
 
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
@@ -875,25 +849,6 @@ def peft_module_casting_to_bf16(model):
                     module = module.to(torch.bfloat16)
 
 
-def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
-    if is_unsloth_available():
-        # Unsloth adds a new attribute in the model config `unsloth_version`
-        # to keep track of models that have been patched with unsloth.
-        if hasattr(model, "config") and getattr(model.config, "unsloth_version", None) is not None:
-            tag_names.append("unsloth")
-
-    if kwargs is not None:
-        if "tags" not in kwargs:
-            kwargs["tags"] = tag_names
-        elif "tags" in kwargs and isinstance(kwargs["tags"], list):
-            kwargs["tags"].extend(tag_names)
-        elif "tags" in kwargs and isinstance(kwargs["tags"], str):
-            tag_names.append(kwargs["tags"])
-            kwargs["tags"] = tag_names
-    return kwargs
-
-
-@deprecate_kwarg("model_config", "0.14.0", "model_args", warn_if_greater_or_equal_version=True)
 def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesConfig]:
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
@@ -922,7 +877,6 @@ def get_kbit_device_map() -> Optional[dict[str, int]]:
         return None
 
 
-@deprecate_kwarg("model_config", "0.14.0", "model_args", warn_if_greater_or_equal_version=True)
 def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
     if model_args.use_peft is False:
         return None
@@ -1435,6 +1389,7 @@ def generate_model_card(
     trainer_citation: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
+    comet_url: Optional[str] = None,
 ) -> ModelCard:
     """
     Generate a `ModelCard` from a template.
@@ -1452,6 +1407,8 @@ def generate_model_card(
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
+        comet_url (`str` or `None`):
+            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
@@ -1481,6 +1438,7 @@ def generate_model_card(
         hub_model_id=hub_model_id,
         dataset_name=dataset_name,
         wandb_url=wandb_url,
+        comet_url=comet_url,
         trainer_name=trainer_name,
         trainer_citation=trainer_citation,
         paper_title=paper_title,
@@ -1492,3 +1450,34 @@ def generate_model_card(
         tokenizers_version=version("tokenizers"),
     )
     return card
+
+
+def get_comet_experiment_url() -> Optional[str]:
+    """
+    If Comet integration is enabled, return the URL of the current Comet experiment; otherwise, return `None`.
+    """
+    if not is_comet_available():
+        return None
+
+    if comet_ml.get_running_experiment() is not None:
+        return comet_ml.get_running_experiment().url
+
+    return None
+
+
+def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
+    """
+    If Comet integration is enabled logs a table to the Comet experiment if it is currently running.
+
+    Args:
+        name (`str`):
+            Table name.
+        table (`pd.DataFrame`):
+            The Pandas DataFrame containing the table to log.
+    """
+    if not is_comet_available():
+        raise ModuleNotFoundError("The comet-ml is not installed. Please install it first: pip install comet-ml")
+
+    experiment = comet_ml.get_running_experiment()
+    if experiment is not None:
+        experiment.log_table(tabular_data=table, filename=name)
