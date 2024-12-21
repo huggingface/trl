@@ -47,14 +47,28 @@ Model win rate: 63.00%
 
 @dataclass
 class ScriptArguments:
-    model_name_or_path: str = field(metadata={"help": "The model name or path to the model to evaluate."})
+    r"""
+    Arguments for the script.
+
+    Args:
+        model_name_or_path (`str`):
+            Model name or path to the model to evaluate.
+        judge_model (`str`, *optional*, defaults to `"meta-llama/Meta-Llama-3-70B-Instruct"`):
+            Model name or path to the model to use as a judge. E.g., 'gpt-3.5-turbo-0125' or
+            'meta-llama/Meta-Llama-3-70B-Instruct'.
+        num_examples (`int` or `None`, *optional*, defaults to `None`):
+            Number of examples to evaluate.
+    """
+
+    model_name_or_path: str = field(metadata={"help": "Model name or path to the model to evaluate."})
     judge_model: str = field(
         default="meta-llama/Meta-Llama-3-70B-Instruct",
         metadata={
-            "help": "The model name or path to the model to use as a judge. E.g., 'gpt-3.5-turbo-0125', 'meta-llama/Meta-Llama-3-70B-Instruct'."
+            "help": "Model name or path to the model to use as a judge. E.g., 'gpt-3.5-turbo-0125' or "
+            "'meta-llama/Meta-Llama-3-70B-Instruct'."
         },
     )
-    num_examples: Optional[int] = field(default=None, metadata={"help": "The number of examples to evaluate."})
+    num_examples: Optional[int] = field(default=None, metadata={"help": "Number of examples to evaluate."})
 
 
 # Parse the arguments

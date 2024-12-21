@@ -173,7 +173,7 @@ def maybe_apply_chat_template(
             messages, where each message is a dictionary with keys `"role"` and `"content"`.
         tokenizer (`PreTrainedTokenizer`):
             The tokenizer to apply the chat template with.
-        tools (`Optional[list[Union[dict, Callable]]]`, *optional*, defaults to `None`):
+        tools (`list[Union[dict, Callable]]` or `None`, *optional*, defaults to `None`):
             A list of tools (callable functions) that will be accessible to the model.
             If the template does not support function calling, this argument will have no effect
 
@@ -224,7 +224,7 @@ def unpair_preference_dataset(
         dataset (`Dataset` or `DatasetDict`):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
-        num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         desc (`str` or `None`, *optional*, defaults to `None`):
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
@@ -265,7 +265,7 @@ def maybe_unpair_preference_dataset(
         dataset (`Dataset` or `DatasetDict`):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
-        num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         desc (`str` or `None`, *optional*, defaults to `None`):
             Meaningful description to be displayed alongside with the progress bar while mapping examples.

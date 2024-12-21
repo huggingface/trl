@@ -18,7 +18,7 @@ import logging
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, Optional, Union
 
 import yaml
@@ -44,18 +44,34 @@ class ScriptArguments:
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
             Dataset split to use for evaluation.
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
-            Whether to apply `use_reentrant` for gradient_checkpointing.
+            Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
             Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar
             type, inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
-    dataset_name: str
-    dataset_config: Optional[str] = None
-    dataset_train_split: str = "train"
-    dataset_test_split: str = "test"
-    gradient_checkpointing_use_reentrant: bool = False
-    ignore_bias_buffers: bool = False
+    dataset_name: str = field(metadata={"help": "Dataset name."})
+    dataset_config: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Dataset configuration name. Corresponds to the `name` argument of the `datasets.load_dataset` "
+            "function."
+        },
+    )
+    dataset_train_split: str = field(default="train", metadata={"help": "Dataset split to use for training."})
+    dataset_test_split: str = field(default="test", metadata={"help": "Dataset split to use for evaluation."})
+    gradient_checkpointing_use_reentrant: bool = field(
+        default=False,
+        metadata={"help": "Whether to apply `use_reentrant` for gradient checkpointing."},
+    )
+    ignore_bias_buffers: bool = field(
+        default=False,
+        metadata={
+            "help": "Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid "
+            "scalar type, inplace operation. See "
+            "https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992."
+        },
+    )
 
 
 def init_zero_verbose():

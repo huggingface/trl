@@ -384,7 +384,7 @@ def pipeline_step(
             The output format of the generate image. Choose between
             [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
         return_dict (`bool`, *optional*, defaults to `True`):
-            Whether or not to return a [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] instead of a
+            Whether to return a [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] instead of a
             plain tuple.
         callback (`Callable`, *optional*):
             A function that will be called every `callback_steps` steps during inference. The function will be
@@ -615,7 +615,7 @@ def pipeline_step_with_grad(
             The output format of the generate image. Choose between
             [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
         return_dict (`bool`, *optional*, defaults to `True`):
-            Whether or not to return a [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] instead of a
+            Whether to return a [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] instead of a
             plain tuple.
         callback (`Callable`, *optional*):
             A function that will be called every `callback_steps` steps during inference. The function will be

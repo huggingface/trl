@@ -31,7 +31,14 @@ class NashMDConfig(OnlineDPOConfig):
             epochs.
     """
 
-    mixture_coef: list[float] = field(default_factory=lambda: [0.5])
+    mixture_coef: list[float] = field(
+        default_factory=lambda: [0.5],
+        metadata={
+            "help": "Logit mixture coefficient for the model and reference model. If a list of floats is provided "
+            "then the mixture coefficient is selected for each new epoch and the last coefficient is used for the "
+            "rest of the epochs."
+        },
+    )
 
     def __post_init__(self):
         super().__post_init__()

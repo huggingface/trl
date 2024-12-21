@@ -26,10 +26,17 @@ class XPOConfig(OnlineDPOConfig):
 
     Parameters:
         alpha (`float` or `list[float]`, *optional*, defaults to `1e-5`):
-            Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each new epoch and the last alpha is used for the rest of the epochs.
+            Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each new epoch
+            and the last alpha is used for the rest of the epochs.
     """
 
-    alpha: list[float] = field(default_factory=lambda: [1e-5])
+    alpha: list[float] = field(
+        default_factory=lambda: [1e-5],
+        metadata={
+            "help": "Weight of the XPO loss term. If a list of floats is provided then the alpha is selected for each "
+            "new epoch and the last alpha is used for the rest of the epochs."
+        },
+    )
 
     def __post_init__(self):
         super().__post_init__()
