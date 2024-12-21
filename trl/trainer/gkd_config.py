@@ -21,7 +21,7 @@ from .sft_config import SFTConfig
 @dataclass
 class GKDConfig(SFTConfig):
     """
-    Configuration class for GKDTrainer.
+    Configuration class for [`GKDTrainer`].
 
     Args:
         temperature (`float`, *optional*, defaults to `0.9`):
@@ -34,7 +34,7 @@ class GKDConfig(SFTConfig):
             beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
         max_new_tokens (`int`, *optional*, defaults to `128`):
             Maximum number of tokens to generate per completion.
-        teacher_model_name_or_path (`Optional[str]`, *optional*, defaults to `None`):
+        teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
             Model name or path of the teacher model. If `None`, the teacher model will be the same as the model
             being trained.
         teacher_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):

@@ -59,8 +59,8 @@ class MergeConfig:
 
     Attributes:
         method (`str`): The merge method to use.
-        policy_model_path (`Optional[str]`): Path to the policy model.
-        target_model_path (`Optional[str]`): Path to the target model.
+        policy_model_path (`str` or `None`): Path to the policy model.
+        target_model_path (`str` or `None`): Path to the target model.
         policy_model_weight (`float`): Weight for the policy model (for `linear` and `ties` methods).
         target_model_weight (`float`): Weight for the target model (for `linear` and `ties` methods).
         policy_model_density (`list[float]`): Density parameters for the policy model (for `ties` and `dare_ties`).

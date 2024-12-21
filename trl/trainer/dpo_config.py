@@ -70,17 +70,17 @@ class DPOConfig(TrainingArguments):
             Whether to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`Optional[int]`, *optional*, defaults to `None`):
+        padding_value (`int` or `None`, *optional*, defaults to `None`):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             Truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the
             default data collator.
-        max_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_prompt_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the target. This argument is required if you want to use the default data collator and
             your model is an encoder-decoder.
         is_encoder_decoder(`Optional[int]`, *optional*, defaults to `None`):
@@ -94,21 +94,21 @@ class DPOConfig(TrainingArguments):
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
-        precompute_ref_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        precompute_ref_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Batch size to use when precomputing reference model log probabilities. This can be set higher than the
             training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
             training and `per_device_eval_batch_size` for evaluation.
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
-        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
-        ref_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        ref_model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
             from a string.
-        model_adapter_name (`Optional[str]`, *optional*, defaults to `None`):
+        model_adapter_name (`str` or `None`, *optional*, defaults to `None`):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
-        ref_adapter_name (`Optional[str]`, *optional*, defaults to `None`):
+        ref_adapter_name (`str` or `None`, *optional*, defaults to `None`):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
         reference_free (`bool`, *optional*, defaults to `False`):
             If `True`, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal

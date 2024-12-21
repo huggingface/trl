@@ -31,9 +31,9 @@ class OnlineDPOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `5e-7`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        reward_model_path (`Optional[str]`, *optional*, defaults to `None`):
+        reward_model_path (`str` or `None`, *optional*, defaults to `None`):
             Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both.
-        judge (`Optional[str]`, *optional*, defaults to `None`):
+        judge (`str` or `None`, *optional*, defaults to `None`):
             Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
@@ -54,7 +54,7 @@ class OnlineDPOConfig(TrainingArguments):
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
 
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.

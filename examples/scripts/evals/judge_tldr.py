@@ -56,7 +56,7 @@ class ScriptArguments:
         judge_model (`str`, *optional*, defaults to `"meta-llama/Meta-Llama-3-70B-Instruct"`):
             Model name or path to the model to use as a judge. E.g., 'gpt-3.5-turbo-0125' or
             'meta-llama/Meta-Llama-3-70B-Instruct'.
-        num_examples (`Optional[int]`, *optional*, defaults to `None`):
+        num_examples (`int` or `None`, *optional*, defaults to `None`):
             Number of examples to evaluate.
     """
 

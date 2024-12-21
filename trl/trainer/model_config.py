@@ -26,7 +26,7 @@ class ModelConfig:
     command line.
 
     Parameters:
-        model_name_or_path (`Optional[str]`, *optional*, defaults to `None`):
+        model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
             Model checkpoint for weights initialization.
         model_revision (`str`, *optional*, defaults to `"main"`):
             Specific model version to use. It can be a branch name, a tag name, or a commit id.
@@ -42,7 +42,7 @@ class ModelConfig:
             Whether to allow for custom models defined on the Hub in their own modeling files. This option should only
             be set to `True` for repositories you trust and in which you have read the code, as it will execute code
             present on the Hub on your local machine.
-        attn_implementation (`Optional[str]`, *optional*, defaults to `None`):
+        attn_implementation (`str` or `None`, *optional*, defaults to `None`):
             Which attention implementation to use. You can run `--attn_implementation=flash_attention_2`, in which case
             you must install this manually by running `pip install flash-attn --no-build-isolation`.
         use_peft (`bool`, *optional*, defaults to `False`):

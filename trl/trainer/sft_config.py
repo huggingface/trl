@@ -35,10 +35,10 @@ class SFTConfig(TrainingArguments):
             Controls whether the [`ConstantLengthDataset`] packs the sequences of the dataset.
         learning_rate (`float`, *optional*, defaults to `2e-5`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of [`~transformers.TrainingArguments`].
-        max_seq_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_seq_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum sequence length for the [`ConstantLengthDataset`] and for automatically creating the dataset. If
             `None`, it uses the smaller value between `tokenizer.model_max_length` and `1024`.
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset. Only used when `packing=False`.
         dataset_batch_size (`Union[int, None]`, *optional*, defaults to `1000`):
             Number of examples to tokenize per batch. If `dataset_batch_size <= 0` or `dataset_batch_size is None`,
@@ -48,7 +48,7 @@ class SFTConfig(TrainingArguments):
             string.
         dataset_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Dictionary of optional keyword arguments to pass when creating packed or non-packed datasets.
-        eval_packing (`Optional[bool]`, *optional*, defaults to `None`):
+        eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
         num_of_sequences (`int`, *optional*, defaults to `1024`):
             Number of sequences to use for the [`ConstantLengthDataset`].

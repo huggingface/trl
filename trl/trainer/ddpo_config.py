@@ -38,7 +38,7 @@ class DDPOConfig:
             Name of this run.
         seed (`int`, *optional*, defaults to `0`):
             Random seed.
-        log_with (`Optional[Literal["wandb", "tensorboard"]]`, *optional*, defaults to `None`):
+        log_with (`Literal["wandb", "tensorboard"]]` or `None`, *optional*, defaults to `None`):
             Log with either 'wandb' or 'tensorboard', check
             https://huggingface.co/docs/accelerate/usage_guides/tracking for more details.
         tracker_kwargs (`Dict`, *optional*, defaults to `{}`):
@@ -111,7 +111,7 @@ class DDPOConfig:
             Whether to compute rewards asynchronously.
         max_workers (`int`, *optional*, defaults to `2`):
             Maximum number of workers to use for async reward computation.
-        negative_prompts (`Optional[str]`, *optional*, defaults to `""`):
+        negative_prompts (`str`, *optional*, defaults to `""`):
             Comma-separated list of prompts to use as negative examples.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the final model checkpoint to the Hub.

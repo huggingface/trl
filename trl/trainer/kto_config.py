@@ -31,12 +31,12 @@ class KTOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `5e-7`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        max_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_prompt_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
@@ -54,7 +54,7 @@ class KTOConfig(TrainingArguments):
             Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`Optional[int]`, *optional*, defaults to `None`):
+        padding_value (`int` or `None`, *optional*, defaults to `None`):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
@@ -62,7 +62,7 @@ class KTOConfig(TrainingArguments):
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B during
             evaluation.
-        is_encoder_decoder (`Optional[bool]`, *optional*, defaults to `None`):
+        is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
@@ -74,7 +74,7 @@ class KTOConfig(TrainingArguments):
         ref_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
             from a string.
-        dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc: (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.

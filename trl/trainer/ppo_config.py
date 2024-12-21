@@ -33,9 +33,9 @@ class PPOConfig(OnPolicyConfig):
             Name of this experiment.
         reward_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the reward model.
-        model_adapter_name (`Optional[str]`, *optional*, defaults to `None`):
+        model_adapter_name (`str` or `None`, *optional*, defaults to `None`):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
-        ref_adapter_name (`Optional[str]`, *optional*, defaults to `None`):
+        ref_adapter_name (`str` or `None`, *optional*, defaults to `None`):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
         num_ppo_epochs (`int`, *optional*, defaults to `4`):
             Number of epochs to train.

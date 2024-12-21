@@ -28,7 +28,7 @@ class RewardConfig(TrainingArguments):
     command line.
 
     Parameters:
-        max_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
         dataset_num_proc (`int`, *optional*, defaults to `None`):

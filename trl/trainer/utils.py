@@ -346,7 +346,7 @@ class RewardDataCollatorWithPadding:
             The tokenizer used for encoding the data.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
-        pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
+        pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.
         return_tensors (`str`, `optional`, defaults to `"pt"`):
             The tensor type to use.
@@ -473,7 +473,7 @@ class DPODataCollatorWithPadding:
             The tokenizer's pad_token_id.
         label_pad_token_id (`int`, defaults to -100):
             The label used for masking.
-        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
+        is_encoder_decoder (`bool` or `None`, `optional`, defaults to `None`):
             Whether you model has an encoder_decoder architecture.
     """
 
@@ -558,7 +558,7 @@ class ConstantLengthDataset(IterableDataset):
             The processor used for processing the data.
         dataset (`dataset.Dataset`):
             Dataset with text files.
-        dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
+        dataset_text_field (`str` or `None`, *optional*, defaults to `None`):
             Name of the field in the dataset that contains the text. Only one of `dataset_text_field` and
             `formatting_func` should be provided.
         formatting_func (`Callable`, *optional*):
@@ -1006,13 +1006,13 @@ class OnPolicyConfig(TrainingArguments):
     command line.
 
     Parameters:
-        run_name (`Optional[str]`, *optional*, defaults to `None`):
+        run_name (`str` or `None`, *optional*, defaults to `None`):
             Name of the run.
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
             Number of minibatches to split a batch into.
-        total_episodes (`Optional[int]`, *optional*, defaults to `None`):
+        total_episodes (`int` or `None`, *optional*, defaults to `None`):
             Total number of episodes in the dataset.
         local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
             Per rank no grad forward pass in the rollout phase.
@@ -1020,9 +1020,9 @@ class OnPolicyConfig(TrainingArguments):
             Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
-        stop_token (`Optional[str]`, *optional*, defaults to `None`):
+        stop_token (`str` or `None`, *optional*, defaults to `None`):
             Stop token.
-        stop_token_id (`Optional[int]`, *optional*, defaults to `None`):
+        stop_token_id (`int` or `None`, *optional*, defaults to `None`):
             Truncation token id.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
@@ -1032,19 +1032,19 @@ class OnPolicyConfig(TrainingArguments):
             value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
-        world_size (`Optional[int]`, *optional*, defaults to `None`):
+        world_size (`int` or `None`, *optional*, defaults to `None`):
             Number of processes (GPUs) to use for the training.
-        num_total_batches (`Optional[int]`, *optional*, defaults to `None`):
+        num_total_batches (`int` or `None`, *optional*, defaults to `None`):
             Number of total batches to train.
-        micro_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        micro_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
-        local_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        local_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
-        batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        batch_size (`int` or `None`, *optional*, defaults to `None`):
             Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`).
-        local_mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        local_mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Mini batch size per GPU.
-        mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Mini batch size across GPUs.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the model to the Hub after training.
