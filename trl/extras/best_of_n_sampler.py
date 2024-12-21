@@ -15,9 +15,8 @@
 from typing import Any, Callable, Optional, Union
 
 import torch
-from transformers import GenerationConfig, PreTrainedTokenizer, PreTrainedTokenizerFast
+from transformers import GenerationConfig, PreTrainedTokenizer, PreTrainedTokenizerFast, set_seed
 
-from ..core import set_seed
 from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
 
 
