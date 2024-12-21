@@ -63,7 +63,7 @@ class OnlineDPOConfig(TrainingArguments):
     learning_rate: float = field(
         default=5e-7,
         metadata={
-            "help": "Initial learning rate for [`AdamW`] optimizer. The default value replaces that of "
+            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
             "transformers.TrainingArguments."
         },
     )
