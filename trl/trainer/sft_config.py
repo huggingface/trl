@@ -43,10 +43,10 @@ class SFTConfig(TrainingArguments):
         dataset_batch_size (`Union[int, None]`, *optional*, defaults to `1000`):
             Number of examples to tokenize per batch. If `dataset_batch_size <= 0` or `dataset_batch_size is None`,
             tokenizes the full dataset as a single batch.
-        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
-        dataset_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        dataset_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Dictionary of optional keyword arguments to pass when creating packed or non-packed datasets.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.

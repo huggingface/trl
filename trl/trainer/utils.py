@@ -979,7 +979,7 @@ class OnPolicyConfig(TrainingArguments):
             Truncation token id.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
-        missing_eos_penalty (`Optional[float]`, *optional*, defaults to `None`):
+        missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
             to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.

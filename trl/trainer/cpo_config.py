@@ -71,7 +71,7 @@ class CPOConfig(TrainingArguments):
         is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
-        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):

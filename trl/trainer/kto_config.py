@@ -68,10 +68,10 @@ class KTOConfig(TrainingArguments):
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
-        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
-        ref_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        ref_model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
             from a string.
         dataset_num_proc: (`int` or `None`, *optional*, defaults to `None`):
