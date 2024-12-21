@@ -1191,13 +1191,17 @@ class DPOTrainer(Trainer):
                 # - Use sequence boundaries to track where each sequence starts/ends
                 logits = logits[0, :-1, :]  # Remove batch dim and last position
                 labels = concatenated_input_ids[1:].clone()  # Shift right by 1 for next-token prediction
+
                 per_token_logps = torch.gather(logits.log_softmax(-1), dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
 
                 # Use sequence boundaries to split back into individual sequences
                 batch_logps = []
                 for start, end in sequence_boundaries:
                     sequence_logps = per_token_logps[start : end - 1]
-                    batch_logps.append(sequence_logps.sum())
+                    sequence_length = end - start - 1  # -1 because we're using end-1 above
+                    normalized_logp = sequence_logps.sum() / sequence_length  # normalize by sequence_length
+                    batch_logps.append(normalized_logp)
+
                 all_logps = torch.stack(batch_logps)
             else:
                 # In standard mode:
