@@ -434,6 +434,20 @@ class TestPackExamples(unittest.TestCase):
         dataset = dataset.map(pack_examples, batched=True, fn_kwargs={"seq_length": seq_length})
         self.assertEqual(dataset.to_dict(), expected_output)
 
+    def test_pack_with_separator(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        seq_length = 5
+        separator = 0
+        expected_output = {
+            "input_ids": [[1, 2, 3, 0, 4], [5, 6, 7, 0, 8], [0]],
+            "attention_mask": [[0, 1, 1, 1, 0], [0, 1, 1, 1, 1], [1]],
+        }
+        result = pack_examples(examples, seq_length, separator)
+        self.assertEqual(result, expected_output)
+
 
 # Run the tests
 if __name__ == "__main__":
