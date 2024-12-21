@@ -375,11 +375,18 @@ class CPOTrainer(Trainer):
                 )
             if args.loss_type == "sigmoid":
                 self.cpo_loss_fn = LigerFusedLinearCPOLoss(
-                    ignore_index=self.label_pad_token_id, beta=self.beta, alpha=self.cpo_alpha
+                    ignore_index=self.label_pad_token_id,
+                    beta=self.beta,
+                    alpha=self.cpo_alpha,
+                    label_smoothing=self.label_smoothing,
                 )
             elif args.loss_type == "simpo":
                 self.cpo_loss_fn = LigerFusedLinearSimPOLoss(
-                    ignore_index=self.label_pad_token_id, beta=self.beta, alpha=self.cpo_alpha, gamma=self.simpo_gamma
+                    ignore_index=self.label_pad_token_id,
+                    beta=self.beta,
+                    alpha=self.cpo_alpha,
+                    gamma=self.simpo_gamma,
+                    label_smoothing=self.label_smoothing,
                 )
             else:
                 raise ValueError("Liger loss is only available for sigmoid and simpo loss types.")
