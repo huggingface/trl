@@ -447,7 +447,8 @@ def pack_examples(
     """
     if separator_token_id is not None:
         examples["input_ids"] = [x + [separator_token_id] for x in examples["input_ids"]]
-        examples["attention_mask"] = [x + [1] for x in examples["attention_mask"]]
+        if "attention_mask" in examples:
+            examples["attention_mask"] = [x + [1] for x in examples["attention_mask"]]
     # Join  all the values into a single list
     examples = {k: sum(v, []) for k, v in examples.items()}
     # Split the values into chunks of size seq_length
