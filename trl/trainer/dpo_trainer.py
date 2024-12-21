@@ -192,6 +192,7 @@ class DPOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+
     """
 
     _tag_names = ["trl", "dpo"]
@@ -347,7 +348,7 @@ class DPOTrainer(Trainer):
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
         self.reference_free = args.reference_free
-
+        self.padding_free = args.padding_free
         if ref_model:
             self.ref_model = ref_model
         elif self.is_peft_model or args.precompute_ref_log_probs:
@@ -1068,8 +1069,10 @@ class DPOTrainer(Trainer):
 
     def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
-
         We do this to avoid doing two forward passes, because it's faster for FSDP.
+        When padding_free=True, sequences are concatenated without padding tokens and processed as a single
+        continuous sequence with reset position IDs, improving memory efficiency and computation speed.
+        When False, uses standard padded batch processing.
         """
         num_examples = batch["prompt_input_ids"].shape[0]
 
@@ -1121,91 +1124,185 @@ class DPOTrainer(Trainer):
                 attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
                 loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
 
-            # Get the first column idx that is all zeros and remove every column after that
-            empty_cols = torch.sum(attention_mask, dim=0) == 0
-            first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-            input_ids = input_ids[:, :first_empty_col]
-            attention_mask = attention_mask[:, :first_empty_col]
-            loss_mask = loss_mask[:, :first_empty_col]
+            if self.padding_free:
+                # Padding-free specific preprocessing
+                seq_lengths = attention_mask.sum(1)
+                if self.args.max_length is not None:
+                    seq_lengths = torch.clamp(seq_lengths, max=self.args.max_length)
+                    input_ids = input_ids[:, : self.args.max_length]
 
-            # Truncate right
-            if self.args.max_length is not None:
-                input_ids = input_ids[:, : self.args.max_length]
-                attention_mask = attention_mask[:, : self.args.max_length]
-                loss_mask = loss_mask[:, : self.args.max_length]
+                # Create concatenated sequence
+                total_length = seq_lengths.sum().item()
+                concatenated_input_ids = torch.zeros(total_length, dtype=input_ids.dtype, device=input_ids.device)
+                position_ids = torch.zeros(total_length, dtype=torch.long, device=input_ids.device)
 
-            if self.use_num_logits_to_keep:
-                # Compute num_logits_to_keep based on loss_mask pattern:
-                # [[0, 0, 0, x, x, x, x],
-                #  [0, 0, 0, x, x, x, 0]]
-                #         ^ start computing logits from here ([:, -(7-3+1):])
-                first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
-                num_logits_to_keep = loss_mask.shape[1] - first_compute_index
-                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
+                # Fill tensors with sequence boundaries tracking
+                current_idx = 0
+                sequence_boundaries = []
+                for i in range(input_ids.size(0)):
+                    length = seq_lengths[i].item()
+                    valid_tokens = input_ids[i, :length]
+                    concatenated_input_ids[current_idx : current_idx + length] = valid_tokens
+                    position_ids[current_idx : current_idx + length] = torch.arange(length, device=input_ids.device)
+                    sequence_boundaries.append((current_idx, current_idx + length))
+                    current_idx += length
 
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
+                model_kwargs.pop("attention_mask", None)
+                model_inputs = {
+                    "input_ids": concatenated_input_ids.unsqueeze(0),
+                    "position_ids": position_ids.unsqueeze(0),
+                }
+            else:
+                # Get the first column idx that is all zeros and remove every column after that
+                empty_cols = torch.sum(attention_mask, dim=0) == 0
+                first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
+                input_ids = input_ids[:, :first_empty_col]
+                attention_mask = attention_mask[:, :first_empty_col]
+                loss_mask = loss_mask[:, :first_empty_col]
 
-            # Offset the logits by one to align with the labels
-            logits = outputs.logits[:, :-1, :]
-            labels = input_ids[:, 1:].clone()
-            loss_mask = loss_mask[:, 1:].bool()
+                # Truncate right
+                if self.args.max_length is not None:
+                    input_ids = input_ids[:, : self.args.max_length]
+                    attention_mask = attention_mask[:, : self.args.max_length]
+                    loss_mask = loss_mask[:, : self.args.max_length]
 
-            if self.use_num_logits_to_keep:
-                # Align labels with logits
-                # logits:    -,  -, [x2, x3, x4, x5, x6]
-                #                     ^ --------- ^       after logits[:, :-1, :]
-                # labels:   [y0, y1, y2, y3, y4, y5, y6]
-                #                         ^ --------- ^   with num_logits_to_keep=4, [:, -4:]
-                # loss_mask: [0,  0,  0,  1,  1,  1,  1]
-                labels = labels[:, -num_logits_to_keep:]
-                loss_mask = loss_mask[:, -num_logits_to_keep:]
+                if self.use_num_logits_to_keep:
+                    # Compute num_logits_to_keep based on loss_mask pattern:
+                    # [[0, 0, 0, x, x, x, x],
+                    #  [0, 0, 0, x, x, x, 0]]
+                    #         ^ start computing logits from here ([:, -(7-3+1):])
+                    first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
+                    num_logits_to_keep = loss_mask.shape[1] - first_compute_index
+                    model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
 
-        if logits.shape[:2] != labels.shape[:2]:
-            # for llava, the returned logits include the image tokens (placed before the text tokens)
-            seq_len = labels.shape[1]
-            logits = logits[:, -seq_len:]
+                model_inputs = {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                }
 
-        # Compute the log probabilities of the labels
-        labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-        per_token_logps[~loss_mask] = 0
-        all_logps = per_token_logps.sum(-1)
+            outputs = model(**model_inputs, **model_kwargs)
+            # Process outputs
+            logits = outputs.logits
+            if self.padding_free:
+                # In padding_free mode:
+                # - We work with a single concatenated sequence
+                # - No padding tokens are used
+                # - Position IDs reset for each sequence
+                # - Use sequence boundaries to track where each sequence starts/ends
+                logits = logits[0, :-1, :]  # Remove batch dim and last position
+                labels = concatenated_input_ids[1:].clone()  # Shift right by 1 for next-token prediction
 
-        output = {}
+                per_token_logps = torch.gather(logits.log_softmax(-1), dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
 
-        if self.use_weighting:
-            with torch.no_grad():
-                # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
-                logprobs = F.log_softmax(logits, dim=-1)
-                weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)  # same as sum(probs**2) in log space
-                per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
-                all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
-                chosen_weights = all_weights[:num_examples]
-                rejected_weights = all_weights[num_examples:]
-                output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
+                # Use sequence boundaries to split back into individual sequences
+                batch_logps = []
+                for start, end in sequence_boundaries:
+                    sequence_logps = per_token_logps[start : end - 1]
+                    sequence_length = end - start - 1  # -1 because we're using end-1 above
+                    normalized_logp = sequence_logps.sum() / sequence_length  # normalize by sequence_length
+                    batch_logps.append(normalized_logp)
 
-        if self.args.rpo_alpha is not None:
-            # Only use the chosen logits for the RPO loss
-            chosen_logits = logits[:num_examples]
-            chosen_labels = labels[:num_examples]
+                all_logps = torch.stack(batch_logps)
+            else:
+                # In standard mode:
+                # - Work with padded batches
+                # - Use attention masks to handle padding
+                # - All sequences in batch processed in parallel
+                # - Need to handle padding tokens carefully
+                if self.use_num_logits_to_keep:
+                    labels = labels[:, -num_logits_to_keep:]
+                    loss_mask = loss_mask[:, -num_logits_to_keep:]
 
-            # Compute the log probabilities of the labels
-            output["nll_loss"] = F.cross_entropy(
-                torch.flatten(chosen_logits, end_dim=1), torch.flatten(chosen_labels, end_dim=1), ignore_index=0
-            )
+                logits = logits[:, :-1, :]  # Remove last position
+                labels = input_ids[:, 1:].clone()  # Shift right by 1
+                loss_mask = loss_mask[:, 1:].bool()  # Adjust mask for shifted positions
 
-        if self.loss_type == "ipo":
-            all_logps = all_logps / loss_mask.sum(-1)
+                # Handle padding and alignment
+                if self.use_num_logits_to_keep:
+                    labels = labels[:, -num_logits_to_keep:]
+                    loss_mask = loss_mask[:, -num_logits_to_keep:]
 
-        output["chosen_logps"] = all_logps[:num_examples]
-        output["rejected_logps"] = all_logps[num_examples:]
-        output["mean_chosen_logits"] = logits[:num_examples][loss_mask[:num_examples]].mean()
-        output["mean_rejected_logits"] = logits[num_examples:][loss_mask[num_examples:]].mean()
+                if logits.shape[:2] != labels.shape[:2]:
+                    seq_len = labels.shape[1]
+                    logits = logits[:, -seq_len:]
 
-        if self.aux_loss_enabled:
-            output["aux_loss"] = outputs.aux_loss
+                # Mask out padding tokens
+                labels[~loss_mask] = 0
+                per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+                per_token_logps[~loss_mask] = 0
+                all_logps = per_token_logps.sum(-1)
 
-        return output
+            # Prepare output dictionary
+            output = {}
+
+            # Add weighting if enabled
+            if self.use_weighting:
+                with torch.no_grad():
+                    logprobs = F.log_softmax(logits, dim=-1)
+                    weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)
+                    per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
+
+                    if self.padding_free:
+                        # Use sequence boundaries to calculate weights
+                        sequence_weights = [
+                            per_token_logps_adjusted[start : end - 1].mean() for start, end in sequence_boundaries
+                        ]
+                        all_weights = torch.stack(sequence_weights)
+                    else:
+                        # Use loss mask to handle padding in weight calculation
+                        all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
+
+                    chosen_weights = all_weights[:num_examples]
+                    rejected_weights = all_weights[num_examples:]
+                    output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
+
+            # Add RPO loss if enabled
+            if self.args.rpo_alpha is not None:
+                if self.padding_free:
+                    # Use sequence boundaries to get chosen sequences
+                    chosen_end_idx = sequence_boundaries[num_examples - 1][1] - 1
+                    chosen_logits = logits[:chosen_end_idx]
+                    chosen_labels = labels[:chosen_end_idx]
+                else:
+                    # Simply split batch in half for chosen sequences
+                    chosen_logits = logits[:num_examples]
+                    chosen_labels = labels[:num_examples]
+
+                output["nll_loss"] = F.cross_entropy(
+                    chosen_logits.reshape(-1, chosen_logits.size(-1)), chosen_labels.reshape(-1), ignore_index=0
+                )
+
+            # Handle IPO loss type
+            if self.loss_type == "ipo":
+                if self.padding_free:
+                    # Normalize by actual sequence lengths from boundaries
+                    all_logps = all_logps / torch.tensor(
+                        [end - start - 1 for start, end in sequence_boundaries], device=all_logps.device
+                    )
+                else:
+                    # Normalize by non-padded length from loss mask
+                    all_logps = all_logps / loss_mask.sum(-1)
+
+            # Add log probabilities to output
+            output["chosen_logps"] = all_logps[:num_examples]
+            output["rejected_logps"] = all_logps[num_examples:]
+
+            # Calculate mean logits
+            if self.padding_free:
+                # Use sequence boundaries to separate chosen/rejected
+                chosen_end_idx = sequence_boundaries[num_examples - 1][1] - 1
+                output["mean_chosen_logits"] = logits[:chosen_end_idx].mean()
+                output["mean_rejected_logits"] = logits[chosen_end_idx:].mean()
+            else:
+                # Use loss mask to ignore padding tokens in mean calculation
+                output["mean_chosen_logits"] = logits[:num_examples][loss_mask[:num_examples]].mean()
+                output["mean_rejected_logits"] = logits[num_examples:][loss_mask[num_examples:]].mean()
+
+            # Add auxiliary loss if enabled
+            if self.aux_loss_enabled:
+                output["aux_loss"] = outputs.aux_loss
+
+            return output
 
     def get_batch_loss_metrics(
         self,
