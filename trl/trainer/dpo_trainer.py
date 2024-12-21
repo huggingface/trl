@@ -1156,6 +1156,7 @@ class DPOTrainer(Trainer):
                 model_kwargs.pop("attention_mask", None)
 
                 outputs = model(
+                    # unsqueeze to add batch dimension because the model expects three dimensions
                     input_ids=concatenated_input_ids.unsqueeze(0),
                     position_ids=position_ids.unsqueeze(0),
                     **model_kwargs,
