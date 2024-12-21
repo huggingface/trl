@@ -18,7 +18,7 @@ When training RL models, optimizing solely for reward may lead to unexpected beh
 However, the RL model being optimized against the reward model may learn patterns that yield high reward but do not represent good language. This can result in extreme cases where the model generates texts with excessive exclamation marks or emojis to maximize the reward. In some worst-case scenarios, the model may generate patterns completely unrelated to natural language yet receive high rewards, similar to adversarial attacks.
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/kl-example.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kl-example.png">
 <p style="text-align: center;"> <b>Figure:</b> Samples without a KL penalty from <a href="https://huggingface.co/papers/1909.08593">https://huggingface.co/papers/1909.08593</a>. </p>
 </div>
 
