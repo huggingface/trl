@@ -79,7 +79,7 @@ if is_deepspeed_available():
 
 
 @dataclass
-class PreferenceCollator(DataCollatorMixin):
+class DataCollatorForPreference(DataCollatorMixin):
     """
     Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they
     are not all of the same length.
@@ -92,8 +92,8 @@ class PreferenceCollator(DataCollatorMixin):
 
     Examples:
     ```python
-    >>> from trl import PreferenceCollator
-    >>> collator = PreferenceCollator(pad_token_id=0)
+    >>> from trl import DataCollatorForPreference
+    >>> collator = DataCollatorForPreference(pad_token_id=0)
     >>> examples = [
     ...     {"prompt_input_ids": [1, 2, 3], "chosen_input_ids": [4, 5], "rejected_input_ids": [6]},
     ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]}
@@ -168,7 +168,7 @@ class DPOTrainer(Trainer):
         args (`DPOConfig`):
             The DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`PreferenceCollator`) will be used
+            The data collator to use for training. If None is specified, the default data collator (`DataCollatorForPreference`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
@@ -374,7 +374,7 @@ class DPOTrainer(Trainer):
                 )
 
         if data_collator is None:
-            data_collator = PreferenceCollator(pad_token_id=self.padding_value)
+            data_collator = DataCollatorForPreference(pad_token_id=self.padding_value)
 
         # Disable dropout in the model and reference model
         if args.disable_dropout:
@@ -684,7 +684,7 @@ class DPOTrainer(Trainer):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
         # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
-        # Instead, we set them to the columns expected by `PreferenceCollator`, hence the override.
+        # Instead, we set them to the columns expected by `DataCollatorForPreference`, hence the override.
         if self._signature_columns is None:
             self._signature_columns = [
                 "prompt_input_ids",
