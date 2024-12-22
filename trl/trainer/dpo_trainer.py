@@ -1180,29 +1180,27 @@ class DPOTrainer(Trainer):
                     "attention_mask": attention_mask,
                 }
 
+            # Prepare output dictionary
+            output = {}
             outputs = model(**model_inputs, **model_kwargs)
             # Process outputs
             logits = outputs.logits
             if self.padding_free:
-                # In padding_free mode:
-                # - We work with a single concatenated sequence
-                # - No padding tokens are used
-                # - Position IDs reset for each sequence
-                # - Use sequence boundaries to track where each sequence starts/ends
-                logits = logits[0, :-1, :]  # Remove batch dim and last position
-                labels = concatenated_input_ids[1:].clone()  # Shift right by 1 for next-token prediction
+                # Padding-free specific processing
+                logits = outputs.logits[0]  # Remove batch dimension
+                all_logps = torch.zeros(num_examples * 2, device=logits.device)
 
-                per_token_logps = torch.gather(logits.log_softmax(-1), dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
+                for i, (start, end) in enumerate(sequence_boundaries):
+                    seq_logits = logits[start : end - 1]
+                    seq_labels = concatenated_input_ids[start + 1 : end]
+                    seq_loss_mask = loss_mask[i, 1 : end - start].bool()
 
-                # Use sequence boundaries to split back into individual sequences
-                batch_logps = []
-                for start, end in sequence_boundaries:
-                    sequence_logps = per_token_logps[start : end - 1]
-                    sequence_length = end - start - 1  # -1 because we're using end-1 above
-                    normalized_logp = sequence_logps.sum() / sequence_length  # normalize by sequence_length
-                    batch_logps.append(normalized_logp)
+                    seq_per_token_logps = torch.gather(
+                        seq_logits.log_softmax(-1), dim=1, index=seq_labels.unsqueeze(1)
+                    ).squeeze(1)
+                    seq_per_token_logps[~seq_loss_mask] = 0
+                    all_logps[i] = seq_per_token_logps.sum()
 
-                all_logps = torch.stack(batch_logps)
             else:
                 # In standard mode:
                 # - Work with padded batches
@@ -1231,9 +1229,6 @@ class DPOTrainer(Trainer):
                 per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
                 per_token_logps[~loss_mask] = 0
                 all_logps = per_token_logps.sum(-1)
-
-            # Prepare output dictionary
-            output = {}
 
             # Add weighting if enabled
             if self.use_weighting:
@@ -1287,12 +1282,19 @@ class DPOTrainer(Trainer):
             output["chosen_logps"] = all_logps[:num_examples]
             output["rejected_logps"] = all_logps[num_examples:]
 
-            # Calculate mean logits
             if self.padding_free:
-                # Use sequence boundaries to separate chosen/rejected
-                chosen_end_idx = sequence_boundaries[num_examples - 1][1] - 1
-                output["mean_chosen_logits"] = logits[:chosen_end_idx].mean()
-                output["mean_rejected_logits"] = logits[chosen_end_idx:].mean()
+                chosen_mean_logits = torch.zeros(num_examples, device=logits.device)
+                rejected_mean_logits = torch.zeros(num_examples, device=logits.device)
+                for i, (start, end) in enumerate(sequence_boundaries):
+                    seq_logits = logits[start : end - 1]
+                    seq_loss_mask = loss_mask[i, 1 : end - start].bool()
+                    if i < num_examples:
+                        chosen_mean_logits[i] = seq_logits[seq_loss_mask].mean()
+                    else:
+                        rejected_mean_logits[i - num_examples] = seq_logits[seq_loss_mask].mean()
+
+                output["mean_chosen_logits"] = chosen_mean_logits.mean()
+                output["mean_rejected_logits"] = rejected_mean_logits.mean()
             else:
                 # Use loss mask to ignore padding tokens in mean calculation
                 output["mean_chosen_logits"] = logits[:num_examples][loss_mask[:num_examples]].mean()
