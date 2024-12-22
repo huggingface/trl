@@ -196,9 +196,11 @@ class OnlineDPOTrainer(Trainer):
             # Get peft model with the given config
             model = get_peft_model(model, peft_config)
 
-        # Disable dropout in the model if specified
+        # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         # Handle the ref_model
         # Usually, the user wants the ref model to be the initial version of the model. When using PEFT, it's easy to
