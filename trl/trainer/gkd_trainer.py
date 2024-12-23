@@ -126,6 +126,7 @@ class GKDTrainer(SFTTrainer):
             else:
                 teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
+        # Disable dropout in the model
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
