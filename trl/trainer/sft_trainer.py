@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import dataclasses
 import inspect
 import os
@@ -48,6 +49,7 @@ from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
     generate_model_card,
+    get_comet_experiment_url,
     peft_module_casting_to_bf16,
 )
 
@@ -539,6 +541,7 @@ class SFTTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="SFT",
         )
 

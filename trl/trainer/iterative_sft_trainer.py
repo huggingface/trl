@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import os
 import warnings
 from typing import Callable, Optional, Union
@@ -35,7 +36,7 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available
 
 from ..core import PPODecorators
-from .utils import generate_model_card
+from .utils import generate_model_card, get_comet_experiment_url
 
 
 if is_peft_available():
@@ -433,6 +434,7 @@ class IterativeSFTTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="Iterative SFT",
         )
 

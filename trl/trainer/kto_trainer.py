@@ -1,4 +1,3 @@
-# KTO Authors: Kawin Ethayarajh, Winnie Xu, Niklas Muennighoff, Dan Jurafsky, and Douwe Kiela
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import inspect
 import os
 import random
@@ -49,7 +49,6 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -58,6 +57,7 @@ from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
     pad_to_length,
     peft_module_casting_to_bf16,
 )
@@ -304,8 +304,6 @@ class KTOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        disable_dropout (`bool`, defaults to `True`):
-            Whether or not to disable dropouts in `model` and `ref_model`.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
@@ -317,9 +315,6 @@ class KTOTrainer(Trainer):
 
     _tag_names = ["trl", "kto"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.14.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module, str] = None,
@@ -529,6 +524,7 @@ class KTOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
+        # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
@@ -1526,6 +1522,7 @@ class KTOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="KTO",
             trainer_citation=citation,
             paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",

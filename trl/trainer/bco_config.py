@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -45,6 +46,8 @@ class BCOConfig(TrainingArguments):
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B during
             evaluation.
@@ -77,6 +80,7 @@ class BCOConfig(TrainingArguments):
     label_pad_token_id: int = -100
     padding_value: Optional[int] = None
     truncation_mode: str = "keep_end"
+    disable_dropout: bool = True
     generate_during_eval: bool = False
     is_encoder_decoder: Optional[bool] = None
     precompute_ref_log_probs: bool = False

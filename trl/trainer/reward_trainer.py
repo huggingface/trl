@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import inspect
 import os
 import warnings
@@ -46,7 +47,10 @@ from .utils import (
     RewardDataCollatorWithPadding,
     compute_accuracy,
     decode_and_strip_padding,
+    disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
+    log_table_to_comet_experiment,
     print_rich_table,
 )
 
@@ -165,6 +169,10 @@ class RewardTrainer(Trainer):
                     model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
 
                 model = get_peft_model(model, peft_config)
+
+        # Disable dropout in the model
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
 
         if compute_metrics is None:
             compute_metrics = compute_accuracy
@@ -358,6 +366,12 @@ class RewardTrainer(Trainer):
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
+            if "comet_ml" in self.args.report_to:
+                log_table_to_comet_experiment(
+                    name="completions.csv",
+                    table=df,
+                )
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -397,6 +411,7 @@ class RewardTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="Reward",
         )
 

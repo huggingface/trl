@@ -1,5 +1,3 @@
-# ORPO Authors: Jiwoo Hong, Noah Lee, and James Thorne
-# Official code: https://github.com/xfactlab/orpo
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -61,6 +59,7 @@ from .utils import (
     add_eos_token_if_needed,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
     pad_to_length,
     peft_module_casting_to_bf16,
 )
@@ -283,6 +282,7 @@ class ORPOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
+        # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
 
@@ -775,18 +775,12 @@ class ORPOTrainer(Trainer):
             loss = loss_fct(logits, labels)
             return loss
 
-        if self.is_encoder_decoder:
-            labels = concatenated_batch["concatenated_labels"].clone()
-        else:
-            labels = concatenated_batch["concatenated_input_ids"].clone()
-            attention_mask = concatenated_batch["concatenated_attention_mask"]
-            labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
-
+        labels = concatenated_batch["concatenated_labels"].clone()
         chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
             all_logits,
-            concatenated_batch["concatenated_labels"],
+            labels,
             average_log_prob=True,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
@@ -795,8 +789,12 @@ class ORPOTrainer(Trainer):
         chosen_logps = all_logps[:len_chosen]
         rejected_logps = all_logps[len_chosen:]
 
-        chosen_logits = all_logits[:len_chosen]
-        rejected_logits = all_logits[len_chosen:]
+        if not self.is_encoder_decoder:
+            chosen_logits = all_logits[:len_chosen, :-1, :]
+            rejected_logits = all_logits[len_chosen:, :-1, :]
+        else:
+            chosen_logits = all_logits[:len_chosen]
+            rejected_logits = all_logits[len_chosen:]
 
         if self.aux_loss_enabled:
             return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss, outputs.aux_loss)
@@ -1079,6 +1077,7 @@ class ORPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="ORPO",
             trainer_citation=citation,
             paper_title="ORPO: Monolithic Preference Optimization without Reference Model",

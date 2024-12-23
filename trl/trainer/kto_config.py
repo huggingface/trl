@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
@@ -76,7 +77,7 @@ class KTOConfig(TrainingArguments):
         dataset_num_proc: (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model.
+            Whether to disable dropout in the model and reference model.
     """
 
     learning_rate: float = 1e-6
