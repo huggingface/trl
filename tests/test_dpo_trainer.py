@@ -1165,6 +1165,42 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
+    def test_dpo_trainer_with_tools(self):
+        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        # Define dummy test tools
+        def get_current_temperature(location: str):
+            """
+            Gets the temperature at a given location.
+
+            Args:
+                location: The location to get the temperature for
+            """
+            return 22.0
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                tools=[get_current_temperature],
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference")
+
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            self.assertIn("get_current_temperature", trainer.train_dataset["prompt"][0])
+
 
 @require_vision
 class DPOVisionTrainerTester(unittest.TestCase):
