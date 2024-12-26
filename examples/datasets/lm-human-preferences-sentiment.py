@@ -50,6 +50,7 @@ def to_prompt_completion(example, tokenizer):
     assert chosen != rejected
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
+
 model_card = ModelCard("""
 ---
 tags: [trl]

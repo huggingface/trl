@@ -56,6 +56,7 @@ def to_preference(example):
     rejected = example["summaries"][rejected_idx]["text"]
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
+
 model_card = ModelCard("""
 ---
 tags: [trl]

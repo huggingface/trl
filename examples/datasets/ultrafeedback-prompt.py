@@ -50,6 +50,7 @@ def drop_long_prompt(example):
     else:
         return True
 
+
 model_card = ModelCard("""
 ---
 tags: [trl]

@@ -50,6 +50,7 @@ def to_conversational(example):
     rejected = [{"role": "assistant", "content": [{"type": "text", "text": example["rejected"]}]}]
     return {"prompt": prompt, "images": [example["image"]], "chosen": chosen, "rejected": rejected}
 
+
 model_card = ModelCard("""
 ---
 tags: [trl]

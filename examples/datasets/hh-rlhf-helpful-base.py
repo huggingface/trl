@@ -85,6 +85,7 @@ def extract_dialogue(example: str) -> list[dict[str, str]]:
 
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
+
 model_card = ModelCard("""
 ---
 tags: [trl]

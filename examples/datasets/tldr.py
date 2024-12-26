@@ -45,6 +45,7 @@ def to_prompt_completion(example):
     completion = " " + example["summary"]  # Add a space to separate the prompt from the completion
     return {"prompt": prompt, "completion": completion}
 
+
 model_card = ModelCard("""
 ---
 tags: [trl]

@@ -114,6 +114,7 @@ def process_example(example):
 
     return {"prompt": prompt, "completions": completions, "labels": labels}
 
+
 model_card = ModelCard("""
 ---
 tags: [trl]

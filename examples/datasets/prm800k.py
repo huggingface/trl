@@ -88,6 +88,7 @@ def process_batch(examples):
     outputs = {k: [v[k] for v in outputs] for k in outputs[0]}
     return outputs
 
+
 model_card = ModelCard("""
 ---
 tags: [trl]
