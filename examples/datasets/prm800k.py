@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -87,6 +88,25 @@ def process_batch(examples):
     outputs = {k: [v[k] for v in outputs] for k in outputs[0]}
     return outputs
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+**PRM800K Dataset**
+
+**Summary**
+
+The PRM800K dataset is a processed version of OpenAI's PRM800K, designed to train models using the TRL library for stepwise supervision tasks. It contains 800,000 step-level correctness labels for model-generated solutions to problems from the MATH dataset. This dataset enables models to learn and verify each step of a solution, enhancing their reasoning capabilities. 
+
+**Data Structure**
+
+- **Format**: [Stepwise Supervision](https://huggingface.co/docs/trl/main/dataset_formats#stepwise-supervision)
+- **Prompt**: The original problem statement.
+- **Completions**: A list of reasoning steps generated to solve the problem.
+- **Labels**: A list of booleans or floats indicating the correctness of each corresponding reasoning step.
+
+This structure allows models to learn the correctness of each step in a solution, facilitating improved reasoning and problem-solving abilities. 
+""")
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -116,3 +136,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")

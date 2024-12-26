@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import AutoTokenizer, HfArgumentParser
 
 
@@ -54,6 +55,25 @@ def to_prompt_completion(example, tokenizer):
     assert chosen != rejected
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+**LM-Human-Preferences-Descriptiveness Dataset**
+
+**Summary**
+
+The LM-Human-Preferences-Descriptiveness dataset is a processed subset of [OpenAI's LM-Human-Preferences](https://github.com/openai/lm-human-preferences), focusing specifically on enhancing the descriptiveness of generated text. It contains pairs of text samples, each labeled as either "chosen" or "rejected," based on human preferences regarding the level of detail and vividness in the descriptions. This dataset enables models to learn human preferences in descriptive language, improving their ability to generate rich and engaging narratives. 
+
+**Data Structure**
+
+- **Format**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
+- **Prompt**: The original text sample.
+- **Chosen**: A version of the text with enhanced descriptiveness.
+- **Rejected**: A version of the text with less descriptiveness.
+
+This structure allows models to learn to prefer the "Chosen" text over the "Rejected" one, thereby aligning with human preferences in descriptive language.
+""")
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -79,3 +99,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")

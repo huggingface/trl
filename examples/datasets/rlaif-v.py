@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import features, load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -49,6 +50,25 @@ def to_conversational(example):
     rejected = [{"role": "assistant", "content": [{"type": "text", "text": example["rejected"]}]}]
     return {"prompt": prompt, "images": [example["image"]], "chosen": chosen, "rejected": rejected}
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+**RLAIF-V**
+
+**Summary**
+
+The RLAIF-V dataset is a processed version of the [openbmb/RLAIF-V-Dataset](https://huggingface.co/datasets/openbmb/RLAIF-V-Dataset#dataset-card-for-rlaif-v-dataset), specifically curated to train vision-language models using the TRL library for preference learning tasks. It contains 83,132 high-quality comparison pairs, each comprising an image and two textual descriptions: one preferred and one rejected. This dataset enables models to learn human preferences in visual contexts, enhancing their ability to generate and evaluate image captions. 
+
+**Data Structure**
+
+- **Format**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
+- **Prompt**: The image to be described.
+- **Chosen**: The preferred textual description of the image.
+- **Rejected**: An alternative textual description that was not preferred.
+
+This structure allows models to learn to prefer the "Chosen" description over the "Rejected" one, thereby aligning with human preferences in image captioning tasks.                       
+""")
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -71,3 +91,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")

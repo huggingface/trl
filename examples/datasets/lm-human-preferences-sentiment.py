@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import AutoTokenizer, HfArgumentParser
 
 
@@ -49,6 +50,25 @@ def to_prompt_completion(example, tokenizer):
     assert chosen != rejected
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+**LM-Human-Preferences-Sentiment Dataset**
+
+**Summary**
+
+The LM-Human-Preferences-Sentiment dataset is a processed subset of [OpenAI's LM-Human-Preferences](https://github.com/openai/lm-human-preferences), focusing specifically on sentiment analysis tasks. It contains pairs of text samples, each labeled as either "chosen" or "rejected," based on human preferences regarding the sentiment conveyed in the text. This dataset enables models to learn human preferences in sentiment expression, enhancing their ability to generate and evaluate text with desired emotional tones. 
+
+**Data Structure**
+
+- **Format**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
+- **Prompt**: The original text sample.
+- **Chosen**: A version of the text that conveys the desired sentiment.
+- **Rejected**: A version of the text that does not convey the desired sentiment.
+
+This structure allows models to learn to prefer the "Chosen" text over the "Rejected" one, thereby aligning with human preferences in sentiment expression.
+""")
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -72,3 +92,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")

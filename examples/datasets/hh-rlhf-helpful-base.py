@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -84,6 +85,27 @@ def extract_dialogue(example: str) -> list[dict[str, str]]:
 
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+**HH-RLHF-Helpful-Base Dataset**
+
+**Summary**
+
+The HH-RLHF-Helpful-Base dataset is a processed version of [Anthropic's HH-RLHF](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset, specifically curated to train models using the TRL library for preference learning and Alignment tasks. It contains pairs of text samples, each labeled as either "chosen" or "rejected," based on human preferences regarding the helpfulness of the responses. This dataset enables models to learn human preferences in generating helpful responses, enhancing their ability to assist users effectively. 
+
+**Data Structure**
+
+The dataset follows the [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference) format:
+
+- **Format**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
+- **Prompt**: The original user query.
+- **Chosen**: A response deemed helpful by human evaluators.
+- **Rejected**: A response considered less helpful or unhelpful.
+
+This structure allows models to learn to prefer the "Chosen" response over the "Rejected" one, thereby aligning with human preferences in helpfulness.
+""")
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -94,3 +116,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")
