@@ -57,6 +57,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install ".[dev]"
+          python -m pip install --no-build-isolation flash-attn
       - name: Test with pytest
         run: |
           make test
@@ -89,6 +90,7 @@ jobs:
           python -m pip install -U git+https://github.com/huggingface/datasets.git
           python -m pip install -U git+https://github.com/huggingface/transformers.git
           python -m pip install ".[dev]"
+          python -m pip install --no-build-isolation flash-attn
       - name: Test with pytest
         run: |
           make test
@@ -150,6 +152,7 @@ jobs:
           python -m pip install datasets==2.21.0
           python -m pip install transformers==4.46.0
           python -m pip install ".[dev]"
+          python -m pip install --no-build-isolation flash-attn
       - name: Test with pytest
         run: |
           make test
