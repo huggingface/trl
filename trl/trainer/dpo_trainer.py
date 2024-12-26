@@ -1149,10 +1149,30 @@ class DPOTrainer(Trainer):
                 num_logits_to_keep = loss_mask.shape[1] - first_compute_index
                 model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
 
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
+            if self.args.padding_free:
+                # Flatten the input_ids, position_ids, and loss_mask
+                # input_ids = [[a, b, c, 0], ->     input_ids = [a, b, c, d, e, f, g]
+                #              [d, e, f, g]]     position_ids = [0, 1, 2, 0, 1, 2, 3]
+                model_kwargs["input_ids"] = input_ids[attention_mask.bool()].unsqueeze(0)
+                model_kwargs["position_ids"] = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
+            else:
+                model_kwargs["input_ids"] = input_ids
+                model_kwargs["attention_mask"] = attention_mask
+
+            outputs = model(**model_kwargs)
+
+            if self.args.padding_free:
+                # Reverse flattenings
+                batch_size, seq_len = input_ids.shape
+                logits = torch.zeros(batch_size, seq_len, outputs.logits.shape[-1], device=outputs.logits.device)
+                flat_logits = logits.view(batch_size * seq_len, -1)  # Shape (B, L, V) -> (B * L, V)
+                flat_attention_mask = attention_mask.flatten()  # Shape (B, L) -> (B * L)
+                flat_logits[flat_attention_mask.bool()] = outputs.logits
+            else:
+                logits = outputs.logits
 
             # Offset the logits by one to align with the labels
-            logits = outputs.logits[:, :-1, :]
+            logits = logits[:, :-1, :]
             labels = input_ids[:, 1:].clone()
             loss_mask = loss_mask[:, 1:].bool()
 
