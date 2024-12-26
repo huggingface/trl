@@ -1165,6 +1165,42 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
+    def test_padding_free(self):
+        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                padding_free=True,
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            trainer = DPOTrainer(
+                model=model,
+                args=training_args,
+                tokenizer=tokenizer,
+                train_dataset=dummy_dataset["train"],
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+
 
 @require_vision
 class DPOVisionTrainerTester(unittest.TestCase):
