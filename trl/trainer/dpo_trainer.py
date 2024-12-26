@@ -391,6 +391,14 @@ class DPOTrainer(Trainer):
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
         self.use_num_logits_to_keep = args.use_num_logits_to_keep
 
+        if args.padding_free:
+            if model.config._attn_implementation != "flash_attention_2":
+                warnings.warn(
+                    "Padding free training is only supported with the `flash_attention_2` implementation. "
+                    "Please set `attn_implementation='flash_attention_2'` in the model config."
+                )
+        self.padding_free = args.padding_free
+
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
         self._precomputed_train_ref_log_probs = False
@@ -1149,7 +1157,7 @@ class DPOTrainer(Trainer):
                 num_logits_to_keep = loss_mask.shape[1] - first_compute_index
                 model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
 
-            if self.args.padding_free:
+            if self.padding_free:
                 # Flatten the input_ids, position_ids, and loss_mask
                 # input_ids = [[a, b, c, 0], ->     input_ids = [a, b, c, d, e, f, g]
                 #              [d, e, f, g]]     position_ids = [0, 1, 2, 0, 1, 2, 3]
@@ -1161,7 +1169,7 @@ class DPOTrainer(Trainer):
 
             outputs = model(**model_kwargs)
 
-            if self.args.padding_free:
+            if self.padding_free:
                 # Reverse flattenings
                 batch_size, seq_len = input_ids.shape
                 vocab_size = outputs.logits.shape[-1]
