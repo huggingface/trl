@@ -1176,6 +1176,7 @@ class DPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
+                learning_rate=9e-1,
                 per_device_train_batch_size=2,
                 padding_free=True,
                 report_to="none",
@@ -1186,7 +1187,7 @@ class DPOTrainerTester(unittest.TestCase):
             trainer = DPOTrainer(
                 model=model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
             )
 
