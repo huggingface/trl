@@ -1164,9 +1164,12 @@ class DPOTrainer(Trainer):
             if self.args.padding_free:
                 # Reverse flattenings
                 batch_size, seq_len = input_ids.shape
-                logits = torch.zeros(batch_size, seq_len, outputs.logits.shape[-1], device=outputs.logits.device)
-                flat_logits = logits.view(batch_size * seq_len, -1)  # Shape (B, L, V) -> (B * L, V)
-                flat_attention_mask = attention_mask.flatten()  # Shape (B, L) -> (B * L)
+                vocab_size = outputs.logits.shape[-1]
+                logits = torch.zeros(
+                    batch_size, seq_len, vocab_size, device=outputs.logits.device, dtype=outputs.logits.dtype
+                )
+                flat_logits = logits.view(batch_size * seq_len, vocab_size)  # (B, L, V) -> (B * L, V)
+                flat_attention_mask = attention_mask.flatten()  # (B, L) -> (B * L)
                 flat_logits[flat_attention_mask.bool()] = outputs.logits
             else:
                 logits = outputs.logits
