@@ -1173,7 +1173,7 @@ class DPOTrainerTester(unittest.TestCase):
         # Normally, we need `attn_implementation="flash_attention_2"` to that the model returns correct logits.
         # Without it, the logits may be incorrect, but that's fine here. This test focuses only on the inner logic
         # of padding_free.
-        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
