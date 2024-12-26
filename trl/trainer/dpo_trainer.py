@@ -1160,8 +1160,8 @@ class DPOTrainer(Trainer):
 
             if self.padding_free:
                 # Flatten the input_ids, position_ids, and loss_mask
-                # input_ids = [[a, b, c, 0], ->     input_ids = [a, b, c, d, e, f, g]
-                #              [d, e, f, g]]     position_ids = [0, 1, 2, 0, 1, 2, 3]
+                # input_ids = [[a, b, c, 0], ->     input_ids = [[a, b, c, d, e, f, g]]
+                #              [d, e, f, g]]     position_ids = [[0, 1, 2, 0, 1, 2, 3]]
                 input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
                 loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
                 model_kwargs["position_ids"] = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
