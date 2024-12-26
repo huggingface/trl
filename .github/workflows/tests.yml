@@ -89,7 +89,6 @@ jobs:
           python -m pip install -U git+https://github.com/huggingface/datasets.git
           python -m pip install -U git+https://github.com/huggingface/transformers.git
           python -m pip install ".[dev]"
-
       - name: Test with pytest
         run: |
           make test
