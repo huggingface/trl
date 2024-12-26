@@ -29,7 +29,12 @@ from transformers import (
     PreTrainedTokenizerBase,
     is_vision_available,
 )
-from transformers.testing_utils import require_peft, require_torch_gpu_if_bnb_not_multi_backend_enabled, require_vision
+from transformers.testing_utils import (
+    require_flash_attn,
+    require_peft,
+    require_torch_gpu_if_bnb_not_multi_backend_enabled,
+    require_vision,
+)
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
@@ -1165,6 +1170,7 @@ class DPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
+    @require_flash_attn
     def test_padding_free(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
