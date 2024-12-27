@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from transformers import TrainingArguments
 
@@ -48,3 +48,4 @@ class RewardConfig(TrainingArguments):
     dataset_num_proc: Optional[int] = None
     center_rewards_coefficient: Optional[float] = None
     remove_unused_columns: bool = False
+    model_init_kwargs: Optional[dict[str, Any]] = None
