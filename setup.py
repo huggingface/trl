@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -68,12 +68,10 @@ To create the package for pypi.
    Then push the change with a message 'set dev version'
 """
 
-import os
-
 from setuptools import find_packages, setup
 
 
-__version__ = "0.13.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.14.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "accelerate>=0.34.0",
@@ -99,44 +97,41 @@ EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
     EXTRAS["dev"].extend(reqs)
 
-try:
-    file_path = os.path.dirname(os.path.abspath(__file__))
-    os.symlink(os.path.join(file_path, "examples/scripts"), os.path.join(file_path, "trl/commands/scripts"))
 
-    setup(
-        name="trl",
-        license="Apache 2.0",
-        classifiers=[
-            "Development Status :: 2 - Pre-Alpha",
-            "Intended Audience :: Developers",
-            "Intended Audience :: Science/Research",
-            "License :: OSI Approved :: Apache Software License",
-            "Natural Language :: English",
-            "Operating System :: OS Independent",
-            "Programming Language :: Python :: 3",
-            "Programming Language :: Python :: 3.9",
-            "Programming Language :: Python :: 3.10",
-            "Programming Language :: Python :: 3.11",
-            "Programming Language :: Python :: 3.12",
-        ],
-        url="https://github.com/huggingface/trl",
-        entry_points={
-            "console_scripts": ["trl=trl.commands.cli:main"],
-        },
-        include_package_data=True,
-        package_data={"trl": ["commands/scripts/config/*", "commands/scripts/*", "templates/*.md"]},
-        packages=find_packages(exclude={"tests"}),
-        install_requires=REQUIRED_PKGS,
-        extras_require=EXTRAS,
-        python_requires=">=3.9",
-        long_description=open("README.md", encoding="utf-8").read(),
-        long_description_content_type="text/markdown",
-        zip_safe=False,
-        version=__version__,
-        description="Train transformer language models with reinforcement learning.",
-        keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
-        author="Leandro von Werra",
-        author_email="leandro.vonwerra@gmail.com",
-    )
-finally:
-    os.unlink(os.path.join(file_path, "trl/commands/scripts"))
+setup(
+    name="trl",
+    license="Apache 2.0",
+    classifiers=[
+        "Development Status :: 2 - Pre-Alpha",
+        "Intended Audience :: Developers",
+        "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: Apache Software License",
+        "Natural Language :: English",
+        "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+    ],
+    url="https://github.com/huggingface/trl",
+    entry_points={
+        "console_scripts": ["trl=trl.cli:main"],
+    },
+    include_package_data=True,
+    package_data={
+        "trl": ["templates/*.md"],
+    },
+    packages=find_packages(exclude={"tests", "tests.slow"}),
+    install_requires=REQUIRED_PKGS,
+    extras_require=EXTRAS,
+    python_requires=">=3.9",
+    long_description=open("README.md", encoding="utf-8").read(),
+    long_description_content_type="text/markdown",
+    zip_safe=False,
+    version=__version__,
+    description="Train transformer language models with reinforcement learning.",
+    keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
+    author="Leandro von Werra",
+    author_email="leandro.vonwerra@gmail.com",
+)

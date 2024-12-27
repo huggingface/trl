@@ -1,4 +1,3 @@
-# BCO Authors: Seungjae Jung, Gunsoo Han, Daniel Wontae Nam and Kyoung-Woon On
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import inspect
 import os
 import random
@@ -59,6 +59,7 @@ from .utils import (
     RunningMoments,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
     pad_to_length,
     peft_module_casting_to_bf16,
 )
@@ -308,8 +309,6 @@ class BCOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        disable_dropout (`bool`, defaults to `True`):
-            Whether or not to disable dropouts in `model` and `ref_model`.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
@@ -537,10 +536,11 @@ class BCOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
-        # disable dropout in the model and reference model
-        disable_dropout_in_model(model)
-        if self.ref_model is not None:
-            disable_dropout_in_model(self.ref_model)
+        # Disable dropout in the model and reference model
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
@@ -1514,6 +1514,7 @@ class BCOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="BCO",
             trainer_citation=citation,
             paper_title="Binary Classifier Optimization for Large Language Model Alignment",

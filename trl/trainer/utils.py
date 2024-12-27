@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import dataclasses
 import importlib.resources as pkg_resources
 import json
@@ -36,10 +37,12 @@ from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
+    EvalPrediction,
     GenerationConfig,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
+    is_comet_available,
 )
 from transformers.utils import (
     is_peft_available,
@@ -48,40 +51,14 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
 
+if is_comet_available():
+    import comet_ml
+
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
-
-
-class AdaptiveKLController:
-    """
-    Adaptive KL controller described in the paper:
-    https://huggingface.co/papers/1909.08593
-    """
-
-    def __init__(self, init_kl_coef, target, horizon):
-        self.value = init_kl_coef
-        self.target = target
-        self.horizon = horizon
-
-    def update(self, current, n_steps):
-        target = self.target
-        proportional_error = np.clip(current / target - 1, -0.2, 0.2)
-        mult = 1 + proportional_error * n_steps / self.horizon
-        self.value *= mult
-
-
-class FixedKLController:
-    """Fixed KL controller."""
-
-    def __init__(self, kl_coef):
-        self.value = kl_coef
-
-    def update(self, current, n_steps):
-        pass
 
 
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
@@ -274,7 +251,7 @@ class DataCollatorForChatML:
             if "input_ids" not in example:
                 message = example[self.messages_key]
                 formatted_message = self.tokenizer.apply_chat_template(
-                    message, tokenize=False, add_generation_prompt=True
+                    message, tokenize=False, add_generation_prompt=False
                 )
                 tokenized_message = self.tokenizer(
                     formatted_message,
@@ -755,18 +732,38 @@ def get_global_statistics(
     return global_mean.to(device), global_var.to(device), count.item()
 
 
-def compute_accuracy(eval_pred) -> dict[str, float]:
+def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
     predictions, labels = eval_pred
-    # Here, predictions is rewards_chosen and rewards_rejected.
-    # We want to see how much of the time rewards_chosen > rewards_rejected.
-    equal_predictions_count = np.array(predictions[:, 0] == predictions[:, 1], dtype=float).sum()
-    if equal_predictions_count > 0:
-        warnings.warn(
-            f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions for "
-            "both options are equal. As a consequence the accuracy can be misleading.",
-            UserWarning,
+    if predictions.ndim == 3:
+        # Token classification task. Shapes are (batch_size, seq_len, num_labels) and (batch_size, seq_len)
+        # Used to compute the accuracy in the prm_trainer.
+        predictions = np.argmax(predictions, axis=2)
+
+        # Flatten the predictions and labels to remove the ignored tokens.
+        predictions = np.array(
+            [p for prediction, label in zip(predictions, labels) for (p, lbl) in zip(prediction, label) if lbl != -100]
         )
-    predictions = np.argmax(predictions, axis=1)
+        labels = np.array([lbl for label in labels for lbl in label if lbl != -100])
+
+    else:
+        # Here, predictions is rewards_chosen and rewards_rejected. Shapes are (batch_size, 2) and (batch_size,)
+        # We want to see how much of the time rewards_chosen > rewards_rejected.
+        equal_mask = predictions[:, 0] == predictions[:, 1]
+        equal_predictions_count = int(equal_mask.sum())
+
+        if equal_predictions_count > 0:
+            warnings.warn(
+                f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
+                "for both options are equal. These instances are ignored in the accuracy computation.",
+                UserWarning,
+            )
+
+        # Filter out equal predictions
+        predictions = predictions[~equal_mask]
+        labels = labels[~equal_mask]
+
+        # Use the remaining predictions for accuracy calculation
+        predictions = np.argmax(predictions, axis=1)
 
     accuracy = np.array(predictions == labels, dtype=float).mean().item()
     return {"accuracy": accuracy}
@@ -852,34 +849,16 @@ def peft_module_casting_to_bf16(model):
                     module = module.to(torch.bfloat16)
 
 
-def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
-    if is_unsloth_available():
-        # Unsloth adds a new attribute in the model config `unsloth_version`
-        # to keep track of models that have been patched with unsloth.
-        if hasattr(model, "config") and getattr(model.config, "unsloth_version", None) is not None:
-            tag_names.append("unsloth")
-
-    if kwargs is not None:
-        if "tags" not in kwargs:
-            kwargs["tags"] = tag_names
-        elif "tags" in kwargs and isinstance(kwargs["tags"], list):
-            kwargs["tags"].extend(tag_names)
-        elif "tags" in kwargs and isinstance(kwargs["tags"], str):
-            tag_names.append(kwargs["tags"])
-            kwargs["tags"] = tag_names
-    return kwargs
-
-
-def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesConfig]:
-    if model_config.load_in_4bit:
+def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesConfig]:
+    if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
-            bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
-            bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
-            bnb_4bit_quant_storage=model_config.torch_dtype,
+            bnb_4bit_compute_dtype=model_args.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
+            bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
+            bnb_4bit_use_double_quant=model_args.use_bnb_nested_quant,
+            bnb_4bit_quant_storage=model_args.torch_dtype,
         )
-    elif model_config.load_in_8bit:
+    elif model_args.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
             load_in_8bit=True,
         )
@@ -898,8 +877,8 @@ def get_kbit_device_map() -> Optional[dict[str, int]]:
         return None
 
 
-def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
-    if model_config.use_peft is False:
+def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
+    if model_args.use_peft is False:
         return None
 
     if not is_peft_available():
@@ -909,14 +888,14 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         )
 
     peft_config = LoraConfig(
-        task_type=model_config.lora_task_type,
-        r=model_config.lora_r,
-        target_modules=model_config.lora_target_modules,
-        lora_alpha=model_config.lora_alpha,
-        lora_dropout=model_config.lora_dropout,
+        task_type=model_args.lora_task_type,
+        r=model_args.lora_r,
+        target_modules=model_args.lora_target_modules,
+        lora_alpha=model_args.lora_alpha,
+        lora_dropout=model_args.lora_dropout,
         bias="none",
-        use_rslora=model_config.use_rslora,
-        modules_to_save=model_config.lora_modules_to_save,
+        use_rslora=model_args.use_rslora,
+        modules_to_save=model_args.lora_modules_to_save,
     )
 
     return peft_config
@@ -1410,6 +1389,7 @@ def generate_model_card(
     trainer_citation: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
+    comet_url: Optional[str] = None,
 ) -> ModelCard:
     """
     Generate a `ModelCard` from a template.
@@ -1427,6 +1407,8 @@ def generate_model_card(
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
+        comet_url (`str` or `None`):
+            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
@@ -1456,6 +1438,7 @@ def generate_model_card(
         hub_model_id=hub_model_id,
         dataset_name=dataset_name,
         wandb_url=wandb_url,
+        comet_url=comet_url,
         trainer_name=trainer_name,
         trainer_citation=trainer_citation,
         paper_title=paper_title,
@@ -1467,3 +1450,34 @@ def generate_model_card(
         tokenizers_version=version("tokenizers"),
     )
     return card
+
+
+def get_comet_experiment_url() -> Optional[str]:
+    """
+    If Comet integration is enabled, return the URL of the current Comet experiment; otherwise, return `None`.
+    """
+    if not is_comet_available():
+        return None
+
+    if comet_ml.get_running_experiment() is not None:
+        return comet_ml.get_running_experiment().url
+
+    return None
+
+
+def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
+    """
+    If Comet integration is enabled logs a table to the Comet experiment if it is currently running.
+
+    Args:
+        name (`str`):
+            Table name.
+        table (`pd.DataFrame`):
+            The Pandas DataFrame containing the table to log.
+    """
+    if not is_comet_available():
+        raise ModuleNotFoundError("The comet-ml is not installed. Please install it first: pip install comet-ml")
+
+    experiment = comet_ml.get_running_experiment()
+    if experiment is not None:
+        experiment.log_table(tabular_data=table, filename=name)

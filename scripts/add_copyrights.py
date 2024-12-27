@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import sys
 from datetime import datetime
 
 
-COPYRIGHT_HEADER = f"""# Copyright {datetime.now().year} The HuggingFace Inc. team. All rights reserved.
+COPYRIGHT_HEADER = f"""# Copyright {datetime.now().year} The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,8 +32,6 @@ COPYRIGHT_HEADER = f"""# Copyright {datetime.now().year} The HuggingFace Inc. te
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-
-COPYRIGHT_KEYWORD = "# Copyright 20"
 
 
 def get_tracked_python_files():
@@ -60,10 +58,9 @@ def check_and_add_copyright(file_path):
     with open(file_path, encoding="utf-8") as f:
         content = f.readlines()
 
-    # Check if the copyright header exists in the first 10 lines
-    for line in content[:10]:
-        if COPYRIGHT_KEYWORD in line:
-            return True
+    # Check if the exact copyright header exists
+    if "".join(content).startswith(COPYRIGHT_HEADER):
+        return True
 
     # If no copyright notice was found, prepend the header
     print(f"[MODIFY] Adding copyright to {file_path}.")

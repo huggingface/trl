@@ -5,13 +5,6 @@ check_dirs := examples tests trl
 ACCELERATE_CONFIG_PATH = `pwd`/examples/accelerate_configs
 COMMAND_FILES_PATH = `pwd`/commands
 
-
-dev:
-	@if [ -L "$(pwd)/trl/commands/scripts" ]; then unlink "$(pwd)/trl/commands/scripts"; fi
-	@if [ -e "$(pwd)/trl/commands/scripts" ] && [ ! -L "$(pwd)/trl/commands/scripts" ]; then rm -rf "$(pwd)/trl/commands/scripts"; fi
-	pip install -e ".[dev]"
-	ln -s `pwd`/examples/scripts/ `pwd`/trl/commands
-
 test:
 	python -m pytest -n auto --dist=loadfile -s -v --reruns 5 --reruns-delay 1 --only-rerun '(OSError|Timeout|HTTPError.*502|HTTPError.*504||not less than or equal to 0.01)' ./tests/
 

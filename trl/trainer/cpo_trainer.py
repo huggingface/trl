@@ -1,4 +1,3 @@
-# CPO Authors: Haoran Xu, Amr Sharaf, Yunmo Chen, Weiting Tan, Lingfeng Shen, Benjamin Van Durme, Kenton Murray, Young Jin Kim
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,7 +45,6 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from .cpo_config import CPOConfig
@@ -56,6 +54,7 @@ from .utils import (
     add_eos_token_if_needed,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
     pad_to_length,
     peft_module_casting_to_bf16,
 )
@@ -106,9 +105,6 @@ class CPOTrainer(Trainer):
 
     _tag_names = ["trl", "cpo"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.14.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
@@ -272,6 +268,7 @@ class CPOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
+        # Disable dropout in the model
         if args.disable_dropout:
             disable_dropout_in_model(model)
 
@@ -1053,6 +1050,7 @@ class CPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="CPO",
             trainer_citation=citation,
             paper_title="Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation",

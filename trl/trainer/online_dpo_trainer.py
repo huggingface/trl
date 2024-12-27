@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -45,7 +45,6 @@ from transformers import (
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model
@@ -58,6 +57,7 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     generate_model_card,
+    get_comet_experiment_url,
     get_reward,
     prepare_deepspeed,
     truncate_right,
@@ -127,9 +127,6 @@ class OnlineDPOTrainer(Trainer):
 
     _tag_names = ["trl", "online-dpo"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.14.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module],
@@ -199,9 +196,11 @@ class OnlineDPOTrainer(Trainer):
             # Get peft model with the given config
             model = get_peft_model(model, peft_config)
 
-        # Disable dropout in the model if specified
+        # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         # Handle the ref_model
         # Usually, the user wants the ref model to be the initial version of the model. When using PEFT, it's easy to
@@ -284,7 +283,10 @@ class OnlineDPOTrainer(Trainer):
                 self.reward_model = prepare_deepspeed(
                     self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
                 )
-            self.ref_model = prepare_deepspeed(self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16)
+            if self.ref_model is not None:
+                self.ref_model = prepare_deepspeed(
+                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
         else:
             if self.ref_model is not None:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
@@ -731,6 +733,7 @@ class OnlineDPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="Online DPO",
             trainer_citation=citation,
             paper_title="Direct Language Model Alignment from Online AI Feedback",

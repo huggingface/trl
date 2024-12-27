@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import os
 import random
 import textwrap
@@ -41,7 +42,13 @@ from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
-from .utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache, generate_model_card
+from .utils import (
+    DataCollatorForChatML,
+    disable_dropout_in_model,
+    empty_cache,
+    generate_model_card,
+    get_comet_experiment_url,
+)
 
 
 if is_deepspeed_available():
@@ -119,6 +126,7 @@ class GKDTrainer(SFTTrainer):
             else:
                 teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
+        # Disable dropout in the model
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
@@ -377,6 +385,7 @@ class GKDTrainer(SFTTrainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="GKD",
             trainer_citation=citation,
             paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",

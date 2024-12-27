@@ -1,5 +1,4 @@
-# DPO Authors: Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D. Manning, and Chelsea Finn 2023
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,7 +30,7 @@ import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
-from datasets import Dataset
+from datasets import Dataset, IterableDataset
 from packaging import version
 from torch.utils.data import DataLoader
 from transformers import (
@@ -61,6 +60,7 @@ from .utils import (
     cap_exp,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
     pad,
     pad_to_length,
     peft_module_casting_to_bf16,
@@ -79,7 +79,7 @@ if is_deepspeed_available():
 
 
 @dataclass
-class PreferenceCollator(DataCollatorMixin):
+class DataCollatorForPreference(DataCollatorMixin):
     """
     Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they
     are not all of the same length.
@@ -92,8 +92,8 @@ class PreferenceCollator(DataCollatorMixin):
 
     Examples:
     ```python
-    >>> from trl import PreferenceCollator
-    >>> collator = PreferenceCollator(pad_token_id=0)
+    >>> from trl import DataCollatorForPreference
+    >>> collator = DataCollatorForPreference(pad_token_id=0)
     >>> examples = [
     ...     {"prompt_input_ids": [1, 2, 3], "chosen_input_ids": [4, 5], "rejected_input_ids": [6]},
     ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]}
@@ -130,6 +130,9 @@ class PreferenceCollator(DataCollatorMixin):
             pixel_values = [torch.tensor(example["pixel_values"]) for example in examples]
         if "pixel_attention_mask" in examples[0]:
             pixel_attention_mask = [torch.tensor(example["pixel_attention_mask"]) for example in examples]
+        if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
+            ref_chosen_logps = torch.tensor([example["ref_chosen_logps"] for example in examples])
+            ref_rejected_logps = torch.tensor([example["ref_rejected_logps"] for example in examples])
 
         # Pad
         output = {}
@@ -145,6 +148,9 @@ class PreferenceCollator(DataCollatorMixin):
             output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
         if "image_sizes" in examples[0]:
             output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
+        if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
+            output["ref_chosen_logps"] = ref_chosen_logps
+            output["ref_rejected_logps"] = ref_rejected_logps
 
         return output
 
@@ -162,7 +168,7 @@ class DPOTrainer(Trainer):
         args (`DPOConfig`):
             The DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
+            The data collator to use for training. If None is specified, the default data collator (`DataCollatorForPreference`) will be used
             which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
@@ -368,8 +374,9 @@ class DPOTrainer(Trainer):
                 )
 
         if data_collator is None:
-            data_collator = PreferenceCollator(pad_token_id=self.padding_value)
+            data_collator = DataCollatorForPreference(pad_token_id=self.padding_value)
 
+        # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
@@ -430,53 +437,16 @@ class DPOTrainer(Trainer):
         # that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
-        with PartialState().local_main_process_first():
-            # Extract the prompt if needed, and apply the chat template if needed
-            train_dataset = train_dataset.map(
-                maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from train dataset"
-            )
-            train_dataset = train_dataset.map(
-                maybe_apply_chat_template,
-                fn_kwargs={"tokenizer": processing_class},
-                num_proc=args.dataset_num_proc,
-                desc="Applying chat template to train dataset",
-            )
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from eval dataset"
-                )
-                eval_dataset = eval_dataset.map(
-                    maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
-                    num_proc=args.dataset_num_proc,
-                    desc="Applying chat template to eval dataset",
-                )
-
-            # tokenize the dataset, lower writer batch size to avoid OOM (frequent in vision models)
-            fn_kwargs = {
-                "processing_class": processing_class,
-                "max_prompt_length": args.max_prompt_length,
-                "max_completion_length": args.max_completion_length,
-                # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
-                "add_special_tokens": self.is_encoder_decoder,
-            }
-            train_dataset = train_dataset.map(
-                self.tokenize_row if not self.is_vision_model else self.process_row,
-                fn_kwargs=fn_kwargs,
-                num_proc=self.dataset_num_proc,
-                writer_batch_size=10,
-                desc="Tokenizing train dataset",
-            )
-            if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(
-                    self.tokenize_row if not self.is_vision_model else self.process_row,
-                    fn_kwargs=fn_kwargs,
-                    num_proc=self.dataset_num_proc,
-                    writer_batch_size=10,
-                    desc="Tokenizing eval dataset",
-                )
+        # Dataset preparation
+        train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
+        if eval_dataset is not None:
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, processing_class, args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
         super().__init__(
             model=model,
@@ -533,6 +503,48 @@ class DPOTrainer(Trainer):
 
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
+
+    def _prepare_dataset(
+        self,
+        dataset: Union[Dataset, IterableDataset],
+        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        args: DPOConfig,
+        dataset_name: str,
+    ) -> Union[Dataset, IterableDataset]:
+        # Build the kwargs for the `map` function
+        map_kwargs = {"writer_batch_size": 10}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
+            map_kwargs["num_proc"] = args.dataset_num_proc
+
+        with PartialState().local_main_process_first():
+            # Extract prompt if needed
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Extracting prompt in {dataset_name} dataset"
+            dataset = dataset.map(maybe_extract_prompt, **map_kwargs)
+
+            # Apply the chat template if needed
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+            dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
+
+            # Tokenize the dataset
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
+
+            dataset = dataset.map(
+                self.tokenize_row if not self.is_vision_model else self.process_row,
+                remove_columns=["prompt", "chosen", "rejected"],
+                fn_kwargs={
+                    "processing_class": processing_class,
+                    "max_prompt_length": args.max_prompt_length,
+                    "max_completion_length": args.max_completion_length,
+                    # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
+                    "add_special_tokens": False,
+                },
+                **map_kwargs,
+            )
+
+        return dataset
 
     @staticmethod
     def tokenize_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
@@ -672,9 +684,16 @@ class DPOTrainer(Trainer):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
         # In DPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
-        # Instead, we set them to the columns expected by `DPODataCollatorWithPadding`, hence the override.
+        # Instead, we set them to the columns expected by `DataCollatorForPreference`, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt_input_ids", "chosen_input_ids", "rejected_input_ids", "image_sizes"]
+            self._signature_columns = [
+                "prompt_input_ids",
+                "chosen_input_ids",
+                "rejected_input_ids",
+                "image_sizes",
+                "ref_chosen_logps",
+                "ref_rejected_logps",
+            ]
 
     def get_train_dataloader(self) -> DataLoader:
         """
@@ -1471,6 +1490,7 @@ class DPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="DPO",
             trainer_citation=citation,
             paper_title="Direct Preference Optimization: Your Language Model is Secretly a Reward Model",

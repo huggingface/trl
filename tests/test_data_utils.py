@@ -11,12 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import itertools
 import unittest
 
 from datasets import Dataset, DatasetDict
 from parameterized import parameterized
-from transformers import AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer
 
 from trl.data_utils import (
     apply_chat_template,
@@ -194,6 +195,37 @@ class ApplyChatTemplateTester(unittest.TestCase):
             self.assertIn("label", result)
             self.assertIsInstance(result["label"], bool)
             self.assertEqual(result["label"], example["label"])
+
+    def test_apply_chat_template_with_tools(self):
+        tokenizer = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+
+        # Define dummy test tools
+        def get_current_temperature(location: str):
+            """
+            Gets the temperature at a given location.
+
+            Args:
+                location: The location to get the temperature for
+            """
+            return 22.0
+
+        # Define test case
+        test_case = {
+            "prompt": [
+                {"content": "Whats the temperature in London?", "role": "user"},
+            ]
+        }
+        # Test with tools
+        result_with_tools = apply_chat_template(test_case, tokenizer, tools=[get_current_temperature])
+
+        # Verify tools are included in the output
+        self.assertIn("get_current_temperature", result_with_tools["prompt"])
+
+        # Test without tools
+        result_without_tools = apply_chat_template(test_case, tokenizer, tools=None)
+
+        # Verify tools are not included in the output
+        self.assertNotIn("get_current_temperature", result_without_tools["prompt"])
 
 
 class UnpairPreferenceDatasetTester(unittest.TestCase):

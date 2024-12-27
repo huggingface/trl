@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -44,7 +44,6 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
@@ -60,7 +59,7 @@ from ..trainer.utils import (
     truncate_response,
 )
 from .rloo_config import RLOOConfig
-from .utils import generate_model_card
+from .utils import generate_model_card, get_comet_experiment_url, log_table_to_comet_experiment
 
 
 if is_wandb_available():
@@ -72,9 +71,6 @@ INVALID_LOGPROB = 1.0
 class RLOOTrainer(Trainer):
     _tag_names = ["trl", "rloo"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.14.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         config: RLOOConfig,
@@ -279,7 +275,7 @@ class RLOOTrainer(Trainer):
         # trainer state initialization
         self.state.global_step = 0
         self.state.episode = 0
-        self.state.max_steps = args.num_total_batches * args.num_mini_batches
+        self.state.max_steps = (args.num_total_batches * args.num_mini_batches) // 2
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
@@ -556,6 +552,12 @@ class RLOOTrainer(Trainer):
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
+            if "comet_ml" in args.report_to:
+                log_table_to_comet_experiment(
+                    name="completions.csv",
+                    table=df,
+                )
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -606,6 +608,7 @@ class RLOOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="RLOO",
             trainer_citation=citation,
             paper_title="Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",

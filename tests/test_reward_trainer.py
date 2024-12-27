@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,17 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import tempfile
 import unittest
 
 import torch
 from datasets import Dataset, load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import RewardConfig, RewardTrainer, maybe_apply_chat_template
-from trl.trainer import compute_accuracy
 from trl.trainer.reward_trainer import _tokenize
 
 
@@ -35,11 +35,6 @@ class RewardTrainerTester(unittest.TestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
         self.model.config.pad_token_id = self.tokenizer.pad_token_id
-
-    def test_accuracy_metrics(self):
-        dummy_eval_predictions = EvalPrediction(torch.FloatTensor([[0.1, 0.9], [0.9, 0.1]]), torch.LongTensor([0, 0]))
-        accuracy = compute_accuracy(dummy_eval_predictions)
-        self.assertEqual(accuracy["accuracy"], 0.5)
 
     def test_preprocessing_conversational(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

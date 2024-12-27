@@ -68,7 +68,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/u2sqci34), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2_completions.gif)
 
 
 In the logs the sampled generations look like 
@@ -218,8 +218,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --num_ppo_epochs 2 \
     --num_mini_batches 2 \
     --learning_rate 3e-6 \
-    --per_device_train_batch_size 8 \
-    --gradient_accumulation_steps 8 \
+    --per_device_train_batch_size 16 \
+    --gradient_accumulation_steps 16 \
     --total_episodes 1000000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
     --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
@@ -251,7 +251,7 @@ The RLOO checkpoint gets a 51.2% preferred rate vs the 33.0% preference rate of 
 
 Metrics:
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/pr-1540/rloo.png)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/rloo.png)
 
 
 ```bash
