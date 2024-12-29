@@ -764,6 +764,14 @@ class ORPOTrainer(Trainer):
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
+        # orpo nll target is with respect to the concatenated prompt + completionlabels
+        if self.is_encoder_decoder:
+            labels = concatenated_batch["concatenated_labels"].clone()
+        else:
+            labels = concatenated_batch["concatenated_input_ids"].clone()
+            attention_mask = concatenated_batch["concatenated_attention_mask"]
+            labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
+
         if self.args.use_liger_loss:
             # skip the lm head and get the last hidden state
             if hasattr(model, "get_decoder"):
@@ -786,6 +794,7 @@ class ORPOTrainer(Trainer):
                 if not self.is_encoder_decoder
                 else concatenated_batch["concatenated_labels"],
                 lm_head.bias if hasattr(lm_head, "bias") else None,
+                nll_target=labels[:, 1:] if not self.is_encoder_decoder else labels,
             )
 
             if self.aux_loss_enabled:
@@ -816,12 +825,6 @@ class ORPOTrainer(Trainer):
                 loss = loss_fct(logits, labels)
                 return loss
 
-            if self.is_encoder_decoder:
-                labels = concatenated_batch["concatenated_labels"].clone()
-            else:
-                labels = concatenated_batch["concatenated_input_ids"].clone()
-                attention_mask = concatenated_batch["concatenated_attention_mask"]
-                labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
             chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
             all_logps = self.get_batch_logps(
