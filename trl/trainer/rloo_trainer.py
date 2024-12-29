@@ -120,12 +120,12 @@ class RLOOTrainer(Trainer):
         # calculate various batch sizes
         #########
         if args.total_episodes is None:  # allow the users to define episodes in terms of epochs.
-            args.total_episodes = int(args.num_train_epochs * self.train_dataset_len)
+            args.total_episodes = int(args.num_train_epochs * self.train_dataset_len * args.rloo_k)
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
         args.local_batch_size = (
-            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
+            args.per_device_train_batch_size * args.gradient_accumulation_steps
         )
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
@@ -275,8 +275,8 @@ class RLOOTrainer(Trainer):
         # trainer state initialization
         self.state.global_step = 0
         self.state.episode = 0
-        self.state.max_steps = (args.num_total_batches * args.num_mini_batches) // 2
-        self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
+        self.state.max_steps = args.num_total_batches * args.num_mini_batches * args.num_ppo_epochs
+        self.state.num_train_epochs = (args.total_episodes / args.rloo_k) / self.train_dataset_len
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
             if args.logging_steps < 1:
@@ -480,7 +480,7 @@ class RLOOTrainer(Trainer):
             del kl, mean_kl, mean_entropy, scores
 
             self.lr_scheduler.step()
-            self.state.global_step += 1
+            self.state.global_step += args.num_ppo_epochs * args.num_mini_batches
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None)
