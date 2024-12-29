@@ -59,7 +59,7 @@ tags: [trl]
 
 **Summary**
 
-The RLAIF-V dataset is a processed version of the [openbmb/RLAIF-V-Dataset](https://huggingface.co/datasets/openbmb/RLAIF-V-Dataset#dataset-card-for-rlaif-v-dataset), specifically curated to train vision-language models using the TRL library for preference learning tasks. It contains 83,132 high-quality comparison pairs, each comprising an image and two textual descriptions: one preferred and one rejected. This dataset enables models to learn human preferences in visual contexts, enhancing their ability to generate and evaluate image captions. 
+The RLAIF-V dataset is a processed version of the [openbmb/RLAIF-V-Dataset](https://huggingface.co/datasets/openbmb/RLAIF-V-Dataset#dataset-card-for-rlaif-v-dataset), specifically curated to train vision-language models using the TRL library for preference learning tasks. It contains 83,132 high-quality comparison pairs, each comprising an image and two textual descriptions: one preferred and one rejected. This dataset enables models to learn human preferences in visual contexts, enhancing their ability to generate and evaluate image captions.
 
 **Data Structure**
 
@@ -68,7 +68,7 @@ The RLAIF-V dataset is a processed version of the [openbmb/RLAIF-V-Dataset](http
 - **Chosen**: The preferred textual description of the image.
 - **Rejected**: An alternative textual description that was not preferred.
 
-This structure allows models to learn to prefer the "Chosen" description over the "Rejected" one, thereby aligning with human preferences in image captioning tasks.                       
+This structure allows models to learn to prefer the "Chosen" description over the "Rejected" one, thereby aligning with human preferences in image captioning tasks.
 """)
 
 if __name__ == "__main__":

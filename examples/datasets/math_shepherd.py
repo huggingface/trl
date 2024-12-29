@@ -123,7 +123,7 @@ tags: [trl]
 
 **Summary**
 
-The Math-Shepherd dataset is a processed version of [Math-Shepherd dataset](peiyi9979/Math-Shepherd), designed to train models using the TRL library for stepwise supervision tasks. It provides step-by-step solutions to mathematical problems, enabling models to learn and verify each step of a solution, thereby enhancing their reasoning capabilities. 
+The Math-Shepherd dataset is a processed version of [Math-Shepherd dataset](peiyi9979/Math-Shepherd), designed to train models using the TRL library for stepwise supervision tasks. It provides step-by-step solutions to mathematical problems, enabling models to learn and verify each step of a solution, thereby enhancing their reasoning capabilities.
 
 **Data Structure**
 
@@ -132,7 +132,7 @@ The Math-Shepherd dataset is a processed version of [Math-Shepherd dataset](peiy
 - **Completions**: A list of reasoning steps generated to solve the problem.
 - **Labels**: A list of booleans or floats indicating the correctness of each corresponding reasoning step.
 
-This structure allows models to learn the correctness of each step in a solution, facilitating improved reasoning and problem-solving abilities. 
+This structure allows models to learn the correctness of each step in a solution, facilitating improved reasoning and problem-solving abilities.
 """)
 
 if __name__ == "__main__":

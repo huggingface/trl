@@ -54,7 +54,7 @@ tags: [trl]
 
 ## Overview
 
-The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the TRL library for summarization tasks. It leverages the common practice on Reddit where users append "TL;DR" (Too Long; Didn't Read) summaries to lengthy posts, providing a rich source of paired text data for training summarization models. 
+The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the TRL library for summarization tasks. It leverages the common practice on Reddit where users append "TL;DR" (Too Long; Didn't Read) summaries to lengthy posts, providing a rich source of paired text data for training summarization models.
 
 ## Data Structure
 

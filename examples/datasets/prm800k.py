@@ -97,7 +97,7 @@ tags: [trl]
 
 **Summary**
 
-The PRM800K dataset is a processed version of OpenAI's PRM800K, designed to train models using the TRL library for stepwise supervision tasks. It contains 800,000 step-level correctness labels for model-generated solutions to problems from the MATH dataset. This dataset enables models to learn and verify each step of a solution, enhancing their reasoning capabilities. 
+The PRM800K dataset is a processed version of OpenAI's PRM800K, designed to train models using the TRL library for stepwise supervision tasks. It contains 800,000 step-level correctness labels for model-generated solutions to problems from the MATH dataset. This dataset enables models to learn and verify each step of a solution, enhancing their reasoning capabilities.
 
 **Data Structure**
 
@@ -106,7 +106,7 @@ The PRM800K dataset is a processed version of OpenAI's PRM800K, designed to trai
 - **Completions**: A list of reasoning steps generated to solve the problem.
 - **Labels**: A list of booleans or floats indicating the correctness of each corresponding reasoning step.
 
-This structure allows models to learn the correctness of each step in a solution, facilitating improved reasoning and problem-solving abilities. 
+This structure allows models to learn the correctness of each step in a solution, facilitating improved reasoning and problem-solving abilities.
 """)
 
 if __name__ == "__main__":

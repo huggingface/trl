@@ -73,7 +73,7 @@ The TL;DR dataset is a processed version of Reddit posts, specifically curated t
 - **Chosen**: The concise "TL;DR" summary appended by the author.
 - **Rejected**: An alternative summary or response that was not selected.
 
-This structure enables models to learn the relationship between detailed content and its abbreviated form, enhancing their summarization capabilities.               
+This structure enables models to learn the relationship between detailed content and its abbreviated form, enhancing their summarization capabilities.
 """)
 
 if __name__ == "__main__":
