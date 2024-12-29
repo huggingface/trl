@@ -7,16 +7,17 @@ body:
       value: |
         Thanks for taking the time to fill out this bug report! 🤗
 
-        Before you submit your bug report:
-
-          - If it is your first time submitting, be sure to check our [bug report guidelines](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md#did-you-find-a-bug)
+        🚩 If it is your first time submitting, be sure to check our [bug report guidelines](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md#did-you-find-a-bug)
 
   - type: textarea
     id: system-info
     attributes:
       label: System Info
-      description: Please share your system info with us. You can run the command `trl env` and copy-paste its output below.
-      placeholder: trl version, transformers version, platform, python version, ...
+      description: |
+        Please provide information about your system: platform, Python version, PyTorch version, Transformers version, devices, TRL version, ...
+        You can get this information by running `trl env` in your terminal.
+
+      placeholder: Copy-paste the output of `trl env`
     validations:
       required: true
 
@@ -50,13 +51,19 @@ body:
         Important! Use code tags to correctly format your code. See https://help.github.com/en/github/writing-on-github/creating-and-highlighting-code-blocks#syntax-highlighting
         Do not use screenshots, as they are hard to read and (more importantly) don't allow others to copy-and-paste your code.
 
-      placeholder: |
-        Steps to reproduce the behavior:
+      value: |
+        ```python
+        from trl import ...
 
-          1.
-          2.
-          3.
+        ```
 
+        outputs:
+
+        ```
+        Traceback (most recent call last):
+          File "example.py", line 42, in <module>
+            ...
+        ```
 
   - type: textarea
     id: expected-behavior
@@ -65,3 +72,22 @@ body:
     attributes:
       label: Expected behavior
       description: "A clear and concise description of what you would expect to happen."
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      description: |
+        Before submitting, please confirm that you've completed each of the following.
+        If an item doesn't apply to your issue, check it anyway to show you've reviewed it.
+      options:
+        - label: "I have checked that my issue isn't already filed (see [open issues](https://github.com/huggingface/trl/issues?q=is%3Aissue))"
+          required: true
+        - label: "I have included my system information"
+          required: true
+        - label: "Any code provided is minimal, complete, and reproducible ([more on MREs](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks))"
+          required: true
+        - label: "Any code provided is properly formatted in code blocks, (no screenshot, [more on code blocks](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks))"
+          required: true
+        - label: "Any traceback provided is complete"
+          required: true

@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import dataclasses
 import importlib.resources as pkg_resources
 import json
@@ -19,8 +20,9 @@ import warnings
 from collections import deque
 from dataclasses import dataclass
 from importlib.metadata import version
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal, Optional, Union
 
+import datasets
 import numpy as np
 import pandas as pd
 import torch
@@ -35,10 +37,12 @@ from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
+    EvalPrediction,
     GenerationConfig,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
+    is_comet_available,
 )
 from transformers.utils import (
     is_peft_available,
@@ -47,40 +51,14 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
 
+if is_comet_available():
+    import comet_ml
+
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
-
-
-class AdaptiveKLController:
-    """
-    Adaptive KL controller described in the paper:
-    https://huggingface.co/papers/1909.08593
-    """
-
-    def __init__(self, init_kl_coef, target, horizon):
-        self.value = init_kl_coef
-        self.target = target
-        self.horizon = horizon
-
-    def update(self, current, n_steps):
-        target = self.target
-        proportional_error = np.clip(current / target - 1, -0.2, 0.2)
-        mult = 1 + proportional_error * n_steps / self.horizon
-        self.value *= mult
-
-
-class FixedKLController:
-    """Fixed KL controller."""
-
-    def __init__(self, kl_coef):
-        self.value = kl_coef
-
-    def update(self, current, n_steps):
-        pass
 
 
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
@@ -90,10 +68,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     calculated on the completion made by the assistant.
 
     Args:
-        response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
+        response_template (`Union[str, list[int]]`): the template form that indicates the start of the response, typically something like
             '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
             differently if it does not have proper context.
-        instruction_template (`Union[str, List[int]]`): the template form that indicates the start of the human instruction, typically something like
+        instruction_template (`Union[str, list[int]]`): the template form that indicates the start of the human instruction, typically something like
             '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
         mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
@@ -104,8 +82,8 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
     def __init__(
         self,
-        response_template: Union[str, List[int]],
-        instruction_template: Optional[Union[str, List[int]]] = None,
+        response_template: Union[str, list[int]],
+        instruction_template: Optional[Union[str, list[int]]] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
@@ -135,13 +113,14 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 "The pad_token_id and eos_token_id values of this tokenizer are identical. "
                 "If you are planning for multi-turn training, "
                 "it can result in the model continuously generating questions and answers without eos token. "
-                "To avoid this, set the pad_token_id to a different value."
+                "To avoid this, set the pad_token_id to a different value.",
+                UserWarning,
             )
 
         self.ignore_index = ignore_index
         self.padding_free = padding_free
 
-    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         batch = super().torch_call(examples)
 
         if self.instruction_template is None:
@@ -158,10 +137,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if response_token_ids_start_idx is None:
                     warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find response key `{self.response_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
                 else:
@@ -185,10 +164,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(response_token_ids_idxs) == 0:
                     warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find response key `{self.response_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
 
@@ -200,10 +179,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(human_token_ids_idxs) == 0:
                     warnings.warn(
-                        f"Could not find instruction key `{self.instruction_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find instruction key `{self.instruction_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
 
@@ -244,6 +223,7 @@ class DataCollatorForChatML:
     tokenizer: PreTrainedTokenizerBase
     ignore_index: int = -100
     max_length: int = None
+    prompt_key: str = "prompt"
     messages_key: str = "messages"
 
     def __post_init__(self):
@@ -253,68 +233,70 @@ class DataCollatorForChatML:
             # set a sensible default
             self.max_length = min(self.tokenizer.model_max_length, 1024)
 
-    def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        prompts = []
-        completions = []
-
-        for example in examples:
-            messages = example[self.messages_key]
-            formatted_chat = self.tokenizer.apply_chat_template(messages, tokenize=False)
-
-            # Split the formatted chat into prompt and completion
-            assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
-            last_assistant_message = assistant_messages[-1]["content"]
-            prompt = formatted_chat.rsplit(last_assistant_message, 1)[0]
-            completion = last_assistant_message
-
-            prompts.append(prompt)
-            completions.append(completion)
-
-        # Tokenize prompts and completions
-        tokenized_prompts = self.tokenizer(
-            prompts, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
-        )
-        tokenized_completions = self.tokenizer(
-            completions, truncation=True, max_length=self.max_length, padding=False, return_tensors=None
-        )
-
-        # Combine prompts and completions
+    def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
         input_ids = []
         attention_mask = []
+        prompts_input_ids = []
+        prompt_attention_mask = []
         labels = []
 
-        for prompt, completion in zip(tokenized_prompts["input_ids"], tokenized_completions["input_ids"]):
-            combined_input_ids = prompt + completion
-            combined_attention_mask = [1] * len(combined_input_ids)
+        for example in examples:
+            formatted_prompt = example.get(self.prompt_key, None)
+            if formatted_prompt is None:
+                prompt = example[self.messages_key][:-1]
+                formatted_prompt = self.tokenizer.apply_chat_template(
+                    prompt, tokenize=False, add_generation_prompt=True
+                )
 
-            # Create labels for one-token ahead task, masking the prompt
-            combined_labels = [self.ignore_index] * len(prompt) + completion[:-1]
-            combined_labels.append(self.tokenizer.eos_token_id)  # Add EOS token as final target
+            if "input_ids" not in example:
+                message = example[self.messages_key]
+                formatted_message = self.tokenizer.apply_chat_template(
+                    message, tokenize=False, add_generation_prompt=False
+                )
+                tokenized_message = self.tokenizer(
+                    formatted_message,
+                    truncation=True,
+                    max_length=self.max_length,
+                    padding=False,
+                    return_tensors=None,
+                    add_special_tokens=False,
+                )
+                input_ids.append(tokenized_message["input_ids"])
+                attention_mask.append(tokenized_message["attention_mask"])
+            else:
+                input_ids.append(example["input_ids"])
+                attention_mask.append(example["attention_mask"])
 
-            input_ids.append(combined_input_ids)
-            attention_mask.append(combined_attention_mask)
-            labels.append(combined_labels)
+            tokenized_prompt = self.tokenizer(
+                formatted_prompt,
+                truncation=True,
+                max_length=len(input_ids[-1]),
+                padding=False,
+                return_tensors=None,
+                add_special_tokens=False,
+            )
 
-        # first convert to list of tensors
-        input_ids = [torch.tensor(ids) for ids in input_ids]
-        attention_mask = [torch.tensor(mask) for mask in attention_mask]
-        labels = [torch.tensor(label) for label in labels]
+            prompts_input_ids.append(tokenized_prompt["input_ids"])
+            prompt_attention_mask.append(tokenized_prompt["attention_mask"])
 
-        # pad the input_ids, attention_mask and labels to the same length across the batch
+            # Create the labels that will have all but the completion tokens of the example["input_ids"] set to ignore_index
+            label = [self.ignore_index] * len(input_ids[-1])
+            completion_start_idx = len(tokenized_prompt["input_ids"])
+            label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
+            labels.append(label)
+
+        # convert to list of tensors and pad
+        input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
+        attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
+        labels = [torch.tensor(label, dtype=torch.long) for label in labels]
         input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
         attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
         labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
 
-        # pad the tokenized_prompts on the left to the same length convert to tensor first
-        prompts_input_ids = [torch.tensor(ids) for ids in tokenized_prompts["input_ids"]]
+        prompts_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in prompts_input_ids]
+        prompt_attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in prompt_attention_mask]
         prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
-
-        # prompt attention mask
-        prompt_attention_mask = pad(
-            [torch.tensor([1] * len(ids)) for ids in tokenized_prompts["input_ids"]],
-            padding_side="left",
-            padding_value=0,
-        )
+        prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
 
         return {
             "input_ids": input_ids,
@@ -346,7 +328,7 @@ class RewardDataCollatorWithPadding:
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         features_chosen = []
         features_rejected = []
         margin = []
@@ -403,12 +385,12 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
-def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
+def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
 
     Args:
-        tensors (`List[torch.Tensor]`):
+        tensors (`list[torch.Tensor]`):
             List of input tensors to pad.
         padding_value (`int`):
             Value to use for padding. Default is 0.
@@ -470,7 +452,7 @@ class DPODataCollatorWithPadding:
     label_pad_token_id: int = -100
     is_encoder_decoder: Optional[bool] = False
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         # first, pad everything to the same length
         padded_batch = {}
         for k in features[0].keys():
@@ -588,13 +570,6 @@ class ConstantLengthDataset(IterableDataset):
         add_special_tokens=True,
     ):
         self.tokenizer = tokenizer
-
-        if tokenizer.eos_token_id is None:
-            warnings.warn(
-                "The passed tokenizer does not have an EOS token. We will use the passed eos_token_id instead which corresponds"
-                f" to {eos_token_id}. If this is not the correct EOS token, make sure to pass the correct eos_token_id."
-            )
-
         self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
         self.dataset = dataset
         self.seq_length = seq_length
@@ -608,7 +583,8 @@ class ConstantLengthDataset(IterableDataset):
         if dataset_text_field is not None and formatting_func is not None:
             warnings.warn(
                 "Only one of `dataset_text_field` and `formatting_func` should be provided. "
-                "Ignoring `dataset_text_field` and using `formatting_func`."
+                "Ignoring `dataset_text_field` and using `formatting_func`.",
+                UserWarning,
             )
 
         if formatting_func is not None:
@@ -618,12 +594,14 @@ class ConstantLengthDataset(IterableDataset):
         else:  # neither is provided
             raise ValueError("Either `dataset_text_field` or `formatting_func` should be provided.")
 
-        if formatting_func is not None:
-            if formatting_func.__code__.co_argcount > 1:
-                warnings.warn(
-                    "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
-                    " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
-                )
+        self.pretokenized = False
+        column_names = (
+            dataset.column_names if isinstance(dataset, (datasets.Dataset, datasets.IterableDataset)) else None
+        )
+        if column_names is not None and "input_ids" in column_names:
+            self.pretokenized = True
+            # since the dataset is tokenized, the unit of buffer size should be tokens
+            self.max_buffer_size = seq_length * num_of_sequences
 
     def __len__(self):
         return len(self.dataset)
@@ -642,15 +620,17 @@ class ConstantLengthDataset(IterableDataset):
                 except StopIteration:
                     if self.infinite:
                         iterator = iter(self.dataset)
-                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
                     else:
                         more_examples = False
                         break
             if self.shuffle:
                 random.shuffle(buffer)
-            tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
-                "input_ids"
-            ]
+            if self.pretokenized:
+                tokenized_inputs = buffer
+            else:
+                tokenized_inputs = self.tokenizer(
+                    buffer, add_special_tokens=self.add_special_tokens, truncation=False
+                )["input_ids"]
             all_token_ids = []
             for tokenized_input in tokenized_inputs:
                 if self.append_concat_token:
@@ -686,7 +666,7 @@ class RunningMoments:
     count: float = 1e-24
 
     @torch.no_grad()
-    def update(self, xs: torch.Tensor) -> Tuple[float, float]:
+    def update(self, xs: torch.Tensor) -> tuple[float, float]:
         """
         Updates running moments from batch's moments computed across ranks
         """
@@ -734,7 +714,7 @@ class RunningMoments:
 @torch.no_grad()
 def get_global_statistics(
     accelerator, xs: torch.Tensor, mask=None, device="cpu"
-) -> Tuple[torch.Tensor, torch.Tensor, int]:
+) -> tuple[torch.Tensor, torch.Tensor, int]:
     """
     Computes element-wise mean and variance of the tensor across processes. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
@@ -752,15 +732,38 @@ def get_global_statistics(
     return global_mean.to(device), global_var.to(device), count.item()
 
 
-def compute_accuracy(eval_pred) -> Dict[str, float]:
+def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
     predictions, labels = eval_pred
-    # Here, predictions is rewards_chosen and rewards_rejected.
-    # We want to see how much of the time rewards_chosen > rewards_rejected.
-    if np.array(predictions[:, 0] == predictions[:, 1], dtype=float).sum() > 0:
-        warnings.warn(
-            f"There are {np.array(predictions[:, 0] == predictions[:, 1]).sum()} out of {len(predictions[:, 0])} instances where the predictions for both options are equal. As a consequence the accuracy can be misleading."
+    if predictions.ndim == 3:
+        # Token classification task. Shapes are (batch_size, seq_len, num_labels) and (batch_size, seq_len)
+        # Used to compute the accuracy in the prm_trainer.
+        predictions = np.argmax(predictions, axis=2)
+
+        # Flatten the predictions and labels to remove the ignored tokens.
+        predictions = np.array(
+            [p for prediction, label in zip(predictions, labels) for (p, lbl) in zip(prediction, label) if lbl != -100]
         )
-    predictions = np.argmax(predictions, axis=1)
+        labels = np.array([lbl for label in labels for lbl in label if lbl != -100])
+
+    else:
+        # Here, predictions is rewards_chosen and rewards_rejected. Shapes are (batch_size, 2) and (batch_size,)
+        # We want to see how much of the time rewards_chosen > rewards_rejected.
+        equal_mask = predictions[:, 0] == predictions[:, 1]
+        equal_predictions_count = int(equal_mask.sum())
+
+        if equal_predictions_count > 0:
+            warnings.warn(
+                f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
+                "for both options are equal. These instances are ignored in the accuracy computation.",
+                UserWarning,
+            )
+
+        # Filter out equal predictions
+        predictions = predictions[~equal_mask]
+        labels = labels[~equal_mask]
+
+        # Use the remaining predictions for accuracy calculation
+        predictions = np.argmax(predictions, axis=1)
 
     accuracy = np.array(predictions == labels, dtype=float).mean().item()
     return {"accuracy": accuracy}
@@ -846,34 +849,16 @@ def peft_module_casting_to_bf16(model):
                     module = module.to(torch.bfloat16)
 
 
-def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
-    if is_unsloth_available():
-        # Unsloth adds a new attribute in the model config `unsloth_version`
-        # to keep track of models that have been patched with unsloth.
-        if hasattr(model, "config") and getattr(model.config, "unsloth_version", None) is not None:
-            tag_names.append("unsloth")
-
-    if kwargs is not None:
-        if "tags" not in kwargs:
-            kwargs["tags"] = tag_names
-        elif "tags" in kwargs and isinstance(kwargs["tags"], list):
-            kwargs["tags"].extend(tag_names)
-        elif "tags" in kwargs and isinstance(kwargs["tags"], str):
-            tag_names.append(kwargs["tags"])
-            kwargs["tags"] = tag_names
-    return kwargs
-
-
-def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesConfig]:
-    if model_config.load_in_4bit:
+def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesConfig]:
+    if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
-            bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
-            bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
-            bnb_4bit_quant_storage=model_config.torch_dtype,
+            bnb_4bit_compute_dtype=model_args.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
+            bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
+            bnb_4bit_use_double_quant=model_args.use_bnb_nested_quant,
+            bnb_4bit_quant_storage=model_args.torch_dtype,
         )
-    elif model_config.load_in_8bit:
+    elif model_args.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
             load_in_8bit=True,
         )
@@ -883,7 +868,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
     return quantization_config
 
 
-def get_kbit_device_map() -> Optional[Dict[str, int]]:
+def get_kbit_device_map() -> Optional[dict[str, int]]:
     if is_torch_xpu_available():
         return {"": f"xpu:{PartialState().local_process_index}"}
     elif torch.cuda.is_available():
@@ -892,8 +877,8 @@ def get_kbit_device_map() -> Optional[Dict[str, int]]:
         return None
 
 
-def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
-    if model_config.use_peft is False:
+def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
+    if model_args.use_peft is False:
         return None
 
     if not is_peft_available():
@@ -903,14 +888,14 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         )
 
     peft_config = LoraConfig(
-        task_type=model_config.lora_task_type,
-        r=model_config.lora_r,
-        target_modules=model_config.lora_target_modules,
-        lora_alpha=model_config.lora_alpha,
-        lora_dropout=model_config.lora_dropout,
+        task_type=model_args.lora_task_type,
+        r=model_args.lora_r,
+        target_modules=model_args.lora_target_modules,
+        lora_alpha=model_args.lora_alpha,
+        lora_dropout=model_args.lora_dropout,
         bias="none",
-        use_rslora=model_config.use_rslora,
-        modules_to_save=model_config.lora_modules_to_save,
+        use_rslora=model_args.use_rslora,
+        modules_to_save=model_args.lora_modules_to_save,
     )
 
     return peft_config
@@ -1065,7 +1050,7 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long):
 
 def get_reward(
     model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Computes the reward logits and the rewards for a given model and query responses.
 
@@ -1224,7 +1209,7 @@ def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Te
 
 def generate(
     lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: GenerationConfig
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generates sequences from the language model backbone in a way that does not affect padding tokens.
 
@@ -1271,7 +1256,8 @@ def batch_generation(
 ):
     query_responses = []
     logitss = []
-    for i in range(0, queries.shape[0], local_rollout_forward_batch_size):
+    batch_size = queries.shape[0]
+    for i in range(0, batch_size, local_rollout_forward_batch_size):
         query = queries[i : i + local_rollout_forward_batch_size]
         query_response, logits = generate(
             model,
@@ -1281,17 +1267,26 @@ def batch_generation(
         )
         query_responses.append(query_response)
         logitss.append(logits)
-    return torch.cat(query_responses, 0), torch.cat(logitss, 0)
+
+    # padding tensors
+    padded_query_responses = pad(query_responses, padding_value=pad_token_id, padding_side="right")
+    padded_logitss = pad(logitss, padding_value=0, padding_side="right")
+
+    # reshaping
+    padded_query_responses = padded_query_responses.view(-1, padded_query_responses.shape[-1])[:batch_size]
+    padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
+
+    return padded_query_responses, padded_logitss
 
 
 def add_bos_token_if_needed(
     bos_token_id: Optional[int],
     prompt_len_input_ids: int,
-    prompt_tokens: Dict[str, List[int]],
+    prompt_tokens: dict[str, list[int]],
     chosen_prompt_len_input_ids: int,
-    chosen_tokens: Dict[str, List[int]],
+    chosen_tokens: dict[str, list[int]],
     rejected_prompt_len_input_ids: int,
-    rejected_tokens: Dict[str, List[int]],
+    rejected_tokens: dict[str, list[int]],
 ):
     if bos_token_id is not None:
         if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
@@ -1307,7 +1302,7 @@ def add_bos_token_if_needed(
 
 
 def add_eos_token_if_needed(
-    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
+    eos_token_id: int, chosen_tokens: dict[str, list[int]], rejected_tokens: dict[str, list[int]]
 ):
     if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
         chosen_tokens["input_ids"].append(eos_token_id)
@@ -1320,7 +1315,7 @@ def add_eos_token_if_needed(
 
 def truncate_right(
     input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Truncates the input tensor from the right side after the first occurrence of the stop token.
 
@@ -1365,7 +1360,7 @@ def empty_cache() -> None:
         torch.cuda.empty_cache()
 
 
-def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> List[str]:
+def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> list[str]:
     """
     Decodes the input tensor and strips the padding tokens.
 
@@ -1376,7 +1371,7 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
             The tokenizer used to decode the input tensor.
 
     Returns:
-        `List[str]`:
+        `list[str]`:
             The list of decoded strings with padding tokens stripped.
     """
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
@@ -1388,12 +1383,13 @@ def generate_model_card(
     model_name: str,
     hub_model_id: str,
     dataset_name: Optional[str],
-    tags: Union[str, List[str], None],
+    tags: list[str],
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
+    comet_url: Optional[str] = None,
 ) -> ModelCard:
     """
     Generate a `ModelCard` from a template.
@@ -1407,10 +1403,12 @@ def generate_model_card(
             Hub model ID as `username/model_id`.
         dataset_name (`str` or `None`):
             Dataset name.
-        tags (`str`, `List[str]`, or `None`):
+        tags (`list[str]`):
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
+        comet_url (`str` or `None`):
+            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
@@ -1424,10 +1422,6 @@ def generate_model_card(
         `ModelCard`:
             A ModelCard object.
     """
-    if tags is None:
-        tags = []
-    elif isinstance(tags, str):
-        tags = [tags]
     card_data = ModelCardData(
         base_model=base_model,
         datasets=dataset_name,
@@ -1444,6 +1438,7 @@ def generate_model_card(
         hub_model_id=hub_model_id,
         dataset_name=dataset_name,
         wandb_url=wandb_url,
+        comet_url=comet_url,
         trainer_name=trainer_name,
         trainer_citation=trainer_citation,
         paper_title=paper_title,
@@ -1455,3 +1450,34 @@ def generate_model_card(
         tokenizers_version=version("tokenizers"),
     )
     return card
+
+
+def get_comet_experiment_url() -> Optional[str]:
+    """
+    If Comet integration is enabled, return the URL of the current Comet experiment; otherwise, return `None`.
+    """
+    if not is_comet_available():
+        return None
+
+    if comet_ml.get_running_experiment() is not None:
+        return comet_ml.get_running_experiment().url
+
+    return None
+
+
+def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
+    """
+    If Comet integration is enabled logs a table to the Comet experiment if it is currently running.
+
+    Args:
+        name (`str`):
+            Table name.
+        table (`pd.DataFrame`):
+            The Pandas DataFrame containing the table to log.
+    """
+    if not is_comet_available():
+        raise ModuleNotFoundError("The comet-ml is not installed. Please install it first: pip install comet-ml")
+
+    experiment = comet_ml.get_running_experiment()
+    if experiment is not None:
+        experiment.log_table(tabular_data=table, filename=name)

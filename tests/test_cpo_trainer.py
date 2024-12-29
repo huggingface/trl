@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import tempfile
 import unittest
 
@@ -21,29 +22,31 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 from transformers.testing_utils import require_peft
 
 from trl import CPOConfig, CPOTrainer
+from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 class CPOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.t5_tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     @parameterized.expand(
         [
-            ["gpt2", "sigmoid", "standard_preference"],
-            ["t5", "hinge", "standard_implicit_prompt_preference"],
-            ["gpt2", "ipo", "conversational_preference"],
-            ["t5", "ipo", "conversational_implicit_prompt_preference"],
-            ["gpt2", "simpo", "standard_preference"],
-            ["t5", "simpo", "standard_implicit_prompt_preference"],
-            ["gpt2", "hinge", "conversational_preference"],
+            ("qwen", "sigmoid", "standard_preference"),
+            ("t5", "hinge", "standard_implicit_prompt_preference"),
+            ("qwen", "ipo", "conversational_preference"),
+            ("t5", "ipo", "conversational_implicit_prompt_preference"),
+            ("qwen", "simpo", "standard_preference"),
+            ("t5", "simpo", "standard_implicit_prompt_preference"),
+            ("qwen", "hinge", "conversational_preference"),
         ]
     )
     def test_cpo_trainer(self, name, loss_type, config_name):
@@ -64,7 +67,7 @@ class CPOTrainerTester(unittest.TestCase):
 
             dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            if name == "gpt2":
+            if name == "qwen":
                 model = self.model
                 tokenizer = self.tokenizer
             elif name == "t5":
@@ -75,7 +78,7 @@ class CPOTrainerTester(unittest.TestCase):
             trainer = CPOTrainer(
                 model=model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -84,16 +87,15 @@ class CPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 # check the params have changed - ignore 0 biases
                 if param.sum() != 0:
-                    assert not torch.equal(param, new_param)
+                    self.assertFalse(torch.equal(param, new_param))
 
-    @require_peft
     @parameterized.expand(
         [
             ("standard_preference",),
@@ -102,6 +104,7 @@ class CPOTrainerTester(unittest.TestCase):
             ("conversational_implicit_prompt_preference",),
         ]
     )
+    @require_peft
     def test_cpo_trainer_with_lora(self, config_name):
         from peft import LoraConfig
 
@@ -132,7 +135,7 @@ class CPOTrainerTester(unittest.TestCase):
             trainer = CPOTrainer(
                 model=self.model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -142,7 +145,7 @@ class CPOTrainerTester(unittest.TestCase):
 
             trainer.train()
 
-            assert trainer.state.log_history[-1]["train_loss"] is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # check the params have changed
             for n, param in previous_trainable_params.items():
@@ -150,4 +153,4 @@ class CPOTrainerTester(unittest.TestCase):
                     new_param = trainer.model.get_parameter(n)
                     # check the params have changed - ignore 0 biases
                     if param.sum() != 0:
-                        assert not torch.equal(param, new_param)
+                        self.assertFalse(torch.equal(param, new_param))

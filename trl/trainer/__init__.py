@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# There is a circular import in the PPOTrainer if we let isort sort these
 from typing import TYPE_CHECKING
 
 from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
@@ -21,10 +20,15 @@ from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffu
 _import_structure = {
     "alignprop_config": ["AlignPropConfig"],
     "alignprop_trainer": ["AlignPropTrainer"],
-    "base": ["BaseTrainer"],
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
-    "callbacks": ["LogCompletionsCallback", "RichProgressCallback", "SyncRefModelCallback", "WinRateCallback"],
+    "callbacks": [
+        "LogCompletionsCallback",
+        "MergeModelCallback",
+        "RichProgressCallback",
+        "SyncRefModelCallback",
+        "WinRateCallback",
+    ],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
     "ddpo_config": ["DDPOConfig"],
@@ -34,14 +38,14 @@ _import_structure = {
     "gkd_trainer": ["GKDTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
+        "AllTrueJudge",
+        "BaseBinaryJudge",
         "BaseJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
         "PairRMJudge",
-        "RandomPairwiseJudge",
-        "RandomRankJudge",
     ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
@@ -56,21 +60,21 @@ _import_structure = {
     "grpo_trainer": ["GRPOTrainer"],
     "ppo_config": ["PPOConfig"],
     "ppo_trainer": ["PPOTrainer"],
-    "ppov2_config": ["PPOv2Config"],
-    "ppov2_trainer": ["PPOv2Trainer"],
+    "prm_config": ["PRMConfig"],
+    "prm_trainer": ["PRMTrainer"],
     "reward_config": ["RewardConfig"],
-    "reward_trainer": ["RewardTrainer", "compute_accuracy"],
+    "reward_trainer": ["RewardTrainer"],
     "rloo_config": ["RLOOConfig"],
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "utils": [
-        "AdaptiveKLController",
         "ConstantLengthDataset",
         "DataCollatorForCompletionOnlyLM",
-        "FixedKLController",
         "RunningMoments",
+        "compute_accuracy",
         "disable_dropout_in_model",
+        "empty_cache",
         "peft_module_casting_to_bf16",
     ],
     "xpo_config": ["XPOConfig"],
@@ -87,10 +91,15 @@ else:
 if TYPE_CHECKING:
     from .alignprop_config import AlignPropConfig
     from .alignprop_trainer import AlignPropTrainer
-    from .base import BaseTrainer
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
-    from .callbacks import LogCompletionsCallback, RichProgressCallback, SyncRefModelCallback, WinRateCallback
+    from .callbacks import (
+        LogCompletionsCallback,
+        MergeModelCallback,
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+    )
     from .cpo_config import CPOConfig
     from .cpo_trainer import CPOTrainer
     from .ddpo_config import DDPOConfig
@@ -100,14 +109,14 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .judges import (
+        AllTrueJudge,
+        BaseBinaryJudge,
         BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
         PairRMJudge,
-        RandomPairwiseJudge,
-        RandomRankJudge,
     )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
@@ -122,20 +131,19 @@ if TYPE_CHECKING:
     from .grpo_trainer import GRPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
-    from .ppov2_config import PPOv2Config
-    from .ppov2_trainer import PPOv2Trainer
+    from .prm_config import PRMConfig
+    from .prm_trainer import PRMTrainer
     from .reward_config import RewardConfig
-    from .reward_trainer import RewardTrainer, compute_accuracy
+    from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .utils import (
-        AdaptiveKLController,
         ConstantLengthDataset,
         DataCollatorForCompletionOnlyLM,
-        FixedKLController,
         RunningMoments,
+        compute_accuracy,
         disable_dropout_in_model,
         empty_cache,
         peft_module_casting_to_bf16,

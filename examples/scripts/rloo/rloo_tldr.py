@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,13 +23,14 @@ from transformers import (
     HfArgumentParser,
 )
 
-from trl import ModelConfig
-from trl.trainer.rloo_trainer import RLOOConfig, RLOOTrainer
+from trl import ModelConfig, RLOOConfig, RLOOTrainer, ScriptArguments
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 """
 python examples/scripts/rloo/rloo_tldr.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_test_split validation \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
     --per_device_train_batch_size 1 \
@@ -44,6 +45,8 @@ python examples/scripts/rloo/rloo_tldr.py \
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/rloo/rloo_tldr.py \
+    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
+    --dataset_test_split validation \
     --output_dir models/minimal/rloo_tldr \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -61,8 +64,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 
 
 if __name__ == "__main__":
-    parser = HfArgumentParser((RLOOConfig, ModelConfig))
-    training_args, model_config = parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser((ScriptArguments, RLOOConfig, ModelConfig))
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
     # remove output_dir if exists
     shutil.rmtree(training_args.output_dir, ignore_errors=True)
 
@@ -70,28 +73,26 @@ if __name__ == "__main__":
     # Model & Tokenizer
     ################
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path,
-        padding_side="left",
-        trust_remote_code=model_config.trust_remote_code,
+        model_args.model_name_or_path, padding_side="left", trust_remote_code=model_args.trust_remote_code
     )
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     reward_model = AutoModelForSequenceClassification.from_pretrained(
-        training_args.reward_model_path, trust_remote_code=model_config.trust_remote_code, num_labels=1
+        training_args.reward_model_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
     )
     ref_policy = AutoModelForCausalLM.from_pretrained(
-        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code
+        training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
     )
     policy = AutoModelForCausalLM.from_pretrained(
-        training_args.sft_model_path, trust_remote_code=model_config.trust_remote_code
+        training_args.sft_model_path, trust_remote_code=model_args.trust_remote_code
     )
     ################
     # Dataset
     ################
-    dataset = load_dataset("trl-internal-testing/tldr-preference-sft-trl-style")
-    train_dataset = dataset["train"]
-    eval_dataset = dataset["validation"]
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    train_dataset = dataset[script_args.dataset_train_split]
+    eval_dataset = dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None
 
     def prepare_dataset(dataset, tokenizer):
         """pre-tokenize the dataset before training; only collate during training"""
@@ -125,7 +126,7 @@ if __name__ == "__main__":
     ################
     trainer = RLOOTrainer(
         config=training_args,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         policy=policy,
         ref_policy=ref_policy,
         reward_model=reward_model,
@@ -137,6 +138,6 @@ if __name__ == "__main__":
     # Save and push to hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name="trl-internal-testing/tldr-preference-sft-trl-style")
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
     trainer.generate_completions()

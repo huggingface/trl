@@ -14,24 +14,40 @@
 
 import os
 import textwrap
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 
+import jinja2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, IterableDataset
-from transformers import PreTrainedTokenizerBase, TrainerCallback, is_wandb_available
-from transformers.modeling_utils import PreTrainedModel
+from transformers import (
+    BaseImageProcessor,
+    FeatureExtractionMixin,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    TrainerCallback,
+    is_wandb_available,
+)
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_apex_available
 
-from ..data_utils import maybe_apply_chat_template
+from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
+from .judges import BasePairwiseJudge
 from .nash_md_config import NashMDConfig
 from .online_dpo_trainer import OnlineDPOTrainer
-from .utils import empty_cache, generate_model_card, get_reward, truncate_right
+from .utils import (
+    SIMPLE_CHAT_TEMPLATE,
+    empty_cache,
+    generate_model_card,
+    get_comet_experiment_url,
+    get_reward,
+    truncate_right,
+)
 
 
 if is_apex_available():
@@ -65,16 +81,18 @@ class NashMDTrainer(OnlineDPOTrainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
-            The tokenizer to use for training. This argument is required if you want to use the default data collator.
-        peft_config (`Dict`):
+        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
+        peft_config (`dict`):
             The peft config to use for training.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
-        callbacks (`List[transformers.TrainerCallback]`):
+        callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
-        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
@@ -86,27 +104,32 @@ class NashMDTrainer(OnlineDPOTrainer):
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
         ref_model: Union[PreTrainedModel, nn.Module] = None,
-        reward_model: Optional[nn.Module] = None,
+        reward_model: Union[PreTrainedModel, nn.Module, None] = None,
+        judge: Optional[BasePairwiseJudge] = None,
         args: Optional[NashMDConfig] = None,
         data_collator: Optional[Callable] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
-        peft_config: Optional[Dict] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ] = None,
+        peft_config: Optional[dict] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
+        callbacks: Optional[list[TrainerCallback]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ) -> None:
         super().__init__(
             model=model,
             ref_model=ref_model,
             reward_model=reward_model,
+            judge=judge,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=tokenizer,
+            processing_class=processing_class,
+            reward_processing_class=processing_class,  # for now, NashMDTrainer can't use any reward model
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -123,8 +146,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             "loss/kl": [],
             "objective/entropy": [],
             "loss/score": [],
-            "rewards/chosen": [],
-            "rewards/rejected": [],
+            "rewards/probabilities": [],
             "rewards/accuracies": [],
             "rewards/margins": [],
             "logps/chosen": [],
@@ -134,6 +156,9 @@ class NashMDTrainer(OnlineDPOTrainer):
             "beta": [],
             "mixture_coef": [],
         }
+        if self.reward_model is not None:
+            self.stats["rewards/chosen"] = []
+            self.stats["rewards/rejected"] = []
 
     @property
     def mixture_coef(self):
@@ -175,21 +200,23 @@ class NashMDTrainer(OnlineDPOTrainer):
         # Process model completions
         model_completion_ids = model_output[:, context_length:]
         model_completion_ids, model_completion_mask = truncate_right(
-            model_completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+            model_completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
         model_data = {
             "input_ids": torch.cat((prompts["input_ids"], model_completion_ids), dim=1),
             "attention_mask": torch.cat((prompts["attention_mask"], model_completion_mask), dim=1),
+            "raw": prompts["raw"],
         }
 
         # Process reference model completions
         mixture_completion_ids = mixture_output[:, context_length:]
         mixture_completion_ids, mixture_completion_mask = truncate_right(
-            mixture_completion_ids, self.tokenizer.eos_token_id, self.tokenizer.pad_token_id
+            mixture_completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
         mixture_data = {
             "input_ids": torch.cat((prompts["input_ids"], mixture_completion_ids), dim=1),
             "attention_mask": torch.cat((prompts["attention_mask"], mixture_completion_mask), dim=1),
+            "raw": prompts["raw"],
         }
 
         return model_data, mixture_data
@@ -197,20 +224,54 @@ class NashMDTrainer(OnlineDPOTrainer):
     def _compute_rewards(self, model_data, mixture_data, context_length):
         with torch.no_grad():
             _, model_scores, _ = get_reward(
-                self.reward_model, model_data["input_ids"], self.tokenizer.pad_token_id, context_length
+                self.reward_model, model_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
             _, mixture_scores, _ = get_reward(
-                self.reward_model, mixture_data["input_ids"], self.tokenizer.pad_token_id, context_length
+                self.reward_model, mixture_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
 
         # Apply EOS penalty if needed
         if self.args.missing_eos_penalty is not None:
-            model_contain_eos = torch.any(model_data["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
-            mixture_contain_eos = torch.any(mixture_data["input_ids"] == self.tokenizer.eos_token_id, dim=-1)
+            model_contain_eos = torch.any(model_data["input_ids"] == self.processing_class.eos_token_id, dim=-1)
+            mixture_contain_eos = torch.any(mixture_data["input_ids"] == self.processing_class.eos_token_id, dim=-1)
             model_scores[~model_contain_eos] -= self.args.missing_eos_penalty
             mixture_scores[~mixture_contain_eos] -= self.args.missing_eos_penalty
 
         return model_scores, mixture_scores
+
+    def _compute_judge(self, model_data, mixture_data, context_length):
+        prompts = model_data["raw"]
+        model_data_completions = self.processing_class.batch_decode(
+            model_data["input_ids"][:, context_length:], skip_special_tokens=True
+        )
+        model_data_completions = [completion.strip() for completion in model_data_completions]
+
+        mixture_data_completions = self.processing_class.batch_decode(
+            mixture_data["input_ids"][:, context_length:], skip_special_tokens=True
+        )
+        mixture_data_completions = [completion.strip() for completion in mixture_data_completions]
+        if is_conversational({"prompt": prompts[0]}):
+            model_data_completions = [
+                [{"role": "assistant", "content": completion}] for completion in model_data_completions
+            ]
+            environment = jinja2.Environment()
+            template = environment.from_string(SIMPLE_CHAT_TEMPLATE)
+            prompts = [template.render(messages=message) for message in prompts]
+            model_data_completions = [template.render(messages=completion) for completion in model_data_completions]
+
+            mixture_data_completions = [
+                [{"role": "assistant", "content": completion}] for completion in mixture_data_completions
+            ]
+            mixture_data_completions = [
+                template.render(messages=completion) for completion in mixture_data_completions
+            ]
+
+        probability = self.judge.judge(
+            prompts,
+            list(zip(model_data_completions, mixture_data_completions)),
+            return_scores=True,
+        )
+        return torch.tensor(probability, device=model_data["input_ids"].device)
 
     def _compute_logprobs(self, model, model_data, context_length):
         def compute_logprobs_for_data(m, data):
@@ -242,26 +303,21 @@ class NashMDTrainer(OnlineDPOTrainer):
         self,
         model_logprobs_model_data,
         ref_logprobs_model_data,
-        model_data_scores,
-        mixture_data_scores,
+        probability,
     ):
-        # Compute log probs
-        model_logprobs_model_data_sum = model_logprobs_model_data.sum(1)
-        ref_logprobs_model_data_sum = ref_logprobs_model_data.sum(1)
-
-        # probability of the model data vs the mixture data
-        probability = F.sigmoid(model_data_scores - mixture_data_scores)
-
         # reinforce score where 0.5 is a control variate
-        score = (probability - 0.5) * model_logprobs_model_data_sum
+        score = (probability - 0.5) * model_logprobs_model_data.sum(1)
 
-        # kl divergence
-        kl_div = model_logprobs_model_data_sum - ref_logprobs_model_data_sum
+        # kl divergence via reinforce
+        with torch.no_grad():
+            log_ratio = model_logprobs_model_data - ref_logprobs_model_data
+            kl_div_log = log_ratio.sum(1)
+        kl_div_loss = (log_ratio * model_logprobs_model_data).sum(1)
 
         # final loss
-        loss = self.beta * kl_div - score
+        loss = self.beta * kl_div_loss - score
 
-        return loss.mean(), score, kl_div
+        return loss.mean(), score, kl_div_log
 
     def _log_statistics(
         self,
@@ -269,11 +325,12 @@ class NashMDTrainer(OnlineDPOTrainer):
         mixture_data,
         model_logprobs_model_data,
         ref_logprobs_model_data,
-        model_scores,
-        mixture_scores,
+        probability,
         score,
         kl_div,
         context_length,
+        model_scores=None,
+        mixture_scores=None,
     ):
         # Helper function to gather and compute mean
         def gather_mean(tensor):
@@ -292,15 +349,19 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["logps/rejected"].append(gather_mean(ref_logprobs_model_data_sum))
 
         # Log rewards
-        self.stats["rewards/chosen"].append(gather_mean(model_scores))
-        self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
+        if self.reward_model is not None:
+            self.stats["rewards/chosen"].append(gather_mean(model_scores))
+            self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
+
+        # Log probabilities
+        self.stats["rewards/probabilities"].append(gather_mean(probability))
 
         # Calculate entropy for model data
         entropy_model_data = -model_logprobs_model_data.sum(1)
         self.stats["objective/entropy"].append(gather_mean(entropy_model_data))
 
         # Calculate margins
-        margin = model_scores - mixture_scores
+        margin = model_logprobs_model_data_sum - ref_logprobs_model_data_sum
         self.stats["rewards/margins"].append(gather_mean(margin))
 
         # Calculate accuracy
@@ -308,8 +369,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["rewards/accuracies"].append(gather_mean(accuracy))
 
         # Log EOS token statistics
-        model_eos = (model_data["input_ids"][:, context_length:] == self.tokenizer.eos_token_id).any(dim=1)
-        mixture_eos = (mixture_data["input_ids"][:, context_length:] == self.tokenizer.eos_token_id).any(dim=1)
+        model_eos = (model_data["input_ids"][:, context_length:] == self.processing_class.eos_token_id).any(dim=1)
+        mixture_eos = (mixture_data["input_ids"][:, context_length:] == self.processing_class.eos_token_id).any(dim=1)
         self.stats["val/model_contain_eos_token"].append(gather_mean(model_eos.float()))
         self.stats["val/ref_contain_eos_token"].append(gather_mean(mixture_eos.float()))
 
@@ -317,14 +378,17 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["beta"].append(self.beta)
         self.stats["mixture_coef"].append(self.mixture_coef)
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(
+        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+    ) -> torch.Tensor:
         model.train()
 
         # Apply chat template and tokenize the input
         batch_size = len(next(iter(inputs.values())))
+        prompts = inputs["prompt"]
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
-        inputs = [maybe_apply_chat_template(x, self.tokenizer) for x in inputs]
-        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.tokenizer) for x in inputs]
+        inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
+        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
         inputs = self.data_collator(inputs)
 
         # need the prompt_ only
@@ -333,6 +397,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         prompts = {
             "input_ids": inputs["prompt_input_ids"],
             "attention_mask": inputs["prompt_attention_mask"],
+            "raw": prompts,
         }
         del inputs
 
@@ -343,15 +408,19 @@ class NashMDTrainer(OnlineDPOTrainer):
         model_data, mixture_data = self._process_completions(model_output, mixture_output, prompts)
 
         # Compute rewards
-        model_data_scores, mixture_data_scores = self._compute_rewards(model_data, mixture_data, context_length)
+        if self.reward_model is not None:
+            model_scores, mixture_scores = self._compute_rewards(model_data, mixture_data, context_length)
+            # probability of the model data vs the mixture data
+            probability = F.sigmoid(model_scores - mixture_scores)
+        else:
+            model_scores, mixture_scores = None, None
+            probability = self._compute_judge(model_data, mixture_data, context_length)
 
         # Compute logprobs
         model_logprobs_model_data, ref_logprobs_model_data = self._compute_logprobs(model, model_data, context_length)
 
         # Compute loss
-        loss, score, kl_div = self._compute_losses(
-            model_logprobs_model_data, ref_logprobs_model_data, model_data_scores, mixture_data_scores
-        )
+        loss, score, kl_div = self._compute_losses(model_logprobs_model_data, ref_logprobs_model_data, probability)
 
         # Log everything
         self._log_statistics(
@@ -359,11 +428,12 @@ class NashMDTrainer(OnlineDPOTrainer):
             mixture_data,
             model_logprobs_model_data.detach(),
             ref_logprobs_model_data,
-            model_data_scores,
-            mixture_data_scores,
+            probability,
             score.detach(),
             kl_div.detach(),
             context_length,
+            model_scores,
+            mixture_scores,
         )
 
         if (
@@ -392,7 +462,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
@@ -402,7 +472,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                 The name of the model.
             dataset_name (`str`, *optional*, defaults to `None`):
                 The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -412,6 +482,13 @@ class NashMDTrainer(OnlineDPOTrainer):
             base_model = self.model.config._name_or_path
         else:
             base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
 
         citation = textwrap.dedent("""\
         @inproceedings{munos2024nash,
@@ -430,6 +507,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="Nash-MD",
             trainer_citation=citation,
             paper_title="Nash Learning from Human Feedback",

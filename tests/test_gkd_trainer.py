@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import os
 import tempfile
 import unittest
@@ -27,9 +28,10 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 class TestGKDTrainer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        cls.tokenizer = AutoTokenizer.from_pretrained(model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
-        cls.model = AutoModelForCausalLM.from_pretrained("gpt2")
+        cls.model = AutoModelForCausalLM.from_pretrained(model_id)
         cls.generation_config = GenerationConfig(
             max_new_tokens=20,
             num_return_sequences=1,
@@ -201,7 +203,7 @@ class TestGeneralizedJSDLoss(unittest.TestCase):
 
 class GKDTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -222,6 +224,7 @@ class GKDTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
+                report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
@@ -231,7 +234,7 @@ class GKDTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
             )
 
             trainer.train()
@@ -251,7 +254,7 @@ class GKDTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
             )
 
             self.assertEqual(trainer.generation_config.pad_token_id, self.tokenizer.eos_token_id)

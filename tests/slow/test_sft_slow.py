@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import gc
 import itertools
 import tempfile
@@ -22,7 +23,7 @@ from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import (
-    require_bitsandbytes,
+    require_liger_kernel,
     require_peft,
     require_torch_accelerator,
     require_torch_multi_accelerator,
@@ -32,7 +33,7 @@ from transformers.utils import is_peft_available
 from trl import SFTConfig, SFTTrainer
 from trl.models.utils import setup_chat_format
 
-from ..testing_utils import require_liger_kernel
+from ..testing_utils import require_bitsandbytes
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 
 
@@ -104,11 +105,12 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -138,17 +140,18 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
+            self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
 
@@ -174,11 +177,12 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -209,11 +213,12 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -245,17 +250,18 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
+            self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
 
@@ -288,11 +294,12 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device_map)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
@@ -327,17 +334,18 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
+            self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
 
@@ -370,17 +378,19 @@ class SFTTrainerSlowTester(unittest.TestCase):
             model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-            model, tokenizer = setup_chat_format(model, tokenizer)
+            if tokenizer.chat_template is None:
+                model, tokenizer = setup_chat_format(model, tokenizer)
+            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=train_dataset,
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
+            self.assertIsInstance(trainer.model, PeftModel)
 
             trainer.train()
 

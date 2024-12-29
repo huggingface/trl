@@ -1,6 +1,6 @@
 # CPO Trainer
 
-[![](https://img.shields.io/badge/All_models-CPO-blue)](https://huggingface.co/models?other=cpo)
+[![](https://img.shields.io/badge/All_models-CPO-blue)](https://huggingface.co/models?other=cpo,trl)
 
 ## Overview
 
@@ -10,10 +10,10 @@ CPO aims to mitigate two fundamental shortcomings of SFT. First, SFT’s methodo
 
 ## Quick start
 
-This example demonstrates how to train a model using the CPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [Capybara dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
+This example demonstrates how to train a model using the CPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/Capybara-Preferences/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -29,10 +29,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-train_dataset = load_dataset("trl-lib/Capybara-Preferences", split="train")
+train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
 training_args = CPOConfig(output_dir="Qwen2-0.5B-CPO", logging_steps=10)
-trainer = CPOTrainer(model=model, args=training_args, tokenizer=tokenizer, train_dataset=train_dataset)
+trainer = CPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
 
@@ -42,9 +42,9 @@ Execute the script using the following command:
 accelerate launch train_cpo.py
 ```
 
-## Expected dataset format
+## Expected dataset type
 
-CPO requires a [preference dataset](dataset_formats#preference). The [`CPOTrainer`] supports both [conversational](dataset_formats#conversational-dataset-format) and [standard](dataset_formats#standard-dataset-format) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+CPO requires a [preference dataset](dataset_formats#preference). The [`CPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Example script
 
@@ -75,7 +75,7 @@ While training and evaluating we record the following reward metrics:
 
 ### Simple Preference Optimization (SimPO)
 
-The [SimPO](https://huggingface.co/papers/2405.14734) method is also implemented in the [`CPOTrainer`]. SimPO is an alternative loss that adds a reward margin, allows for length normalization, and does not use BC regularization. To use this loss, we can use SimPO easily by turning on `loss_type="simpo"` and `cpo_alpha=0` in the [`CPOConfig`].
+The [SimPO](https://huggingface.co/papers/2405.14734) method is also implemented in the [`CPOTrainer`]. SimPO is an alternative loss that adds a reward margin, allows for length normalization, and does not use BC regularization. To use this loss, we can use SimPO easily by turning on `loss_type="simpo"` and `cpo_alpha=0.0` in the [`CPOConfig`].
 
 ### CPO-SimPO
 

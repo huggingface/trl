@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.12.0.dev0"
+__version__ = "0.14.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -20,8 +20,7 @@ from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffus
 
 
 _import_structure = {
-    "commands.cli_utils": ["DPOScriptArguments", "SFTScriptArguments", "TrlParser", "init_zero_verbose"],
-    "core": ["set_seed"],
+    "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -36,8 +35,7 @@ _import_structure = {
     "import_utils": [
         "is_deepspeed_available",
         "is_diffusers_available",
-        "is_liger_kernel_available",
-        "is_llmblender_available",
+        "is_llm_blender_available",
     ],
     "models": [
         "SUPPORTED_ARCHITECTURES",
@@ -50,6 +48,8 @@ _import_structure = {
     "trainer": [
         "AlignPropConfig",
         "AlignPropTrainer",
+        "AllTrueJudge",
+        "BaseBinaryJudge",
         "BaseJudge",
         "BasePairwiseJudge",
         "BaseRankJudge",
@@ -71,6 +71,7 @@ _import_structure = {
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
+        "MergeModelCallback",
         "ModelConfig",
         "NashMDConfig",
         "NashMDTrainer",
@@ -82,10 +83,8 @@ _import_structure = {
         "PairRMJudge",
         "PPOConfig",
         "PPOTrainer",
-        "PPOv2Config",
-        "PPOv2Trainer",
-        "RandomPairwiseJudge",
-        "RandomRankJudge",
+        "PRMConfig",
+        "PRMTrainer",
         "RewardConfig",
         "RewardTrainer",
         "RLOOConfig",
@@ -96,7 +95,7 @@ _import_structure = {
         "XPOConfig",
         "XPOTrainer",
     ],
-    "trainer.callbacks": ["RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
@@ -117,8 +116,6 @@ else:
     _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
-    from .commands.cli_utils import DPOScriptArguments, SFTScriptArguments, TrlParser, init_zero_verbose
-    from .core import set_seed
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
@@ -130,12 +127,7 @@ if TYPE_CHECKING:
     )
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
-    from .import_utils import (
-        is_deepspeed_available,
-        is_diffusers_available,
-        is_liger_kernel_available,
-        is_llmblender_available,
-    )
+    from .import_utils import is_deepspeed_available, is_diffusers_available, is_llm_blender_available
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,
@@ -144,9 +136,12 @@ if TYPE_CHECKING:
         create_reference_model,
         setup_chat_format,
     )
+    from .scripts import ScriptArguments, TrlParser, init_zero_verbose
     from .trainer import (
         AlignPropConfig,
         AlignPropTrainer,
+        AllTrueJudge,
+        BaseBinaryJudge,
         BaseJudge,
         BasePairwiseJudge,
         BaseRankJudge,
@@ -166,6 +161,7 @@ if TYPE_CHECKING:
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
+        MergeModelCallback,
         ModelConfig,
         NashMDConfig,
         NashMDTrainer,
@@ -177,10 +173,8 @@ if TYPE_CHECKING:
         PairRMJudge,
         PPOConfig,
         PPOTrainer,
-        PPOv2Config,
-        PPOv2Trainer,
-        RandomPairwiseJudge,
-        RandomRankJudge,
+        PRMConfig,
+        PRMTrainer,
         RewardConfig,
         RewardTrainer,
         RLOOConfig,

@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -68,83 +68,70 @@ To create the package for pypi.
    Then push the change with a message 'set dev version'
 """
 
-import os
-
 from setuptools import find_packages, setup
 
 
-__version__ = "0.12.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.14.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
-    "torch>=1.4.0",
-    "transformers>=4.40.0",
-    "numpy>=1.18.2;platform_system!='Windows'",
-    "numpy<2;platform_system=='Windows'",
-    "accelerate",
-    "datasets",
-    "tyro>=0.5.11",
+    "accelerate>=0.34.0",
+    "datasets>=2.21.0",
+    "rich",  # rich shouldn't be a required package for trl, we should remove it from here
+    "transformers>=4.46.0",
 ]
 EXTRAS = {
-    "test": [
-        "parameterized",
-        "peft>=0.8.0",
-        "pytest",
-        "pytest-xdist",
-        "pytest-cov",
-        "pytest-xdist",
-        "scikit-learn",
-        "Pillow",
-        "pytest-rerunfailures",
-        "llm-blender>=0.0.2",
-    ],
-    "peft": ["peft>=0.8.0"],
-    "liger": ["liger-kernel>=0.2.1"],
+    # Windows support is partially supported with DeepSpeed https://github.com/microsoft/DeepSpeed/tree/master#windows
+    "deepspeed": ["deepspeed>=0.14.4; sys_platform != 'win32'"],
     "diffusers": ["diffusers>=0.18.0"],
-    "deepspeed": ["deepspeed>=0.14.4"],
-    "quantization": ["bitsandbytes<=0.41.1"],
-    "llm_judge": ["openai>=1.23.2", "llm-blender>=0.0.2"],
+    "judges": ["openai>=1.23.2", "llm-blender>=0.0.2"],
+    # liger-kernel depends on triton, which is only available on Linux https://github.com/triton-lang/triton#compatibility
+    "liger": ["liger-kernel>=0.4.0; sys_platform != 'win32'"],
+    "mergekit": ["mergekit>=0.0.5.1"],
+    "peft": ["peft>=0.8.0"],
+    "quantization": ["bitsandbytes"],
+    "scikit": ["scikit-learn"],
+    "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
+    "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
     EXTRAS["dev"].extend(reqs)
 
-try:
-    file_path = os.path.dirname(os.path.abspath(__file__))
-    os.symlink(os.path.join(file_path, "examples/scripts"), os.path.join(file_path, "trl/commands/scripts"))
 
-    setup(
-        name="trl",
-        license="Apache 2.0",
-        classifiers=[
-            "Development Status :: 2 - Pre-Alpha",
-            "Intended Audience :: Developers",
-            "Intended Audience :: Science/Research",
-            "License :: OSI Approved :: Apache Software License",
-            "Natural Language :: English",
-            "Operating System :: OS Independent",
-            "Programming Language :: Python :: 3",
-            "Programming Language :: Python :: 3.9",
-            "Programming Language :: Python :: 3.10",
-            "Programming Language :: Python :: 3.11",
-        ],
-        url="https://github.com/huggingface/trl",
-        entry_points={
-            "console_scripts": ["trl=trl.commands.cli:main"],
-        },
-        include_package_data=True,
-        package_data={"trl": ["commands/scripts/config/*", "commands/scripts/*", "templates/*.md"]},
-        packages=find_packages(exclude={"tests"}),
-        install_requires=REQUIRED_PKGS,
-        extras_require=EXTRAS,
-        python_requires=">=3.7",
-        long_description=open("README.md", encoding="utf-8").read(),
-        long_description_content_type="text/markdown",
-        zip_safe=False,
-        version=__version__,
-        description="Train transformer language models with reinforcement learning.",
-        keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
-        author="Leandro von Werra",
-        author_email="leandro.vonwerra@gmail.com",
-    )
-finally:
-    os.unlink(os.path.join(file_path, "trl/commands/scripts"))
+setup(
+    name="trl",
+    license="Apache 2.0",
+    classifiers=[
+        "Development Status :: 2 - Pre-Alpha",
+        "Intended Audience :: Developers",
+        "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: Apache Software License",
+        "Natural Language :: English",
+        "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+    ],
+    url="https://github.com/huggingface/trl",
+    entry_points={
+        "console_scripts": ["trl=trl.cli:main"],
+    },
+    include_package_data=True,
+    package_data={
+        "trl": ["templates/*.md"],
+    },
+    packages=find_packages(exclude={"tests", "tests.slow"}),
+    install_requires=REQUIRED_PKGS,
+    extras_require=EXTRAS,
+    python_requires=">=3.9",
+    long_description=open("README.md", encoding="utf-8").read(),
+    long_description_content_type="text/markdown",
+    zip_safe=False,
+    version=__version__,
+    description="Train transformer language models with reinforcement learning.",
+    keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
+    author="Leandro von Werra",
+    author_email="leandro.vonwerra@gmail.com",
+)

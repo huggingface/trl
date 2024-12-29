@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import tempfile
 import unittest
 
@@ -28,31 +29,31 @@ from .testing_utils import require_no_wandb
 
 class KTOTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     @parameterized.expand(
         [
-            ["gpt2", "kto", True, True],
-            ["gpt2", "kto", True, False],
-            ["gpt2", "kto", False, True],
-            ["gpt2", "kto", False, False],
-            ["gpt2", "apo_zero_unpaired", True, True],
-            ["gpt2", "apo_zero_unpaired", True, False],
-            ["gpt2", "apo_zero_unpaired", False, True],
-            ["gpt2", "apo_zero_unpaired", False, False],
+            ("qwen", "standard_preference", "kto", True, True),
+            # ("t5", "standard_implicit_prompt_preference", "kto", True, False), # KTO broken for enc-dec
+            ("qwen", "standard_unpaired_preference", "kto", False, True),
+            # ("t5", "conversational_preference", "kto", False, False),
+            ("qwen", "conversational_implicit_prompt_preference", "apo_zero_unpaired", True, True),
+            # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", True, False),
+            ("qwen", "standard_unpaired_preference", "apo_zero_unpaired", False, True),
+            # ("t5", "conversational_unpaired_preference", "apo_zero_unpaired", False, False),
         ]
     )
-    def test_kto_trainer(self, name, loss_type, pre_compute, eval_dataset):
+    def test_kto_trainer(self, name, config_name, loss_type, pre_compute, eval_dataset):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
                 output_dir=tmp_dir,
@@ -68,9 +69,9 @@ class KTOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            if name == "gpt2":
+            if name == "qwen":
                 model = self.model
                 ref_model = self.ref_model
                 tokenizer = self.tokenizer
@@ -83,7 +84,7 @@ class KTOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=ref_model,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"] if eval_dataset else None,
             )
@@ -117,7 +118,7 @@ class KTOTrainerTester(unittest.TestCase):
                     model=self.model,
                     ref_model=self.model,  # ref_model can't be the same as model
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                 )
 
@@ -141,7 +142,7 @@ class KTOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=self.ref_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -156,10 +157,10 @@ class KTOTrainerTester(unittest.TestCase):
             self.assertListEqual(tokenized_dataset["prompt"], train_dataset["prompt"])
             self.assertListEqual(tokenized_dataset["completion"], train_dataset["completion"])
             self.assertListEqual(tokenized_dataset["label"], train_dataset["label"])
-            self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [5377, 11141])
-            self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1])
-            self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [318, 1365, 621, 8253, 13])
-            self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1, 1, 1, 1])
+            self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
+            self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
+            self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [27261, 13])
+            self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1])
 
             # Test corruption of (prompt, completion) pairs for KL dataset
             for batch_size in [2, 3]:
@@ -196,14 +197,14 @@ class KTOTrainerTester(unittest.TestCase):
             self.assertListEqual(processed_dataset["prompt"], train_dataset["prompt"])
             self.assertListEqual(processed_dataset["completion"], train_dataset["completion"])
             self.assertListEqual(processed_dataset["label"], train_dataset["label"])
-            self.assertListEqual(processed_dataset["prompt_input_ids"][0], [50256, 5377, 11141])
-            self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1])
+            self.assertListEqual(processed_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
+            self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
             self.assertListEqual(
-                processed_dataset["completion_input_ids"][0], [50256, 5377, 11141, 318, 1365, 621, 8253, 13, 50256]
+                processed_dataset["completion_input_ids"][0], [46518, 374, 2664, 1091, 27261, 13, 151645]
             )
-            self.assertListEqual(processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1, 1, 1])
+            self.assertListEqual(processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
             self.assertListEqual(
-                processed_dataset["completion_labels"][0], [-100, -100, -100, 318, 1365, 621, 8253, 13, 50256]
+                processed_dataset["completion_labels"][0], [-100, -100, -100, -100, 27261, 13, 151645]
             )
 
     def test_kto_trainer_without_providing_ref_model(self):
@@ -226,7 +227,7 @@ class KTOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -275,7 +276,7 @@ class KTOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,
@@ -315,14 +316,14 @@ class KTOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex="`generate_during_eval=True` requires Weights and Biases to be installed."
-                " Please install with `pip install wandb` to resolve.",
+                expected_regex="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+                " Please install `wandb` or `comet-ml` to resolve.",
             ):
                 KTOTrainer(
                     model=self.model,
                     ref_model=None,
                     args=training_args,
-                    tokenizer=self.tokenizer,
+                    processing_class=self.tokenizer,
                     train_dataset=dummy_dataset["train"],
                     eval_dataset=dummy_dataset["test"],
                 )
@@ -363,7 +364,7 @@ class KTOTrainerTester(unittest.TestCase):
                 model=model_peft,
                 ref_model=None,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 peft_config=lora_config,

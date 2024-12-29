@@ -1,6 +1,6 @@
-# PPOv2 Trainer
+# PPO Trainer
 
-[![](https://img.shields.io/badge/All_models-PPO-blue)](https://huggingface.co/models?other=ppo)
+[![](https://img.shields.io/badge/All_models-PPO-blue)](https://huggingface.co/models?other=ppo,trl)
 
 TRL supports training LLMs with [Proximal Policy Optimization (PPO)](https://huggingface.co/papers/1707.06347).
 
@@ -16,6 +16,8 @@ To just run a PPO script to make sure the trainer can run, you can run the follo
 
 ```bash
 python examples/scripts/ppo/ppo.py \
+    --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
+    --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -64,7 +66,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/dd2o3g35), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif?download=true)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2_completions.gif)
 
 
 In the logs the sampled generations look like 
@@ -167,7 +169,7 @@ In the logs the sampled generations look like
 
 ## Implementation details
 
-This PPOv2 implementation is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
+This PPO implementation is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
 
 ## Benchmark experiments
 
@@ -208,7 +210,7 @@ The PPO checkpoint gets a 64.7% preferred rate vs the 33.0% preference rate of t
 
 Metrics:
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/pr-1540/ppov2.png)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2.png)
 
 
 ```bash
@@ -222,14 +224,14 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --pc.ncols 4 \
     --pc.ncols-legend 1 \
     --pc.xlabel "Episode" \
-    --output-filename benchmark/trl/pr-1540/ppov2 \
+    --output-filename benchmark/trl/pr-1540/ppo \
     --scan-history
 ```
 
-## PPOv2Trainer
+## PPOTrainer
 
-[[autodoc]] PPOv2Trainer
+[[autodoc]] PPOTrainer
 
-## PPOv2Config
+## PPOConfig
 
-[[autodoc]] PPOv2Config
+[[autodoc]] PPOConfig

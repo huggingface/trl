@@ -2,7 +2,7 @@
 # This script runs an SFT example end-to-end on a tiny model using different possible configurations
 # but defaults to QLoRA + PEFT
 OUTPUT_DIR="test_sft/"
-MODEL_NAME="trl-internal-testing/tiny-random-LlamaForCausalLM"
+MODEL_NAME="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 DATASET_NAME="stanfordnlp/imdb"
 MAX_STEPS=5
 BATCH_SIZE=2
@@ -36,7 +36,7 @@ CMD="""
 accelerate launch $EXTRA_ACCELERATE_ARGS \
     --num_processes $NUM_GPUS \
     --mixed_precision 'fp16' \
-    `pwd`/examples/scripts/sft.py \
+    `pwd`/trl/scripts/sft.py \
     --model_name $MODEL_NAME \
     --dataset_name $DATASET_NAME \
     --output_dir $OUTPUT_DIR \

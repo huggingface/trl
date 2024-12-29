@@ -11,8 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from .sft_config import SFTConfig
 
@@ -36,11 +37,14 @@ class GKDConfig(SFTConfig):
         teacher_model_name_or_path (`Optional[str]`, *optional*, defaults to `None`):
             Model name or path of the teacher model. If `None`, the teacher model will be the same as the model
             being trained.
-        teacher_model_init_kwargs (`Optional[Dict[str, Any]]`, *optional*, defaults to `None`):
+        teacher_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether or not to disable dropouts in `model`.
+            Whether to disable dropout in the model.
+        seq_kd (`bool`, *optional*, defaults to `False`):
+            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT
+            on teacher-generated output).
     """
 
     temperature: float = 0.9
@@ -48,8 +52,9 @@ class GKDConfig(SFTConfig):
     beta: float = 0.5
     max_new_tokens: int = 128
     teacher_model_name_or_path: Optional[str] = None
-    teacher_model_init_kwargs: Optional[Dict[str, Any]] = None
+    teacher_model_init_kwargs: Optional[dict[str, Any]] = None
     disable_dropout: bool = True
+    seq_kd: bool = False
 
     def __post_init__(self):
         super().__post_init__()

@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional
+from typing import Literal, Optional
 
 from transformers import TrainingArguments
 
@@ -32,7 +32,9 @@ class OnlineDPOConfig(TrainingArguments):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
         reward_model_path (`Optional[str]`, *optional*, defaults to `None`):
-            Path to the reward model.
+            Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both.
+        judge (`Optional[str]`, *optional*, defaults to `None`):
+            Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
         temperature (`float`, *optional*, defaults to `0.9`):
@@ -55,15 +57,16 @@ class OnlineDPOConfig(TrainingArguments):
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model.
+            Whether to disable dropout in the model and reference model.
     """
 
     learning_rate: float = 5e-7
     reward_model_path: Optional[str] = None
+    judge: Optional[str] = None
     max_new_tokens: int = 64
     temperature: float = 0.9
     missing_eos_penalty: Optional[float] = None
-    beta: List[float] = field(default_factory=lambda: [0.1])
+    beta: list[float] = field(default_factory=lambda: [0.1])
     loss_type: Literal["sigmoid", "ipo"] = "sigmoid"
     dataset_num_proc: Optional[int] = None
     disable_dropout: bool = True

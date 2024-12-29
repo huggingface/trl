@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -187,7 +187,7 @@ trainer = SFTTrainer(
     peft_config=peft_config,
     max_seq_length=None,
     formatting_func=prepare_sample_text,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
     args=training_args,
 )
 trainer.train()
