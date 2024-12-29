@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -45,6 +46,25 @@ def to_prompt_completion(example):
     return {"prompt": prompt, "completion": completion}
 
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+# TL;DR Dataset
+
+## Overview
+
+The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the TRL library for summarization tasks. It leverages the common practice on Reddit where users append "TL;DR" (Too Long; Didn't Read) summaries to lengthy posts, providing a rich source of paired text data for training summarization models.
+
+## Data Structure
+
+- **Format**: [Prompt-Completion](https://huggingface.co/docs/trl/en/dataset_formats#prompt-completion)
+- **Prompt**: The original, unabridged Reddit post.
+- **Completion**: The concise "TL;DR" summary appended by the author.
+
+This structure enables models to learn the relationship between detailed content and its abbreviated form, enhancing their summarization capabilities.
+""")
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
@@ -65,3 +85,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")
