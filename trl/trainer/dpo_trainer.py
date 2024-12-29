@@ -394,6 +394,15 @@ class DPOTrainer(Trainer):
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
         self.use_num_logits_to_keep = args.use_num_logits_to_keep
 
+        if args.padding_free:
+            if model.config._attn_implementation != "flash_attention_2":
+                warnings.warn(
+                    "Padding-free training is only supported with the `flash_attention_2` implementation. "
+                    "You're very likely to get unexpected results. Please set "
+                    "`attn_implementation='flash_attention_2'` in the model config."
+                )
+        self.padding_free = args.padding_free
+
         # Since ref_logs are precomputed on the first call to get_train/eval_dataloader
         # keep track of first called to avoid computation of future calls
         self._precomputed_train_ref_log_probs = False
@@ -1152,12 +1161,22 @@ class DPOTrainer(Trainer):
                 num_logits_to_keep = loss_mask.shape[1] - first_compute_index
                 model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
 
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs)
+            if self.padding_free:
+                # Flatten the input_ids, position_ids, and loss_mask
+                # input_ids = [[a, b, c, 0], ->     input_ids = [[a, b, c, d, e, f, g]]
+                #              [d, e, f, g]]     position_ids = [[0, 1, 2, 0, 1, 2, 3]]
+                input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
+                loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
+                model_kwargs["position_ids"] = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
+            else:
+                model_kwargs["attention_mask"] = attention_mask
+
+            outputs = model(input_ids, **model_kwargs)
+            logits = outputs.logits
 
             # Offset the logits by one to align with the labels
-            logits = outputs.logits[:, :-1, :]
-            labels = input_ids[:, 1:].clone()
-            loss_mask = loss_mask[:, 1:].bool()
+            labels = torch.roll(input_ids, shifts=-1, dims=1)
+            loss_mask = torch.roll(loss_mask, shifts=-1, dims=1).bool()
 
             if self.use_num_logits_to_keep:
                 # Align labels with logits
@@ -1178,6 +1197,16 @@ class DPOTrainer(Trainer):
         labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
         per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
         per_token_logps[~loss_mask] = 0
+        per_token_logps = torch.roll(per_token_logps, shifts=1, dims=1)
+
+        if self.padding_free:
+            batch_size, seq_len = attention_mask.shape
+            per_token_logps_ = torch.zeros(
+                batch_size, seq_len, device=outputs.logits.device, dtype=outputs.logits.dtype
+            )
+            per_token_logps_[attention_mask.bool()] = per_token_logps
+            per_token_logps = per_token_logps_
+
         all_logps = per_token_logps.sum(-1)
 
         output = {}
@@ -1208,8 +1237,8 @@ class DPOTrainer(Trainer):
 
         output["chosen_logps"] = all_logps[:num_examples]
         output["rejected_logps"] = all_logps[num_examples:]
-        output["mean_chosen_logits"] = logits[:num_examples][loss_mask[:num_examples]].mean()
-        output["mean_rejected_logits"] = logits[num_examples:][loss_mask[num_examples:]].mean()
+        output["mean_chosen_logits"] = torch.zeros(1)  # logits[:num_examples][loss_mask[:num_examples]].mean()
+        output["mean_rejected_logits"] = torch.zeros(1)  # logits[num_examples:][loss_mask[num_examples:]].mean()
 
         if self.aux_loss_enabled:
             output["aux_loss"] = outputs.aux_loss

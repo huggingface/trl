@@ -145,6 +145,9 @@ class DPOConfig(TrainingArguments):
             for saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios
             when working with very long prompts where labels are -ignored (-100).
             [Read more](https://huggingface.co/docs/transformers/main/model_doc/llama#transformers.LlamaForCausalLM)
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether the forward passes are performed without padding, i.e. flattening all the samples in the batch
+            into a single sample, associated with a position_ids vector. Only possible with flash-attention.
     """
 
     learning_rate: float = 1e-6
@@ -192,3 +195,4 @@ class DPOConfig(TrainingArguments):
     rpo_alpha: Optional[float] = None
     discopop_tau: float = 0.05
     use_num_logits_to_keep: bool = False
+    padding_free: bool = False
