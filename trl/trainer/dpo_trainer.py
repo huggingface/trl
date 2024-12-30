@@ -729,7 +729,10 @@ class DPOTrainer(Trainer):
                 ref_rejected_logps.append(ref_rejected_logp.cpu())
 
                 # Unnecessary cache clearing to avoid OOM
-                torch.cuda.empty_cache()
+                if self.args.device.type == "cuda":
+                    torch.cuda.empty_cache()
+                else:
+                    torch.xpu.empty_cache()
                 self.accelerator.free_memory()
 
             all_ref_chosen_logps = torch.cat(ref_chosen_logps).float().numpy()
@@ -809,7 +812,9 @@ class DPOTrainer(Trainer):
 
     def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
-        compte_ref_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        compte_ref_context_manager = (
+            amp.autocast(self.args.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
         with torch.no_grad(), compte_ref_context_manager:
             if self.ref_model is None:
                 with self.null_ref_context():
@@ -1271,7 +1276,9 @@ class DPOTrainer(Trainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
-        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        compute_loss_context_manager = (
+            amp.autocast(self.args.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
@@ -1290,7 +1297,9 @@ class DPOTrainer(Trainer):
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        generate_context_manager = (
+            amp.autocast(self.args.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with generate_context_manager:
             policy_output = model.generate(
@@ -1344,7 +1353,9 @@ class DPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        prediction_context_manager = (
+            amp.autocast(self.args.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
