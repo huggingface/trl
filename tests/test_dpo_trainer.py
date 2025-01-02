@@ -551,6 +551,33 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:
                     self.assertFalse(torch.equal(param, new_param))
 
+    def test_dpo_trainer_padding_free_training(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=0.1,
+                report_to="none",
+                padding_free=True,
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+            trainer = DPOTrainer(
+                model=self.model,
+                ref_model=None,
+                args=training_args,
+                tokenizer=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            trainer.train()
+
     @require_no_wandb
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
