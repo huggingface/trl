@@ -19,7 +19,7 @@ import textwrap
 import time
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -114,7 +114,7 @@ class PPOTrainer(Trainer):
         ],
         model: nn.Module,
         ref_model: Optional[nn.Module],
-        reward_model: nn.Module,
+        reward_model: Union[nn.Module, Callable],
         train_dataset: Dataset,
         value_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
@@ -218,7 +218,7 @@ class PPOTrainer(Trainer):
         # setup model, optimizer, and others
         #########
         for module in [self.policy_model, self.ref_model, self.value_model, self.reward_model]:
-            if module is not None:
+            if isinstance(module, nn.Module):
                 disable_dropout_in_model(module)
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = processing_class.eos_token_id
@@ -285,9 +285,10 @@ class PPOTrainer(Trainer):
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+            if isinstance(self.reward_model, nn.Module):
+                self.reward_model = prepare_deepspeed(
+                    self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
 
             if self.ref_model is None:
                 if not self.is_peft_model:
@@ -302,7 +303,8 @@ class PPOTrainer(Trainer):
                     raise ValueError("No reference model and model is not a Peft model.")
             else:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
-            self.reward_model = self.reward_model.to(self.accelerator.device)
+                if isinstance(self.reward_model, nn.Module):
+                    self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
@@ -457,11 +459,19 @@ class PPOTrainer(Trainer):
                     sequence_length = first_true_indices(postprocessed_response == processing_class.pad_token_id) - 1
                     unwrapped_value_model = accelerator.unwrap_model(model).value_model
                     full_value, _, _ = get_reward(
-                        unwrapped_value_model, query_response, processing_class.pad_token_id, context_length
+                        unwrapped_value_model,
+                        processing_class,
+                        query_response,
+                        processing_class.pad_token_id,
+                        context_length,
                     )
                     value = full_value[:, context_length - 1 : -1].squeeze(-1)
                     _, score, _ = get_reward(
-                        reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
+                        reward_model,
+                        processing_class,
+                        postprocessed_query_response,
+                        processing_class.pad_token_id,
+                        context_length,
                     )
 
                     responses.append(response)
@@ -713,7 +723,11 @@ class PPOTrainer(Trainer):
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     _, score, _ = get_reward(
-                        self.reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
+                        self.reward_model,
+                        processing_class,
+                        postprocessed_query_response,
+                        processing_class.pad_token_id,
+                        context_length,
                     )
                     table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
