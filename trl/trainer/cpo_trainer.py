@@ -770,18 +770,33 @@ class CPOTrainer(Trainer):
             model_kwargs["output_router_logits"] = True
 
         if self.args.use_liger_loss:
-            # skip the lm head and get the last hidden state
-            # skip the lm head and get the last hidden state
-            if hasattr(model, "get_decoder"):
-                base_model = model.get_decoder()
+            if self.is_encoder_decoder:
+                # For encoder-decoder models:
+                # 1. Get encoder outputs
+                encoder_outputs = model.get_encoder()(
+                    concatenated_batch["concatenated_input_ids"],
+                    attention_mask=concatenated_batch["concatenated_attention_mask"],
+                    return_dict=True,
+                )
+                # 2. Get decoder outputs
+                outputs = model.get_decoder()(
+                    input_ids=model_kwargs["decoder_input_ids"],
+                    encoder_hidden_states=encoder_outputs.last_hidden_state,
+                    use_cache=False,
+                )
             else:
-                base_model = getattr(model, self.args.base_model_attribute_name)
-            outputs = base_model(
-                concatenated_batch["concatenated_input_ids"],
-                attention_mask=concatenated_batch["concatenated_attention_mask"],
-                use_cache=False,
-                **model_kwargs,
-            )
+                # skip the lm head and get the last hidden state
+                if hasattr(model, "get_decoder"):
+                    base_model = model.get_decoder()
+                else:
+                    base_model = getattr(model, self.args.base_model_attribute_name)
+                outputs = base_model(
+                    concatenated_batch["concatenated_input_ids"],
+                    attention_mask=concatenated_batch["concatenated_attention_mask"],
+                    use_cache=False,
+                    **model_kwargs,
+                )
+
             lm_head = model.get_output_embeddings()
 
             # return the final loss and aux_outputs tuple
