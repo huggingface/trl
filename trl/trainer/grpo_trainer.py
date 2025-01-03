@@ -108,13 +108,13 @@ class GRPOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
-        args.per_device_train_batch_size = args.per_device_train_batch_size * args.sampling_group_size
+        args.per_device_train_batch_size = args.per_device_train_batch_size
         args.local_batch_size = (
             args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
         )
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
-        args.mini_batch_size = args.batch_size * args.sampling_group_size
+        args.mini_batch_size = args.batch_size
         args.mini_batch_size = exact_div(
             args.batch_size, args.num_mini_batches, "`batch_size` must be a multiple of `num_mini_batches`"
         )
@@ -123,7 +123,7 @@ class GRPOTrainer(Trainer):
             args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
         args.num_total_batches = math.ceil(
-            args.total_episodes* args.sampling_group_size / args.batch_size
+            args.total_episodes / args.batch_size
         )  # we may train for more than `total_episodes`
         time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
@@ -159,10 +159,10 @@ class GRPOTrainer(Trainer):
 
         self.generation_config = GenerationConfig(
             max_new_tokens=self.args.response_length,
-            temperature=(0.01 + 1e-7),
-            top_k=0.0,
-            top_p=1.0,
             do_sample=True,
+            top_k=50,
+            top_p=0.9,
+            temperature=0.7
         )
         #########
         # setup model, optimizer, and others
@@ -308,9 +308,8 @@ class GRPOTrainer(Trainer):
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
                 num_original_queries = queries.shape[0]
-                queries = queries.repeat(args.sampling_group_size, 1)
                 context_length = queries.shape[1]
-
+                queries = queries.repeat_interleave(args.sampling_group_size, 0)
                 query_responses = []
                 responses = []
                 postprocessed_responses = []
@@ -328,6 +327,9 @@ class GRPOTrainer(Trainer):
                         processing_class.pad_token_id,
                         self.generation_config,
                     )
+
+                query_responses = query_responses.view(-1, query_responses.size(-1))
+                logitss = logitss.view(-1, logitss.size(-2), logitss.size(-1))
 
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size ):
                     # the query here is sampling_group_size * number of orginal queries
@@ -383,28 +385,22 @@ class GRPOTrainer(Trainer):
                 gc.collect()
 
                 scores_by_query = scores.view(num_original_queries, args.sampling_group_size)
+
+                # 2. Apply EOS token penalty BEFORE normalization
+                contain_eos_token = torch.any(postprocessed_responses == processing_class.eos_token_id, dim=-1)
+                contain_eos_token = contain_eos_token.view(num_original_queries, args.sampling_group_size)
+                if args.missing_eos_penalty is not None:
+                    scores_by_query[~contain_eos_token] -= self.args.missing_eos_penalty
+
+                # 3. Normalize within groups
                 group_means = scores_by_query.mean(dim=1, keepdim=True)
                 group_stds = scores_by_query.std(dim=1, keepdim=True)
+                # Add small epsilon to avoid division by zero
+                group_stds = torch.clamp(group_stds, min=1e-8)
+                normalized_by_group = (scores_by_query - group_means) / group_stds
 
-                normalized = torch.zeros_like(scores_by_query)
-                valid_stds = group_stds > torch.finfo(scores.dtype).eps
-                normalized = torch.where(
-                    valid_stds,
-                    (scores_by_query - group_means) / (group_stds + torch.finfo(scores.dtype).eps),
-                    scores_by_query - group_means  # If std=0, just center the scores
-                )
-
-
-                # Replace the original scores with normalized scores
-                scores = normalized.reshape(-1)
-
-                # Response Processing 3. filter response. Ensure that the sample contains stop_token_id
-                # responses not passing that filter will receive a low (fixed) score
-                # only query humans on responses that pass that filter
-                contain_eos_token = torch.any(postprocessed_responses == processing_class.eos_token_id, dim=-1)
-
-                if args.missing_eos_penalty is not None:
-                    scores[~contain_eos_token] -= self.args.missing_eos_penalty
+                # 4. Reshape back to original format
+                normalized = normalized_by_group.reshape(-1)
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
@@ -414,7 +410,7 @@ class GRPOTrainer(Trainer):
 
                 # 4. compute rewards, we don't have to compute the non_score_reward ( this is only for the outcome supervision)
                 kl = logprobs - ref_logprobs
-                rlhf_reward = scores
+                rlhf_reward = normalized
 
                 ##### This is only for the outcome supervision
                 advantages = rlhf_reward.unsqueeze(1)
@@ -458,8 +454,10 @@ class GRPOTrainer(Trainer):
                             new_ratio = (new_logprobs - mb_logprobs).exp()
                             pg_losses = -mb_advantage * ratio
                             pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
-                            pg_loss_max = torch.max(pg_losses, pg_losses2) + kl_coef_approx_kl / self.sampling_group_size
+                            pg_loss_max = torch.max(pg_losses, pg_losses2) + kl_coef_approx_kl
                             pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
+
+
                             loss = pg_loss
                             accelerator.backward(loss)
                             optimizer.step()
@@ -583,3 +581,44 @@ class GRPOTrainer(Trainer):
 
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
+
+    def batch_generation(self, model, queries, batch_size, pad_token_id, gen_config, **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Generate responses in batches.
+        Args:
+            model: The model to generate with
+            queries: Input tensor [batch_size, seq_len]
+            batch_size: How many items to process at once
+            pad_token_id: Padding token ID
+            gen_config: Generation configuration
+        """
+        num_return_sequences = gen_config.num_return_sequences
+        context_length = queries.shape[1]
+        all_query_responses = []
+        all_logits = []
+
+        # Process in batches
+        for i in range(0, queries.shape[0], batch_size):
+            batch_queries = queries[i:i + batch_size]
+
+            output = model.generate(
+                input_ids=batch_queries,
+                generation_config=gen_config,
+                pad_token_id=pad_token_id,
+                return_dict_in_generate=True,
+                output_scores=True,
+                **kwargs,
+            )
+
+            # Reshape the output sequences and matching queries
+            sequences = output.sequences.view(-1, output.sequences.size(-1))
+            expanded_queries = batch_queries.repeat_interleave(num_return_sequences, 0)
+
+            # Concatenate for this batch
+            query_response = torch.cat((expanded_queries, sequences[:, context_length:]), dim=1)
+            logits = torch.stack(output.scores, dim=1)
+            logits = logits.view(-1, logits.size(-2), logits.size(-1))
+
+            all_query_responses.append(query_response)
+            all_logits.append(logits)
+        return torch.cat(all_query_responses, dim=0), torch.cat(all_logits, dim=0)
