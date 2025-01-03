@@ -76,6 +76,11 @@ class CPOConfig(TrainingArguments):
             string.
         dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use Liger loss.
+        base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
+            Name of the attribute in the model that contains the base model. This is used to get the base model from the
+            model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
     """
 
     learning_rate: float = 1e-6
@@ -95,3 +100,5 @@ class CPOConfig(TrainingArguments):
     is_encoder_decoder: Optional[bool] = None
     model_init_kwargs: Optional[dict[str, Any]] = None
     dataset_num_proc: Optional[int] = None
+    use_liger_loss: bool = False
+    base_model_attribute_name: str = "model"
