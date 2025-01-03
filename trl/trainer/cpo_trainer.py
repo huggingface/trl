@@ -840,8 +840,12 @@ class CPOTrainer(Trainer):
             chosen_logps = all_logps[:len_chosen]
             rejected_logps = all_logps[len_chosen:]
 
-            chosen_logits = all_logits[:len_chosen]
-            rejected_logits = all_logits[len_chosen:]
+            if not self.is_encoder_decoder:
+                chosen_logits = all_logits[:len_chosen, :-1, :]
+                rejected_logits = all_logits[len_chosen:, :-1, :]
+            else:
+                chosen_logits = all_logits[:len_chosen]
+                rejected_logits = all_logits[len_chosen:]
 
             if self.aux_loss_enabled:
                 return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, nll_loss, outputs.aux_loss)
@@ -868,10 +872,10 @@ class CPOTrainer(Trainer):
                     policy_chosen_logits,
                     policy_rejected_logits,
                     policy_nll_loss,
-                    chosen_rewards,
-                    rejected_rewards,
                 ),
             ) = forward_output
+            chosen_rewards = self.beta * policy_chosen_logps
+            rejected_rewards = self.beta * policy_rejected_logps
         else:
             (
                 policy_chosen_logps,
