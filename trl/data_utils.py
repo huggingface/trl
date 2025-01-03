@@ -412,3 +412,45 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
         if (chosen_conv and prompt_conv) or (not chosen_conv and not prompt_conv):
             return example
     return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
+
+
+def pack_examples(
+    examples: dict[str, list[list]], seq_length: int, separator_token_id: Optional[int] = None
+) -> dict[str, list[list]]:
+    """
+    Pack examples into chunks of size `seq_length`.
+
+    Args:
+        examples (`dict[str, list[list]]`):
+            Dictionary of examples with keys as strings and values as lists of lists.
+        seq_length (`int`):
+            Maximum sequence length.
+        separator_token_id (`int` or `None`, *optional*, defaults to `None`):
+            Token ID to use as a separator between packed sequences. If `None`, no separator is added.
+
+    Returns:
+        `dict[str, list[list]]`: Dictionary of examples with keys as strings and values as lists of lists.
+
+    Example:
+
+    ```python
+    >>> from trl import pack_examples
+    >>> examples = {
+    ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+    ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+    ... }
+    >>> pack_examples(examples, seq_length=5)
+    {'input_ids': [[1, 2, 3, 4, 5], [6, 7, 8]], 'attention_mask': [[0, 1, 1, 0, 0], [1, 1, 1]]}
+    >>> pack_examples(examples, seq_length=2)
+    {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
+    ```
+    """
+    if separator_token_id is not None:
+        examples["input_ids"] = [x + [separator_token_id] for x in examples["input_ids"]]
+        if "attention_mask" in examples:
+            examples["attention_mask"] = [x + [1] for x in examples["attention_mask"]]
+    # Join  all the values into a single list
+    examples = {k: sum(v, []) for k, v in examples.items()}
+    # Split the values into chunks of size seq_length
+    examples = {k: [v[i : i + seq_length] for i in range(0, len(v), seq_length)] for k, v in examples.items()}
+    return examples
