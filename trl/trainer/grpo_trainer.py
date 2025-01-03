@@ -99,6 +99,7 @@ class GRPOTrainer(Trainer):
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
         self.processing_class = processing_class
+        self.optimizer_cls_and_kwargs = None
         #########
         # calculate various batch sizes
         #########
