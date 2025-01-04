@@ -1,0 +1,13 @@
+name: "OpenAI Issue Labeler"
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: August-murr/auto-labeler@main
+        with:
+            openai-api-key: ${{ secrets.OPENAI_API_KEY }}
