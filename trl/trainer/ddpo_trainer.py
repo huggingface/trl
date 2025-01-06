@@ -23,10 +23,11 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
+from huggingface_hub import PyTorchModelHubMixin
 from transformers import is_wandb_available
 
 from ..models import DDPOStableDiffusionPipeline
-from . import BaseTrainer, DDPOConfig
+from .ddpo_config import DDPOConfig
 from .utils import PerPromptStatTracker, generate_model_card, get_comet_experiment_url
 
 
@@ -37,7 +38,7 @@ if is_wandb_available():
 logger = get_logger(__name__)
 
 
-class DDPOTrainer(BaseTrainer):
+class DDPOTrainer(PyTorchModelHubMixin):
     """
     The DDPOTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
     Note, this trainer is heavily inspired by the work here: https://github.com/kvablack/ddpo-pytorch
