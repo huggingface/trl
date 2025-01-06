@@ -504,7 +504,7 @@ class DPOTrainer(Trainer):
 
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        if self.loss_type == "bco_pair":
+        if "bco_pair" in self.loss_type:
             self.running = RunningMoments(self.accelerator)
 
     def _prepare_dataset(
@@ -870,6 +870,8 @@ class DPOTrainer(Trainer):
             )
         if "image_sizes" in batch:
             output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
+        if "image_flags" in batch:
+            batch["image_flags"] = torch.cat([batch["image_flags"], batch["image_flags"]], dim=0)
 
         # Concatenate the chosen and rejected completions
         max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
@@ -1095,6 +1097,8 @@ class DPOTrainer(Trainer):
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
         if "image_sizes" in concatenated_batch:
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
+        if "image_flags" in concatenated_batch:
+            model_kwargs["image_flags"] = concatenated_batch["image_flags"]
 
         prompt_input_ids = concatenated_batch["prompt_input_ids"]
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
@@ -1234,9 +1238,27 @@ class DPOTrainer(Trainer):
         else:
             ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
 
-        losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-            model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
-        )
+        if "," in self.loss_type:
+            loss_type = self.loss_type
+            loss_type_list = loss_type.split(",")
+
+            losses, chosen_rewards, rejected_rewards = 0, 0, 0
+            for curr_type in loss_type_list:
+                self.loss_type = curr_type
+                curr_losses, curr_chosen_rewards, curr_rejected_rewards = self.dpo_loss(
+                    model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
+                )
+                curr_weight = getattr(self.args, f"{curr_type}_loss_weight")
+                losses = losses + curr_losses * curr_weight
+                chosen_rewards = chosen_rewards + curr_chosen_rewards * curr_weight
+                rejected_rewards = rejected_rewards + curr_rejected_rewards * curr_weight
+
+            self.loss_type = loss_type
+        else:
+            losses, chosen_rewards, rejected_rewards = self.dpo_loss(
+                model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
+            )
+
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         if self.args.rpo_alpha is not None:
