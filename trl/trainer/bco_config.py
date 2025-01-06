@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from transformers import TrainingArguments
@@ -28,12 +28,12 @@ class BCOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        max_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_prompt_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
@@ -41,7 +41,7 @@ class BCOConfig(TrainingArguments):
             reference model.
         label_pad_token_id (`int`,  *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`Optional[int]`, *optional*, defaults to `None`):
+        padding_value (`int` or `None`, *optional*, defaults to `None`):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
@@ -51,19 +51,19 @@ class BCOConfig(TrainingArguments):
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from both the model and the reference model to W&B or Comet during
             evaluation.
-        is_encoder_decoder (`Optional[bool]`, *optional*, defaults to `None`):
+        is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute reference model log probabilities for training and evaluation datasets. This is
             useful when training without the reference model to reduce the total GPU memory needed.
-        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
-        ref_model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        ref_model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
             from a string.
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         prompt_sample_size (`int`, *optional*, defaults to `1024`):
             Number of prompts that are fed to density ratio classifier.
@@ -73,20 +73,106 @@ class BCOConfig(TrainingArguments):
             Maximum value of the density ratio. The estimated density ratio is clamped to this value.
     """
 
-    max_length: Optional[int] = None
-    max_prompt_length: Optional[int] = None
-    max_completion_length: Optional[int] = None
-    beta: float = 0.1
-    label_pad_token_id: int = -100
-    padding_value: Optional[int] = None
-    truncation_mode: str = "keep_end"
-    disable_dropout: bool = True
-    generate_during_eval: bool = False
-    is_encoder_decoder: Optional[bool] = None
-    precompute_ref_log_probs: bool = False
-    model_init_kwargs: Optional[dict[str, Any]] = None
-    ref_model_init_kwargs: Optional[dict[str, Any]] = None
-    dataset_num_proc: Optional[int] = None
-    prompt_sample_size: int = 1024
-    min_density_ratio: float = 0.5
-    max_density_ratio: float = 10.0
+    max_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum length of the sequences (prompt + completion) in the batch. "
+            "This argument is required if you want to use the default data collator."
+        },
+    )
+    max_prompt_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum length of the prompt. "
+            "This argument is required if you want to use the default data collator."
+        },
+    )
+    max_completion_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum length of the completion. This argument is required if you want to use the "
+            "default data collator and your model is an encoder-decoder."
+        },
+    )
+    beta: float = field(
+        default=0.1,
+        metadata={
+            "help": "Parameter controlling the deviation from the reference model. "
+            "Higher β means less deviation from the reference model."
+        },
+    )
+    label_pad_token_id: int = field(
+        default=-100,
+        metadata={
+            "help": "Label pad token id. This argument is required if you want to use the default data collator."
+        },
+    )
+    padding_value: Optional[int] = field(
+        default=None,
+        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
+    )
+    truncation_mode: str = field(
+        default="keep_end",
+        metadata={
+            "help": "Truncation mode to use when the prompt is too long. Possible values are "
+            "`keep_end` or `keep_start`. This argument is required if you want to use the "
+            "default data collator."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model and reference model."},
+    )
+    generate_during_eval: bool = field(
+        default=False,
+        metadata={
+            "help": "If `True`, generates and logs completions from both the model and the reference model "
+            "to W&B during evaluation."
+        },
+    )
+    is_encoder_decoder: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "When using the `model_init` argument (callable) to instantiate the model instead of the "
+            "`model` argument, you need to specify if the model returned by the callable is an "
+            "encoder-decoder model."
+        },
+    )
+    precompute_ref_log_probs: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to precompute reference model log probabilities for training and evaluation datasets. "
+            "This is useful when training without the reference model to reduce the total GPU memory "
+            "needed."
+        },
+    )
+    model_init_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
+            "model from a string."
+        },
+    )
+    ref_model_init_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
+            "reference model from a string."
+        },
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    prompt_sample_size: int = field(
+        default=1024,
+        metadata={"help": "Number of prompts that are fed to density ratio classifier."},
+    )
+    min_density_ratio: float = field(
+        default=0.5,
+        metadata={"help": "Minimum value of the density ratio. The estimated density ratio is clamped to this value."},
+    )
+    max_density_ratio: float = field(
+        default=10.0,
+        metadata={"help": "Maximum value of the density ratio. The estimated density ratio is clamped to this value."},
+    )

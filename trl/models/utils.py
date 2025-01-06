@@ -90,7 +90,7 @@ def setup_chat_format(
         model (`~transformers.PreTrainedModel`): The model to be modified.
         tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
         format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
-        resize_to_multiple_of (`Optional[int]`): Number to resize the embedding layer to. Defaults to None.
+        resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
         model (`~transformers.PreTrainedModel`): The modified model.

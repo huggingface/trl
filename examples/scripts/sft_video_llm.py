@@ -45,7 +45,7 @@ accelerate launch \
 import json
 import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import requests
@@ -152,7 +152,15 @@ def collate_fn(examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
 
 @dataclass
 class CustomScriptArguments(ScriptArguments):
-    video_cache_dir: str = "/tmp/videos/"
+    r"""
+    Arguments for the script.
+
+    Args:
+        video_cache_dir (`str`, *optional*, defaults to `"/tmp/videos/"`):
+            Video cache directory.
+    """
+
+    video_cache_dir: str = field(default="/tmp/videos/", metadata={"help": "Video cache directory."})
 
 
 if __name__ == "__main__":
