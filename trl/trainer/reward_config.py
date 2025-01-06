@@ -52,9 +52,7 @@ class RewardConfig(TrainingArguments):
     )
     disable_dropout: bool = field(
         default=True,
-        metadata={
-            "help": "Whether to disable dropout in the model and reference model."
-        },
+        metadata={"help": "Whether to disable dropout in the model and reference model."},
     )
     dataset_num_proc: Optional[int] = field(
         default=None,

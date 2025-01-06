@@ -121,9 +121,7 @@ class BCOConfig(TrainingArguments):
     )
     disable_dropout: bool = field(
         default=True,
-        metadata={
-            "help": "Whether to disable dropout in the model and reference model."
-        },
+        metadata={"help": "Whether to disable dropout in the model and reference model."},
     )
     generate_during_eval: bool = field(
         default=False,
