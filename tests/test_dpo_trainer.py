@@ -571,8 +571,8 @@ class DPOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex="`generate_during_eval=True` requires Weights and Biases to be installed."
-                " Please install `wandb` to resolve.",
+                expected_regex="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+                " Please install `wandb` or `comet-ml` to resolve.",
             ):
                 DPOTrainer(
                     model=self.model,
