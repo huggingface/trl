@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 from transformers import TrainingArguments
 
@@ -31,12 +31,12 @@ class CPOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        max_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_prompt_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
@@ -61,37 +61,109 @@ class CPOConfig(TrainingArguments):
             Target reward margin for the SimPO loss, used only when the `loss_type="simpo"`.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`Optional[int]`, *optional*, defaults to `None`):
+        padding_value (`int` or `None`, *optional*, defaults to `None`):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
         truncation_mode (`str`,*optional*,  defaults to `"keep_end"`):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             If `True`, generates and logs completions from the model to W&B or Comet during evaluation.
-        is_encoder_decoder (`Optional[bool]`, *optional*, defaults to `None`):
+        is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
-        model_init_kwargs (`Optional[dict[str, Any]]`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
             string.
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
     """
 
-    learning_rate: float = 1e-6
-    max_length: Optional[int] = None
-    max_prompt_length: Optional[int] = None
-    max_completion_length: Optional[int] = None
-    beta: float = 0.1
-    label_smoothing: float = 0.0
-    loss_type: Literal["sigmoid", "hinge", "ipo", "simpo"] = "sigmoid"
-    disable_dropout: bool = True
-    cpo_alpha: float = 1.0
-    simpo_gamma: float = 0.5
-    label_pad_token_id: int = -100
-    padding_value: Optional[int] = None
-    truncation_mode: str = "keep_end"
-    generate_during_eval: bool = False
-    is_encoder_decoder: Optional[bool] = None
-    model_init_kwargs: Optional[dict[str, Any]] = None
-    dataset_num_proc: Optional[int] = None
+    learning_rate: float = field(
+        default=1e-6,
+        metadata={
+            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
+            "`transformers.TrainingArguments`."
+        },
+    )
+    max_length: Optional[int] = field(
+        default=None,
+        metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
+    )
+    max_prompt_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
+            "collator and your model is an encoder-decoder."
+        },
+    )
+    max_completion_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum length of the completion. This argument is required if you want to use the default data "
+            "collator and your model is an encoder-decoder."
+        },
+    )
+    beta: float = field(
+        default=0.1,
+        metadata={
+            "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
+            "the reference model."
+        },
+    )
+    label_smoothing: float = field(
+        default=0.0,
+        metadata={"help": "Label smoothing factor."},
+    )
+    loss_type: str = field(
+        default="sigmoid",
+        metadata={
+            "help": "Type of loss to use.",
+            "choices": ["sigmoid", "hinge", "ipo", "simpo"],
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model."},
+    )
+    cpo_alpha: float = field(
+        default=1.0,
+        metadata={"help": "Weight of the BC regularizer in CPO training."},
+    )
+    simpo_gamma: float = field(
+        default=0.5,
+        metadata={"help": "Target reward margin for the SimPO loss, used only when the `loss_type='simpo'`."},
+    )
+    label_pad_token_id: int = field(
+        default=-100,
+        metadata={"help": "Label pad token id."},
+    )
+    padding_value: Optional[int] = field(
+        default=None,
+        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
+    )
+    truncation_mode: str = field(
+        default="keep_end",
+        metadata={
+            "help": "Truncation mode to use when the prompt is too long.",
+            "choices": ["keep_end", "keep_start"],
+        },
+    )
+    generate_during_eval: bool = field(
+        default=False,
+        metadata={"help": "If `True`, generates and logs completions from the model to W&B during evaluation."},
+    )
+    is_encoder_decoder: Optional[bool] = field(
+        default=None,
+        metadata={"help": "Whether the model is an encoder-decoder model."},
+    )
+    model_init_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
+            "from a string."
+        },
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
