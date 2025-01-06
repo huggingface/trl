@@ -60,7 +60,7 @@ class KTOConfig(TrainingArguments):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B during
+            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet during
             evaluation.
         is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
@@ -77,7 +77,7 @@ class KTOConfig(TrainingArguments):
         dataset_num_proc: (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model.
+            Whether to disable dropout in the model and reference model.
     """
 
     learning_rate: float = field(

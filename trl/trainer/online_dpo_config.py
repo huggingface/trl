@@ -57,7 +57,7 @@ class OnlineDPOConfig(TrainingArguments):
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model.
+            Whether to disable dropout in the model and reference model.
     """
 
     learning_rate: float = field(
