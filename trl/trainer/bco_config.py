@@ -49,7 +49,7 @@ class BCOConfig(TrainingArguments):
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B during
+            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet during
             evaluation.
         is_encoder_decoder (`Optional[bool]`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
