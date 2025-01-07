@@ -1170,7 +1170,8 @@ class DPOTrainer(Trainer):
                 #              [d, e, f, g]]     position_ids = [[0, 1, 2, 0, 1, 2, 3]]
                 input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
                 loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
-                model_kwargs["position_ids"] = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
+                position_ids = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
+                model_kwargs["position_ids"] = position_ids
             else:
                 model_kwargs["attention_mask"] = attention_mask
 
