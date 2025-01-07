@@ -1245,7 +1245,7 @@ class DPOTrainer(Trainer):
 
         # Compute the mean logits
         if self.padding_free:
-            # pos_id contains a sequence of range identifiers (e.g., [[0, 1, 2, 0, 1, 2, 3, ...]]).
+            # position_ids contains a sequence of range identifiers (e.g., [[0, 1, 2, 0, 1, 2, 3, ...]]).
             # There are 2*num_examples ranges in total: the first half corresponds to the chosen tokens,
             # and the second half to the rejected tokens.
             # To find the start of the rejected tokens, we look for the num_examples+1-th zero in pos_id.
