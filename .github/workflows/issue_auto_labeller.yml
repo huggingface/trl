@@ -1,7 +1,7 @@
-name: "OpenAI Issue Labeler"
+name: "Hugging Face Issue Labeler"
 on:
   issues:
-    types: [opened, edited]
+    types: opened
 
 jobs:
   triage:
@@ -10,4 +10,4 @@ jobs:
       - uses: actions/checkout@v3
       - uses: August-murr/auto-labeler@main
         with:
-            openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+            hf-api-key: ${{ secrets.HF_API_KEY }}
