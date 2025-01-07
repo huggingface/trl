@@ -1161,8 +1161,8 @@ class DPOTrainer(Trainer):
                 #  [0, 0, 0, x, x, x, 0]]
                 #         ^ start computing logits from here ([:, -(7-3+1):])
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
-                num_logits_to_keep = loss_mask.shape[1] - first_compute_index
-                model_kwargs["num_logits_to_keep"] = num_logits_to_keep.item() + 1  # +1 for the first label
+                num_logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1  # +1 for the first label
+                model_kwargs["num_logits_to_keep"] = num_logits_to_keep
 
             if self.padding_free:
                 # Flatten the input_ids, position_ids, and loss_mask

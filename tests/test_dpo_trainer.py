@@ -1112,7 +1112,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -1122,7 +1122,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
