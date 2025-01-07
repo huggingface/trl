@@ -460,18 +460,20 @@ class RLOOTrainer(Trainer):
                 eps = int(self.state.episode / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
-                metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
-                metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
-                metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
-                metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
-                metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
-                metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
-                metrics["policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
-                metrics["loss/policy_avg"] = self.accelerator.gather(pg_loss_stats).mean().item()
-                metrics["val/clipfrac_avg"] = self.accelerator.gather(vf_clipfrac_stats).mean().item()
-                metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
-                metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
-                metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
+                metrics["objective/kl"] = self.accelerator.gather_for_metrics(mean_kl).mean().item()
+                metrics["objective/entropy"] = self.accelerator.gather_for_metrics(mean_entropy).mean().item()
+                metrics["objective/non_score_reward"] = (
+                    self.accelerator.gather_for_metrics(mean_non_score_reward).mean().item()
+                )
+                metrics["objective/rlhf_reward"] = self.accelerator.gather_for_metrics(rlhf_reward).mean().item()
+                metrics["objective/scores"] = self.accelerator.gather_for_metrics(scores.mean()).mean().item()
+                metrics["policy/approxkl_avg"] = self.accelerator.gather_for_metrics(approxkl_stats).mean().item()
+                metrics["policy/clipfrac_avg"] = self.accelerator.gather_for_metrics(pg_clipfrac_stats).mean().item()
+                metrics["loss/policy_avg"] = self.accelerator.gather_for_metrics(pg_loss_stats).mean().item()
+                metrics["val/clipfrac_avg"] = self.accelerator.gather_for_metrics(vf_clipfrac_stats).mean().item()
+                metrics["policy/entropy_avg"] = self.accelerator.gather_for_metrics(entropy_stats).mean().item()
+                metrics["val/ratio"] = self.accelerator.gather_for_metrics(ratio_stats).mean().item()
+                metrics["val/ratio_var"] = self.accelerator.gather_for_metrics(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
@@ -538,7 +540,7 @@ class RLOOTrainer(Trainer):
                     _, score, _ = get_reward(
                         self.reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
                     )
-                    table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
+                    table["score"].extend(self.accelerator.gather_for_metrics(score).float().cpu().numpy())
 
                 if sampling:
                     break
