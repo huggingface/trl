@@ -251,7 +251,7 @@ class GKDTrainer(SFTTrainer):
             loss = self.jsd_loss_fn(
                 torch.flatten(shifted_student_logits, end_dim=1),
                 torch.flatten(shifted_teacher_logits, end_dim=1),
-                shifted_labels.view(-1),
+                torch.flatten(shifted_labels),
             )
         else:
             loss = self.generalized_jsd_loss(
