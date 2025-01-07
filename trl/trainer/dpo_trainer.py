@@ -397,9 +397,12 @@ class DPOTrainer(Trainer):
         if args.padding_free:
             if model.config._attn_implementation != "flash_attention_2":
                 warnings.warn(
-                    "Padding-free training is only supported with the `flash_attention_2` implementation. "
-                    "You're very likely to get unexpected results. Please set "
-                    "`attn_implementation='flash_attention_2'` in the model config."
+                    "Padding-free training is enabled, but the attention implementation is not set to "
+                    "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
+                    "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
+                    "other implementations may lead to unexpected behavior. To ensure compatibility, set "
+                    "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
+                    "attention mechanism can handle flattened sequences."
                 )
         self.padding_free = args.padding_free
 
