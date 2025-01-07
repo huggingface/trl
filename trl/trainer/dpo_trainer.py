@@ -1249,7 +1249,7 @@ class DPOTrainer(Trainer):
             # There are 2*num_examples ranges in total: the first half corresponds to the chosen tokens,
             # and the second half to the rejected tokens.
             # To find the start of the rejected tokens, we look for the num_examples+1-th zero in pos_id.
-            split_idx = (model_kwargs["position_ids"] == 0).nonzero(as_tuple=True)[1][num_examples]
+            split_idx = (position_ids == 0).nonzero(as_tuple=True)[1][num_examples]
             mean_chosen_logits = logits[0, :split_idx][loss_mask[0, :split_idx]].mean()
             mean_rejected_logits = logits[0, split_idx:][loss_mask[0, split_idx:]].mean()
         else:
