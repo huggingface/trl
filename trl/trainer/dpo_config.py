@@ -146,9 +146,9 @@ class DPOConfig(TrainingArguments):
             scenarios when working with very long prompts where labels are ignored (-100).
             [Read more](https://huggingface.co/docs/transformers/main/model_doc/llama#transformers.LlamaForCausalLM)
         padding_free (`bool`, *optional*, defaults to `False`):
-            Whether forward passes are performed without padding by flattening all sequences in the batch 
-            into a single continuous sequence. This approach requires associating a `position_ids` vector to track 
-            positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it 
+            Whether forward passes are performed without padding by flattening all sequences in the batch
+            into a single continuous sequence. This approach requires associating a `position_ids` vector to track
+            positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it
             can handle the flattened batch structure.
     """
 
