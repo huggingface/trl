@@ -813,15 +813,15 @@ class CPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean().cpu()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().cpu()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().mean().cpu()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
-        metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
+        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather(chosen_rewards).mean().item()
+        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather(rejected_rewards).mean().item()
+        metrics[f"{prefix}rewards/accuracies"] = self.accelerator.gather(reward_accuracies).mean().item()
+        metrics[f"{prefix}rewards/margins"] = self.accelerator.gather(chosen_rewards - rejected_rewards).mean().item()
+        metrics[f"{prefix}logps/rejected"] = self.accelerator.gather(policy_rejected_logps).detach().mean().item()
+        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather(policy_chosen_logps).detach().mean().item()
+        metrics[f"{prefix}logits/rejected"] = self.accelerator.gather(policy_rejected_logits).detach().mean().item()
+        metrics[f"{prefix}logits/chosen"] = self.accelerator.gather(policy_chosen_logits).detach().mean().item()
+        metrics[f"{prefix}nll_loss"] = self.accelerator.gather(policy_nll_loss).detach().mean().item()
 
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss

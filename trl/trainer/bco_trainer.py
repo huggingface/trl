@@ -1236,7 +1236,7 @@ class BCOTrainer(Trainer):
             chosen_embeddings,
             rejected_embeddings,
         )
-        metrics["delta"] = delta.item()
+        metrics["delta"] = self.accelerator.gather(delta).mean().item()
 
         num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
         num_rejected = torch.Tensor([len(rejected_rewards)]).to(self.accelerator.device)
