@@ -77,7 +77,7 @@ class TestJudges(unittest.TestCase):
 
     def test_rlhflow_pairwise_judge(self):
         judge = RLHFlowPairwiseJudge("TianqiLiuAI/RRM-0p2")
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions, batch_size=2)
         self.assertEqual(len(ranks), 2)
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
@@ -85,7 +85,7 @@ class TestJudges(unittest.TestCase):
 
     def test_rlhflow_pairwise_judge_return_scores(self):
         judge = RLHFlowPairwiseJudge("TianqiLiuAI/RRM-0p2")
-        prompts, completions = self._get_prompts_and_completions()
+        prompts, completions = self._get_prompts_and_pairwise_completions()
         probs = judge.judge(prompts=prompts, completions=completions, return_scores=True, batch_size=2)
         self.assertEqual(len(probs), 2)
         self.assertTrue(all(isinstance(prob, float) for prob in probs))
