@@ -833,17 +833,21 @@ class ORPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().mean()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean()
-        metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean()
-        metrics[f"{prefix}log_odds_ratio"] = log_odds_ratio
-        metrics[f"{prefix}log_odds_chosen"] = log_odds_chosen
+        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather_for_metrics(chosen_rewards).mean()
+        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather_for_metrics(rejected_rewards).mean()
+        metrics[f"{prefix}rewards/accuracies"] = self.accelerator.gather_for_metrics(reward_accuracies).mean()
+        metrics[f"{prefix}rewards/margins"] = self.accelerator.gather_for_metrics(
+            chosen_rewards - rejected_rewards
+        ).mean()
+        metrics[f"{prefix}logps/rejected"] = self.accelerator.gather_for_metrics(policy_rejected_logps).detach().mean()
+        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean()
+        metrics[f"{prefix}logits/rejected"] = (
+            self.accelerator.gather_for_metrics(policy_rejected_logits).detach().mean()
+        )
+        metrics[f"{prefix}logits/chosen"] = self.accelerator.gather_for_metrics(policy_chosen_logits).detach().mean()
+        metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean()
+        metrics[f"{prefix}log_odds_ratio"] = self.accelerator.gather_for_metrics(log_odds_ratio).mean()
+        metrics[f"{prefix}log_odds_chosen"] = self.accelerator.gather_for_metrics(log_odds_chosen).mean()
         if is_torch_xla_available():
             xm.mark_step()  # needed because .item() calls
         for k, v in metrics.items():
