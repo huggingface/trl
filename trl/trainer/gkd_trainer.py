@@ -249,9 +249,9 @@ class GKDTrainer(SFTTrainer):
         # compute loss
         if self.args.use_liger_loss:
             loss = self.jsd_loss_fn(
-                shifted_student_logits,
-                shifted_teacher_logits,
-                shifted_labels,
+                torch.flatten(shifted_student_logits, end_dim=1),
+                torch.flatten(shifted_teacher_logits, end_dim=1),
+                shifted_labels.view(-1),
             )
         else:
             loss = self.generalized_jsd_loss(
