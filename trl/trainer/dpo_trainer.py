@@ -1240,24 +1240,32 @@ class DPOTrainer(Trainer):
             losses = losses + self.aux_loss_coef * model_output["aux_loss"]
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather(chosen_rewards).mean().item()
-        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather(rejected_rewards).mean().item()
-        metrics[f"{prefix}rewards/accuracies"] = self.accelerator.gather(reward_accuracies).mean().item()
-        metrics[f"{prefix}rewards/margins"] = self.accelerator.gather(chosen_rewards - rejected_rewards).mean().item()
-        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather(model_output["chosen_logps"]).detach().mean().item()
+        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather_for_metrics(chosen_rewards).mean().item()
+        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather_for_metrics(rejected_rewards).mean().item()
+        metrics[f"{prefix}rewards/accuracies"] = self.accelerator.gather_for_metrics(reward_accuracies).mean().item()
+        metrics[f"{prefix}rewards/margins"] = (
+            self.accelerator.gather_for_metrics(chosen_rewards - rejected_rewards).mean().item()
+        )
+        metrics[f"{prefix}logps/chosen"] = (
+            self.accelerator.gather_for_metrics(model_output["chosen_logps"]).detach().mean().item()
+        )
         metrics[f"{prefix}logps/rejected"] = (
-            self.accelerator.gather(model_output["rejected_logps"]).detach().mean().item()
+            self.accelerator.gather_for_metrics(model_output["rejected_logps"]).detach().mean().item()
         )
         metrics[f"{prefix}logits/chosen"] = (
-            self.accelerator.gather(model_output["mean_chosen_logits"]).detach().mean().item()
+            self.accelerator.gather_for_metrics(model_output["mean_chosen_logits"]).detach().mean().item()
         )
         metrics[f"{prefix}logits/rejected"] = (
-            self.accelerator.gather(model_output["mean_rejected_logits"]).detach().mean().item()
+            self.accelerator.gather_for_metrics(model_output["mean_rejected_logits"]).detach().mean().item()
         )
         if self.args.rpo_alpha is not None:
-            metrics[f"{prefix}nll_loss"] = self.accelerator.gather(model_output["nll_loss"]).detach().mean().item()
+            metrics[f"{prefix}nll_loss"] = (
+                self.accelerator.gather_for_metrics(model_output["nll_loss"]).detach().mean().item()
+            )
         if self.aux_loss_enabled:
-            metrics[f"{prefix}aux_loss"] = self.accelerator.gather(model_output["aux_loss"]).detach().mean().item()
+            metrics[f"{prefix}aux_loss"] = (
+                self.accelerator.gather_for_metrics(model_output["aux_loss"]).detach().mean().item()
+            )
 
         return losses.mean(), metrics
 
@@ -1427,7 +1435,6 @@ class DPOTrainer(Trainer):
             start_time (`float` or `None`, *optional*, defaults to `None`):
                 Start time of the training.
         """
-        # This function is called either in the
         # logs either has 'loss' or 'eval_loss'
         train_eval = "train" if "loss" in logs else "eval"
         # Add averaged stored metrics to logs
