@@ -1203,6 +1203,7 @@ class DPOTrainer(Trainer):
         per_token_logps = torch.roll(per_token_logps, shifts=1, dims=1)
 
         if self.padding_free:
+            # Unflatten the per_token_logps (shape: [1, sum_seq_len] -> [batch_size, seq_len])
             batch_size, seq_len = attention_mask.shape
             per_token_logps_ = torch.zeros(
                 batch_size, seq_len, device=outputs.logits.device, dtype=outputs.logits.dtype
@@ -1240,8 +1241,22 @@ class DPOTrainer(Trainer):
 
         output["chosen_logps"] = all_logps[:num_examples]
         output["rejected_logps"] = all_logps[num_examples:]
-        output["mean_chosen_logits"] = torch.zeros(1)  # logits[:num_examples][loss_mask[:num_examples]].mean()
-        output["mean_rejected_logits"] = torch.zeros(1)  # logits[num_examples:][loss_mask[num_examples:]].mean()
+
+        # Compute the mean logits
+        if self.padding_free:
+            # pos_id contains a sequence of range identifiers (e.g., [[0, 1, 2, 0, 1, 2, 3, ...]]).
+            # There are 2*num_examples ranges in total: the first half corresponds to the chosen tokens,
+            # and the second half to the rejected tokens.
+            # To find the start of the rejected tokens, we look for the num_examples+1-th zero in pos_id.
+            split_idx = (model_kwargs["position_ids"] == 0).nonzero(as_tuple=True)[1][num_examples]
+            mean_chosen_logits = logits[0, :split_idx][loss_mask[0, :split_idx]].mean()
+            mean_rejected_logits = logits[0, split_idx:][loss_mask[0, split_idx:]].mean()
+        else:
+            mean_chosen_logits = logits[:num_examples][loss_mask[:num_examples]].mean()
+            mean_rejected_logits = logits[num_examples:][loss_mask[num_examples:]].mean()
+
+        output["mean_chosen_logits"] = mean_chosen_logits
+        output["mean_rejected_logits"] = mean_rejected_logits
 
         if self.aux_loss_enabled:
             output["aux_loss"] = outputs.aux_loss
