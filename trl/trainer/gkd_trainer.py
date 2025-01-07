@@ -55,7 +55,7 @@ if is_deepspeed_available():
     import deepspeed
 
 if is_liger_kernel_available():
-    from liger_kernel.transformers import AutoLigerKernelForCausalLM
+    from liger_kernel.transformers import AutoLigerKernelForCausalLM, LigerJSD
 
 if is_peft_available():
     from peft import PeftConfig
@@ -158,6 +158,14 @@ class GKDTrainer(SFTTrainer):
         ):
             self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
 
+        if self.args.use_liger_loss:
+            if not is_liger_kernel_available():
+                raise ValueError(
+                    "You set `use_liger_loss=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
+            self.jsd_loss_fn = LigerJSD(self.beta)
+
     @staticmethod
     def generalized_jsd_loss(
         student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
@@ -239,12 +247,19 @@ class GKDTrainer(SFTTrainer):
         shifted_labels = inputs["labels"][:, prompt_lengths:]
 
         # compute loss
-        loss = self.generalized_jsd_loss(
-            student_logits=shifted_student_logits,
-            teacher_logits=shifted_teacher_logits,
-            labels=shifted_labels,
-            beta=self.beta,
-        )
+        if self.args.use_liger_loss:
+            loss = self.jsd_loss_fn(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                labels=shifted_labels,
+            )
+        else:
+            loss = self.generalized_jsd_loss(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                labels=shifted_labels,
+                beta=self.beta,
+            )
 
         # empty cache
         empty_cache()

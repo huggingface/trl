@@ -243,6 +243,37 @@ class GKDTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
             self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))
 
+    def test_gkd_trainer_with_liger(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GKDConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                per_device_eval_batch_size=2,
+                report_to="none",
+                use_liger_loss=True,
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+
+            trainer = GKDTrainer(
+                model=self.model_id,
+                teacher_model=self.model_id,
+                args=training_args,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+            )
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))
+
     def test_generation_config_init(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GKDConfig(output_dir=tmp_dir)

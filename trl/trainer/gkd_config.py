@@ -45,6 +45,8 @@ class GKDConfig(SFTConfig):
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT
             on teacher-generated output).
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use Liger loss.
     """
 
     temperature: float = field(
@@ -94,6 +96,10 @@ class GKDConfig(SFTConfig):
             "help": "Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised "
             "FT on teacher-generated output)."
         },
+    )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use Liger loss."},
     )
 
     def __post_init__(self):
