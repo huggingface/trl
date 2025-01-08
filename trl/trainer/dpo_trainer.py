@@ -729,10 +729,10 @@ class DPOTrainer(Trainer):
                 ref_rejected_logps.append(ref_rejected_logp.cpu())
 
                 # Unnecessary cache clearing to avoid OOM
-                if self.args.device.type == "cuda":
-                    torch.cuda.empty_cache()
-                elif self.args.device.type == "xpu":
+                if is_torch_xpu_available():
                     torch.xpu.empty_cache()
+                else:
+                    torch.cuda.empty_cache()
                 self.accelerator.free_memory()
 
             all_ref_chosen_logps = torch.cat(ref_chosen_logps).float().numpy()
