@@ -1290,9 +1290,8 @@ class DPOTrainer(Trainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
-        compute_loss_context_manager = (
-            amp.autocast(self.args.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
-        )
+        device_type = "xpu" if is_torch_xpu_available() else "cuda"
+        compute_loss_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
