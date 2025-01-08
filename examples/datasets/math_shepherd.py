@@ -18,6 +18,7 @@ from itertools import chain
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -123,6 +124,34 @@ def process_example(example):
     return {"prompt": prompt, "completions": completions, "labels": labels}
 
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+
+# Math-Shepherd Dataset
+
+## Summary
+
+The Math-Shepherd dataset is a processed version of [Math-Shepherd dataset](peiyi9979/Math-Shepherd), designed to train models using the [TRL library](https://github.com/huggingface/trl) for stepwise supervision tasks. It provides step-by-step solutions to mathematical problems, enabling models to learn and verify each step of a solution, thereby enhancing their reasoning capabilities.
+
+## Data Structure
+
+- **Format**: [Standard](https://huggingface.co/docs/trl/main/dataset_formats#standard)
+- **Type**: [Stepwise supervision](https://huggingface.co/docs/trl/main/dataset_formats#stepwise-supervision)
+
+Columns:
+- `"pompt"`: The problem statement.
+- `"completions"`: A list of reasoning steps generated to solve the problem.
+- `"labels"`: A list of booleans or floats indicating the correctness of each corresponding reasoning step.
+
+This structure allows models to learn the correctness of each step in a solution, facilitating improved reasoning and problem-solving abilities.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/math_shepherd.py).
+""")
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
@@ -138,3 +167,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")

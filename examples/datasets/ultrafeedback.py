@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -94,6 +95,32 @@ def to_unpaired_preference(example, model_name, aspect):
     return {"prompt": prompt, "completion": completion, "label": label}
 
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+
+# UltraFeedback GPT-3.5-Turbo Helpfulness Dataset
+
+## Summary
+
+The UltraFeedback GPT-3.5-Turbo Helpfulness dataset contains processed user-assistant interactions filtered for helpfulness, derived from the [openbmb/UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback) dataset. It is designed for fine-tuning and evaluating models in alignment tasks.
+
+## Data Structure
+
+- **Format**: [Conversational](https://huggingface.co/docs/trl/main/dataset_formats#conversational)
+- **Type**: [Unpaired preference](https://huggingface.co/docs/trl/main/dataset_formats#unpaired-preference)
+
+Column:
+- `"pompt"`: The input question or instruction provided to the model.
+- `"completion"`: The model's response to the prompt.
+- `"label"`: A binary value indicating whether the response is sufficiently helpful.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/ultafeedback.py).
+""")
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
@@ -115,3 +142,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")
