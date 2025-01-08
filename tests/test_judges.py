@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import time
 import unittest
 
@@ -75,6 +76,8 @@ class TestJudges(unittest.TestCase):
         self.assertTrue(all(isinstance(prob, float) for prob in probs))
         self.assertTrue(all(0 <= prob <= 1 for prob in probs))
 
+    # skip this test on windows
+    @unittest.skipIf(sys.platform == "win32", "Skipping test on Windows")
     def test_rlhflow_pairwise_judge(self):
         judge = RLHFlowPairwiseJudge("TianqiLiuAI/RRM-0p2")
         prompts, completions = self._get_prompts_and_pairwise_completions()
@@ -83,6 +86,8 @@ class TestJudges(unittest.TestCase):
         self.assertTrue(all(isinstance(rank, int) for rank in ranks))
         self.assertEqual(ranks, [0, 1])
 
+    # skip this test on windows
+    @unittest.skipIf(sys.platform == "win32", "Skipping test on Windows")
     def test_rlhflow_pairwise_judge_return_scores(self):
         judge = RLHFlowPairwiseJudge("TianqiLiuAI/RRM-0p2")
         prompts, completions = self._get_prompts_and_pairwise_completions()
