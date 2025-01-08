@@ -41,9 +41,13 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
-from ..data_utils import maybe_apply_chat_template, pack_examples
+from ..data_utils import maybe_apply_chat_template, pack_examples, is_conversational
 from .sft_config import SFTConfig
-from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url
+from .utils import (
+    ConstantLengthDataset,
+    generate_model_card,
+    get_comet_experiment_url,
+)
 
 
 if is_peft_available():
@@ -181,18 +185,18 @@ class SFTTrainer(Trainer):
                 processing_class.pad_token = processing_class.eos_token  # required for padding when collating data
 
         # 4. Handle the dataset
-        train_dataset = self.prepare_dataset(
+        train_dataset = self._prepare_dataset(
             train_dataset, processing_class, args, args.packing, formatting_func, "train"
         )
         if eval_dataset is not None:
             packing = args.packing if args.eval_packing is None else args.eval_packing
             if isinstance(eval_dataset, dict):
                 eval_dataset = {
-                    key: self.prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
+                    key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
                     for key, dataset in eval_dataset.items()
                 }
             else:
-                eval_dataset = self.prepare_dataset(
+                eval_dataset = self._prepare_dataset(
                     eval_dataset, processing_class, args, packing, formatting_func, "eval"
                 )
 
@@ -233,8 +237,8 @@ class SFTTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-    @staticmethod
-    def prepare_dataset(
+    def _prepare_dataset(
+        self,
         dataset: Union[Dataset, IterableDataset],
         processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
         args: SFTConfig,
@@ -264,9 +268,16 @@ class SFTTrainer(Trainer):
 
                 dataset = dataset.map(_func, batched=batched, **map_kwargs)
 
-            # Rename the column if needed
-            if args.dataset_text_field != "text":
-                dataset = dataset.rename_column(args.dataset_text_field, "text")
+            # If the dataset is prompt-completion, convert it to language modeling type
+            if "prompt" in dataset.column_names and "completion" in dataset.column_names:
+
+                def concat_prompt_completion(example):
+                    if is_conversational(example):
+                        return {"messages": example["prompt"] + example["completion"]}
+                    else:
+                        return {"text": "".join((example["prompt"], example["completion"]))}
+
+                dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -276,12 +287,8 @@ class SFTTrainer(Trainer):
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
-
-            def _tokenize(example):
-                return processing_class(example["text"])
-
-            dataset = dataset.map(_tokenize, **map_kwargs)
-
+            dataset = dataset.map(lambda ex: processing_class(ex[args.dataset_text_field]), **map_kwargs)
+            
             # Pack/truncate the dataset
             if packing:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
