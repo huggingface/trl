@@ -656,7 +656,7 @@ class DPOTrainer(Trainer):
         return output
 
     def _prepare_fsdp(self, model: PreTrainedModelWrapper):
-        # Adpated from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
+        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
         from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 
         # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
