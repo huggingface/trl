@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -59,6 +60,30 @@ def drop_long_prompt(example):
         return True
 
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+
+# UltraFeedback - Prompts Dataset
+
+## Summary
+
+The UltraFeedback - Prompts dataset is a processed version of the [UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback) dataset for model evaluation on specific aspects like helpfulness, honesty, and instruction-following.
+
+## Data Structure
+
+- **Format**: [Conversational](https://huggingface.co/docs/trl/main/dataset_formats#conversational)
+- **Type**: [Prompt-only](https://huggingface.co/docs/trl/main/dataset_formats#prompt-only)
+
+Column:
+- `"pompt"`: The input question or instruction provided to the model.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/ultafeedback-prompt.py).
+""")
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
@@ -75,3 +100,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")
