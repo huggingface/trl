@@ -275,7 +275,7 @@ class RLOOTrainer(Trainer):
         # trainer state initialization
         self.state.global_step = 0
         self.state.episode = 0
-        self.state.max_steps = args.num_total_batches * args.num_mini_batches * args.num_ppo_epochs
+        self.state.max_steps = args.num_total_batches
         self.state.num_train_epochs = (args.total_episodes / args.rloo_k) / self.train_dataset_len
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
@@ -480,7 +480,7 @@ class RLOOTrainer(Trainer):
             del kl, mean_kl, mean_entropy, scores
 
             self.lr_scheduler.step()
-            self.state.global_step += args.num_ppo_epochs * args.num_mini_batches
+            self.state.global_step += 1
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
                 self._save_checkpoint(model, trial=None)
