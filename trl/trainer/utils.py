@@ -552,7 +552,7 @@ class ConstantLengthDataset(IterableDataset):
             Name of the field in the dataset that contains the text. Only one of `dataset_text_field` and
             `formatting_func` should be provided.
         formatting_func (`Callable`, *optional*):
-            Function that formats the text before tokenization. Usually it is recommended to have follows a certain
+            Function that formats the text before tokenization. Usually it is recommended to follow a certain
             pattern such as `"### Question: {question} ### Answer: {answer}"`. Only one of `dataset_text_field` and
             `formatting_func` should be provided.
         infinite (`bool`, *optional*, defaults to `False`):
