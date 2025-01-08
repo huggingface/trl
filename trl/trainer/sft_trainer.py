@@ -43,13 +43,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, pack_examples
 from .sft_config import SFTConfig
-from .utils import (
-    ConstantLengthDataset,
-    DataCollatorForCompletionOnlyLM,
-    generate_model_card,
-    get_comet_experiment_url,
-    peft_module_casting_to_bf16,
-)
+from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url
 
 
 if is_peft_available():
