@@ -41,12 +41,14 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
-from ..data_utils import maybe_apply_chat_template, pack_examples, is_conversational
+from ..data_utils import maybe_apply_chat_template, pack_examples
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
+    DataCollatorForCompletionOnlyLM,
     generate_model_card,
     get_comet_experiment_url,
+    peft_module_casting_to_bf16,
 )
 
 
@@ -185,20 +187,22 @@ class SFTTrainer(Trainer):
                 processing_class.pad_token = processing_class.eos_token  # required for padding when collating data
 
         # 4. Handle the dataset
-        train_dataset = self._prepare_dataset(
-            train_dataset, processing_class, args, args.packing, formatting_func, "train"
-        )
-        if eval_dataset is not None:
-            packing = args.packing if args.eval_packing is None else args.eval_packing
-            if isinstance(eval_dataset, dict):
-                eval_dataset = {
-                    key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
-                    for key, dataset in eval_dataset.items()
-                }
-            else:
-                eval_dataset = self._prepare_dataset(
-                    eval_dataset, processing_class, args, packing, formatting_func, "eval"
-                )
+        preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
+        if preprocess_dataset:
+            train_dataset = self._prepare_dataset(
+                train_dataset, processing_class, args, args.packing, formatting_func, "train"
+            )
+            if eval_dataset is not None:
+                packing = args.packing if args.eval_packing is None else args.eval_packing
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
+                        for key, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._prepare_dataset(
+                        eval_dataset, processing_class, args, packing, formatting_func, "eval"
+                    )
 
         # 5. Handle the data collator
         if data_collator is None:
@@ -272,10 +276,7 @@ class SFTTrainer(Trainer):
             if "prompt" in dataset.column_names and "completion" in dataset.column_names:
 
                 def concat_prompt_completion(example):
-                    if is_conversational(example):
-                        return {"messages": example["prompt"] + example["completion"]}
-                    else:
-                        return {"text": "".join((example["prompt"], example["completion"]))}
+                    return {"text": example["prompt"] + example["completion"]}
 
                 dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 
@@ -288,25 +289,13 @@ class SFTTrainer(Trainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
             dataset = dataset.map(lambda ex: processing_class(ex[args.dataset_text_field]), **map_kwargs)
-            
-            # Pack/truncate the dataset
+            # Pack the dataset
             if packing:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
-                fn_kwargs = {"seq_length": args.max_length or min(processing_class.model_max_length, 1024)}
+                fn_kwargs = {"seq_length": args.max_seq_length or min(processing_class.model_max_length, 1024)}
                 dataset = dataset.select_columns(["input_ids"])
                 dataset = dataset.map(pack_examples, batched=True, fn_kwargs=fn_kwargs, **map_kwargs)
-            elif args.max_length is not None:  # elif because `pack_examples` truncates the sequences
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-
-                def _truncate(example):
-                    output = {"input_ids": example["input_ids"][: args.max_length]}
-                    if "attention_mask" in example:
-                        output["attention_mask"] = example["attention_mask"][: args.max_length]
-                    return output
-
-                dataset = dataset.map(_truncate, **map_kwargs)
 
         return dataset
 
