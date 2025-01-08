@@ -887,10 +887,10 @@ class CPOTrainer(Trainer):
                     policy_chosen_logits,
                     policy_rejected_logits,
                     policy_nll_loss,
+                    chosen_rewards,
+                    rejected_rewards,
                 ),
             ) = forward_output
-            chosen_rewards = self.beta * policy_chosen_logps
-            rejected_rewards = self.beta * policy_rejected_logps
         else:
             (
                 policy_chosen_logps,
