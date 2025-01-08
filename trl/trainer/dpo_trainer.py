@@ -1366,9 +1366,8 @@ class DPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = (
-            amp.autocast(self.args.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
-        )
+        device_type = "xpu" if is_torch_xpu_available() else "cuda"
+        prediction_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
 
         with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
