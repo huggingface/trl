@@ -92,9 +92,7 @@ class CPOConfig(TrainingArguments):
     )
     max_length: Optional[int] = field(
         default=None,
-        metadata={
-            "help": "Maximum length of the sequences (prompt + completion) in the batch."
-        },
+        metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
     )
     max_prompt_length: Optional[int] = field(
         default=None,
@@ -138,9 +136,7 @@ class CPOConfig(TrainingArguments):
     )
     simpo_gamma: float = field(
         default=0.5,
-        metadata={
-            "help": "Target reward margin for the SimPO loss, used only when the `loss_type='simpo'`."
-        },
+        metadata={"help": "Target reward margin for the SimPO loss, used only when the `loss_type='simpo'`."},
     )
     label_pad_token_id: int = field(
         default=-100,
@@ -148,9 +144,7 @@ class CPOConfig(TrainingArguments):
     )
     padding_value: Optional[int] = field(
         default=None,
-        metadata={
-            "help": "Padding value to use. If `None`, the padding value of the tokenizer is used."
-        },
+        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
     )
     truncation_mode: str = field(
         default="keep_end",
@@ -161,9 +155,7 @@ class CPOConfig(TrainingArguments):
     )
     generate_during_eval: bool = field(
         default=False,
-        metadata={
-            "help": "If `True`, generates and logs completions from the model to W&B during evaluation."
-        },
+        metadata={"help": "If `True`, generates and logs completions from the model to W&B during evaluation."},
     )
     is_encoder_decoder: Optional[bool] = field(
         default=None,
