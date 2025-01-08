@@ -588,6 +588,14 @@ dataset = unpair_preference_dataset(dataset)
  'label': True}
 ```
 
+<Tip warning={true}>
+
+Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
+Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
+This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
+
+</Tip>
+
 ### From preference to language modeling dataset
 
 To convert a preference dataset into a language modeling dataset, remove the rejected, concatenate the prompt and the chosen into the `"text"` column.
@@ -721,9 +729,17 @@ dataset = unpair_preference_dataset(dataset)
  'label': True}
 ```
 
+<Tip warning={true}>
+
+Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
+Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
+This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
+
+</Tip>
+
 ### From unpaired preference to language modeling dataset
 
-To convert an unpaired preference dataset into a language modeling dataset, concatenate the prompt and the completion into the `"text"` column, and remove the prompt, completion and label columns.
+To convert an unpaired preference dataset into a language modeling dataset, concatenate prompts with good completions into the `"text"` column, and remove the prompt, completion and label columns.
 
 ```python
 from datasets import Dataset
@@ -737,7 +753,7 @@ dataset = Dataset.from_dict({
 def concatenate_prompt_completion(example):
     return {"text": example["prompt"] + example["completion"]}
 
-dataset = dataset.map(concatenate_prompt_completion).remove_columns(["prompt", "completion", "label"])
+dataset = dataset.filter(lambda x: x["label"]).map(concatenate_prompt_completion).remove_columns(["prompt", "completion", "label"])
 ```
 
 ```python
@@ -747,7 +763,7 @@ dataset = dataset.map(concatenate_prompt_completion).remove_columns(["prompt", "
 
 ### From unpaired preference to prompt-completion dataset
 
-To convert an unpaired preference dataset into a prompt-completion dataset, remove the label columns.
+To convert an unpaired preference dataset into a prompt-completion dataset, filter for good labels, then remove the label columns.
 
 ```python
 from datasets import Dataset
@@ -758,7 +774,7 @@ dataset = Dataset.from_dict({
     "label": [True, True, False, False],
 })
 
-dataset = dataset.remove_columns(["label"])
+dataset = dataset.filter(lambda x: x["label"]).remove_columns(["label"])
 ```
 
 ```python
@@ -789,7 +805,7 @@ dataset = dataset.remove_columns(["completion", "label"])
 
 ### From stepwise supervision to language modeling dataset
 
-To convert a stepwise supervision dataset into a language modeling dataset, concatenate the prompt and the completions into the `"text"` column.
+To convert a stepwise supervision dataset into a language modeling dataset, concatenate prompts with good completions into the `"text"` column.
 
 ```python
 from datasets import Dataset
@@ -805,7 +821,7 @@ def concatenate_prompt_completions(example):
     completion = "".join(example["completions"])
     return {"text": example["prompt"] + completion}
 
-dataset = dataset.map(concatenate_prompt_completions, remove_columns=["prompt", "completions", "labels"])
+dataset = dataset.filter(lambda x: all(x["labels"])).map(concatenate_prompt_completions, remove_columns=["prompt", "completions", "labels"])
 ```
 
 ```python
@@ -815,7 +831,7 @@ dataset = dataset.map(concatenate_prompt_completions, remove_columns=["prompt", 
 
 ### From stepwise supervision to prompt completion dataset
 
-To convert a stepwise supervision dataset into a prompt-completion dataset, join the completions and remove the labels.
+To convert a stepwise supervision dataset into a prompt-completion dataset, join the good completions and remove the labels.
 
 ```python
 from datasets import Dataset
@@ -831,7 +847,7 @@ def join_completions(example):
     completion = "".join(example["completions"])
     return {"completion": completion}
 
-dataset = dataset.map(join_completions, remove_columns=["completions", "labels"])
+dataset = dataset.filter(lambda x: all(x["labels"])).map(join_completions, remove_columns=["completions", "labels"])
 ```
 
 ```python
