@@ -161,6 +161,8 @@ prompt_only_example = {"prompt": "The sky is"}
 prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
 ```
 
+For examples of prompt-only datasets, refer to the [Prompt-only datasets collection](https://huggingface.co/collections/trl-lib/prompt-only-datasets-677ea25245d20252cea00368).
+
 <Tip>
 
 While both the prompt-only and language modeling types are similar, they differ in how the input is handled. In the prompt-only type, the prompt represents a partial input that expects the model to complete or continue, while in the language modeling type, the input is treated as a complete sentence or sequence. These two types are processed differently by TRL. Below is an example showing the difference in the output of the `apply_chat_template` function for each type:
@@ -199,6 +201,8 @@ prompt_completion_example = {"prompt": [{"role": "user", "content": "What color 
                              "completion": [{"role": "assistant", "content": "It is blue."}]}
 ```
 
+For examples of prompt-completion datasets, refer to the [Prompt-completion datasets collection](https://huggingface.co/collections/trl-lib/prompt-completion-datasets-677ea2bb20bbb6bdccada216).
+
 #### Preference
 
 A preference dataset is used for tasks where the model is trained to choose between two or more possible completions to the same prompt. This dataset includes a `"prompt"`, a `"chosen"` completion, and a `"rejected"` completion. The model is trained to select the `"chosen"` response over the `"rejected"` response.
@@ -223,6 +227,8 @@ preference_example = {"chosen": [{"role": "user", "content": "What color is the 
                                    {"role": "assistant", "content": "It is green."}]}
 ```
 
+For examples of preference datasets, refer to the [Preference datasets collection](https://huggingface.co/collections/trl-lib/preference-datasets-677e99b581018fcad9abd82c).
+
 Some preference datasets can be found with [the tag `dpo` on Hugging Face Hub](https://huggingface.co/datasets?other=dpo). You can also explore the [librarian-bots' DPO Collections](https://huggingface.co/collections/librarian-bots/direct-preference-optimization-datasets-66964b12835f46289b6ef2fc) to identify preference datasets.
 
 #### Unpaired preference
@@ -238,6 +244,8 @@ unpaired_preference_example = {"prompt": [{"role": "user", "content": "What colo
                                "label": True}
 ```
 
+For examples of unpaired preference datasets, refer to the [Unpaired preference datasets collection](https://huggingface.co/collections/trl-lib/unpaired-preference-datasets-677ea22bf5f528c125b0bcdf).
+
 #### Stepwise supervision
 
 A stepwise (or process) supervision dataset is similar to an [unpaired preference](#unpaired-preference) dataset but includes multiple steps of completions, each with its own label. This structure is useful for tasks that need detailed, step-by-step labeling, such as reasoning tasks. By evaluating each step separately and providing targeted labels, this approach helps identify precisely where the reasoning is correct and where errors occur, allowing for targeted feedback on each part of the reasoning process.
@@ -249,6 +257,8 @@ stepwise_example = {
     "labels": [True, False]
 }
 ```
+
+For examples of stepwise supervision datasets, refer to the [Stepwise supervision datasets collection](https://huggingface.co/collections/trl-lib/stepwise-supervision-datasets-677ea27fd4c5941beed7a96e).
 
 ## Which dataset type to use?
 

@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -778,12 +778,18 @@ class ORPOTrainer(Trainer):
             loss = loss_fct(logits, labels)
             return loss
 
-        labels = concatenated_batch["concatenated_labels"].clone()
+        if self.is_encoder_decoder:
+            labels = concatenated_batch["concatenated_labels"].clone()
+        else:
+            labels = concatenated_batch["concatenated_input_ids"].clone()
+            attention_mask = concatenated_batch["concatenated_attention_mask"]
+            labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
+        # orpo chosen nll loss is computed over the full prompt and response
         chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
             all_logits,
-            labels,
+            concatenated_batch["concatenated_labels"],
             average_log_prob=True,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
@@ -833,17 +839,21 @@ class ORPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().mean()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean()
-        metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean()
-        metrics[f"{prefix}log_odds_ratio"] = log_odds_ratio
-        metrics[f"{prefix}log_odds_chosen"] = log_odds_chosen
+        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather_for_metrics(chosen_rewards).mean()
+        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather_for_metrics(rejected_rewards).mean()
+        metrics[f"{prefix}rewards/accuracies"] = self.accelerator.gather_for_metrics(reward_accuracies).mean()
+        metrics[f"{prefix}rewards/margins"] = self.accelerator.gather_for_metrics(
+            chosen_rewards - rejected_rewards
+        ).mean()
+        metrics[f"{prefix}logps/rejected"] = self.accelerator.gather_for_metrics(policy_rejected_logps).detach().mean()
+        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean()
+        metrics[f"{prefix}logits/rejected"] = (
+            self.accelerator.gather_for_metrics(policy_rejected_logits).detach().mean()
+        )
+        metrics[f"{prefix}logits/chosen"] = self.accelerator.gather_for_metrics(policy_chosen_logits).detach().mean()
+        metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean()
+        metrics[f"{prefix}log_odds_ratio"] = self.accelerator.gather_for_metrics(log_odds_ratio).mean()
+        metrics[f"{prefix}log_odds_chosen"] = self.accelerator.gather_for_metrics(log_odds_chosen).mean()
         if is_torch_xla_available():
             xm.mark_step()  # needed because .item() calls
         for k, v in metrics.items():
