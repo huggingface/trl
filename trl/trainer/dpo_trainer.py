@@ -1310,9 +1310,8 @@ class DPOTrainer(Trainer):
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = (
-            amp.autocast(self.args.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
-        )
+        device_type = "xpu" if is_torch_xpu_available() else "cuda"
+        generate_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
 
         with generate_context_manager:
             policy_output = model.generate(
