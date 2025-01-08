@@ -145,6 +145,11 @@ class DPOConfig(TrainingArguments):
             useful for saving memory and speeding up training by not computing the logits for all tokens, especially in
             scenarios when working with very long prompts where labels are ignored (-100).
             [Read more](https://huggingface.co/docs/transformers/main/model_doc/llama#transformers.LlamaForCausalLM)
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether forward passes are performed without padding by flattening all sequences in the batch
+            into a single continuous sequence. This approach requires associating a `position_ids` vector to track
+            positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it
+            can handle the flattened batch structure.
     """
 
     learning_rate: float = field(
@@ -353,5 +358,12 @@ class DPOConfig(TrainingArguments):
             "help": "If `True`, only a specified number of logits are computed in the forward pass of CausalLM. "
             "This can be useful for saving memory and speeding up training by not computing the logits for all "
             "tokens, especially in scenarios when working with very long prompts where labels are ignored (-100)."
+        },
+    )
+    padding_free: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether the forward passes are performed without padding, i.e. flattening all the samples in the "
+            "batch into a single sample, associated with a position_ids vector. Only possible with flash-attention."
         },
     )
