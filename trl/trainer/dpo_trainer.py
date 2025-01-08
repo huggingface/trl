@@ -1309,7 +1309,7 @@ class DPOTrainer(Trainer):
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
-        # the torch cuda amp context manager as some hidden states are silently casted to full precision.
+        # the torch amp context manager as some hidden states are silently casted to full precision.
         generate_context_manager = (
             amp.autocast(self.args.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         )
