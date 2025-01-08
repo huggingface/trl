@@ -812,9 +812,8 @@ class DPOTrainer(Trainer):
 
     def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
-        compte_ref_context_manager = (
-            amp.autocast(self.args.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
-        )
+        device_type = "xpu" if is_torch_xpu_available() else "cuda"
+        compte_ref_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         with torch.no_grad(), compte_ref_context_manager:
             if self.ref_model is None:
                 with self.null_ref_context():
