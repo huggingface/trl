@@ -50,7 +50,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_torch_xpu_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
@@ -61,6 +61,7 @@ from .utils import (
     RunningMoments,
     cap_exp,
     disable_dropout_in_model,
+    empty_cache,
     generate_model_card,
     get_comet_experiment_url,
     log_table_to_comet_experiment,
@@ -741,10 +742,7 @@ class DPOTrainer(Trainer):
                 ref_rejected_logps.append(ref_rejected_logp.cpu())
 
                 # Unnecessary cache clearing to avoid OOM
-                if is_torch_xpu_available():
-                    torch.xpu.empty_cache()
-                else:
-                    torch.cuda.empty_cache()
+                empty_cache()
                 self.accelerator.free_memory()
 
             all_ref_chosen_logps = torch.cat(ref_chosen_logps).float().numpy()
@@ -1338,7 +1336,9 @@ class DPOTrainer(Trainer):
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
         device_type = "xpu" if is_torch_xpu_available() else "cuda"
-        compute_loss_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        compute_loss_context_manager = (
+            amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
