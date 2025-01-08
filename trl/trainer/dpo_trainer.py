@@ -679,21 +679,6 @@ class DPOTrainer(Trainer):
                 "device_id": self.accelerator.device,
             }
             model = FSDP(model, **kwargs)
-            if fsdp_plugin.activation_checkpointing:
-                from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
-                    CheckpointImpl,
-                    apply_activation_checkpointing,
-                    checkpoint_wrapper,
-                )
-
-                apply_activation_checkpointing(
-                    model,
-                    checkpoint_wrapper_fn=functools.partial(
-                        checkpoint_wrapper,
-                        checkpoint_impl=CheckpointImpl.NO_REENTRANT,
-                    ),
-                    auto_wrap_policy=fsdp_plugin.auto_wrap_policy,
-                )
         model.eval()
         return model
 
