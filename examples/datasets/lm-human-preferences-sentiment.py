@@ -64,20 +64,28 @@ model_card = ModelCard("""
 ---
 tags: [trl]
 ---
-**LM-Human-Preferences-Sentiment Dataset**
 
-**Summary**
+# LM-Human-Preferences-Sentiment Dataset
+
+## Summary
 
 The LM-Human-Preferences-Sentiment dataset is a processed subset of [OpenAI's LM-Human-Preferences](https://github.com/openai/lm-human-preferences), focusing specifically on sentiment analysis tasks. It contains pairs of text samples, each labeled as either "chosen" or "rejected," based on human preferences regarding the sentiment conveyed in the text. This dataset enables models to learn human preferences in sentiment expression, enhancing their ability to generate and evaluate text with desired emotional tones.
 
-**Data Structure**
+## Data Structure
 
-- **Format**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
-- **Prompt**: The original text sample.
-- **Chosen**: A version of the text that conveys the desired sentiment.
-- **Rejected**: A version of the text that does not convey the desired sentiment.
+- **Format**: [Standard](https://huggingface.co/docs/trl/main/dataset_formats#standard)
+- **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
 
-This structure allows models to learn to prefer the "Chosen" text over the "Rejected" one, thereby aligning with human preferences in sentiment expression.
+Columns:
+- `"pompt"`: The text sample.
+- `"chosen"`: A version of the text that conveys the desired sentiment.
+- `"rejected"`: A version of the text that does not convey the desired sentiment.
+
+This structure allows models to learn to prefer the _chosen_ response over the _rejected_ one, thereby aligning with human preferences in sentiment expression.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/lm-human-preferences-sentiment.py).
 """)
 
 if __name__ == "__main__":

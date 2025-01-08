@@ -70,19 +70,28 @@ model_card = ModelCard("""
 ---
 tags: [trl]
 ---
-# TL;DR Dataset for Preference Learning
-## Overview
 
-The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the TRL library for preference learning and Reinforcement Learning from Human Feedback (RLHF) tasks. It leverages the common practice on Reddit where users append "TL;DR" (Too Long; Didn't Read) summaries to lengthy posts, providing a rich source of paired text data for training models to understand and generate concise summaries.
+# TL;DR Dataset for Preference Learning
+
+## Summary
+
+The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the [TRL library](https://github.com/huggingface/trl) for preference learning and Reinforcement Learning from Human Feedback (RLHF) tasks. It leverages the common practice on Reddit where users append "TL;DR" (Too Long; Didn't Read) summaries to lengthy posts, providing a rich source of paired text data for training models to understand and generate concise summaries.
 
 ## Data Structure
 
-- **Format**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
-- **Prompt**: The original, unabridged Reddit post.
-- **Chosen**: The concise "TL;DR" summary appended by the author.
-- **Rejected**: An alternative summary or response that was not selected.
+- **Format**: [Standard](https://huggingface.co/docs/trl/main/dataset_formats#standard)
+- **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
+
+Columns:
+- `"pompt"`: The unabridged Reddit post.
+- `"chosen"`: The concise "TL;DR" summary appended by the author.
+- `"rejected"`: An alternative summary or response that was not selected.
 
 This structure enables models to learn the relationship between detailed content and its abbreviated form, enhancing their summarization capabilities.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/tldr_preference.py).
 """)
 
 if __name__ == "__main__":

@@ -69,20 +69,28 @@ model_card = ModelCard("""
 ---
 tags: [trl]
 ---
-**LM-Human-Preferences-Descriptiveness Dataset**
 
-**Summary**
+# LM-Human-Preferences-Descriptiveness Dataset
+
+## Summary
 
 The LM-Human-Preferences-Descriptiveness dataset is a processed subset of [OpenAI's LM-Human-Preferences](https://github.com/openai/lm-human-preferences), focusing specifically on enhancing the descriptiveness of generated text. It contains pairs of text samples, each labeled as either "chosen" or "rejected," based on human preferences regarding the level of detail and vividness in the descriptions. This dataset enables models to learn human preferences in descriptive language, improving their ability to generate rich and engaging narratives.
 
-**Data Structure**
+## Data Structure
 
-- **Format**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
-- **Prompt**: The original text sample.
-- **Chosen**: A version of the text with enhanced descriptiveness.
-- **Rejected**: A version of the text with less descriptiveness.
+- **Format**: [Standard](https://huggingface.co/docs/trl/main/dataset_formats#standard)
+- **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
 
-This structure allows models to learn to prefer the "Chosen" text over the "Rejected" one, thereby aligning with human preferences in descriptive language.
+Columns:
+- `"pompt"`: The text sample.
+- `"chosen"`: A version of the text with enhanced descriptiveness.
+- `"rejected"`: A version of the text with less descriptiveness.
+
+This structure allows models to learn to prefer the _chosen_ response over the _rejected_ one, thereby aligning with human preferences in descriptive language.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/lm-human-preferences-descriptiveness.py).
 """)
 
 if __name__ == "__main__":

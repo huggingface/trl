@@ -102,20 +102,28 @@ model_card = ModelCard("""
 ---
 tags: [trl]
 ---
-**PRM800K Dataset**
 
-**Summary**
+# PRM800K Dataset
 
-The PRM800K dataset is a processed version of OpenAI's PRM800K, designed to train models using the TRL library for stepwise supervision tasks. It contains 800,000 step-level correctness labels for model-generated solutions to problems from the MATH dataset. This dataset enables models to learn and verify each step of a solution, enhancing their reasoning capabilities.
+## Summary
 
-**Data Structure**
+The PRM800K dataset is a processed version of [OpenAI's PRM800K](https://github.com/openai/prm800k), designed to train models using the [TRL library](https://github.com/huggingface/trl) for stepwise supervision tasks. It contains 800,000 step-level correctness labels for model-generated solutions to problems from the MATH dataset. This dataset enables models to learn and verify each step of a solution, enhancing their reasoning capabilities.
 
-- **Format**: [Stepwise Supervision](https://huggingface.co/docs/trl/main/dataset_formats#stepwise-supervision)
-- **Prompt**: The original problem statement.
-- **Completions**: A list of reasoning steps generated to solve the problem.
-- **Labels**: A list of booleans or floats indicating the correctness of each corresponding reasoning step.
+## Data Structure
+
+- **Format**: [Standard](https://huggingface.co/docs/trl/main/dataset_formats#standard)
+- **Type**: [Stepwise supervision](https://huggingface.co/docs/trl/main/dataset_formats#stepwise-supervision)
+
+Columns:
+- `"pompt"`: The problem statement.
+- `"completions"`: A list of reasoning steps generated to solve the problem.
+- `"labels"`: A list of booleans or floats indicating the correctness of each corresponding reasoning step.
 
 This structure allows models to learn the correctness of each step in a solution, facilitating improved reasoning and problem-solving abilities.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/prm800k.py).
 """)
 
 if __name__ == "__main__":

@@ -64,20 +64,24 @@ model_card = ModelCard("""
 ---
 tags: [trl]
 ---
-# UltraFeedback - Prompts
+
+# UltraFeedback - Prompts Dataset
 
 ## Summary
 
-A processed version of the [UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback) dataset for model evaluation on specific aspects like helpfulness, honesty, and instruction-following.
-
-## Description
-
-This dataset contains prompts from the original UltraFeedback dataset, designed to evaluate and fine-tune language models. It is preprocessed to target specific model behavior evaluation (e.g., helpfulness), with the option to push the dataset to the Hugging Face Hub.
+The UltraFeedback - Prompts dataset is a processed version of the [UltraFeedback](https://huggingface.co/datasets/openbmb/UltraFeedback) dataset for model evaluation on specific aspects like helpfulness, honesty, and instruction-following.
 
 ## Data Structure
 
-- **Format**: [prompt-only](https://huggingface.co/docs/trl/main/dataset_formats#prompt-completion)
-- **Prompt**: The input question or instruction provided to the model.
+- **Format**: [Conversational](https://huggingface.co/docs/trl/main/dataset_formats#conversational)
+- **Type**: [Prompt-only](https://huggingface.co/docs/trl/main/dataset_formats#prompt-only)
+
+Column:
+- `"pompt"`: The input question or instruction provided to the model.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/ultafeedback-prompt.py).
 """)
 
 if __name__ == "__main__":

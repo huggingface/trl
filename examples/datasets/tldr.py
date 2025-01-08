@@ -59,19 +59,27 @@ model_card = ModelCard("""
 ---
 tags: [trl]
 ---
+
 # TL;DR Dataset
 
-## Overview
+## Summary
 
-The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the TRL library for summarization tasks. It leverages the common practice on Reddit where users append "TL;DR" (Too Long; Didn't Read) summaries to lengthy posts, providing a rich source of paired text data for training summarization models.
+The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the [TRL library](https://github.com/huggingface/trl) for summarization tasks. It leverages the common practice on Reddit where users append "TL;DR" (Too Long; Didn't Read) summaries to lengthy posts, providing a rich source of paired text data for training summarization models.
 
 ## Data Structure
 
-- **Format**: [Prompt-Completion](https://huggingface.co/docs/trl/en/dataset_formats#prompt-completion)
-- **Prompt**: The original, unabridged Reddit post.
-- **Completion**: The concise "TL;DR" summary appended by the author.
+- **Format**: [Standard](https://huggingface.co/docs/trl/main/dataset_formats#standard)
+- **Type**: [Prompt-completion](https://huggingface.co/docs/trl/main/dataset_formats#prompt-completion)
+
+Columns:
+- `"pompt"`: The unabridged Reddit post.
+- `"completion"`: The concise "TL;DR" summary appended by the author.
 
 This structure enables models to learn the relationship between detailed content and its abbreviated form, enhancing their summarization capabilities.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/tldr.py).
 """)
 
 if __name__ == "__main__":
