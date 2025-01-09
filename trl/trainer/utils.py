@@ -1107,7 +1107,7 @@ def get_reward(
     else:
         texts = processor.batch_decode(query_responses)
         rewards = model(texts)
-        rewards = torch.tensor(rewards, dtype=torch.float)
+        rewards = torch.tensor(rewards, dtype=torch.float).to(query_responses.device)
         final_rewards, sequence_lengths = None, None
         return final_rewards, rewards, sequence_lengths
 
