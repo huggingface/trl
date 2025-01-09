@@ -42,6 +42,14 @@ class RLOOConfig(OnPolicyConfig):
             Clip range.
         rloo_k (`int`, *optional*, defaults to `2`):
             REINFORCE Leave-One-Out (RLOO) number of online samples per prompt.
+        normalize_reward (`bool`, *optional*, defaults to `False`):
+            Whether to normalize rewards.
+        reward_clip_range (`float`, *optional*, defaults to `10.0`):
+            Clip range for rewards.
+        normalize_advantage (`bool`, *optional*, defaults to `False`):
+            Whether to normalize advantages.
+        token_level_kl (`bool`, *optional*, defaults to `True`):
+            Whether to use token-level KL penalty or sequence-level KL penalty.
     """
 
     exp_name: str = field(
@@ -71,4 +79,20 @@ class RLOOConfig(OnPolicyConfig):
     rloo_k: int = field(
         default=2,
         metadata={"help": "REINFORCE Leave-One-Out (RLOO) number of online samples per prompt."},
+    )
+    normalize_reward: bool = field(
+        default=False,
+        metadata={"help": "Whether to normalize rewards"},
+    )
+    reward_clip_range: float = field(
+        default=10.0,
+        metadata={"help": "Clip range for rewards"},
+    )
+    normalize_advantage: bool = field(
+        default=False,
+        metadata={"help": "Whether to normalize advantages"},
+    )
+    token_level_kl: bool = field(
+        default=True,
+        metadata={"help": "Whether to use token-level KL penalty or sequence-level KL penalty"},
     )
