@@ -494,7 +494,7 @@ class RLOOTrainer(Trainer):
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
-            
+
             # Compute metrics
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
