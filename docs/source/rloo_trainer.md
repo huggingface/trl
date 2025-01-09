@@ -278,7 +278,7 @@ The [Reinforce++](https://hijkzzz.notion.site/reinforce-plus-plus) report by Jia
 - Normalizing advantages: scaling advantages to have a mean of 0 and a standard deviation of 1, which helps in stabilizing the training process
 - Using token-level KL penalty (default) vs. sequence-level KL penalty
 
-These options are available via the appropriate arguments in the `RLOOConfig` class.
+These options are available via the appropriate arguments in the [`RLOOConfig`] class.
 
 
 ## RLOOTrainer
