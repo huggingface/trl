@@ -223,8 +223,6 @@ class TextHistory:
 class TextEnvironment:
     """
     The TextEnvironment enables interaction of a LLM with an environment using tools.
-    When using caching, TextEnvironment is not suited for training use, i.e. backpropagation through the generated graph. Use with Trainers is of course possible.
-    Furthermore, caching requires, that there be no calculation dependencies between examples at inference time. When using BatchNorm, the model should thus be in eval mode.
     """
 
     def __init__(
@@ -238,6 +236,7 @@ class TextEnvironment:
         max_tool_reponse=100,
         max_length=None,
         generation_kwargs=None,
+        use_cache=False
     ):
         """
         Initialize TextEnvironment.
@@ -252,6 +251,7 @@ class TextEnvironment:
             max_tool_response (Optional[int]): The maximum number of characters to allow in a tool response.
             max_length (Optional[int]): The maximum number of tokens to allow in an episode.
             generation_kwargs (Optional[dict]): A dictionary of keyword arguments to pass to the model's generate method.
+            use_cache (bool): Whether or not to cache past_key_values between segments. When using caching, TextEnvironment is not suited for training use, i.e. backpropagation through the generated graph. Use with Trainers is of course possible. Furthermore, caching requires, that there be no calculation dependencies between examples at inference time. When using BatchNorm, the model should thus be in eval mode.
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -268,6 +268,7 @@ class TextEnvironment:
         self.submit_token = "<submit>"
         self.max_turns = max_turns
         self.max_tool_response = max_tool_reponse
+        self.use_cache = use_cache
 
         if generation_kwargs is None:
             self.generation_kwargs = dict()
@@ -293,11 +294,15 @@ class TextEnvironment:
         ]
 
         histories = [TextHistory(q, qt, system=True) for q, qt in zip(queries, queries_tokens)]
-
+        
         past_key_values,past_attention_masks,past_input_ids,last_active_histories = (None,None,None,None)
 
         while any(not history.completed for history in histories) and turns < self.max_turns:
-            histories,past_key_values,past_attention_masks,past_input_ids,last_active_histories = self.generate(histories,past_key_values,past_attention_masks,past_input_ids,last_active_histories)
+            if self.use_cache:
+                histories,past_key_values,past_attention_masks,past_input_ids,last_active_histories = self.generate(histories,past_key_values,past_attention_masks,past_input_ids,last_active_histories)
+            else:
+                #Discard cache
+                histories,_,_,_,_ = self.generate(histories,past_key_values,past_attention_masks,past_input_ids,last_active_histories)
             histories = self.tasks_end_check(histories)
             # TODO: make this parallel rather than for-loop
             for i in range(len(histories)):
@@ -385,12 +390,18 @@ class TextEnvironment:
 
     def _next_input(self,history):
         return history.last_token_segment if not history.completed else torch.tensor([])
-    
-    #combines all caches in order to exclude completed histories from further generation
-    #batch_examples: list of masks indicating for each example, whether it is supposed to remain or not
+
     def _combine_cache(self,example_mask,past_key_values,past_attention_masks,past_input_ids):
+        """
+        combines all caches in order to exclude completed histories from further generation
+
+        Args:
+            batch_examples (list[bool]): mask indicating for each example, whether it is supposed to remain or not
+            past_key_values (list[transformers.DynamicCache]) : Batched list of caches from the last generation
+            past_attention_masks (list[torch.Tensor]): Batched list of attention masks from the last generation
+            past_input_ids (list[torch.Tensor]): Batched list of input ids from the last generation
+        """
         legacy_format = [cache.to_legacy_cache() for cache in past_key_values ]
-        #combines all caches, excluding
         example_mask_offset = 0
         combined_cache = []
         for layer_id in range(len(legacy_format[0])):
@@ -417,13 +428,23 @@ class TextEnvironment:
     def generate(self, histories,past_key_values=None,past_attention_masks=None,past_input_ids=None,last_active_histories=None):
         """
         Generate responses for a list of histories.
+        Either all of past_key_values, past_attention_masks, past_input_ids,last_active_histories are provided or all are None.
+        Args:
+            histories (list[TextHistory]):
+            past_key_values (Optional[list[transformers.DynamicCache]]): Batched list of caches from the last generation
+            past_attention_masks (Optional[list[torch.Tensor]]): Batched list of attention masks from the last generation
+            past_input_ids (Optional[list[torch.Tensor]]): Batched list of input ids from the last generation
+            last_active_histories (Optional[list[int]]): indices of histories for which generation took place during the last generation turn
         """
         active_histories = [i for i in range(len(histories)) if not histories[i].completed]
-        query_tensors = [self._next_input(histories[i]) for i in active_histories]
         combined_past_key_values,combined_past_attention_masks, combined_past_input_ids = (None,None,None)
+        
         if past_key_values is not None:
+            query_tensors = [self._next_input(histories[i]) for i in active_histories]
             example_mask = [(not histories[i].completed) for i in last_active_histories]
             combined_past_key_values,combined_past_attention_masks, combined_past_input_ids = self._combine_cache(example_mask,past_key_values,past_attention_masks,past_input_ids)
+        else:
+            query_tensors = [histories[i].tokens for i in active_histories]
 
         response_tensors,past_key_values,past_attention_masks,past_input_ids, truncated = self._generate_batched(query_tensors,combined_past_key_values=combined_past_key_values,combined_past_attention_masks=combined_past_attention_masks, combined_past_input_ids=combined_past_input_ids)
         if not truncated:
@@ -477,6 +498,14 @@ class TextEnvironment:
 
     #builds the cache for the current batch
     def _get_batched_cache(self,start_index, end_index, combined_past_key_values, combined_attention_masks, combined_input_ids):
+        """
+        Extract (batch) cache for current batch
+        start_index (int): start index of current batch
+        end_index (int): end index of current batch (points to first element not in batch)
+        combined_past_key_values (tuple[tuple[torch.Tensor]]) : The combined (unbatched) cache in legacy format from the last generation
+        combined_past_attention_masks (torch.Tensor): The combined (unbatched) attention masks from the last generation
+        combined_past_input_ids (torch.Tensor): The combined (unbatched) input ids from the last generation
+        """
         current_cache = []
         for layer_id, layer in enumerate(combined_past_key_values):
             keys,values = layer
@@ -486,23 +515,27 @@ class TextEnvironment:
         current_cache = tuple(current_cache)
         return DynamicCache().from_legacy_cache(current_cache), combined_attention_masks[start_index:end_index], combined_input_ids[start_index:end_index]
 
+
     #TODO make batch_size changeable
     def _generate_batched(
         self,
         query_tensors,
         batch_size: int = 16,
         pad_to_multiple_of: Optional[int] = None,
-        combined_past_key_values=None,#past_key_values in legacy format
+        combined_past_key_values=None,
         combined_past_attention_masks=None,
         combined_past_input_ids = None
     ):
         """
         Generate responses for a list of query tensors.
-
+        Either all of combined_past_key_values, combined_past_attention_masks, combined_past_input_ids are provided or all are None.
         Args:
             query_tensors (list[torch.Tensor]): A list of query tensors to generate responses for.
             batch_size (int): The batch size to use for generation.
             pad_to_multiple_of (int): The padding length to use for generation.
+            combined_past_key_values (Optional[tuple[tuple[torch.Tensor]]]) : The combined (unbatched) cache in legacy format from the last generation
+            combined_past_attention_masks (Optional[torch.Tensor]): The combined (unbatched) attention masks from the last generation
+            combined_past_input_ids (Optional[torch.Tensor]): The combined (unbatched) input ids from the last generation
         """
         outputs = []
         padding_side_default = self.tokenizer.padding_side
