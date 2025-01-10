@@ -415,7 +415,7 @@ class PPOTrainer(Trainer):
                 sequence_lengths = []
                 values = []
                 with unwrap_model_for_generation(
-                        self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                    self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model:
                     query_responses, logitss = batch_generation(
                         unwrapped_model.policy,
@@ -691,7 +691,7 @@ class PPOTrainer(Trainer):
 
         table = defaultdict(list)
         with unwrap_model_for_generation(
-                self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]

@@ -311,7 +311,7 @@ class RLOOTrainer(Trainer):
 
                 # Generate responses and compute logprobs
                 with unwrap_model_for_generation(
-                        self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                    self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model:
                     query_responses, logitss = batch_generation(
                         unwrapped_model,
@@ -557,7 +557,7 @@ class RLOOTrainer(Trainer):
 
         table = defaultdict(list)
         with unwrap_model_for_generation(
-                self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]
