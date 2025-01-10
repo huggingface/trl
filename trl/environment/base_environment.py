@@ -405,19 +405,19 @@ class TextEnvironment:
         example_mask_offset = 0
         combined_cache = []
         for layer_id in range(len(legacy_format[0])):
-            layer = None
+            combined_layer = None
             for cache_idx, cache in enumerate(legacy_format):
                 layer = cache[layer_id]
                 num_examples = len(layer[0])
                 new_keys = layer[0][example_mask[example_mask_offset:example_mask_offset+num_examples]]
                 new_values = layer[1][example_mask[example_mask_offset:example_mask_offset+num_examples]]
-                if layer is None:
-                    layer = (new_keys,new_values)
+                if combined_layer is None:
+                    combined_layer = (new_keys,new_values)
                 else:
-                    other_new_keys,other_new_values = layer
-                    layer = (torch.concat([other_new_keys,new_keys],dim=0),torch.concat([other_new_values,new_values],dim=0))
+                    other_new_keys,other_new_values = combined_layer
+                    combined_layer = (torch.concat([other_new_keys,new_keys],dim=0),torch.concat([other_new_values,new_values],dim=0))
                 example_mask_offset += num_examples
-            combined_cache.append(layer)
+            combined_cache.append(combined_layer)
         combined_cache = tuple(combined_cache)
 
         combined_attention_masks = torch.concat(past_attention_masks,dim=0)[example_mask]
@@ -542,7 +542,6 @@ class TextEnvironment:
         if not self.is_encoder_decoder:
             self.tokenizer.padding_side = "left"
 
-
         new_past_key_values = []
         new_past_attention_masks = []
         new_past_input_ids = []
@@ -566,7 +565,6 @@ class TextEnvironment:
                 return_tensors="pt",
             ).to(self.current_device)
             input_attention_mask = padded_inputs["attention_mask"].clone()
-
             stopping_criteria = StringStoppingCriteria([self.call_token, self.submit_token], self.tokenizer)
 
             self.generation_kwargs["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
