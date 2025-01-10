@@ -251,6 +251,7 @@ class OnlineDPOTrainer(Trainer):
                 n=2,  # 2 generations per prompt
                 max_tokens=args.max_new_tokens,
                 temperature=args.temperature,
+                top_k=50,
                 top_p=1.0,
                 detokenize=False,  # to avoid vllm to decode (we don't need it)
             )
@@ -264,7 +265,7 @@ class OnlineDPOTrainer(Trainer):
             self.generation_config = GenerationConfig(
                 max_new_tokens=args.max_new_tokens,
                 temperature=args.temperature,
-                top_k=0,
+                top_k=50,
                 top_p=1.0,
                 do_sample=True,
                 use_cache=False if args.gradient_checkpointing else True,
@@ -474,7 +475,7 @@ class OnlineDPOTrainer(Trainer):
 
     def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask):
         # Get the number of tokens to truncate from prompt
-        num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - 512, 0)
+        num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - 360, 0)
 
         # Truncate left to avoid oom
         prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
