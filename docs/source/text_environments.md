@@ -114,6 +114,7 @@ Let's decompose the settings:
 | `max_tool_response`| The tool response is truncated to this number to avoid running out of model context.|
 | `max_length`       |  The maximum number of tokens to allow in an episode. |
 | `generation_kwargs`| Generation settings used by the language model. |
+| `use_cache` | Cache keys and values between segment generation. Warning: When using caching, TextEnvironment is not suited for training use, i.e. backpropagation through the generated graph. Use with trl Trainers is of course possible. Furthermore, caching requires, that there be no calculation dependencies between examples at inference time. When using BatchNorm, the model should thus be in eval mode.|
 
 You can customize the environment to your needs and add custom tools and settings. Let's see how you can use the environment to have the model interact with the available tools!
 
