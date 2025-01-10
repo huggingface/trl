@@ -410,10 +410,10 @@ class TextEnvironment:
             past_input_ids (list[torch.Tensor]): Batched list of input ids from the last generation
         """
         legacy_format = [cache.to_legacy_cache() for cache in past_key_values]
-        example_mask_offset = 0
         combined_cache = []
         for layer_id in range(len(legacy_format[0])):
             combined_layer = None
+            example_mask_offset = 0
             for cache_idx, cache in enumerate(legacy_format):
                 layer = cache[layer_id]
                 num_examples = len(layer[0])
@@ -580,27 +580,34 @@ class TextEnvironment:
         new_past_key_values = []
         new_past_attention_masks = []
         new_past_input_ids = []
+
+        # pad all batches to same length for cache compatibility
+        mask = [torch.ones_like(element) for element in query_tensors]
+        inputs = {"input_ids": query_tensors, "attention_mask": mask}
+        all_padded_inputs = self.tokenizer.pad(
+            inputs,
+            padding=True,
+            max_length=None,
+            pad_to_multiple_of=pad_to_multiple_of,
+            return_tensors="pt",
+        ).to(self.current_device)
+
         # in case we have fewer examples than bs
         batch_size = min(len(query_tensors), batch_size)
         for batch_index, i in enumerate(range(0, len(query_tensors), batch_size)):
             # prevent overflow if query tensors are not even multiple of bs
             end_index = min(len(query_tensors), i + batch_size)
-            batch = query_tensors[i:end_index]
-            batch_mask = [torch.ones_like(element) for element in batch]
             past_key_values, past_attention_masks, past_input_ids = (None, None, None)
             if combined_past_key_values is not None:
                 past_key_values, past_attention_masks, past_input_ids = self._get_batched_cache(
                     i, end_index, combined_past_key_values, combined_past_attention_masks, combined_past_input_ids
                 )
-            inputs = {"input_ids": batch, "attention_mask": batch_mask}
 
-            padded_inputs = self.tokenizer.pad(
-                inputs,
-                padding=True,
-                max_length=None,
-                pad_to_multiple_of=pad_to_multiple_of,
-                return_tensors="pt",
-            ).to(self.current_device)
+            padded_inputs = {
+                "input_ids": all_padded_inputs["input_ids"][i:end_index],
+                "attention_mask": all_padded_inputs["attention_mask"][i:end_index],
+            }
+
             input_attention_mask = padded_inputs["attention_mask"].clone()
             stopping_criteria = StringStoppingCriteria([self.call_token, self.submit_token], self.tokenizer)
 
