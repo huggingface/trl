@@ -579,7 +579,7 @@ class TextEnvironment:
             if past_input_ids is not None:
                 padded_inputs["input_ids"] = torch.concatenate([past_input_ids,padded_inputs["input_ids"]],dim=1)
 
-            if padded_inputs["input_ids"].shape[-1]>self.max_length:
+            if self.max_length is not None and padded_inputs["input_ids"].shape[-1]>self.max_length:
                 return None, None, None,None, True
 
             generations = extract_model_from_parallel(self.model).generate(**padded_inputs, **self.generation_kwargs)

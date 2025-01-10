@@ -26,10 +26,10 @@ class DummyTool:
         return text
 
 
-def dummy_generate(histories):
+def dummy_generate(histories,past_key_values=None,past_attention_masks=None,past_input_ids=None,last_active_histories=None):
     for i in range(len(histories)):
         histories[i].append_segment("<request><DummyTool>test<call>", torch.tensor([1, 2, 3]), system=False)
-    return histories
+    return histories, None, None, None, None
 
 
 class TextHistoryTest(unittest.TestCase):
@@ -131,10 +131,10 @@ class TextEnvironmentTester(unittest.TestCase):
 
         model_inputs = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
 
-        generations_batched = env._generate_batched(model_inputs, batch_size=2)
+        generations_batched,_,_,_,_ = env._generate_batched(model_inputs, batch_size=2)
         generations_batched = self.gpt2_tokenizer.batch_decode(generations_batched)
 
-        generations_single = [env._generate_batched([inputs], batch_size=1)[0] for inputs in model_inputs]
+        generations_single = [env._generate_batched([inputs], batch_size=1)[0][0] for inputs in model_inputs]
         generations_single = self.gpt2_tokenizer.batch_decode(generations_single)
 
         self.assertEqual(generations_single, generations_batched)
