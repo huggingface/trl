@@ -45,9 +45,9 @@ from transformers import (
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
-from vllm import LLM, SamplingParams
 
 from ..data_utils import apply_chat_template, is_conversational
+from ..import_utils import is_vllm_available
 from ..models import create_reference_model
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
@@ -77,6 +77,10 @@ if is_sagemaker_mp_enabled():
 
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
+
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
 
 if is_wandb_available():
     import wandb
@@ -248,6 +252,11 @@ class OnlineDPOTrainer(Trainer):
                 top_p=1.0,
                 detokenize=False,  # to avoid vllm to decode (we don't need it)
             )
+            # vLLM dynamically adjusts the size of the key-value cache based on available GPU memory at instanciation.
+            # A larger cache size improves speed, so we would expect gpu_memory_utilization=1.
+            # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
+            # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
+            # space for them. Setting gpu_memory_utilization to 0.6 seems to work well in practice.
             self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.6)
         else:
             self.generation_config = GenerationConfig(
