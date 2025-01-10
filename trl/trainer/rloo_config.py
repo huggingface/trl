@@ -96,3 +96,8 @@ class RLOOConfig(OnPolicyConfig):
         default=True,
         metadata={"help": "Whether to use token-level KL penalty or sequence-level KL penalty"},
     )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={
+            "help": "For deepspeed stage 3. Whether to gather policy model weights for sequences generation to speed it up. Disabling it makes training models bigger than single GPU VRAM possible, but it may be slow."},
+    )
