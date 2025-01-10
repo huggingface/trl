@@ -259,7 +259,7 @@ class OnlineDPOTrainer(Trainer):
             # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
             # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
             # space for them. Setting gpu_memory_utilization to 0.6 seems to work well in practice.
-            self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.6)
+            self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.55)
         else:
             self.generation_config = GenerationConfig(
                 max_new_tokens=args.max_new_tokens,
@@ -430,7 +430,7 @@ class OnlineDPOTrainer(Trainer):
         max_prompt_length = max(len(ids) for ids in prompt_ids)
         prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
         prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
-        max_tokens = self.sampling_params.max_tokens
+        max_tokens = self.generation_config.max_tokens
         completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
         completion_ids = [
             ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
@@ -472,6 +472,28 @@ class OnlineDPOTrainer(Trainer):
 
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 
+    def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask):
+        # Get the number of tokens to truncate from prompt
+        num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - 512, 0)
+
+        # Truncate left to avoid oom
+        prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
+        prompt_mask = prompt_mask[:, num_tokens_to_truncate:]
+
+        # Concat the prompt and completion
+        prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        
+        # Get the logprobs of the completions from the model
+        output = model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+        
+        # There is 1 offset, because the model predict the next token
+        logits = output.logits[:, prompt_ids.size(1) - 1 : -1]
+        
+        # Take the completion tokens logprob
+        logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
+        return logprobs
+
     def training_step(
         self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
     ) -> torch.Tensor:
@@ -481,41 +503,23 @@ class OnlineDPOTrainer(Trainer):
         batch_size = len(prompts)
 
         if self.args.use_vllm:
-            prompt_ids, prompt_mask, completion_mask, completion_ids = self._generate_vllm(model, prompts)
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(model, prompts)
         else:
-            prompt_ids, prompt_mask, completion_mask, completion_ids = self._generate(model, prompts)
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts)
 
         contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
-        prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
-        prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
-
-        # Get the logprobs of the completions from the model
-        output = model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-        # There is 1 offset, because the model predict the next token
-        context_length = prompt_ids.size(1)
-        logits = output.logits[:, context_length - 1 : -1]
-        # Turn logits into logprobs
-        all_logprobs = F.log_softmax(logits, dim=-1)
-        # Take the completion tokens logprob
-        logprobs = torch.take_along_dim(all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
-        del output, logits, all_logprobs  # free memory
-
-        # Same for the reference model
+        
+        logprobs = self._forward(model, prompt_ids, prompt_mask, completion_ids, completion_mask)
         with torch.no_grad():
             if self.ref_model is not None:
-                ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+                ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_mask, completion_ids, completion_mask)
             else:  # peft case: we just need to disable the adapter
                 with self.model.disable_adapter():
-                    ref_output = self.model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-            ref_logits = ref_output.logits[:, context_length - 1 : -1]
-            ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
-            ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
-            del ref_output, ref_logits, ref_all_logprobs  # free memory
+                    ref_logprobs = self._forward(self.model, prompt_ids, prompt_mask, completion_ids, completion_mask)
 
         # Decode the completions, and format them if the input is conversational
-        device = prompt_completion_ids.device
-        completions_ids = prompt_completion_ids[:, context_length:]
-        completions = self.processing_class.batch_decode(completions_ids, skip_special_tokens=True)
+        device = logprobs.device
+        completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational({"prompt": prompts[0]}):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
