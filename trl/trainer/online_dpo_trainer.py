@@ -46,9 +46,10 @@ from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, se
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
-from ..data_utils import apply_chat_template, is_conversational
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model
+from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
@@ -60,6 +61,7 @@ from .utils import (
     get_comet_experiment_url,
     get_reward,
     prepare_deepspeed,
+    truncate_right,
 )
 
 
@@ -413,44 +415,73 @@ class OnlineDPOTrainer(Trainer):
     ) -> torch.Tensor:
         model.train()
 
-        prompts = inputs["prompt"]
-        num_examples = len(prompts)
+        if self.use_vllm:
+            prompts = inputs["prompt"]
+            num_examples = len(prompts)
 
-        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-        llm_model.load_weights(model.state_dict().items())
-        if is_conversational({"prompt": prompts[0]}):
-            outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+            llm_model.load_weights(model.state_dict().items())
+            if is_conversational({"prompt": prompts[0]}):
+                outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+            else:
+                outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
+
+            completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
+            prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+
+            # First, let's add the eos token to the end of each sequence
+            eos_token_id = self.processing_class.eos_token_id
+            pad_token_id = self.processing_class.pad_token_id
+
+            # For the prompt, we just add the pad token at the begining and build the mask
+            max_prompt_length = max(len(ids) for ids in prompt_ids)
+            prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
+            prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
+
+            max_tokens = self.sampling_params.max_tokens
+            completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
+            completion_ids = [
+                ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
+                for ids in completion_ids
+            ]
+            # Now, let's pad all the sequences to the same length
+            completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
+
+            prompt_ids = torch.tensor(prompt_ids, device=self.accelerator.device)
+            prompt_mask = torch.tensor(prompt_mask, device=self.accelerator.device)
+            completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
+            completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
+
+            context_length = prompt_ids.size(1)
+
         else:
-            outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
+            # Apply chat template and tokenize the input.
+            # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
+            batch_size = len(next(iter(inputs.values())))
+            prompts = inputs["prompt"]
+            inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
+            inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
+            inputs = [
+                self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs
+            ]
+            inputs = self.data_collator(inputs)
 
-        completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
-        prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+            # Sample 2 completions per prompt of size `max_new_tokens` from the model
+            inputs = self._prepare_inputs(inputs)
+            num_examples, context_length = inputs["prompt_input_ids"].shape
+            prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
+            prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
+            with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                output = unwrapped_model.generate(
+                    input_ids=prompt_ids,
+                    attention_mask=prompt_mask,
+                    generation_config=self.generation_config,
+                )
 
-        # First, let's add the eos token to the end of each sequence
-        eos_token_id = self.processing_class.eos_token_id
-        pad_token_id = self.processing_class.pad_token_id
-
-        # For the prompt, we just add the pad token at the begining and build the mask
-        max_prompt_length = max(len(ids) for ids in prompt_ids)
-        prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
-        prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
-
-        max_tokens = self.sampling_params.max_tokens
-        completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
-        completion_ids = [
-            ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
-            for ids in completion_ids
-        ]
-        # Now, let's pad all the sequences to the same length
-        completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
-
-        prompt_ids = torch.tensor(prompt_ids, device=self.accelerator.device)
-        prompt_mask = torch.tensor(prompt_mask, device=self.accelerator.device)
-        completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
-        completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
-
-        context_length = prompt_ids.size(1)
-
+            completion_ids = output[:, context_length:]
+            completion_ids, completion_mask = truncate_right(
+                completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
+            )
         contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
