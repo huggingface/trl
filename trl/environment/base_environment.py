@@ -481,7 +481,7 @@ class TextEnvironment:
         else:
             for history in histories:
                 if not history.completed:
-                    # Adds an eos token, so that we always end on a non-system segment
+                    # Adds an eos token, so that we end on a non-system segment
                     history.append_segment(
                         self.tokenizer.eos_token,
                         torch.tensor([self.tokenizer.eos_token_id]).to(self.current_device),
