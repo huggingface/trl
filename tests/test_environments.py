@@ -26,7 +26,9 @@ class DummyTool:
         return text
 
 
-def dummy_generate(histories,past_key_values=None,past_attention_masks=None,past_input_ids=None,last_active_histories=None):
+def dummy_generate(
+    histories, past_key_values=None, past_attention_masks=None, past_input_ids=None, last_active_histories=None
+):
     for i in range(len(histories)):
         histories[i].append_segment("<request><DummyTool>test<call>", torch.tensor([1, 2, 3]), system=False)
     return histories, None, None, None, None
@@ -79,7 +81,7 @@ class TextHistoryTest(unittest.TestCase):
         history.append_segment("General Kenobi!", torch.tensor([4, 5, 6]))
         history.append_segment("You are a bold one!", torch.tensor([7, 8, 9]))
         self.assertEqual(history.last_text_segment, "You are a bold one!")
-        self.assertTrue(torch.all(history.last_token_segment== torch.tensor([7, 8, 9])).item())
+        self.assertTrue(torch.all(history.last_token_segment == torch.tensor([7, 8, 9])).item())
 
     def test_text_history_split_query_response(self):
         text = "Hello there!"
@@ -94,8 +96,6 @@ class TextHistoryTest(unittest.TestCase):
         self.assertTrue(torch.equal(mask, torch.tensor([1, 1, 1, 0, 0, 0])))
 
 
-
-
 class TextEnvironmentTester(unittest.TestCase):
     def setUp(self):
         # model_id
@@ -105,7 +105,6 @@ class TextEnvironmentTester(unittest.TestCase):
         self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
         self.gpt2_tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
-
 
     def test_text_environment_setup(self):
         env = TextEnvironment(
@@ -135,7 +134,7 @@ class TextEnvironmentTester(unittest.TestCase):
 
         model_inputs = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
 
-        generations_batched,_,_,_,_ = env._generate_batched(model_inputs, batch_size=2)
+        generations_batched, _, _, _, _ = env._generate_batched(model_inputs, batch_size=2)
         generations_batched = self.gpt2_tokenizer.batch_decode(generations_batched)
 
         generations_single = [env._generate_batched([inputs], batch_size=1)[0][0] for inputs in model_inputs]
@@ -291,28 +290,30 @@ class TextEnvironmentTester(unittest.TestCase):
             max_turns=2,
         )
 
-        caches = [((torch.tensor([[1],[2]]),
-                    torch.tensor([[3],[4]])),),
-                ((torch.tensor([[5]]),
-                torch.tensor([[6]])),)]
+        caches = [
+            ((torch.tensor([[1], [2]]), torch.tensor([[3], [4]])),),
+            ((torch.tensor([[5]]), torch.tensor([[6]])),),
+        ]
         caches = [DynamicCache().from_legacy_cache(cache) for cache in caches]
-        attention_masks = [torch.tensor([[0],[1]]),torch.tensor([[2]])]
-        input_ids = [torch.tensor([[1],[2]]),torch.tensor([[3]])]
-        example_mask = [True,False,True]
+        attention_masks = [torch.tensor([[0], [1]]), torch.tensor([[2]])]
+        input_ids = [torch.tensor([[1], [2]]), torch.tensor([[3]])]
+        example_mask = [True, False, True]
 
-        expected_cache = ((torch.tensor([[1],[5]]),torch.tensor([[3],[6]])),)
-        expected_attention_mask = torch.tensor([[0],[2]])
-        expected_input_ids = torch.tensor([[1],[3]])
-        
-        combined_cache, combined_attention_masks, combined_input_ids = env._combine_cache(example_mask, caches, attention_masks,input_ids)
+        expected_cache = ((torch.tensor([[1], [5]]), torch.tensor([[3], [6]])),)
+        expected_attention_mask = torch.tensor([[0], [2]])
+        expected_input_ids = torch.tensor([[1], [3]])
 
-        self.assertEqual(len(combined_cache),len(expected_cache))
-        self.assertEqual(len(combined_cache[0]),len(expected_cache[0]))
-        self.assertTrue(torch.all(combined_cache[0][0]==expected_cache[0][0]))
-        self.assertTrue(torch.all(combined_cache[0][1]==expected_cache[0][1]))
-        self.assertTrue(torch.all(combined_attention_masks==expected_attention_mask))
-        self.assertTrue(torch.all(combined_input_ids==expected_input_ids))
-    
+        combined_cache, combined_attention_masks, combined_input_ids = env._combine_cache(
+            example_mask, caches, attention_masks, input_ids
+        )
+
+        self.assertEqual(len(combined_cache), len(expected_cache))
+        self.assertEqual(len(combined_cache[0]), len(expected_cache[0]))
+        self.assertTrue(torch.all(combined_cache[0][0] == expected_cache[0][0]))
+        self.assertTrue(torch.all(combined_cache[0][1] == expected_cache[0][1]))
+        self.assertTrue(torch.all(combined_attention_masks == expected_attention_mask))
+        self.assertTrue(torch.all(combined_input_ids == expected_input_ids))
+
     def test_get_batched_cache(self):
         env = TextEnvironment(
             self.gpt2_model,
@@ -323,23 +324,25 @@ class TextEnvironmentTester(unittest.TestCase):
             max_turns=2,
         )
 
-        cache = ((torch.tensor([[1],[2],[3]]),torch.tensor([[4],[5],[6]])),)
-        attention_masks = torch.tensor([[1],[2],[3]])
-        input_ids = torch.tensor([[4],[5],[6]])
-        batched_cache, batched_attention_masks, batched_input_ids = env._get_batched_cache(1,3,cache,attention_masks,input_ids)
+        cache = ((torch.tensor([[1], [2], [3]]), torch.tensor([[4], [5], [6]])),)
+        attention_masks = torch.tensor([[1], [2], [3]])
+        input_ids = torch.tensor([[4], [5], [6]])
+        batched_cache, batched_attention_masks, batched_input_ids = env._get_batched_cache(
+            1, 3, cache, attention_masks, input_ids
+        )
         batched_cache = batched_cache.to_legacy_cache()
-        expected_cache = ((torch.tensor([[2],[3]]),torch.tensor([[5],[6]])),)
+        expected_cache = ((torch.tensor([[2], [3]]), torch.tensor([[5], [6]])),)
 
-        self.assertEqual(len(batched_cache),len(expected_cache))
-        self.assertEqual(len(batched_cache[0]),len(expected_cache[0]))
-        self.assertTrue(torch.all(batched_cache[0][0]==expected_cache[0][0]))
-        self.assertTrue(torch.all(batched_cache[0][1]==expected_cache[0][1]))
+        self.assertEqual(len(batched_cache), len(expected_cache))
+        self.assertEqual(len(batched_cache[0]), len(expected_cache[0]))
+        self.assertTrue(torch.all(batched_cache[0][0] == expected_cache[0][0]))
+        self.assertTrue(torch.all(batched_cache[0][1] == expected_cache[0][1]))
 
-        expected_attention_mask = torch.tensor([[2],[3]])
-        self.assertTrue(torch.all(batched_attention_masks==expected_attention_mask))
+        expected_attention_mask = torch.tensor([[2], [3]])
+        self.assertTrue(torch.all(batched_attention_masks == expected_attention_mask))
 
-        expected_input_ids = torch.tensor([[5],[6]])
-        self.assertTrue(torch.all(batched_input_ids==expected_input_ids))
+        expected_input_ids = torch.tensor([[5], [6]])
+        self.assertTrue(torch.all(batched_input_ids == expected_input_ids))
 
     def test_cached_generate_batched(self):
         generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.gpt2_tokenizer.eos_token_id}
@@ -354,7 +357,9 @@ class TextEnvironmentTester(unittest.TestCase):
 
         input_texts = ["this is a test", "this is another, longer test"]
         model_inputs = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
-        outputs, past_key_values, past_attention_masks,past_input_ids, _ = env._generate_batched(model_inputs, batch_size=2)
+        outputs, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
+            model_inputs, batch_size=2
+        )
         past_key_values = past_key_values[0].to_legacy_cache()
         past_attention_masks = past_attention_masks[0]
         past_input_ids = past_input_ids[0]
@@ -362,12 +367,19 @@ class TextEnvironmentTester(unittest.TestCase):
         input_texts2 = [" short interim", " a slightly longer interim"]
         model_inputs2 = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
 
-        outputs_cached, _,_,_,_ = env._generate_batched(model_inputs2, batch_size=2,combined_past_key_values=past_key_values,combined_past_attention_masks=past_attention_masks,combined_past_input_ids=past_input_ids)
+        outputs_cached, _, _, _, _ = env._generate_batched(
+            model_inputs2,
+            batch_size=2,
+            combined_past_key_values=past_key_values,
+            combined_past_attention_masks=past_attention_masks,
+            combined_past_input_ids=past_input_ids,
+        )
 
-        model_inputs2_full = [torch.concat([in1,out1,in2],dim=0) for in1,out1,in2 in zip(model_inputs,outputs, model_inputs2)]
+        model_inputs2_full = [
+            torch.concat([in1, out1, in2], dim=0) for in1, out1, in2 in zip(model_inputs, outputs, model_inputs2)
+        ]
 
-        outputs_uncached, _, _,_, _ = env._generate_batched(model_inputs2_full, batch_size=2)
+        outputs_uncached, _, _, _, _ = env._generate_batched(model_inputs2_full, batch_size=2)
 
-        for cached, uncached in zip(outputs_cached,outputs_uncached):
-            self.assertTrue(torch.all(cached==uncached))
-
+        for cached, uncached in zip(outputs_cached, outputs_uncached):
+            self.assertTrue(torch.all(cached == uncached))
