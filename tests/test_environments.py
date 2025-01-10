@@ -376,17 +376,17 @@ class TextEnvironmentTester(unittest.TestCase):
             generation_kwargs=generation_kwargs,
         )
 
-        input_texts = ["this is a test", "this is another, longer test", "some other batch"]
+        input_texts = ["this is a test", "this is another, longer test", "some other batch", "something unnecessary"]
         model_inputs = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
         outputs, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
             model_inputs, batch_size=2
         )
 
         past_key_values, past_attention_masks, past_input_ids = env._combine_cache(
-            [True, True, True], past_key_values, past_attention_masks, past_input_ids
+            [True, True, True, False], past_key_values, past_attention_masks, past_input_ids
         )
 
-        input_texts2 = [" short interim", " a slightly longer interim", "another interim"]
+        input_texts2 = [" short interim", " a somewhat longer section in between", "something else entirely! So, "]
         model_inputs2 = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
 
         outputs_cached, _, _, _, _ = env._generate_batched(
@@ -398,7 +398,7 @@ class TextEnvironmentTester(unittest.TestCase):
         )
 
         model_inputs2_full = [
-            torch.concat([in1, out1, in2], dim=0) for in1, out1, in2 in zip(model_inputs, outputs, model_inputs2)
+            torch.concat([in1, out1, in2], dim=0) for in1, out1, in2 in zip(model_inputs[:-1], outputs, model_inputs2)
         ]
         outputs_uncached, _, _, _, _ = env._generate_batched(model_inputs2_full, batch_size=2)
         for cached, uncached in zip(outputs_cached, outputs_uncached):
