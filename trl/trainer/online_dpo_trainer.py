@@ -418,7 +418,10 @@ class OnlineDPOTrainer(Trainer):
 
         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
         llm_model.load_weights(model.state_dict().items())
-        outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+        if is_conversational({"prompt": prompts[0]}):
+            outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+        else:
+            outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
 
         completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
         prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
