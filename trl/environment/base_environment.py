@@ -531,11 +531,12 @@ class TextEnvironment:
     ):
         """
         Extract (batch) cache for current batch
-        start_index (int): start index of current batch
-        end_index (int): end index of current batch (points to first element not in batch)
-        combined_past_key_values (tuple[tuple[torch.Tensor]]) : The combined (unbatched) cache in legacy format from the last generation
-        combined_past_attention_masks (torch.Tensor): The combined (unbatched) attention masks from the last generation
-        combined_past_input_ids (torch.Tensor): The combined (unbatched) input ids from the last generation
+        Args:
+            start_index (int): start index of current batch
+            end_index (int): end index of current batch (points to first element not in batch)
+            combined_past_key_values (tuple[tuple[torch.Tensor]]) : The combined (unbatched) cache in legacy format from the last generation
+            combined_past_attention_masks (torch.Tensor): The combined (unbatched) attention masks from the last generation
+            combined_past_input_ids (torch.Tensor): The combined (unbatched) input ids from the last generation
         """
         current_cache = []
         for layer_id, layer in enumerate(combined_past_key_values):
