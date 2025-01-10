@@ -554,9 +554,9 @@ class DPOTrainer(Trainer):
                     "processing_class": processing_class,
                     "max_prompt_length": args.max_prompt_length,
                     "max_completion_length": args.max_completion_length,
-                    "truncation_mode": args.truncation_mode,
                     # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
                     "add_special_tokens": False,
+                    "truncation_mode": args.truncation_mode,
                 },
                 **map_kwargs,
             )
