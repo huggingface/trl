@@ -481,9 +481,9 @@ class OnlineDPOTrainer(Trainer):
         batch_size = len(prompts)
 
         if self.args.use_vllm:
-            prompt_ids, prompt_mask, completion_mask, completion_ids = self._generate_vllm(prompts)
+            prompt_ids, prompt_mask, completion_mask, completion_ids = self._generate_vllm(model, prompts)
         else:
-            prompt_ids, prompt_mask, completion_mask, completion_ids = self._generate(prompts)
+            prompt_ids, prompt_mask, completion_mask, completion_ids = self._generate(model, prompts)
 
         contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
