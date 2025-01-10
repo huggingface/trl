@@ -33,6 +33,7 @@ from transformers import (
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
+    GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -239,15 +240,24 @@ class OnlineDPOTrainer(Trainer):
             self.stats["objective/scores_margin"] = []
             self.stats["objective/scores"] = []
 
-        self.sampling_params = SamplingParams(
-            n=2,  # 2 generation per prompt
-            max_tokens=args.max_new_tokens,
-            temperature=args.temperature,
-            top_p=1.0,
-            detokenize=False,  # to avoid vllm to decode (we don't need it)
-        )
-
-        self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.6)
+        if self.args.use_vllm:
+            self.generation_config = SamplingParams(
+                n=2,  # 2 generations per prompt
+                max_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_p=1.0,
+                detokenize=False,  # to avoid vllm to decode (we don't need it)
+            )
+            self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.6)
+        else:
+            self.generation_config = GenerationConfig(
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_k=0,
+                top_p=1.0,
+                do_sample=True,
+                use_cache=False if args.gradient_checkpointing else True,
+            )
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
@@ -399,7 +409,7 @@ class OnlineDPOTrainer(Trainer):
 
         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
         llm_model.load_weights(model.state_dict().items())
-        outputs = self.llm.chat(prompts, self.sampling_params, use_tqdm=False)
+        outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
 
         completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
         prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]

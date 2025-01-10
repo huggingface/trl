@@ -58,6 +58,8 @@ class OnlineDPOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
+        use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use the vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
     """
 
     learning_rate: float = field(
@@ -118,6 +120,13 @@ class OnlineDPOConfig(TrainingArguments):
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the model."},
+    )
+    use_vllm: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the vLLM for generating completions. Requires vLLM to be installed "
+            "(`pip install vllm`)."
+        },
     )
 
     def __post_init__(self):
