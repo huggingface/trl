@@ -33,7 +33,6 @@ from transformers import (
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
-    GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -45,10 +44,10 @@ from transformers import (
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
+from vllm import LLM, SamplingParams
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational
 from ..models import create_reference_model
-from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
@@ -60,7 +59,6 @@ from .utils import (
     get_comet_experiment_url,
     get_reward,
     prepare_deepspeed,
-    truncate_right,
 )
 
 
@@ -241,14 +239,15 @@ class OnlineDPOTrainer(Trainer):
             self.stats["objective/scores_margin"] = []
             self.stats["objective/scores"] = []
 
-        self.generation_config = GenerationConfig(
-            max_new_tokens=args.max_new_tokens,
+        self.sampling_params = SamplingParams(
+            n=2,  # 2 generation per prompt
+            max_tokens=args.max_new_tokens,
             temperature=args.temperature,
-            top_k=0,
             top_p=1.0,
-            do_sample=True,
-            use_cache=False if args.gradient_checkpointing else True,
+            detokenize=False,  # to avoid vllm to decode (we don't need it)
         )
+
+        self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.6)
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
@@ -395,32 +394,41 @@ class OnlineDPOTrainer(Trainer):
     ) -> torch.Tensor:
         model.train()
 
-        # Apply chat template and tokenize the input.
-        # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
-        batch_size = len(next(iter(inputs.values())))
         prompts = inputs["prompt"]
-        inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
-        inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
-        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
-        inputs = self.data_collator(inputs)
+        num_examples = len(prompts)
 
-        # Sample 2 completions per prompt of size `max_new_tokens` from the model
-        inputs = self._prepare_inputs(inputs)
-        num_examples, context_length = inputs["prompt_input_ids"].shape
-        prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
-        prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            output = unwrapped_model.generate(
-                input_ids=prompt_ids,
-                attention_mask=prompt_mask,
-                generation_config=self.generation_config,
-            )
-        del inputs
+        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+        llm_model.load_weights(model.state_dict().items())
+        outputs = self.llm.chat(prompts, self.sampling_params, use_tqdm=False)
 
-        completion_ids = output[:, context_length:]
-        completion_ids, completion_mask = truncate_right(
-            completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
-        )
+        completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
+        prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+
+        # First, let's add the eos token to the end of each sequence
+        eos_token_id = self.processing_class.eos_token_id
+        pad_token_id = self.processing_class.pad_token_id
+
+        # For the prompt, we just add the pad token at the begining and build the mask
+        max_prompt_length = max(len(ids) for ids in prompt_ids)
+        prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
+        prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
+
+        max_tokens = self.sampling_params.max_tokens
+        completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
+        completion_ids = [
+            ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
+            for ids in completion_ids
+        ]
+        # Now, let's pad all the sequences to the same length
+        completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
+
+        prompt_ids = torch.tensor(prompt_ids, device=self.accelerator.device)
+        prompt_mask = torch.tensor(prompt_mask, device=self.accelerator.device)
+        completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
+        completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
+
+        context_length = prompt_ids.size(1)
+
         contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
