@@ -13,11 +13,12 @@
 # limitations under the License.
 
 import re
+
 from typing import Optional
 
 import torch
 from accelerate.utils import extract_model_from_parallel
-from transformers import StoppingCriteria, StoppingCriteriaList
+from transformers import StoppingCriteria, StoppingCriteriaList, DynamicCache
 
 from ..import_utils import is_rich_available
 
@@ -36,7 +37,7 @@ class StringStoppingCriteria(StoppingCriteria):
         self.first_call = True
 
     def __call__(self, input_ids, scores, **kwargs):
-        """Returns true if all generated sequences contain any of the stop strings."""
+        """Returns true if all generated sequences contain any of the stop strings or terminated early."""
         if self.first_call:
             self.generated_tokens = [1 for _ in range(input_ids.shape[0])]
             self.start_length = input_ids.shape[-1] - 1
@@ -45,7 +46,7 @@ class StringStoppingCriteria(StoppingCriteria):
         done = []
 
         for i, decoded_generation in enumerate(decoded_generations):
-            sequence_complete = any(stop_string in decoded_generation for stop_string in self.stop_strings)
+            sequence_complete = any(stop_string in decoded_generation for stop_string in self.stop_strings) or self.tokenizer.eos_token_id in input_ids[i, self.start_length :]
             done.append(sequence_complete)
             if not sequence_complete:
                 self.generated_tokens[i] += 1
@@ -127,6 +128,14 @@ class TextHistory:
         """
         start, end = self.text_spans[-1]
         return self.text[start:end]
+    
+    @property
+    def last_token_segment(self):
+        """
+        Get the last token segment
+        """
+        start, end = self.token_spans[-1]
+        return self.tokens[start:end]
 
     def split_query_response_tokens(self):
         """
@@ -214,6 +223,8 @@ class TextHistory:
 class TextEnvironment:
     """
     The TextEnvironment enables interaction of a LLM with an environment using tools.
+    When using caching, TextEnvironment is not suited for training use, i.e. backpropagation through the generated graph. Use with Trainers is of course possible.
+    Furthermore, caching requires, that there be no calculation dependencies between examples at inference time. When using BatchNorm, the model should thus be in eval mode.
     """
 
     def __init__(
@@ -283,8 +294,10 @@ class TextEnvironment:
 
         histories = [TextHistory(q, qt, system=True) for q, qt in zip(queries, queries_tokens)]
 
+        past_key_values,past_attention_masks,past_input_ids,last_active_histories = (None,None,None,None)
+
         while any(not history.completed for history in histories) and turns < self.max_turns:
-            histories = self.generate(histories)
+            histories,past_key_values,past_attention_masks,past_input_ids,last_active_histories = self.generate(histories,past_key_values,past_attention_masks,past_input_ids,last_active_histories)
             histories = self.tasks_end_check(histories)
             # TODO: make this parallel rather than for-loop
             for i in range(len(histories)):
@@ -370,25 +383,69 @@ class TextEnvironment:
             history.reward = reward
         return histories
 
-    def generate(self, histories):
+    def _next_input(self,history):
+        return history.last_token_segment if not history.completed else torch.tensor([])
+    
+    #combines all caches in order to exclude completed histories from further generation
+    #batch_examples: list of masks indicating for each example, whether it is supposed to remain or not
+    def _combine_cache(self,example_mask,past_key_values,past_attention_masks,past_input_ids):
+        legacy_format = [cache.to_legacy_cache() for cache in past_key_values ]
+        #combines all caches, excluding
+        example_mask_offset = 0
+        combined_cache = []
+        for layer_id in range(len(legacy_format[0])):
+            layer = None
+            for cache_idx, cache in enumerate(legacy_format):
+                layer = cache[layer_id]
+                num_examples = len(layer[0])
+                new_keys = layer[0][example_mask[example_mask_offset:example_mask_offset+num_examples]]
+                new_values = layer[1][example_mask[example_mask_offset:example_mask_offset+num_examples]]
+                if layer is None:
+                    layer = (new_keys,new_values)
+                else:
+                    other_new_keys,other_new_values = layer
+                    layer = (torch.concat([other_new_keys,new_keys],dim=0),torch.concat([other_new_values,new_values],dim=0))
+                example_mask_offset += num_examples
+            combined_cache.append(layer)
+        combined_cache = tuple(combined_cache)
+
+        combined_attention_masks = torch.concat(past_attention_masks,dim=0)[example_mask]
+        combined_input_ids = torch.concat(past_input_ids,dim=0)[example_mask]
+
+        return combined_cache, combined_attention_masks, combined_input_ids
+
+    def generate(self, histories,past_key_values=None,past_attention_masks=None,past_input_ids=None,last_active_histories=None):
         """
         Generate responses for a list of histories.
         """
-        active_histories = [i for i, history in enumerate(histories) if not history.completed]
+        active_histories = [i for i in range(len(histories)) if not histories[i].completed]
+        query_tensors = [self._next_input(histories[i]) for i in active_histories]
+        combined_past_key_values,combined_past_attention_masks, combined_past_input_ids = (None,None,None)
+        if past_key_values is not None:
+            example_mask = [(not histories[i].completed) for i in last_active_histories]
+            combined_past_key_values,combined_past_attention_masks, combined_past_input_ids = self._combine_cache(example_mask,past_key_values,past_attention_masks,past_input_ids)
 
-        query_tensors = [histories[i].tokens for i in active_histories]
-        response_tensors = self._generate_batched(query_tensors)
-        response_texts = self.tokenizer.batch_decode(response_tensors)
+        response_tensors,past_key_values,past_attention_masks,past_input_ids, truncated = self._generate_batched(query_tensors,combined_past_key_values=combined_past_key_values,combined_past_attention_masks=combined_past_attention_masks, combined_past_input_ids=combined_past_input_ids)
+        if not truncated:
+            response_texts = self.tokenizer.batch_decode(response_tensors)
+            for i, response_text, response_tensor in zip(active_histories, response_texts, response_tensors):
+                history = histories[i]
+                if not history.completed:
+                    history.append_segment(response_text, response_tensor, system=False)
+        else:
+            for history in histories:
+                if not history.completed:
+                    #Adds an eos token, so that we always end on a non-system segment
+                    history.append_segment(self.tokenizer.eos_token, torch.tensor([self.tokenizer.eos_token_id]).to(self.current_device), system=False)
+                    history.complete(truncated=True)
 
-        for i, response_text, response_tensor in zip(active_histories, response_texts, response_tensors):
-            histories[i].append_segment(response_text, response_tensor, system=False)
-
-        return histories
+        return histories,past_key_values,past_attention_masks,past_input_ids, active_histories
 
     def tasks_end_check(self, histories, model_turn=True):
         """
         Check if the current generation sequences have finished.
         """
+
         for history in histories:
             if not history.completed:
                 truncated, ended = self.task_end_check(history, model_turn=model_turn)
@@ -404,7 +461,7 @@ class TextEnvironment:
         ended = False
         if history.completed:
             return truncated, ended
-        if self.max_length is not None and len(self.tokenizer(history.text).input_ids[0]) > self.max_length:
+        if self.max_length is not None and len(history.tokens) > self.max_length:
             truncated = True
             ended = True
         elif self.tokenizer.eos_token in history.text:
@@ -418,11 +475,26 @@ class TextEnvironment:
             ended = True
         return truncated, ended
 
+    #builds the cache for the current batch
+    def _get_batched_cache(self,start_index, end_index, combined_past_key_values, combined_attention_masks, combined_input_ids):
+        current_cache = []
+        for layer_id, layer in enumerate(combined_past_key_values):
+            keys,values = layer
+            new_keys = keys[start_index:end_index]
+            new_values = values[start_index:end_index]
+            current_cache.append((new_keys,new_values))
+        current_cache = tuple(current_cache)
+        return DynamicCache().from_legacy_cache(current_cache), combined_attention_masks[start_index:end_index], combined_input_ids[start_index:end_index]
+
+    #TODO make batch_size changeable
     def _generate_batched(
         self,
         query_tensors,
         batch_size: int = 16,
         pad_to_multiple_of: Optional[int] = None,
+        combined_past_key_values=None,#past_key_values in legacy format
+        combined_past_attention_masks=None,
+        combined_past_input_ids = None
     ):
         """
         Generate responses for a list of query tensors.
@@ -437,15 +509,20 @@ class TextEnvironment:
         if not self.is_encoder_decoder:
             self.tokenizer.padding_side = "left"
 
+
+        new_past_key_values = []
+        new_past_attention_masks = []
+        new_past_input_ids = []
         # in case we have fewer examples than bs
         batch_size = min(len(query_tensors), batch_size)
-
-        for i in range(0, len(query_tensors), batch_size):
+        for batch_index,i in enumerate(range(0, len(query_tensors), batch_size)):
             # prevent overflow if query tensors are not even multiple of bs
             end_index = min(len(query_tensors), i + batch_size)
-
             batch = query_tensors[i:end_index]
             batch_mask = [torch.ones_like(element) for element in batch]
+            past_key_values, past_attention_masks, past_input_ids = (None,None,None)
+            if combined_past_key_values is not None:
+                past_key_values, past_attention_masks, past_input_ids = self._get_batched_cache(i,end_index,combined_past_key_values,combined_past_attention_masks,combined_past_input_ids)
             inputs = {"input_ids": batch, "attention_mask": batch_mask}
 
             padded_inputs = self.tokenizer.pad(
@@ -455,25 +532,52 @@ class TextEnvironment:
                 pad_to_multiple_of=pad_to_multiple_of,
                 return_tensors="pt",
             ).to(self.current_device)
+            input_attention_mask = padded_inputs["attention_mask"].clone()
 
             stopping_criteria = StringStoppingCriteria([self.call_token, self.submit_token], self.tokenizer)
 
             self.generation_kwargs["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
+            self.generation_kwargs["use_cache"] = True
+            self.generation_kwargs["return_dict_in_generate"] = True
+            #handle caching
+            self.generation_kwargs["past_key_values"] = past_key_values if past_key_values is not None else DynamicCache()
+            if past_attention_masks is not None:
+                padded_inputs["attention_mask"] = torch.concatenate([past_attention_masks,padded_inputs["attention_mask"]],dim=1)
+            if past_input_ids is not None:
+                padded_inputs["input_ids"] = torch.concatenate([past_input_ids,padded_inputs["input_ids"]],dim=1)
+
+            if padded_inputs["input_ids"].shape[-1]>self.max_length:
+                return None, None, None,None, True
 
             generations = extract_model_from_parallel(self.model).generate(**padded_inputs, **self.generation_kwargs)
+            new_past_key_values.append(generations.past_key_values)
 
-            for generation, mask, generated_tokens in zip(
-                generations, padded_inputs["attention_mask"], stopping_criteria.generated_tokens
+            past_attention_mask = torch.ones_like(generations.sequences)
+            #Don't attend to generated padding or eos tokens
+            past_attention_mask[torch.logical_or(generations.sequences==self.tokenizer.eos_token_id, generations.sequences==self.tokenizer.pad_token_id)] = 0
+            past_attention_mask[:,:input_attention_mask.shape[1]] = input_attention_mask
+
+            generations = generations.sequences
+
+            new_past_input_ids.append(generations)
+            for generation, mask, generated_tokens, new_attention_mask in zip(
+                generations, padded_inputs["attention_mask"], stopping_criteria.generated_tokens,past_attention_mask
             ):
                 if not self.is_encoder_decoder:
                     output = generation[(1 - mask).sum() :]  # remove padding
+                    padding_removed_past_attention_mask = new_attention_mask[(1 - mask).sum() :]
                 else:
                     output = generation
+                    padding_removed_past_attention_mask = new_attention_mask
 
                 if not self.is_encoder_decoder:
                     output = output[(mask).sum() :]  # remove prompt
+                    generated_tokens_attention_mask = padding_removed_past_attention_mask[(mask).sum() :]
 
                 # remove chunk generated after stopping criteria in batch mode
                 outputs.append(output[:generated_tokens])
+                #Do not attend to tokens that were generated after <call> or <submit>
+                generated_tokens_attention_mask[generated_tokens:]=0
+            new_past_attention_masks.append(past_attention_mask)
         self.tokenizer.padding_side = padding_side_default
-        return outputs
+        return outputs, new_past_key_values, new_past_attention_masks,new_past_input_ids, False
