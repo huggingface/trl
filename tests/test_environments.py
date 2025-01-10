@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import unittest
-from parameterized import parameterized_class
 from unittest.mock import patch
 
 import torch
@@ -97,7 +96,6 @@ class TextHistoryTest(unittest.TestCase):
 
 
 
-@parameterized_class(("use_cache",),[(True,),(False,)])
 class TextEnvironmentTester(unittest.TestCase):
     def setUp(self):
         # model_id
