@@ -247,6 +247,11 @@ class OnlineDPOTrainer(Trainer):
             self.stats["objective/scores"] = []
 
         if args.use_vllm:
+            if not is_vllm_available():
+                raise ImportError(
+                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
+                    "`pip install vllm` to use it."
+                )
             self.generation_config = SamplingParams(
                 n=2,  # 2 generations per prompt
                 max_tokens=args.max_new_tokens,
