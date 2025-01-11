@@ -484,13 +484,13 @@ class OnlineDPOTrainer(Trainer):
         # Concat the prompt and completion
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
-        
+
         # Get the logprobs of the completions from the model
         output = model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-        
+
         # There is 1 offset, because the model predict the next token
         logits = output.logits[:, prompt_ids.size(1) - 1 : -1]
-        
+
         # Take the completion tokens logprob
         logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
         return logprobs
@@ -509,7 +509,7 @@ class OnlineDPOTrainer(Trainer):
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts)
 
         contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
-        
+
         logprobs = self._forward(model, prompt_ids, prompt_mask, completion_ids, completion_mask)
         with torch.no_grad():
             if self.ref_model is not None:
