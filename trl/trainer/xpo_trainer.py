@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -360,7 +360,7 @@ class XPOTrainer(OnlineDPOTrainer):
     ):
         # Helper function to gather and compute mean
         def gather_mean(tensor):
-            return self.accelerator.gather(tensor).mean().item()
+            return self.accelerator.gather_for_metrics(tensor).mean().item()
 
         # Log losses
         self.stats["loss/dpo"].append(gather_mean(dpo_losses))
