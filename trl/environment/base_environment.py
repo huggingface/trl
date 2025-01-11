@@ -409,6 +409,8 @@ class TextEnvironment:
             past_attention_masks (list[torch.Tensor]): Batched list of attention masks from the last generation
             past_input_ids (list[torch.Tensor]): Batched list of input ids from the last generation
         """
+        max_sequence_length = max([attention_mask.shape[1] for attention_mask in past_attention_masks])
+
         legacy_format = [cache.to_legacy_cache() for cache in past_key_values]
         combined_cache = []
         for layer_id in range(len(legacy_format[0])):
@@ -417,8 +419,22 @@ class TextEnvironment:
             for cache_idx, cache in enumerate(legacy_format):
                 layer = cache[layer_id]
                 num_examples = len(layer[0])
-                new_keys = layer[0][example_mask[example_mask_offset : example_mask_offset + num_examples]]
-                new_values = layer[1][example_mask[example_mask_offset : example_mask_offset + num_examples]]
+                extracted_keys = layer[0][example_mask[example_mask_offset : example_mask_offset + num_examples]]
+                extracted_values = layer[1][example_mask[example_mask_offset : example_mask_offset + num_examples]]
+
+                # pad to max_sequence_length -1
+                new_keys = torch.zeros(
+                    (
+                        extracted_keys.shape[0],
+                        extracted_keys.shape[1],
+                        max_sequence_length - 1,
+                        extracted_keys.shape[3],
+                    )
+                ).to(self.current_device)
+                new_values = torch.zeros_like(new_keys).to(self.current_device)
+                new_keys[:, :, : extracted_keys.shape[2], :] = extracted_keys
+                new_values[:, :, : extracted_values.shape[2], :] = extracted_values
+
                 if combined_layer is None:
                     combined_layer = (new_keys, new_values)
                 else:
@@ -431,8 +447,23 @@ class TextEnvironment:
             combined_cache.append(combined_layer)
         combined_cache = tuple(combined_cache)
 
-        combined_attention_masks = torch.concat(past_attention_masks, dim=0)[example_mask]
-        combined_input_ids = torch.concat(past_input_ids, dim=0)[example_mask]
+        padded_attentions_masks = []
+        padded_past_input_ids = []
+        for attention_mask, input_ids in zip(past_attention_masks, past_input_ids):
+            padded_attention_mask = torch.zeros(
+                (attention_mask.shape[0], max_sequence_length), dtype=attention_mask.dtype
+            ).to(self.current_device)
+            padded_attention_mask[:, : attention_mask.shape[1]] = attention_mask
+            padded_attentions_masks.append(padded_attention_mask)
+
+            padded_input_ids = torch.full(
+                (input_ids.shape[0], max_sequence_length), self.tokenizer.pad_token_id, dtype=input_ids.dtype
+            ).to(self.current_device)
+            padded_input_ids[:, : input_ids.shape[1]] = input_ids
+            padded_past_input_ids.append(padded_input_ids)
+
+        combined_attention_masks = torch.concat(padded_attentions_masks, dim=0)[example_mask]
+        combined_input_ids = torch.concat(padded_past_input_ids, dim=0)[example_mask]
 
         return combined_cache, combined_attention_masks, combined_input_ids
 
@@ -565,13 +596,17 @@ class TextEnvironment:
         Generate responses for a list of query tensors.
         Either all of combined_past_key_values, combined_past_attention_masks, combined_past_input_ids are provided or all are None.
         Args:
-            query_tensors (list[torch.Tensor]): A list of query tensors to generate responses for.
+            query_tensors (list[torch.Tensor]): A list of non-empty query tensors to generate responses for.
             batch_size (int): The batch size to use for generation.
             pad_to_multiple_of (int): The padding length to use for generation.
             combined_past_key_values (Optional[tuple[tuple[torch.Tensor]]]) : The combined (unbatched) cache in legacy format from the last generation
             combined_past_attention_masks (Optional[torch.Tensor]): The combined (unbatched) attention masks from the last generation
             combined_past_input_ids (Optional[torch.Tensor]): The combined (unbatched) input ids from the last generation
         """
+        # Ensures, that the next token is never conditioned on a padding token. This should never be a problem, as empty system prompts are not particularly useful and between segments there is always a response token.
+        for query in query_tensors:
+            if len(query) == 0:
+                raise Exception("Cannot input empty query")
         outputs = []
         padding_side_default = self.tokenizer.padding_side
         if not self.is_encoder_decoder:
