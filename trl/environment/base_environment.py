@@ -354,7 +354,7 @@ class TextEnvironment:
 
         history.append_segment(
             response + self.response_token,
-            self.tokenizer(response + self.response_token, return_tensors="pt")
+            self.tokenizer(response + self.response_token, return_tensors="pt", add_special_tokens=False)
             .input_ids[0]
             .to(self.model.pretrained_model.device),
             system=True,
