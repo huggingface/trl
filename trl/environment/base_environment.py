@@ -253,7 +253,7 @@ class TextEnvironment:
             max_tool_response (Optional[int]): The maximum number of characters to allow in a tool response.
             max_length (Optional[int]): The maximum number of tokens to allow in an episode.
             generation_kwargs (Optional[dict]): A dictionary of keyword arguments to pass to the model's generate method.
-            use_cache (bool): Whether or not to cache past_key_values between segments. When using caching, TextEnvironment is not suited for training use, i.e. backpropagation through the generated graph. Use with Trainers is of course possible. Furthermore, caching requires, that there be no calculation dependencies between examples at inference time. When using BatchNorm, the model should thus be in eval mode.
+            use_cache (bool): Whether to cache past_key_values between segments. When using caching, [`TextEnvironment`] is not suited for training use, i.e. backpropagation through the generated graph. Use with Trainers is of course possible. Furthermore, caching requires, that there be no calculation dependencies between examples at inference time. When using `BatchNorm`, the model should thus be in eval mode.
         """
         self.model = model
         self.tokenizer = tokenizer
