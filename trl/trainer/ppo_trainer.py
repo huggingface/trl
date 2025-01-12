@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -338,13 +338,11 @@ class PPOTrainer(Trainer):
             self.deepspeed = backup_deepspeed
 
     def _compute_score(self, query_reponse: torch.Tensor, context_length: int) -> torch.Tensor:
-        '''
+        """
         This methods decoples the score computing from the training method.
         Override it to implement your custom reward function.
-        '''
-        _, score, _ = get_reward(
-            self.reward_model, query_reponse, self.processing_class.pad_token_id, context_length
-        )
+        """
+        _, score, _ = get_reward(self.reward_model, query_reponse, self.processing_class.pad_token_id, context_length)
         return score
 
     def train(self):
@@ -353,7 +351,6 @@ class PPOTrainer(Trainer):
         optimizer = self.optimizer
         model = self.model
         ref_policy = self.ref_model
-        reward_model = self.reward_model
         processing_class = self.processing_class
         dataloader = self.dataloader
         device = accelerator.device
