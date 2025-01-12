@@ -266,7 +266,7 @@ class OnlineDPOTrainer(Trainer):
             # A larger cache size improves speed, so we would expect gpu_memory_utilization=1.
             # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
             # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
-            # space for them. Setting gpu_memory_utilization to 0.6 seems to work well in practice.
+            # space for them. Setting gpu_memory_utilization to 0.55 seems to work well in practice.
             self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.55, dtype=torch.float32)
         else:
             self.generation_config = GenerationConfig(
