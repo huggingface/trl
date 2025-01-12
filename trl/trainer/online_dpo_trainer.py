@@ -228,6 +228,8 @@ class OnlineDPOTrainer(Trainer):
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(pad_token_id=processing_class.pad_token_id)
 
+        self.max_length = args.max_length
+
         self.stats = {
             "objective/kl": [],
             "objective/entropy": [],
@@ -265,9 +267,10 @@ class OnlineDPOTrainer(Trainer):
             # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
             # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
             # space for them. Setting gpu_memory_utilization to 0.6 seems to work well in practice.
-            self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.55)
+            self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.55, dtype=torch.float32)
         else:
             self.generation_config = GenerationConfig(
+                num_return_sequences=2,
                 max_new_tokens=args.max_new_tokens,
                 temperature=args.temperature,
                 top_k=50,
@@ -453,34 +456,38 @@ class OnlineDPOTrainer(Trainer):
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 
     def _generate(self, model, prompts):
-        # Apply chat template and tokenize the input.
-        # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
+        eos_token_id = self.processing_class.eos_token_id
+        pad_token_id = self.processing_class.pad_token_id
+
+        # Apply chat template and tokenize the input. We do this on-the-fly to enable the use of reward models and
+        # policies with different tokenizers / chat templates.
         inputs = [{"prompt": prompt} for prompt in prompts]
         inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
-        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
+        inputs = [self.tokenize_row(x, model.config.is_encoder_decoder, self.processing_class) for x in inputs]
         inputs = self.data_collator(inputs)
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
-        prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
-        prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
             output = unwrapped_model.generate(
-                input_ids=prompt_ids,
-                attention_mask=prompt_mask,
+                input_ids=inputs["prompt_input_ids"],
+                attention_mask=inputs["prompt_attention_mask"],
                 generation_config=self.generation_config,
             )
 
         completion_ids = output[:, inputs["prompt_input_ids"].size(1) :]
-        completion_ids, completion_mask = truncate_right(
-            completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
-        )
+        completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
+
+        prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)  # [0, 1] -> [0, 0, 1, 1]
+        prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
+        completion_ids = torch.cat((completion_ids[::2], completion_ids[1::2]))  # [0, 1, 2, 3] -> [0, 2, 1, 3]
+        completion_mask = torch.cat((completion_mask[::2], completion_mask[1::2]))
 
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 
     def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask):
         # Get the number of tokens to truncate from prompt
-        num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - 360, 0)
+        num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
 
         # Truncate left to avoid oom
         prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
