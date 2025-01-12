@@ -416,7 +416,7 @@ class TextEnvironment:
         for layer_id in range(len(legacy_format[0])):
             combined_layer = None
             example_mask_offset = 0
-            for cache_idx, cache in enumerate(legacy_format):
+            for cache in legacy_format:
                 layer = cache[layer_id]
                 num_examples = len(layer[0])
                 extracted_keys = layer[0][example_mask[example_mask_offset : example_mask_offset + num_examples]]
@@ -570,7 +570,7 @@ class TextEnvironment:
             combined_past_input_ids (torch.Tensor): The combined (unbatched) input ids from the last generation
         """
         current_cache = []
-        for layer_id, layer in enumerate(combined_past_key_values):
+        for layer in combined_past_key_values:
             keys, values = layer
             new_keys = keys[start_index:end_index]
             new_values = values[start_index:end_index]
@@ -629,7 +629,7 @@ class TextEnvironment:
 
         # in case we have fewer examples than bs
         batch_size = min(len(query_tensors), batch_size)
-        for batch_index, i in enumerate(range(0, len(query_tensors), batch_size)):
+        for i in range(0, len(query_tensors), batch_size):
             # prevent overflow if query tensors are not even multiple of bs
             end_index = min(len(query_tensors), i + batch_size)
             past_key_values, past_attention_masks, past_input_ids = (None, None, None)
