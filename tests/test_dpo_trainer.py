@@ -459,8 +459,8 @@ class DPOTrainerTester(unittest.TestCase):
                 ValueError,
                 expected_regex=r"`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in "
                 r"the `processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
-                r"`tokenizer.pad_token` (e.g., `tokenizer.pad_token = tokenizer.eos_token`) before instantiating the "
-                r"trainer.",
+                r"`tokenizer.pad_token` \(e.g., `tokenizer.pad_token = tokenizer.eos_token`\) before instantiating "
+                r"the trainer.",
             ):
                 trainer = DPOTrainer(
                     model=self.model,
