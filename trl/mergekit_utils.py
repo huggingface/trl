@@ -59,14 +59,14 @@ class MergeConfig:
 
     Attributes:
         method (`str`): The merge method to use.
-        policy_model_path (`Optional[str]`): Path to the policy model.
-        target_model_path (`Optional[str]`): Path to the target model.
+        policy_model_path (`str` or `None`): Path to the policy model.
+        target_model_path (`str` or `None`): Path to the target model.
         policy_model_weight (`float`): Weight for the policy model (for `linear` and `ties` methods).
         target_model_weight (`float`): Weight for the target model (for `linear` and `ties` methods).
         policy_model_density (`list[float]`): Density parameters for the policy model (for `ties` and `dare_ties`).
         target_model_density (`list[float]`): Density parameters for the target model (for `ties` and `dare_ties`).
-        normalize (`Optional[float]`): Normalization factor for the TIES method.
-        t_values (`Optional[float]`): Interpolation factor for the SLERP method.
+        normalize (`float` or `None`): Normalization factor for the TIES method.
+        t_values (`float` or `None`): Interpolation factor for the SLERP method.
         dtype (`str`): Data type to use for merging, e.g., `"float16"`.
     """
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from transformers import TrainingArguments
@@ -31,9 +31,9 @@ class PRMConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-5`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        max_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the sequences (prompt + completion) used for truncation.
-        max_completion_length (`Optional[int]`, *optional*, defaults to `None`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
@@ -45,10 +45,37 @@ class PRMConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
     """
 
-    learning_rate: float = 1e-5
-    max_length: Optional[int] = None
-    max_completion_length: Optional[int] = None
-    disable_dropout: bool = True
-    step_separator: str = "\n"
-    train_on_last_step_only: bool = False
-    dataset_num_proc: Optional[int] = None
+    learning_rate: float = field(
+        default=1e-5,
+        metadata={
+            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
+            "`TrainingArguments`."
+        },
+    )
+    max_length: Optional[int] = field(
+        default=None,
+        metadata={"help": "Maximum length of the sequences (prompt + completion) used for truncation."},
+    )
+    max_completion_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum length of the completion used for truncation. The completion is the concatenation of the "
+            "steps."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model and reference model."},
+    )
+    step_separator: str = field(
+        default="\n",
+        metadata={"help": "Separator used to separate each step of the reasoning process."},
+    )
+    train_on_last_step_only: bool = field(
+        default=False,
+        metadata={"help": "Whether to train only on the last step."},
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )

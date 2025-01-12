@@ -334,7 +334,7 @@ class NashMDTrainer(OnlineDPOTrainer):
     ):
         # Helper function to gather and compute mean
         def gather_mean(tensor):
-            return self.accelerator.gather(tensor).mean().item()
+            return self.accelerator.gather_for_metrics(tensor).mean().item()
 
         # Log score
         self.stats["loss/score"].append(gather_mean(score))

@@ -22,6 +22,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from threading import Thread
+from typing import Optional
 
 import torch
 import yaml
@@ -81,67 +82,118 @@ DEFAULT_EXAMPLES = {
 
 @dataclass
 class ChatArguments:
-    # general settings
-    model_name_or_path: str = field(metadata={"help": "Name of the pre-trained model"})
-    user: str = field(default=None, metadata={"help": "Username to display in chat interface"})
-    system_prompt: str = field(default=None, metadata={"help": "System prompt"})
-    save_folder: str = field(default="./chat_history/", metadata={"help": "Folder to save chat history"})
-    device: str = field(
-        default="cpu",
-        metadata={"help": "device to use for inference."},
-    )
-    examples_path: str = field(default=None, metadata={"help": "Path to a yaml file with examples"})
-    # generation settings
-    max_new_tokens: int = field(default=256, metadata={"help": "Maximum number of tokens to generate"})
-    do_sample: bool = field(default=True, metadata={"help": "Whether to sample outputs during generation"})
-    num_beams: int = field(default=1, metadata={"help": "Number of beams for beam search"})
-    temperature: float = field(default=1.0, metadata={"help": "Temperature parameter for generation"})
-    top_k: int = field(default=50, metadata={"help": "Value of k for top-k sampling"})
-    top_p: float = field(default=1.0, metadata={"help": "Value of p for nucleus sampling"})
-    repetition_penalty: float = field(default=1.0, metadata={"help": "Repetition penalty"})
-    eos_tokens: str = field(
+    r"""
+    Arguments for the chat script.
+
+    Args:
+        model_name_or_path (`str`):
+            Name of the pre-trained model.
+        user (`str` or `None`, *optional*, defaults to `None`):
+            Username to display in chat interface.
+        system_prompt (`str` or `None`, *optional*, defaults to `None`):
+            System prompt.
+        save_folder (`str`, *optional*, defaults to `"./chat_history/"`):
+            Folder to save chat history.
+        device (`str`, *optional*, defaults to `"cpu"`):
+            Device to use for inference.
+        examples_path (`str` or `None`, *optional*, defaults to `None`):
+            Path to a yaml file with examples.
+        max_new_tokens (`int`, *optional*, defaults to `256`):
+            Maximum number of tokens to generate.
+        do_sample (`bool`, *optional*, defaults to `True`):
+            Whether to sample outputs during generation.
+        num_beams (`int`, *optional*, defaults to `1`):
+            Number of beams for beam search.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature parameter for generation.
+        top_k (`int`, *optional*, defaults to `50`):
+            Value of k for top-k sampling.
+        top_p (`float`, *optional*, defaults to `1.0`):
+            Value of p for nucleus sampling.
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Repetition penalty.
+        eos_tokens (`str` or `None`, *optional*, defaults to `None`):
+            EOS tokens to stop the generation. If multiple they should be comma separated.
+        eos_token_ids (`str` or `None`, *optional*, defaults to `None`):
+            EOS token IDs to stop the generation. If multiple they should be comma separated.
+        model_revision (`str`, *optional*, defaults to `"main"`):
+            Specific model version to use (can be a branch name, tag name or commit id).
+        torch_dtype (`str` or `None`, *optional*, defaults to `None`):
+            Override the default `torch.dtype` and load the model under this dtype. If `'auto'` is passed, the dtype
+            will be automatically derived from the model's weights.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to trust remote code when loading a model.
+        attn_implementation (`str` or `None`, *optional*, defaults to `None`):
+            Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in which case
+            you must install this manually by running `pip install flash-attn --no-build-isolation`.
+        load_in_8bit (`bool`, *optional*, defaults to `False`):
+            Whether to use 8 bit precision for the base model - works only with LoRA.
+        load_in_4bit (`bool`, *optional*, defaults to `False`):
+            Whether to use 4 bit precision for the base model - works only with LoRA.
+        bnb_4bit_quant_type (`str`, *optional*, defaults to `"nf4"`):
+            Quantization type.
+        use_bnb_nested_quant (`bool`, *optional*, defaults to `False`):
+            Whether to use nested quantization.
+    """
+
+    # General settings
+    model_name_or_path: str = field(metadata={"help": "Name of the pre-trained model."})
+    user: Optional[str] = field(default=None, metadata={"help": "Username to display in chat interface."})
+    system_prompt: Optional[str] = field(default=None, metadata={"help": "System prompt."})
+    save_folder: str = field(default="./chat_history/", metadata={"help": "Folder to save chat history."})
+    device: str = field(default="cpu", metadata={"help": "Device to use for inference."})
+    examples_path: Optional[str] = field(default=None, metadata={"help": "Path to a yaml file with examples."})
+
+    # Generation settings
+    max_new_tokens: int = field(default=256, metadata={"help": "Maximum number of tokens to generate."})
+    do_sample: bool = field(default=True, metadata={"help": "Whether to sample outputs during generation."})
+    num_beams: int = field(default=1, metadata={"help": "Number of beams for beam search."})
+    temperature: float = field(default=1.0, metadata={"help": "Temperature parameter for generation."})
+    top_k: int = field(default=50, metadata={"help": "Value of k for top-k sampling."})
+    top_p: float = field(default=1.0, metadata={"help": "Value of p for nucleus sampling."})
+    repetition_penalty: float = field(default=1.0, metadata={"help": "Repetition penalty."})
+    eos_tokens: Optional[str] = field(
         default=None,
-        metadata={"help": "EOS tokens to stop the generation. If multiple they should be comma separated"},
+        metadata={"help": "EOS tokens to stop the generation. If multiple they should be comma separated."},
     )
-    eos_token_ids: str = field(
+    eos_token_ids: Optional[str] = field(
         default=None,
-        metadata={"help": "EOS token IDs to stop the generation. If multiple they should be comma separated"},
+        metadata={"help": "EOS token IDs to stop the generation. If multiple they should be comma separated."},
     )
-    # model loading
+
+    # Model loading
     model_revision: str = field(
         default="main",
-        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
+        metadata={"help": "Specific model version to use (can be a branch name, tag name or commit id)."},
     )
-    torch_dtype: str = field(
+    torch_dtype: Optional[str] = field(
         default=None,
         metadata={
-            "help": (
-                "Override the default `torch.dtype` and load the model under this dtype. If `auto` is passed, the "
-                "dtype will be automatically derived from the model's weights."
-            ),
+            "help": "Override the default `torch.dtype` and load the model under this dtype. If `'auto'` is passed, "
+            "the dtype will be automatically derived from the model's weights.",
             "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
-    trust_remote_code: bool = field(default=False, metadata={"help": "Trust remote code when loading a model."})
-    attn_implementation: str = field(
+    trust_remote_code: bool = field(
+        default=False, metadata={"help": "Whether to trust remote code when loading a model."}
+    )
+    attn_implementation: Optional[str] = field(
         default=None,
         metadata={
-            "help": (
-                "Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in which case you must install this manually by running `pip install flash-attn --no-build-isolation`"
-            )
+            "help": "Which attention implementation to use; you can run --attn_implementation=flash_attention_2, in "
+            "which case you must install this manually by running `pip install flash-attn --no-build-isolation`."
         },
     )
     load_in_8bit: bool = field(
         default=False,
-        metadata={"help": "use 8 bit precision for the base model - works only with LoRA"},
+        metadata={"help": "Whether to use 8 bit precision for the base model - works only with LoRA."},
     )
     load_in_4bit: bool = field(
         default=False,
-        metadata={"help": "use 4 bit precision for the base model - works only with LoRA"},
+        metadata={"help": "Whether to use 4 bit precision for the base model - works only with LoRA."},
     )
-
-    bnb_4bit_quant_type: str = field(default="nf4", metadata={"help": "precise the quantization type (fp4 or nf4)"})
-    use_bnb_nested_quant: bool = field(default=False, metadata={"help": "use nested quantization"})
+    bnb_4bit_quant_type: str = field(default="nf4", metadata={"help": "Quantization type.", "choices": ["fp4", "nf4"]})
+    use_bnb_nested_quant: bool = field(default=False, metadata={"help": "Whether to use nested quantization."})
 
 
 class RichInterface:
