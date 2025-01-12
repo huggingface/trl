@@ -457,9 +457,10 @@ class DPOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
-                r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
-                r"before instantiating the trainer.",
+                expected_regex=r"`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in "
+                r"the `processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
+                r"`tokenizer.pad_token` \(e.g., `tokenizer.pad_token = tokenizer.eos_token`\) before instantiating "
+                r"the trainer.",
             ):
                 trainer = DPOTrainer(
                     model=self.model,
@@ -490,24 +491,16 @@ class DPOTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-            tokenizer.pad_token = None
 
-            with self.assertRaisesRegex(
-                ValueError,
-                expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
-                r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
-                r"before instantiating the trainer.",
-            ):
-                trainer = DPOTrainer(
-                    model=self.model,
-                    ref_model=None,
-                    args=training_args,
-                    processing_class=tokenizer,
-                    train_dataset=dummy_dataset["train"],
-                    eval_dataset=dummy_dataset["test"],
-                )
+            trainer = DPOTrainer(
+                model=self.model,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
 
-                trainer.train()
+            trainer.train()
 
     def test_tr_dpo_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
