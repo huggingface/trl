@@ -270,7 +270,6 @@ class OnlineDPOTrainer(Trainer):
             self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.55, dtype=torch.float32)
         else:
             self.generation_config = GenerationConfig(
-                num_return_sequences=2,
                 max_new_tokens=args.max_new_tokens,
                 temperature=args.temperature,
                 top_k=50,
@@ -468,20 +467,17 @@ class OnlineDPOTrainer(Trainer):
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
+        prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
+        prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
             output = unwrapped_model.generate(
-                input_ids=inputs["prompt_input_ids"],
-                attention_mask=inputs["prompt_attention_mask"],
+                input_ids=prompt_ids,
+                attention_mask=prompt_mask,
                 generation_config=self.generation_config,
             )
 
-        completion_ids = output[:, inputs["prompt_input_ids"].size(1) :]
+        completion_ids = output[:, prompt_ids.size(1) :]
         completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
-
-        prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)  # [0, 1] -> [0, 0, 1, 1]
-        prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
-        completion_ids = torch.cat((completion_ids[::2], completion_ids[1::2]))  # [0, 1, 2, 3] -> [0, 2, 1, 3]
-        completion_mask = torch.cat((completion_mask[::2], completion_mask[1::2]))
 
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 
