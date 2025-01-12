@@ -163,7 +163,7 @@ for model_id, config_class, model_class, suffix in [
         is_encoder_decoder=True,
     )
     model = model_class(config)
-    push_to_hub(model, tokenizer, suffix)
+    push_to_hub(model, tokenizer, "tiny", suffix)
 
 
 # Vision Language Models
@@ -204,4 +204,4 @@ for model_id, config_class, text_config_class, vision_config_class, model_class 
         **kwargs,
     )
     model = model_class(config)
-    push_to_hub(model, processor)
+    push_to_hub(model, processor, "tiny")
