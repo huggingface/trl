@@ -172,7 +172,10 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 @contextmanager
 def unwrap_model_for_generation(
-    model: Union["DistributedDataParallel", "DeepSpeedEngine"], accelerator: "Accelerator", is_peft_model: bool = False
+    model: Union["DistributedDataParallel", "DeepSpeedEngine"],
+    accelerator: "Accelerator",
+    is_peft_model: bool = False,
+    gather_deepspeed3_params: bool = True,
 ) -> Union["PreTrainedModelWrapper", "DeepSpeedEngine"]:
     """Context manager to unwrap a model for generation.
     For ZeRO-3 models, we gather the weights once to speed up generation.
@@ -181,6 +184,8 @@ def unwrap_model_for_generation(
     if is_peft_model:
         unwrapped_model.pretrained_model.disable_adapter()
     if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
+        if not gather_deepspeed3_params:
+            yield accelerator.unwrap_model(model)
         with deepspeed.zero.GatheredParameters(model.parameters()):
             remove_hooks(model)
             yield accelerator.unwrap_model(model)
