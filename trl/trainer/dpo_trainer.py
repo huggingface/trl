@@ -557,6 +557,7 @@ class DPOTrainer(Trainer):
                     "max_completion_length": args.max_completion_length,
                     # for enc-dec, we add the special tokens ([bos_token] + prompt + [eos_token]; completion + [eos_token])
                     "add_special_tokens": False,
+                    "truncation_mode": args.truncation_mode,
                 },
                 **map_kwargs,
             )
@@ -564,7 +565,9 @@ class DPOTrainer(Trainer):
         return dataset
 
     @staticmethod
-    def tokenize_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+    def tokenize_row(
+        features, processing_class, max_prompt_length, max_completion_length, add_special_tokens, truncation_mode
+    ):
         """
         Tokenize a row of the dataset.
 
@@ -581,6 +584,9 @@ class DPOTrainer(Trainer):
                 Whether to add special tokens to the sequences. Typically used for encoder-decoder models. If `True`,
                 the prompt sequence will have a bos token prepended and an eos token appended. In any case, the
                 completion sequences will have an eos token appended.
+            truncation_mode (`str`):
+                Whether to truncate the prompt sequence from the end or the start. If `"keep_end"`, the prompt sequence
+                will be truncated from the end. If `"keep_start"`, the prompt sequence will be truncated from the start.
 
         Returns:
             `dict[str, list[int]]`:
@@ -592,7 +598,8 @@ class DPOTrainer(Trainer):
         >>> from transformers import GPT2Tokenizer
         >>> tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         >>> features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
-        >>> DPOTrainer.tokenize_row(features, tokenizer, max_prompt_length=3, max_completion_length=3, add_special_tokens=False)
+        >>> DPOTrainer.tokenize_row(features, tokenizer, max_prompt_length=3, max_completion_length=3,
+        >>> add_special_tokens=False, truncation_mode="keep_end")
         {'prompt_input_ids': [464, 6766, 318], 'chosen_input_ids': [4171, 50256], 'rejected_input_ids': [4077, 50256]}
         ```
         """
@@ -612,7 +619,12 @@ class DPOTrainer(Trainer):
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
-            prompt_input_ids = prompt_input_ids[-max_prompt_length:]
+            if truncation_mode == "keep_end":
+                prompt_input_ids = prompt_input_ids[-max_prompt_length:]
+            elif truncation_mode == "keep_start":
+                prompt_input_ids = prompt_input_ids[:max_prompt_length]
+            else:
+                raise ValueError(f"Unknown truncation mode: {truncation_mode}")
         if max_completion_length is not None:
             chosen_input_ids = chosen_input_ids[:max_completion_length]
             rejected_input_ids = rejected_input_ids[:max_completion_length]
@@ -624,7 +636,9 @@ class DPOTrainer(Trainer):
         }
 
     @staticmethod
-    def process_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+    def process_row(
+        features, processing_class, max_prompt_length, max_completion_length, add_special_tokens, truncation_mode
+    ):
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
         """
@@ -647,7 +661,12 @@ class DPOTrainer(Trainer):
 
         # Truncate prompt and completion sequences
         if max_prompt_length is not None:
-            prompt_input_ids = prompt_input_ids[-max_prompt_length:]
+            if truncation_mode == "keep_end":
+                prompt_input_ids = prompt_input_ids[-max_prompt_length:]
+            elif truncation_mode == "keep_start":
+                prompt_input_ids = prompt_input_ids[:max_prompt_length]
+            else:
+                raise ValueError(f"Unknown truncation mode: {truncation_mode}")
         if max_completion_length is not None:
             chosen_input_ids = chosen_input_ids[:max_completion_length]
             rejected_input_ids = rejected_input_ids[:max_completion_length]
