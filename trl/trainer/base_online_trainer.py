@@ -336,7 +336,10 @@ class BaseOnlineTrainer(Trainer):
 
             # Add our metrics
             for key, val in self.stats.items():
-                logs[key] = sum(val) / len(val)
+                if len(val) == 0:
+                    logger.warning(f"stats for {key} are empty, skipping")
+                else:
+                    logs[key] = sum(val) / len(val)
             self.stats = {key: [] for key in self.stats}  # reset stats
 
             self._total_loss_scalar += tr_loss_scalar
