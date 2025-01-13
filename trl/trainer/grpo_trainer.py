@@ -135,15 +135,19 @@ class GRPOTrainer(Trainer):
         if self._signature_columns is None:
             self._signature_columns = ["prompt"]
 
+    # Trainer "prepares" the inputs before calling `compute_loss`. It converts to tensor and move to device.
+    # Since we preprocess the data in `compute_loss`, we need to override this method to skip this step.
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
-        examples = [maybe_apply_chat_template(example, self.processing_class) for example in inputs]
-        prompts = [example["prompt"] for example in examples]
-        inputs = self.processing_class(prompts, return_tensors="pt", padding=True)
-        return super()._prepare_inputs(inputs)
+        return inputs
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
+
+        examples = [maybe_apply_chat_template(example, self.processing_class) for example in inputs]
+        prompts = [example["prompt"] for example in examples]
+        inputs = self.processing_class(prompts, return_tensors="pt", padding=True)
+        inputs = super()._prepare_inputs(inputs)
 
         # Generate completions
         prompt_completion_ids = model.generate(**inputs, generation_config=self.generation_config)  # Shape (B*G, L)
