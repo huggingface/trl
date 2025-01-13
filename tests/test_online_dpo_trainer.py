@@ -18,7 +18,7 @@ import unittest
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft
+from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
 from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available, is_vllm_available
@@ -241,6 +241,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
     @unittest.skipIf(not is_vllm_available(), "vllm is not available")
+    @require_torch_accelerator
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training_with_vllm(self, config_name):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We neeed a bigger model
