@@ -28,8 +28,13 @@ class GRPOConfig(TrainingArguments):
     command line.
 
     Parameters:
+        The parameters specific to GRPO training are listed below. For details on other parameters, refer to the
+        [`~transformers.TrainingArguments`] documentation.
+
         > Parameters that control the data preprocessing
 
+        num_generations (`int` or `None`, *optional*, defaults to `8`):
+            Number of generations per prompt to sample.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the generated completion.
 
