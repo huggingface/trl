@@ -35,6 +35,8 @@ class GRPOConfig(TrainingArguments):
 
         num_generations (`int` or `None`, *optional*, defaults to `8`):
             Number of generations per prompt to sample.
+        temperature (`float`, *optional*, defaults to `0.9`):
+            Temperature for sampling. The higher the temperature, the more random the completions.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the generated completion.
 
@@ -51,6 +53,10 @@ class GRPOConfig(TrainingArguments):
     num_generations: Optional[int] = field(
         default=8,
         metadata={"help": "Number of generations to sample."},
+    )
+    temperature: Optional[float] = field(
+        default=0.9,
+        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
     )
     max_completion_length: Optional[int] = field(
         default=256,

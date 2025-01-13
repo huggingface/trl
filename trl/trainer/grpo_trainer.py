@@ -76,6 +76,7 @@ class GRPOTrainer(Trainer):
         self.generation_config = GenerationConfig(
             max_new_tokens=self.max_completion_length,
             do_sample=True,
+            temperature=args.temperature,
             num_return_sequences=self.num_generations,
             pad_token_id=processing_class.eos_token_id,
         )
@@ -123,11 +124,13 @@ class GRPOTrainer(Trainer):
         return super()._prepare_inputs(inputs)
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        assert return_outputs is False, "The GRPOTrainer does not support returning outputs"
+        if return_outputs:
+            raise ValueError("The GRPOTrainer does not support returning outputs")
+
         # Generate completions
         prompt_completion_ids = model.generate(**inputs, generation_config=self.generation_config)  # Shape (B*G, L)
-        prompt_ids = prompt_completion_ids[:, : -self.max_completion_length]
-        completion_ids = prompt_completion_ids[:, -self.max_completion_length :]
+        prompt_length = inputs["input_ids"].size(1)
+        completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Get the per-token log probabilities for the completions for the model and the reference model
         def get_per_token_logps(model, input_ids):
@@ -136,13 +139,12 @@ class GRPOTrainer(Trainer):
             per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=input_ids.unsqueeze(2)).squeeze(2)
             return per_token_logps
 
-        prompt_len = prompt_ids.size(1)
         per_token_logps = get_per_token_logps(model, prompt_completion_ids)
-        per_token_logps = per_token_logps[:, prompt_len:]  # get rid of the prompt
+        per_token_logps = per_token_logps[:, prompt_length:]  # get rid of the prompt
 
         with torch.no_grad():
             ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids)
-        ref_per_token_logps = ref_per_token_logps[:, prompt_len:]  # get rid of the prompt
+        ref_per_token_logps = ref_per_token_logps[:, prompt_length:]  # get rid of the prompt
 
         # Compute the KL divergence between the model and the reference model
         per_token_kl = (
@@ -178,12 +180,15 @@ class GRPOTrainer(Trainer):
         # Compute grouped-wise rewards
         mean_grouped_rewards = final_rewards.view(-1, self.num_generations).mean(dim=1, keepdim=True)
         std_grouped_rewards = final_rewards.view(-1, self.num_generations).std(dim=1, keepdim=True)
+        std_grouped_rewards = torch.where(  # avoid division by zero
+            std_grouped_rewards < 1e-8, torch.tensor(1.0, device=std_grouped_rewards.device), std_grouped_rewards
+        )
 
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         per_token_advantages = (per_token_reward - mean_grouped_rewards) / std_grouped_rewards
-        per_token_advantages = per_token_advantages[:, prompt_len:]  # get rid of the prompt
+        per_token_advantages = per_token_advantages[:, prompt_length:]  # get rid of the prompt
 
         # Compute the loss
         per_token_loss = -(per_token_advantages - self.beta * per_token_kl)
