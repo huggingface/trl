@@ -52,23 +52,26 @@ class GRPOTrainer(Trainer):
         optimizer_cls_and_kwargs: Optional[tuple[Type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     ):
+        # Models
         self.ref_model = create_reference_model(model)
         self.reward_model = reward_model
 
+        # Data loading and preprocessing
         if data_collator is None:
-            # No data collation is needed in GRPO
-            def data_collator(features):
+
+            def data_collator(features):  # No data collation is needed in GRPO
                 return features
 
-        self.max_completion_length = 256  # = |o_i| = L_c
-        self.num_generations = 8  # = G
+        # Training arguments
+        self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
+        self.num_generations = args.num_generations  # = G in the GRPO paper
         self.generation_config = GenerationConfig(
             max_new_tokens=self.max_completion_length,
             do_sample=True,
             num_return_sequences=self.num_generations,
             pad_token_id=processing_class.eos_token_id,
         )
-        self.beta = 0.04
+        self.beta = args.beta
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the

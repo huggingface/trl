@@ -28,21 +28,31 @@ class GRPOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        learning_rate (`float`, *optional*, defaults to `5e-7`):
+        > Parameters that control the data preprocessing
+
+        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
+            Maximum length of the generated completion.
+
+        > Parameters that control the training
+
+        learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        max_length (`int` or `None`, *optional*, defaults to `None`):
-            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
-            to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `None`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
-            Maximum length of the completion. This argument is required if you want to use the default data collator
-            and your model is an encoder-decoder.
-        dataset_num_proc: (`int` or `None`, *optional*, defaults to `None`):
-            Number of processes to use for processing the dataset.
+        beta (`float`, *optional*, defaults to `0.04`):
+            KL coefficient.
     """
 
+    # Parameters that control the data preprocessing
+    num_generations: Optional[int] = field(
+        default=8,
+        metadata={"help": "Number of generations to sample."},
+    )
+    max_completion_length: Optional[int] = field(
+        default=256,
+        metadata={"help": "Maximum length of the generated completion."},
+    )
+
+    # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,
         metadata={
@@ -50,25 +60,7 @@ class GRPOConfig(TrainingArguments):
             "`transformers.TrainingArguments`."
         },
     )
-    max_length: Optional[int] = field(
-        default=None,
-        metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
-    )
-    max_prompt_length: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
-    max_completion_length: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Maximum length of the completion. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
-    dataset_num_proc: Optional[int] = field(
-        default=None,
-        metadata={"help": "Number of processes to use for processing the dataset."},
+    beta: float = field(
+        default=0.04,
+        metadata={"help": "KL coefficient."},
     )
