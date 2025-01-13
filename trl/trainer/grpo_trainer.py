@@ -30,12 +30,16 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
+from transformers.utils import is_peft_available
 
 from ..data_utils import maybe_apply_chat_template
 from ..models import create_reference_model
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url
 
+
+if is_peft_available():
+    from peft import PeftConfig, get_peft_model
 
 if is_wandb_available():
     import wandb
@@ -45,7 +49,6 @@ class GRPOTrainer(Trainer):
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
-        ref_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         args: GRPOConfig = None,
         data_collator: Optional[DataCollator] = None,
@@ -59,9 +62,23 @@ class GRPOTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         optimizer_cls_and_kwargs: Optional[tuple[Type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        peft_config: Optional[PeftConfig] = None,
     ):
         # Models
-        self.ref_model = create_reference_model(model)
+        # Trained model
+        if peft_config is not None:
+            model = get_peft_model(model, peft_config)
+
+        # Reference model
+        if peft_config is None:
+            # If PEFT configuration is not provided, create a reference model based on the initial model.
+            self.ref_model = create_reference_model(model)
+        else:
+            # If PEFT is used, the reference model is not needed since the adapter can be disabled
+            # to revert to the initial model.
+            self.ref_model = None
+
+        # Reward model
         self.reward_model = reward_model
 
         # Data loading and preprocessing
@@ -106,7 +123,8 @@ class GRPOTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+        if self.ref_model is not None:
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
         self.reward_model = self.accelerator.prepare_model(self.reward_model, evaluation_mode=True)
 
     def _set_signature_columns_if_needed(self):
@@ -143,7 +161,11 @@ class GRPOTrainer(Trainer):
         per_token_logps = per_token_logps[:, prompt_length:]  # get rid of the prompt
 
         with torch.no_grad():
-            ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids)
+            if self.ref_model is not None:
+                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids)
+            else:
+                with model.disable_adapter():
+                    ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids)
         ref_per_token_logps = ref_per_token_logps[:, prompt_length:]  # get rid of the prompt
 
         # Compute the KL divergence between the model and the reference model
