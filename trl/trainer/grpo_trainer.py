@@ -33,7 +33,7 @@ from transformers import (
 from transformers.utils import is_peft_available
 
 from ..data_utils import maybe_apply_chat_template
-from ..models import create_reference_model
+from ..models import create_reference_model, unwrap_model_for_generation
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url
 
@@ -153,7 +153,8 @@ class GRPOTrainer(Trainer):
         inputs = super()._prepare_inputs(inputs)
 
         # Generate completions
-        prompt_completion_ids = model.generate(**inputs, generation_config=self.generation_config)  # Shape (B*G, L)
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+            prompt_completion_ids = unwrapped_model.generate(**inputs, generation_config=self.generation_config)
         prompt_length = inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
@@ -236,7 +237,7 @@ class GRPOTrainer(Trainer):
         return loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        metrics = {key: sum(val)/len(val) for key, val in self._metrics.items()} # average the metrics
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
         logs = {**logs, **metrics}
         super().log(logs, start_time)
         self._metrics = {key: [] for key in self._metrics}
