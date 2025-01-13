@@ -107,6 +107,9 @@ class GRPOTrainer(Trainer):
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
+        # Initialize the metrics
+        self._metrics = {"kl": [], "reward": [], "advantage": []}
+
         super().__init__(
             model=model,
             args=args,
@@ -174,14 +177,15 @@ class GRPOTrainer(Trainer):
 
         # Compute the KL divergence between the model and the reference model
         per_token_kl = (
-            torch.exp(ref_per_token_logps) / torch.exp(per_token_logps) - ref_per_token_logps + per_token_logps - 1
+            torch.exp(ref_per_token_logps) / torch.exp(per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
         )
 
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
-        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device="cuda")
+        device = self.accelerator.device
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        sequence_indices = torch.arange(is_eos.size(1), device="cuda").expand(is_eos.size(0), -1)
+        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # Compute the reward
@@ -207,19 +211,35 @@ class GRPOTrainer(Trainer):
         mean_grouped_rewards = final_rewards.view(-1, self.num_generations).mean(dim=1, keepdim=True)
         std_grouped_rewards = final_rewards.view(-1, self.num_generations).std(dim=1, keepdim=True)
         std_grouped_rewards = torch.where(  # avoid division by zero
-            std_grouped_rewards < 1e-8, torch.tensor(1.0, device=std_grouped_rewards.device), std_grouped_rewards
+            std_grouped_rewards < 1e-8, torch.tensor(1.0, device=device), std_grouped_rewards
         )
 
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        per_token_advantages = (per_token_reward - mean_grouped_rewards) / std_grouped_rewards
-        per_token_advantages = per_token_advantages[:, prompt_length:]  # get rid of the prompt
+        per_token_advantage = (per_token_reward - mean_grouped_rewards) / std_grouped_rewards
+        per_token_advantage = per_token_advantage[:, prompt_length:]  # get rid of the prompt
 
         # Compute the loss
-        per_token_loss = -(per_token_advantages - self.beta * per_token_kl)
-        loss = ((per_token_loss * completion_mask).sum(1) / completion_mask.sum(1)).mean()
+        per_token_loss = -(per_token_advantage - self.beta * per_token_kl)
+        loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+
+        # Log the metrics
+        self._metrics["reward"].append(self.accelerator.gather_for_metrics(final_rewards).mean().item())
+
+        mean_advantage = ((per_token_advantage * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+        self._metrics["advantage"].append(self.accelerator.gather_for_metrics(mean_advantage).mean().item())
+
+        mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+        self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+
         return loss
+
+    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+        metrics = {key: sum(val)/len(val) for key, val in self._metrics.items()} # average the metrics
+        logs = {**logs, **metrics}
+        super().log(logs, start_time)
+        self._metrics = {key: [] for key in self._metrics}
 
     def create_model_card(
         self,
