@@ -172,7 +172,7 @@ class GRPOTrainer(Trainer):
             if self.ref_model is not None:
                 ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids)
             else:
-                with model.disable_adapter():
+                with self.accelerator.unwrap_model(model).disable_adapter():
                     ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids)
         ref_per_token_logps = ref_per_token_logps[:, prompt_length:]  # get rid of the prompt
 
