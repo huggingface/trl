@@ -23,14 +23,14 @@ class GRPOConfig(TrainingArguments):
     r"""
     Configuration class for the [`GRPOTrainer`].
 
+    Only the parameters specific to GRPO training are listed here. For details on other parameters, refer to the
+    [`~transformers.TrainingArguments`] documentation.
+
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
     Parameters:
-    The parameters specific to GRPO training are listed below. For details on other parameters, refer to the
-    [`~transformers.TrainingArguments`] documentation.
-
         > Parameters that control the data preprocessing
 
         num_generations (`int` or `None`, *optional*, defaults to `8`):
