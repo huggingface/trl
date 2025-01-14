@@ -144,7 +144,7 @@ class GRPOTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         # Initialize the metrics
-        self._metrics = {"kl": [], "reward": [], "advantage": []}
+        self._metrics = {"kl": [], "reward": []}
 
         super().__init__(
             model=model,
@@ -263,8 +263,6 @@ class GRPOTrainer(Trainer):
 
         # Log the metrics
         self._metrics["reward"].append(self.accelerator.gather_for_metrics(rewards).mean().item())
-
-        self._metrics["advantage"].append(self.accelerator.gather_for_metrics(advantages).mean().item())
 
         mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
