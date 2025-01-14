@@ -176,8 +176,6 @@ class RLOOv2Trainer(BaseOnlineTrainer):
         device = prompt_completion_ids.device
         completions_ids = prompt_completion_ids[:, context_length:]
         completions = self.processing_class.batch_decode(completions_ids, skip_special_tokens=True)
-        if is_conversational({"prompt": prompts[0]}):
-            completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
         if is_conversational({"prompt": prompts[0]}):
             examples = [{"prompt": p, "completion": c} for p, c in zip(prompts, completions)]
