@@ -46,6 +46,7 @@ _import_structure = {
         "HfPairwiseJudge",
         "OpenAIPairwiseJudge",
         "PairRMJudge",
+        "RLHFlowPairwiseJudge",
     ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
@@ -115,6 +116,7 @@ if TYPE_CHECKING:
         HfPairwiseJudge,
         OpenAIPairwiseJudge,
         PairRMJudge,
+        RLHFlowPairwiseJudge,
     )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
