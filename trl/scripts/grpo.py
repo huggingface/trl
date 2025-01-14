@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import argparse
+from dataclasses import dataclass, field
+from typing import Optional
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
@@ -20,16 +22,36 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
 
 
+@dataclass
+class GRPOScriptArguments(ScriptArguments):
+    """
+    Script arguments for the GRPO training script.
+
+    Args:
+        reward_model_name_or_path (`str` or `None`):
+            Reward model id of a pretrained model hosted inside a model repo on huggingface.co or local path to a
+            directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
+    """
+
+    reward_model_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Reward model id of a pretrained model hosted inside a model repo on huggingface.co or "
+            "local path to a directory containing model weights saved using `PreTrainedModel.save_pretrained`."
+        },
+    )
+
+
 def main(script_args, training_args, model_args):
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        model_args.reward_model_name_or_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
-    )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
+    reward_model = AutoModelForSequenceClassification.from_pretrained(
+        script_args.reward_model_name_or_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
     )
 
     # Load the dataset
@@ -56,7 +78,7 @@ def main(script_args, training_args, model_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
-    dataclass_types = (ScriptArguments, GRPOConfig, ModelConfig)
+    dataclass_types = (GRPOScriptArguments, GRPOConfig, ModelConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("grpo", help="Run the GRPO training script", dataclass_types=dataclass_types)
     else:
