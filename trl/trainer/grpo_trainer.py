@@ -65,7 +65,7 @@ class GRPOTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         optimizer_cls_and_kwargs: Optional[tuple[Type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[PeftConfig] = None,
+        peft_config: Optional["PeftConfig"] = None,
     ):
         # Args
         if args is None:
@@ -113,7 +113,7 @@ class GRPOTrainer(Trainer):
         # Reward model
         if isinstance(reward_model, str):
             reward_model = AutoModelForSequenceClassification.from_pretrained(
-                reward_model, num_labels=1, **model_init_kwargs
+                reward_model, num_labels=1, pad_token_id=0, **model_init_kwargs
             )
         self.reward_model = reward_model
 
