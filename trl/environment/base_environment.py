@@ -39,7 +39,7 @@ class StringStoppingCriteria(StoppingCriteria):
     def __call__(self, input_ids, scores, **kwargs):
         """Returns true if all generated sequences contain any of the stop strings or terminated early."""
         if self.first_call:
-            self.generated_tokens = [1 for _ in range(input_ids.shape[0])]
+            self.generated_tokens = [0 for _ in range(input_ids.shape[0])]
             self.start_length = input_ids.shape[-1] - 1
             self.first_call = False
         decoded_generations = self.tokenizer.batch_decode(input_ids[:, self.start_length :])
@@ -431,9 +431,14 @@ class TextEnvironment:
                         extracted_keys.shape[3],
                     )
                 ).to(self.current_device)
+
+                if extracted_keys.shape[2] != extracted_values.shape[2]:
+                    raise Exception("Cache format incompatible")
+                # left padding ensures, that the last valid generated token is what the next generated token is conditioned on
+                start_position = max_sequence_length - 1 - extracted_keys.shape[2]
                 new_values = torch.zeros_like(new_keys).to(self.current_device)
-                new_keys[:, :, : extracted_keys.shape[2], :] = extracted_keys
-                new_values[:, :, : extracted_values.shape[2], :] = extracted_values
+                new_keys[:, :, start_position:, :] = extracted_keys
+                new_values[:, :, start_position:, :] = extracted_values
 
                 if combined_layer is None:
                     combined_layer = (new_keys, new_values)
@@ -450,16 +455,19 @@ class TextEnvironment:
         padded_attentions_masks = []
         padded_past_input_ids = []
         for attention_mask, input_ids in zip(past_attention_masks, past_input_ids):
+            if attention_mask.shape[1] != input_ids.shape[1]:
+                raise Exception("Cache format incompatible")
+            start_position = max_sequence_length - attention_mask.shape[1]
             padded_attention_mask = torch.zeros(
                 (attention_mask.shape[0], max_sequence_length), dtype=attention_mask.dtype
             ).to(self.current_device)
-            padded_attention_mask[:, : attention_mask.shape[1]] = attention_mask
+            padded_attention_mask[:, start_position:] = attention_mask
             padded_attentions_masks.append(padded_attention_mask)
 
             padded_input_ids = torch.full(
                 (input_ids.shape[0], max_sequence_length), self.tokenizer.pad_token_id, dtype=input_ids.dtype
             ).to(self.current_device)
-            padded_input_ids[:, : input_ids.shape[1]] = input_ids
+            padded_input_ids[:, start_position:] = input_ids
             padded_past_input_ids.append(padded_input_ids)
 
         combined_attention_masks = torch.concat(padded_attentions_masks, dim=0)[example_mask]
@@ -519,6 +527,7 @@ class TextEnvironment:
                         system=False,
                     )
                     history.complete(truncated=True)
+            return histories, None, None, None, []  # invalidate cache
 
         return histories, past_key_values, past_attention_masks, past_input_ids, active_histories
 
@@ -664,6 +673,9 @@ class TextEnvironment:
                 return None, None, None, None, True
 
             generations = extract_model_from_parallel(self.model).generate(**padded_inputs, **self.generation_kwargs)
+
+            if generations.past_key_values.to_legacy_cache()[0][0].shape[2] != generations.sequences.shape[1] - 1:
+                raise Exception("Cache should not contain keys and values for last generated token")
             new_past_key_values.append(generations.past_key_values)
 
             past_attention_mask = torch.ones_like(generations.sequences)
@@ -677,26 +689,45 @@ class TextEnvironment:
             past_attention_mask[:, : input_attention_mask.shape[1]] = input_attention_mask
 
             generations = generations.sequences
-
-            new_past_input_ids.append(generations)
-            for generation, mask, generated_tokens, new_attention_mask in zip(
-                generations, padded_inputs["attention_mask"], stopping_criteria.generated_tokens, past_attention_mask
+            # copy for in-place modification
+            batch_new_past_input_ids = generations.detach().clone()
+            for generation, mask, num_generated_tokens, new_attention_mask, example_input_ids, i in zip(
+                generations,
+                padded_inputs["attention_mask"],
+                stopping_criteria.generated_tokens,
+                past_attention_mask,
+                batch_new_past_input_ids,
+                range(len(generations)),
             ):
                 if not self.is_encoder_decoder:
-                    output = generation[(1 - mask).sum() :]  # remove padding
+                    # remove padding
+                    output = generation[(1 - mask).sum() :]
+                    padding_removed_b_n_past_input_ids = example_input_ids[(1 - mask).sum() :]
                     padding_removed_past_attention_mask = new_attention_mask[(1 - mask).sum() :]
                 else:
                     output = generation
                     padding_removed_past_attention_mask = new_attention_mask
+                    padding_removed_b_n_past_input_ids = example_input_ids[(1 - mask).sum() :]
 
                 if not self.is_encoder_decoder:
-                    output = output[(mask).sum() :]  # remove prompt
-                    generated_tokens_attention_mask = padding_removed_past_attention_mask[(mask).sum() :]
+                    # remove prompt
+                    output = output[(mask).sum() :]
+                    padding_removed_b_n_past_input_ids = padding_removed_b_n_past_input_ids[(mask).sum() :]
+                    padding_removed_past_attention_mask = padding_removed_past_attention_mask[(mask).sum() :]
 
                 # remove chunk generated after stopping criteria in batch mode
-                outputs.append(output[:generated_tokens])
-                # Do not attend to tokens that were generated after <call> or <submit>
-                generated_tokens_attention_mask[generated_tokens:] = 0
+                generated_tokens = output[:num_generated_tokens]
+                if num_generated_tokens < 1:
+                    raise Exception("Generation failed to produce any valid token")
+
+                outputs.append(generated_tokens)
+                # Do not attend to invalid tokens that were generated after <call> or <submit> or the last valid generated token, as we move it to the end of the sequence
+                padding_removed_past_attention_mask[num_generated_tokens - 1 :] = 0
+                # move last valid generated token to the end of the sequence to be the start of the next generation
+                padding_removed_b_n_past_input_ids[-1] = padding_removed_b_n_past_input_ids[num_generated_tokens - 1]
+                padding_removed_past_attention_mask[-1] = 1  # attend to the last valid generated token
+
             new_past_attention_masks.append(past_attention_mask)
+            new_past_input_ids.append(batch_new_past_input_ids)
         self.tokenizer.padding_side = padding_side_default
         return outputs, new_past_key_values, new_past_attention_masks, new_past_input_ids, False

@@ -302,27 +302,25 @@ class TextEnvironmentTester(unittest.TestCase):
 
         caches = [
             (
-                (torch.tensor([[1], [2]]), torch.tensor([[3], [4]])),
-                (torch.tensor([[7], [8]]), torch.tensor([[9], [10]])),
+                (torch.tensor([[[[1], [13]]], [[[2], [14]]]]), torch.tensor([[[[3], [15]]], [[[4], [16]]]])),
+                (torch.tensor([[[[7], [17]]], [[[8], [18]]]]), torch.tensor([[[[9], [19]]], [[[10], [20]]]])),
             ),
             (
-                (torch.tensor([[5]]), torch.tensor([[6]])),
-                (torch.tensor([[11]]), torch.tensor([[12]])),
+                (torch.tensor([[[[5]]]]), torch.tensor([[[[6]]]])),
+                (torch.tensor([[[[11]]]]), torch.tensor([[[[12]]]])),
             ),
         ]
-        caches = [DynamicCache().from_legacy_cache(reshape_cache(cache)) for cache in caches]
-        attention_masks = [torch.tensor([[0, 1], [1, 0]]), torch.tensor([[2, 4]])]
-        input_ids = [torch.tensor([[1, 4], [2, 5]]), torch.tensor([[3, 6]])]
+        caches = [DynamicCache().from_legacy_cache(cache) for cache in caches]
+        attention_masks = [torch.tensor([[-1, 1, 7], [1, 0, 8]]), torch.tensor([[2, 4]])]
+        input_ids = [torch.tensor([[1, 4, 7], [2, 5, 8]]), torch.tensor([[3, 6]])]
         example_mask = [True, False, True]
 
-        expected_cache = reshape_cache(
-            (
-                (torch.tensor([[1], [5]]), torch.tensor([[3], [6]])),
-                (torch.tensor([[7], [11]]), torch.tensor([[9], [12]])),
-            )
+        expected_cache = (
+            (torch.tensor([[[[1], [13]]], [[[0], [5]]]]), torch.tensor([[[[3], [15]]], [[[0], [6]]]])),
+            (torch.tensor([[[[7], [17]]], [[[0], [11]]]]), torch.tensor([[[[9], [19]]], [[[0], [12]]]])),
         )
-        expected_attention_mask = torch.tensor([[0, 1], [2, 4]])
-        expected_input_ids = torch.tensor([[1, 4], [3, 6]])
+        expected_attention_mask = torch.tensor([[-1, 1, 7], [0, 2, 4]])
+        expected_input_ids = torch.tensor([[1, 4, 7], [self.gpt2_tokenizer.pad_token_id, 3, 6]])
 
         combined_cache, combined_attention_masks, combined_input_ids = env._combine_cache(
             example_mask, caches, attention_masks, input_ids
