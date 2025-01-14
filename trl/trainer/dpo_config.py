@@ -150,6 +150,12 @@ class DPOConfig(TrainingArguments):
             into a single continuous sequence. This approach requires associating a `position_ids` vector to track
             positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it
             can handle the flattened batch structure.
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use Liger loss.
+        base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
+            Name of the attribute in the model that contains the base model. This is used to get the base model
+            from the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is
+            `True`.
     """
 
     learning_rate: float = field(
@@ -365,5 +371,17 @@ class DPOConfig(TrainingArguments):
         metadata={
             "help": "Whether the forward passes are performed without padding, i.e. flattening all the samples in the "
             "batch into a single sample, associated with a position_ids vector. Only possible with flash-attention."
+        },
+    )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use Liger loss."},
+    )
+    base_model_attribute_name: str = field(
+        default="model",
+        metadata={
+            "help": "Name of the attribute in the model that contains the base model. This is used to get the base model "
+            "from the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is "
+            "`True`."
         },
     )
