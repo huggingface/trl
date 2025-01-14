@@ -57,6 +57,7 @@ from transformers import (
     Phi3ForCausalLM,
     Qwen2Config,
     Qwen2ForCausalLM,
+    Qwen2ForSequenceClassification,
     SiglipVisionConfig,
     T5Config,
     T5ForConditionalGeneration,
@@ -125,6 +126,23 @@ for model_id, config_class, model_class, suffix in [
         num_key_value_heads=2,
         num_hidden_layers=2,
         intermediate_size=32,
+    )
+    model = model_class(config)
+    push_to_hub(model, tokenizer, suffix)
+
+# Reward models
+for model_id, config_class, model_class, suffix in [
+    ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForSequenceClassification, "2.5"),
+]:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    config = config_class(
+        vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        hidden_size=8,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_hidden_layers=2,
+        intermediate_size=32,
+        num_labels=1,
     )
     model = model_class(config)
     push_to_hub(model, tokenizer, suffix)

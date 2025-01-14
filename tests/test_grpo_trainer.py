@@ -28,7 +28,7 @@ class GRPOTrainerTester(unittest.TestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             train_dataset=dataset,
         )
 
@@ -46,7 +46,7 @@ class GRPOTrainerTester(unittest.TestCase):
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
             )
