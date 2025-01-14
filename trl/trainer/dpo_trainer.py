@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import inspect
 import os
 import random
@@ -507,6 +508,8 @@ class DPOTrainer(Trainer):
         else:
             if self.is_deepspeed_enabled:
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
+            elif self.is_fsdp_enabled:
+                self.ref_model = self._prepare_fsdp(self.ref_model)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
@@ -665,6 +668,33 @@ class DPOTrainer(Trainer):
             output["image_sizes"] = processed_features["image_sizes"][0]
 
         return output
+
+    def _prepare_fsdp(self, model: PreTrainedModelWrapper):
+        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
+        from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
+
+        # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
+        # don't wrap it again
+        if not isinstance(model, FSDP):
+            self.accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+            fsdp_plugin = self.accelerator.state.fsdp_plugin
+            kwargs = {
+                "sharding_strategy": fsdp_plugin.sharding_strategy,
+                "cpu_offload": fsdp_plugin.cpu_offload,
+                "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
+                "mixed_precision": fsdp_plugin.mixed_precision_policy,
+                "sync_module_states": fsdp_plugin.sync_module_states,
+                "backward_prefetch": fsdp_plugin.backward_prefetch,
+                "forward_prefetch": fsdp_plugin.forward_prefetch,
+                "use_orig_params": fsdp_plugin.use_orig_params,
+                "param_init_fn": fsdp_plugin.param_init_fn,
+                "ignored_modules": fsdp_plugin.ignored_modules,
+                "limit_all_gathers": fsdp_plugin.limit_all_gathers,
+                "device_id": self.accelerator.device,
+            }
+            model = FSDP(model, **kwargs)
+        model.eval()
+        return model
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
