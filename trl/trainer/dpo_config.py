@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
@@ -40,16 +41,64 @@ class DPOConfig(TrainingArguments):
     command line.
 
     Parameters:
+        > Parameters that control the model and reference model
+
+        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the
+            [`DPOTrainer`] is provided as a string.
+        ref_model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+            Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument of the
+            [`DPOTrainer`] is provided as a string.
+        model_adapter_name (`str` or `None`, *optional*, defaults to `None`):
+            Name of the train target PEFT adapter, when using LoRA with multiple adapters.
+        ref_adapter_name (`str` or `None`, *optional*, defaults to `None`):
+            Name of the reference PEFT adapter, when using LoRA with multiple adapters.
+        force_use_ref_model (`bool`, *optional*, defaults to `False`):
+            If you provide a PEFT model as the active model and wish to use a different model for the `ref_model`, set
+            this flag to `True`.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model and reference model.
+        use_num_logits_to_keep (`bool`, *optional*, defaults to `False`):
+            If `True`, only a specified number of logits are computed in the forward pass. This can be useful for
+            saving memory and speeding up training by not computing the logits for all tokens, especially in
+            scenarios when working with very long prompts where labels are ignored (-100).
+
+        > Parameters that control the data preprocessing
+
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+            Number of processes to use for processing the dataset.
+        padding_value (`int` or `None`, *optional*, defaults to `None`):
+            Padding value to use. If `None`, the padding value of the tokenizer is used.
+        label_pad_token_id (`int`, *optional*, defaults to `-100`):
+            Padding value to use for labels.
+        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
+            Truncation mode to usewhen the prompt is too long, either `keep_end` or `keep_start`.
+        max_prompt_length (`int` or `None`, *optional*, defaults to `None`):
+            Maximum length of the prompt.
+        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
+            Maximum length of the completion.
+        max_length (`int` or `None`, *optional*, defaults to `None`):
+            Maximum length of the full sequence (prompt + completion).
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether forward passes are performed without padding by flattening all sequences in the batch
+            into a single continuous sequence. This approach requires associating a `position_ids` vector to track
+            positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it
+            can handle the flattened batch structure.
+        precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
+            Whether to precompute the log probabilities from the reference model. Setting this to `True` allows
+            training without needing the reference model during training, which can help reduce GPU memory usage. If
+            set to `False` (default), the reference model will be used during training to compute log probabilities
+            on-the-fly.
+        precompute_ref_batch_size (`int` or `None`, *optional*, defaults to `None`):
+            Batch size to use when precomputing reference model log probabilities. This can be set higher than the
+            training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
+            training and `per_device_eval_batch_size` for evaluation.
+
+        > Parameters that control the training
+
         learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        beta (`float`, *optional*, defaults to `0.1`):
-            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
-            reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
-            the [paper](https://huggingface.co/papers/2310.12036).
-        label_smoothing (`float`, *optional*, defaults to `0.0`):
-            Robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and
-            [Robust DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
@@ -66,73 +115,23 @@ class DPOConfig(TrainingArguments):
                 - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
-        use_weighting (`bool`, *optional*, defaults to `False`):
-            Whether to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
-        label_pad_token_id (`int`, *optional*, defaults to `-100`):
-            Label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int` or `None`, *optional*, defaults to `None`):
-            Padding value to use. If `None`, the padding value of the tokenizer is used.
-        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to use, either `keep_end` or `keep_start`. This argument is required if you want to use the
-            default data collator.
-        max_length (`int` or `None`, *optional*, defaults to `None`):
-            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
-            to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `None`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
-            Maximum length of the target. This argument is required if you want to use the default data collator and
-            your model is an encoder-decoder.
-        is_encoder_decoder(`Optional[int]`, *optional*, defaults to `None`):
-            When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
-            you need to specify if the model returned by the callable is an encoder-decoder model.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model and reference model.
-        generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet during
-            evaluation.
-        precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
-            Whether to precompute reference model log probabilities for training and evaluation datasets. This is
-            useful when training without the reference model to reduce the total GPU memory needed.
-        precompute_ref_batch_size (`int` or `None`, *optional*, defaults to `None`):
-            Batch size to use when precomputing reference model log probabilities. This can be set higher than the
-            training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
-            training and `per_device_eval_batch_size` for evaluation.
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
-            Number of processes to use for processing the dataset.
-        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
-        ref_model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
-            from a string.
-        model_adapter_name (`str` or `None`, *optional*, defaults to `None`):
-            Name of the train target PEFT adapter, when using LoRA with multiple adapters.
-        ref_adapter_name (`str` or `None`, *optional*, defaults to `None`):
-            Name of the reference PEFT adapter, when using LoRA with multiple adapters.
-        reference_free (`bool`, *optional*, defaults to `False`):
-            If `True`, we ignore the _provided_ reference model and implicitly use a reference model that assigns equal
-            probability to all responses.
-        force_use_ref_model (`bool`, *optional*, defaults to `False`):
-            In case one passes a PEFT model for the active model and you want to use a different model for the
-            ref_model, set this flag to `True`.
+
+        beta (`float`, *optional*, defaults to `0.1`):
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
+            the [paper](https://huggingface.co/papers/2310.12036).
         f_divergence_type (`str`, *optional*, defaults to `FDivergenceType.REVERSE_KL`):
             Type of f-divergence regularization function to compute divergence between policy and reference model.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
             α coefficient in the α-divergence u^-α regularization function for DPO loss.
-        sync_ref_model (`bool`, *optional*, defaults to `False`):
-            When set to `True`, the reference model is synchronized with the active model every `ref_model_sync_steps`
-            steps, using the `ref_model_mixup_alpha` parameter. This synchronization originites from the
-            [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
-        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.9`):
-            α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
-            between the current policy and the previous reference policy during updates. The reference policy is
-            updated according to the equation: `π_ref = α * π_θ + (1 - α) * π_ref_prev`
-            To use this parameter, you must set `sync_ref_model=True`.
-        ref_model_sync_steps (`int`, *optional*, defaults to `64`):
-            τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
-            frequently the current policy is synchronized with the reference policy. To use this parameter, you must
-            set `sync_ref_model=True`.
+        reference_free (`bool`, *optional*, defaults to `False`):
+            Whether to ignore the provided reference model and implicitly use a reference model that assigns equal
+            probability to all responses.
+        label_smoothing (`float`, *optional*, defaults to `0.0`):
+            Robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and
+            [Robust DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
+        use_weighting (`bool`, *optional*, defaults to `False`):
+            Whether to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
         rpo_alpha (`float`, *optional*, defaults to `None`):
             α parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper (v3), which controls the
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
@@ -140,35 +139,136 @@ class DPOConfig(TrainingArguments):
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
-        use_num_logits_to_keep (`bool`, *optional*, defaults to `False`):
-            If `True`, only a specified number of logits are computed in the forward pass of CausalLM. This can be
-            useful for saving memory and speeding up training by not computing the logits for all tokens, especially in
-            scenarios when working with very long prompts where labels are ignored (-100).
-            [Read more](https://huggingface.co/docs/transformers/main/model_doc/llama#transformers.LlamaForCausalLM)
-        padding_free (`bool`, *optional*, defaults to `False`):
-            Whether forward passes are performed without padding by flattening all sequences in the batch
-            into a single continuous sequence. This approach requires associating a `position_ids` vector to track
-            positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it
-            can handle the flattened batch structure.
+        sync_ref_model (`bool`, *optional*, defaults to `False`):
+            Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
+            the `ref_model_mixup_alpha` parameter. This synchronization originites from the
+            [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.9`):
+            α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
+            between the current policy and the previous reference policy during updates. The reference policy is
+            updated according to the equation: `π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you
+            must set `sync_ref_model=True`.
+        ref_model_sync_steps (`int`, *optional*, defaults to `64`):
+            τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
+            frequently the current policy is synchronized with the reference policy. To use this parameter, you must
+            set `sync_ref_model=True`.
+
+        > Parameters that control the logging
+
+        generate_during_eval (`bool`, *optional*, defaults to `False`):
+            Whether to generate and log completions from both the model and the reference model to W&B or Comet during
+            evaluation.
     """
 
+    # Parameters that control the model and reference model
+    model_init_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
+            "the `DPOTrainer` is provided as a string."
+        },
+    )
+    ref_model_init_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument "
+            "of the `DPOTrainer` is provided as a string."
+        },
+    )
+    model_adapter_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Name of the train target PEFT adapter, when using LoRA with multiple adapters."},
+    )
+    ref_adapter_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Name of the reference PEFT adapter, when using LoRA with multiple adapters."},
+    )
+    force_use_ref_model: bool = field(
+        default=False,
+        metadata={
+            "help": "If you provide a PEFT model as the active model and wish to use a different model for the "
+            "`ref_model`, set this flag to `True`."
+        },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model and reference model."},
+    )
+    use_num_logits_to_keep: bool = field(
+        default=False,
+        metadata={
+            "help": "If `True`, only a specified number of logits are computed in the forward pass. This can be "
+            "useful for saving memory and speeding up training by not computing the logits for all tokens, especially "
+            "in scenarios when working with very long prompts where labels are ignored (-100)."
+        },
+    )
+
+    # Parameters that control the data preprocessing
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    padding_value: Optional[int] = field(
+        default=None,
+        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
+    )
+    label_pad_token_id: int = field(
+        default=-100,
+        metadata={"help": "Padding value to use for labels."},
+    )
+    truncation_mode: str = field(
+        default="keep_end",
+        metadata={
+            "help": "Truncation mode to use when the prompt is too long.",
+            "choices": ["keep_end", "keep_start"],
+        },
+    )
+    max_prompt_length: Optional[int] = field(
+        default=None,
+        metadata={"help": "Maximum length of the prompt."},
+    )
+    max_completion_length: Optional[int] = field(
+        default=None,
+        metadata={"help": "Maximum length of the completion."},
+    )
+    max_length: Optional[int] = field(
+        default=None,
+        metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
+    )
+    padding_free: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether forward passes are performed without padding by flattening all sequences in the batch "
+            "into a single continuous sequence. This approach requires associating a `position_ids` vector to track "
+            "positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it "
+            "can handle the flattened batch structure."
+        },
+    )
+    precompute_ref_log_probs: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to precompute the log probabilities from the reference model. Setting this to `True` "
+            "allows training without needing the reference model during training, which can help reduce GPU memory "
+            "usage. If set to `False` (default), the reference model will be used during training to compute log "
+            "probabilities on-the-fly."
+        },
+    )
+    precompute_ref_batch_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
+            "than the training batch size to speed up preprocessing. If `None`, defaults to "
+            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
+        },
+    )
+
+    # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,
         metadata={
             "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
             "`transformers.TrainingArguments`."
         },
-    )
-    beta: float = field(
-        default=0.1,
-        metadata={
-            "help": "Parameter controlling the deviation from the reference model. "
-            "Higher β means less deviation from the reference model."
-        },
-    )
-    label_smoothing: float = field(
-        default=0.0,
-        metadata={"help": "Label smoothing factor."},
     )
     loss_type: str = field(
         default="sigmoid",
@@ -191,117 +291,11 @@ class DPOConfig(TrainingArguments):
             ],
         },
     )
-    use_weighting: bool = field(
-        default=False,
-        metadata={"help": "Whether to weight the loss as done in the WPO paper."},
-    )
-    label_pad_token_id: int = field(
-        default=-100,
+    beta: float = field(
+        default=0.1,
         metadata={
-            "help": "Label pad token id. This argument is required if you want to use the default data collator."
-        },
-    )
-    padding_value: Optional[int] = field(
-        default=None,
-        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
-    )
-    truncation_mode: str = field(
-        default="keep_end",
-        metadata={
-            "help": "Truncation mode to use when the prompt is too long. This argument is required if you want to use "
-            "the default data collator.",
-            "choices": ["keep_end", "keep_start"],
-        },
-    )
-    max_length: Optional[int] = field(
-        default=None,
-        metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
-    )
-    max_prompt_length: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
-    max_completion_length: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Maximum length of the completion. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
-        },
-    )
-    is_encoder_decoder: Optional[bool] = field(
-        default=None,
-        metadata={
-            "help": "When using the `model_init` argument (callable) to instantiate the model instead of the "
-            "`model` argument, you need to specify if the model returned by the callable is an encoder-decoder model."
-        },
-    )
-    disable_dropout: bool = field(
-        default=True,
-        metadata={"help": "Whether to disable dropout in the model and reference model."},
-    )
-    generate_during_eval: bool = field(
-        default=False,
-        metadata={
-            "help": "If `True`, generates and logs completions from both the model and the reference model "
-            "to W&B during evaluation."
-        },
-    )
-    precompute_ref_log_probs: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to precompute reference model log probabilities for training and evaluation datasets. "
-            "This is useful when training without the reference model to reduce the total GPU memory needed."
-        },
-    )
-    precompute_ref_batch_size: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
-            "than the training batch size to speed up preprocessing. If `None`, defaults to "
-            "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
-        },
-    )
-    dataset_num_proc: Optional[int] = field(
-        default=None,
-        metadata={"help": "Number of processes to use for processing the dataset."},
-    )
-    model_init_kwargs: Optional[dict[str, Any]] = field(
-        default=None,
-        metadata={
-            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
-            "model from a string."
-        },
-    )
-    ref_model_init_kwargs: Optional[dict[str, Any]] = field(
-        default=None,
-        metadata={
-            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
-            "reference model from a string."
-        },
-    )
-    model_adapter_name: Optional[str] = field(
-        default=None,
-        metadata={"help": "Name of the train target PEFT adapter, when using LoRA with multiple adapters."},
-    )
-    ref_adapter_name: Optional[str] = field(
-        default=None,
-        metadata={"help": "Name of the reference PEFT adapter, when using LoRA with multiple adapters."},
-    )
-    reference_free: bool = field(
-        default=False,
-        metadata={
-            "help": "If `True`, we ignore the _provided_ reference model and implicitly use a reference model that "
-            "assigns equal probability to all responses."
-        },
-    )
-    force_use_ref_model: bool = field(
-        default=False,
-        metadata={
-            "help": "In case one passes a PEFT model for the active model and you want to use a different model for "
-            "the ref_model, set this flag to `True`."
+            "help": "Parameter controlling the deviation from the reference model. "
+            "Higher β means less deviation from the reference model."
         },
     )
     f_divergence_type: FDivergenceType = field(
@@ -315,27 +309,23 @@ class DPOConfig(TrainingArguments):
         default=1.0,
         metadata={"help": "α coefficient in the α-divergence u^-α regularization function for DPO loss."},
     )
-    sync_ref_model: bool = field(
+    reference_free: bool = field(
         default=False,
         metadata={
-            "help": "When set to `True`, the reference model is synchronized with the active model every "
-            "`ref_model_sync_steps` steps, using the `ref_model_mixup_alpha` parameter."
+            "help": "Whether to ignore the provided reference model and implicitly use a reference model that assigns "
+            "equal probability to all responses."
         },
     )
-    ref_model_mixup_alpha: float = field(
-        default=0.9,
+    label_smoothing: float = field(
+        default=0.0,
         metadata={
-            "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
-            "previous reference policy during updates. The reference policy is updated according to the equation: "
-            "`π_ref = α * π_θ + (1 - α) * π_ref_prev`"
+            "help": "Robust DPO label smoothing parameter from the cDPO report and Robust DPO paper that should "
+            "be between `0.0` and `0.5`."
         },
     )
-    ref_model_sync_steps: int = field(
-        default=64,
-        metadata={
-            "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
-            "synchronized with the reference policy."
-        },
+    use_weighting: bool = field(
+        default=False,
+        metadata={"help": "Whether to weight the loss as done in the WPO paper."},
     )
     rpo_alpha: Optional[float] = field(
         default=None,
@@ -352,18 +342,49 @@ class DPOConfig(TrainingArguments):
             "loss. The paper recommends the default value `discopop_tau=0.05`."
         },
     )
-    use_num_logits_to_keep: bool = field(
+    sync_ref_model: bool = field(
         default=False,
         metadata={
-            "help": "If `True`, only a specified number of logits are computed in the forward pass of CausalLM. "
-            "This can be useful for saving memory and speeding up training by not computing the logits for all "
-            "tokens, especially in scenarios when working with very long prompts where labels are ignored (-100)."
+            "help": "Whether to synchronize the reference model with the active model every `ref_model_sync_steps` "
+            "steps, using the `ref_model_mixup_alpha` parameter."
         },
     )
-    padding_free: bool = field(
+    ref_model_mixup_alpha: float = field(
+        default=0.9,
+        metadata={
+            "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
+            "previous reference policy during updates. The reference policy is updated according to the equation: "
+            "`π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+    ref_model_sync_steps: int = field(
+        default=64,
+        metadata={
+            "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
+            "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+
+    # Parameters that control the logging
+    generate_during_eval: bool = field(
         default=False,
         metadata={
-            "help": "Whether the forward passes are performed without padding, i.e. flattening all the samples in the "
-            "batch into a single sample, associated with a position_ids vector. Only possible with flash-attention."
+            "help": "Whether to generate and log completions from both the model and the reference model to W&B or "
+            "Comet during evaluation."
         },
     )
+
+    # Deprecated parameters
+    is_encoder_decoder: Optional[bool] = field(
+        default=None,
+        metadata={"help": "Deprecated. This argument is not used anymore."},
+    )
+
+    def __post_init__(self):
+        if self.is_encoder_decoder is not None:
+            warnings.warn(
+                "The `is_encoder_decoder` parameter is deprecated will be removed in version 0.15. The trainer now "
+                "automatically determines if the model is an encoder-decoder, so you can safely remove it."
+            )
+
+        return super().__post_init__()
