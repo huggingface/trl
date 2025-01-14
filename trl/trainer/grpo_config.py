@@ -31,6 +31,12 @@ class GRPOConfig(TrainingArguments):
     command line.
 
     Parameters:
+        > Parameters that control the model and reference model
+
+        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
+            argument of the [`GRPOTrainer`] is provided as a string.
+
         > Parameters that control the data preprocessing
 
         num_generations (`int` or `None`, *optional*, defaults to `8`):
@@ -48,6 +54,15 @@ class GRPOConfig(TrainingArguments):
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
     """
+
+    # Parameters that control the model and reference model
+    model_init_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
+            "argument of the `GRPOTrainer` is provided as a string."
+        },
+    )
 
     # Parameters that control the data preprocessing
     num_generations: Optional[int] = field(

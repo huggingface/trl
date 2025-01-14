@@ -21,6 +21,9 @@ import torch.nn as nn
 import torch.utils.data
 from datasets import Dataset, IterableDataset
 from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
     DataCollator,
     EvalPrediction,
     GenerationConfig,
@@ -64,8 +67,33 @@ class GRPOTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[PeftConfig] = None,
     ):
+        # Args
+        if args is None:
+            args = GRPOConfig("output_dir")
+
         # Models
         # Trained model
+        if isinstance(model, str):
+            model_init_kwargs = args.model_init_kwargs or {}
+            torch_dtype = model_init_kwargs.get("torch_dtype")
+            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
+                pass  # torch_dtype is already a torch.dtype or "auto" or None
+            elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
+                torch_dtype = getattr(torch, torch_dtype)
+                model_init_kwargs["torch_dtype"] = torch_dtype
+            else:
+                raise ValueError(
+                    "Invalid `torch_dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
+                    f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                )
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+        else:
+            if args.model_init_kwargs is not None:
+                raise ValueError(
+                    "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
+                    "This argument can only be used when the `model` argument is a string."
+                )
+
         if peft_config is not None:
             model = get_peft_model(model, peft_config)
 
@@ -78,7 +106,15 @@ class GRPOTrainer(Trainer):
             # to revert to the initial model.
             self.ref_model = None
 
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+
         # Reward model
+        if isinstance(reward_model, str):
+            reward_model = AutoModelForSequenceClassification.from_pretrained(
+                reward_model, num_labels=1, **model_init_kwargs
+            )
         self.reward_model = reward_model
 
         # Data loading and preprocessing
@@ -193,24 +229,25 @@ class GRPOTrainer(Trainer):
         prompt_mask = inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
         prompt_completion_mask = torch.cat([prompt_mask, completion_mask], dim=1)
 
-        def get_per_token_reward(model, input_ids):
+        def get_reward(model, input_ids, attention_mask):
+            # Forward pass through the reward model
             base_model = getattr(model, model.base_model_prefix)  # usually base_model_prefix = "model"
-            output = base_model(input_ids=input_ids, attention_mask=prompt_completion_mask, output_hidden_states=True)
+            output = base_model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
             per_token_reward = model.score(output.hidden_states[-1]).squeeze(2)
-            return per_token_reward
 
-        per_token_reward = get_per_token_reward(self.reward_model, prompt_completion_ids)
+            # Get the last True index in the mask
+            flipped = torch.flip(prompt_completion_mask, dims=[1])
+            final_idx = prompt_completion_mask.shape[1] - torch.argmax(flipped.int(), dim=1) - 1
 
-        # Get the last True index in the mask
-        flipped = torch.flip(prompt_completion_mask, dims=[1])
-        final_idx = prompt_completion_mask.shape[1] - torch.argmax(flipped.int(), dim=1) - 1
+            # Get the reward logits for the last token in the sequence
+            rewards = per_token_reward[torch.arange(per_token_reward.size(0)), final_idx]
+            return rewards
 
-        # Get the reward logits for the last token in the sequence
-        final_rewards = per_token_reward[torch.arange(per_token_reward.size(0)), final_idx]
+        rewards = get_reward(self.reward_model, prompt_completion_ids, prompt_completion_mask)
 
         # Compute grouped-wise rewards
-        mean_grouped_rewards = final_rewards.view(-1, self.num_generations).mean(dim=1, keepdim=True)
-        std_grouped_rewards = final_rewards.view(-1, self.num_generations).std(dim=1, keepdim=True)
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
         std_grouped_rewards = torch.where(  # avoid division by zero
             std_grouped_rewards < 1e-8, torch.tensor(1.0, device=device), std_grouped_rewards
         )
@@ -218,18 +255,16 @@ class GRPOTrainer(Trainer):
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        per_token_advantage = (per_token_reward - mean_grouped_rewards) / std_grouped_rewards
-        per_token_advantage = per_token_advantage[:, prompt_length:]  # get rid of the prompt
+        advantages = (rewards - mean_grouped_rewards) / std_grouped_rewards
 
         # Compute the loss
-        per_token_loss = -(per_token_advantage - self.beta * per_token_kl)
+        per_token_loss = -(advantages.unsqueeze(1) - self.beta * per_token_kl)
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
 
         # Log the metrics
-        self._metrics["reward"].append(self.accelerator.gather_for_metrics(final_rewards).mean().item())
+        self._metrics["reward"].append(self.accelerator.gather_for_metrics(rewards).mean().item())
 
-        mean_advantage = ((per_token_advantage * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
-        self._metrics["advantage"].append(self.accelerator.gather_for_metrics(mean_advantage).mean().item())
+        self._metrics["advantage"].append(self.accelerator.gather_for_metrics(advantages).mean().item())
 
         mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
