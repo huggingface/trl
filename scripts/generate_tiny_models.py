@@ -43,6 +43,7 @@ from transformers import (
     Idefics2ForConditionalGeneration,
     LlamaConfig,
     LlamaForCausalLM,
+    LlamaForSequenceClassification,
     LlavaConfig,
     LlavaForConditionalGeneration,
     LlavaNextConfig,
@@ -132,6 +133,7 @@ for model_id, config_class, model_class, suffix in [
 
 # Reward models
 for model_id, config_class, model_class, suffix in [
+    ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForSequenceClassification, "3.2"),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForSequenceClassification, "2.5"),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
