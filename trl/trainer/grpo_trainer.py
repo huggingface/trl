@@ -261,9 +261,9 @@ class GRPOTrainer(Trainer):
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        std_grouped_rewards_raw = rewards.view(-1, self.num_generations).std(dim=1)
         std_grouped_rewards = torch.where(  # avoid division by zero
-            std_grouped_rewards < 1e-8, torch.tensor(1.0, device=device), std_grouped_rewards
+            std_grouped_rewards < 1e-8, torch.tensor(1.0, device=device), std_grouped_rewards_raw
         )
 
         # Normalize the rewards to compute the advantages
@@ -277,6 +277,8 @@ class GRPOTrainer(Trainer):
 
         # Log the metrics
         self._metrics["reward"].append(self.accelerator.gather_for_metrics(rewards).mean().item())
+
+        self._metrics["reward_std"].append(self.accelerator.gather_for_metrics(std_grouped_rewards_raw).mean().item())
 
         mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
