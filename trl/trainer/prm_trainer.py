@@ -288,11 +288,12 @@ class PRMTrainer(Trainer):
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
+
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
@@ -313,7 +314,7 @@ class PRMTrainer(Trainer):
 
         citation = textwrap.dedent("""\
         @article{uesato2022solving,
-            title        = {Solving Math Word Problems With Process- and Outcome-Based Feedback},
+            title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},
             author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
             year         = 2022,
             journal      = {arXiv preprint arXiv:2211.14275}
