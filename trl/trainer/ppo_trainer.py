@@ -417,7 +417,7 @@ class PPOTrainer(BaseTrainer):
             dataset,
             batch_size=self.config.batch_size,
             collate_fn=data_collator,
-            shuffle=True,
+            shuffle=False,
             drop_last=True,
         )
         return dataloader
@@ -485,6 +485,7 @@ class PPOTrainer(BaseTrainer):
         if generate_ref_response:
             ref_model = self.model if self.is_peft_model else self.ref_model
         if isinstance(query_tensor, List):
+            self.model.eval()
             response = self._generate_batched(
                 self.model,
                 query_tensor,
@@ -494,6 +495,7 @@ class PPOTrainer(BaseTrainer):
                 **generation_kwargs,
             )
             if generate_ref_response:
+                self.ref_model.eval()
                 ref_response = self._generate_batched(
                     ref_model,
                     query_tensor,
@@ -733,9 +735,8 @@ class PPOTrainer(BaseTrainer):
                 )
 
         model_inputs_names = list(model_inputs.keys())
-
         full_kl_penalty = self.config.kl_penalty == "full"
-
+        # torch.cuda.memory._record_memory_history()
         with torch.no_grad():
             all_logprobs, logits_or_none, values, masks = self.batched_forward_pass(
                 self.model,
@@ -744,6 +745,7 @@ class PPOTrainer(BaseTrainer):
                 model_inputs,
                 response_masks=response_masks,
                 return_logits=full_kl_penalty,
+                use_cache=False
             )
             with self.optional_peft_ctx():
                 ref_logprobs, ref_logits_or_none, _, _ = self.batched_forward_pass(
@@ -752,8 +754,9 @@ class PPOTrainer(BaseTrainer):
                     responses,
                     model_inputs,
                     return_logits=full_kl_penalty,
+                    use_cache=False
                 )
-
+        # torch.cuda.memory._dump_snapshot(f"ppo_batched_forward_pass-{time.time()}.pickle")
         timing["time/ppo/forward_pass"] = time.time() - t
 
         with torch.no_grad():
@@ -813,13 +816,14 @@ class PPOTrainer(BaseTrainer):
                         mini_batch_dict[k] = batch_dict[k][mini_batch_inds]
                     with self.accelerator.accumulate(self.model):
                         model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
-
+                        # torch.cuda.memory._record_memory_history()
                         logprobs, logits, vpreds, _ = self.batched_forward_pass(
                             self.model,
                             mini_batch_dict["queries"],
                             mini_batch_dict["responses"],
                             model_inputs,
                             return_logits=True,
+                            is_training=True,
                         )
                         train_stats = self.train_minibatch(
                             mini_batch_dict["logprobs"],
@@ -832,7 +836,8 @@ class PPOTrainer(BaseTrainer):
                             mini_batch_dict["returns"],
                         )
                         all_stats.append(train_stats)
-
+                        # torch.cuda.memory._dump_snapshot("ppo_train_minibatch_bs16_mbs4.pickle")
+                        # exit(0)
             # typically, early stopping is done at the epoch level
             if self.config.early_stopping:
                 policykl = train_stats["policy/policykl"]
@@ -976,6 +981,8 @@ class PPOTrainer(BaseTrainer):
         model_inputs: dict,
         return_logits: bool = False,
         response_masks: Optional[torch.Tensor] = None,
+        is_training: bool = False,
+        use_cache: bool = True
     ):
         """
         Calculate model outputs in multiple batches.
@@ -1001,11 +1008,14 @@ class PPOTrainer(BaseTrainer):
         all_logits = []
         all_masks = []
         all_values = []
-
-        model.eval()
-
+        if not is_training:
+            model.eval()
+        else:
+            model.train()
         for i in range(math.ceil(bs / fbs)):
             input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
+            input_kwargs["use_cache"] = use_cache
+            print("use_cache:", use_cache)
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
             if response_masks is not None:

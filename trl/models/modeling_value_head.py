@@ -164,7 +164,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             kwargs (`dict`, `optional`):
                 Additional keyword arguments, that are passed to the wrapped model.
         """
-        kwargs["output_hidden_states"] = True  # this had already been set in the LORA / PEFT examples
+        kwargs["output_hidden_states"] = False  # this had already been set in the LORA / PEFT examples
         kwargs["past_key_values"] = past_key_values
 
         if self.is_peft_model and self.pretrained_model.active_peft_config.peft_type == "PREFIX_TUNING":
@@ -176,7 +176,8 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             **kwargs,
         )
 
-        last_hidden_state = base_model_output.hidden_states[-1]
+        # last_hidden_state = base_model_output.hidden_states[-1]
+        last_hidden_state = base_model_output.last_hidden_state
         lm_logits = base_model_output.logits
         loss = base_model_output.loss
 

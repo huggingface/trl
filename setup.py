@@ -82,7 +82,7 @@ EXTRAS = {
     "peft": ["peft>=0.4.0"],
     "diffusers": ["diffusers>=0.18.0"],
     "deepspeed": ["deepspeed>=0.9.5"],
-    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.2.1a5", "requests", "deepspeed"],
+    "benchmark": ["wandb", "ghapi", "openrlbenchmark==0.1.1b4", "requests", "deepspeed"],
     "quantization": ["bitsandbytes<=0.41.1"],
 }
 EXTRAS["dev"] = []
