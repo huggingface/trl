@@ -120,10 +120,13 @@ class GRPOTrainer(Trainer):
 
         # Reward processing class
         if reward_processing_class is None:
-            self.reward_processing_class = AutoTokenizer.from_pretrained(reward_model.config._name_or_path)
+            reward_processing_class = AutoTokenizer.from_pretrained(reward_model.config._name_or_path)
+        if reward_processing_class.pad_token_id is None:
+            reward_processing_class.pad_token = reward_processing_class.eos_token
+        self.reward_processing_class = reward_processing_class
         # The reward model computes the reward for the latest non-padded token in the input sequence.
         # So it's important to set the pad token ID to the padding token ID of the processing class.
-        self.reward_model.config.pad_token_id = self.reward_processing_class.pad_token_id
+        self.reward_model.config.pad_token_id = reward_processing_class.pad_token_id
 
         # Data loading and preprocessing
         if data_collator is None:
