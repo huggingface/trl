@@ -35,10 +35,10 @@ from transformers import (
 )
 from transformers.utils import is_peft_available
 
-from ..data_utils import maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model, unwrap_model_for_generation
 from .grpo_config import GRPOConfig
-from .utils import flush_left, generate_model_card, get_comet_experiment_url
+from .utils import generate_model_card, get_comet_experiment_url
 
 
 if is_peft_available():
@@ -58,6 +58,7 @@ class GRPOTrainer(Trainer):
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
+        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_loss_func: Optional[Callable] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
@@ -115,10 +116,14 @@ class GRPOTrainer(Trainer):
             reward_model = AutoModelForSequenceClassification.from_pretrained(
                 reward_model, num_labels=1, **model_init_kwargs
             )
-            # The reward model computes the reward for the latest non-padded token in the input sequence.
-            # So it's important to set the pad token ID to the padding token ID of the processing class.
-            self.reward_model.config.pad_token_id = processing_class.pad_token_id
         self.reward_model = reward_model
+
+        # Reward processing class
+        if reward_processing_class is None:
+            self.reward_processing_class = AutoTokenizer.from_pretrained(reward_model.config._name_or_path)
+        # The reward model computes the reward for the latest non-padded token in the input sequence.
+        # So it's important to set the pad token ID to the padding token ID of the processing class.
+        self.reward_model.config.pad_token_id = self.reward_processing_class.pad_token_id
 
         # Data loading and preprocessing
         if data_collator is None:
@@ -186,15 +191,17 @@ class GRPOTrainer(Trainer):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
 
-        examples = [maybe_apply_chat_template(example, self.processing_class) for example in inputs]
-        prompts = [example["prompt"] for example in examples]
-        inputs = self.processing_class(prompts, return_tensors="pt", padding=True)
-        inputs = super()._prepare_inputs(inputs)
+        prompts = [x["prompt"] for x in inputs]
+        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+        prompt_inputs = self.processing_class(
+            prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+        )
+        prompt_inputs = super()._prepare_inputs(prompt_inputs)
 
         # Generate completions
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            prompt_completion_ids = unwrapped_model.generate(**inputs, generation_config=self.generation_config)
-        prompt_length = inputs["input_ids"].size(1)
+            prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
+        prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Get the per-token log probabilities for the completions for the model and the reference model
@@ -207,7 +214,7 @@ class GRPOTrainer(Trainer):
         per_token_logps = get_per_token_logps(model, prompt_completion_ids)
         per_token_logps = per_token_logps[:, prompt_length:]  # get rid of the prompt
 
-        with torch.no_grad():
+        with torch.inference_mode():
             if self.ref_model is not None:
                 ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids)
             else:
@@ -228,14 +235,26 @@ class GRPOTrainer(Trainer):
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
-        # Compute the reward
-        prompt_mask = inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
-        prompt_completion_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        # Decode the generated completions
+        completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
 
-        attention_mask, input_ids = flush_left(
-            prompt_completion_mask, prompt_completion_ids
-        )  # needed for the reward model
-        rewards = self.reward_model(input_ids, attention_mask)
+        # Compute the rewards
+        prompts = [prompt for prompt in prompts for _ in range(self.num_generations)]
+        if is_conversational(inputs[0]):
+            completions = [[{"role": "assistant", "content": completion}] for completion in completions]
+            messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+            texts = [apply_chat_template(x, self.reward_processing_class)["text"] for x in messages]
+            reward_inputs = self.reward_processing_class(
+                texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+            )
+        else:
+            texts = [p + c for p, c in zip(prompts, completions)]
+            reward_inputs = self.reward_processing_class(
+                texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+            )
+        reward_inputs = super()._prepare_inputs(reward_inputs)
+        with torch.inference_mode():
+            rewards = self.reward_model(**reward_inputs).logits[:, 0]  # Shape (B*G,)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
