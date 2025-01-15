@@ -1204,7 +1204,7 @@ class DPOTrainerTester(unittest.TestCase):
 
     @require_liger_kernel
     def test_dpo_trainer_with_liger(self):
-        """Test ORPO trainer with Liger loss enabled.
+        """Test DPO trainer with Liger loss enabled.
 
         This test verifies that:
         1. Training runs successfully with Liger loss
