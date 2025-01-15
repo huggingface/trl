@@ -37,6 +37,10 @@ class OnlineDPOConfig(TrainingArguments):
             Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
+        max_length (`int`, *optional*, defaults to `256`):
+            Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If the
+            sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the completion as
+            possible.
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
@@ -58,6 +62,8 @@ class OnlineDPOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
+        use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use the vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
     """
 
     learning_rate: float = field(
@@ -82,6 +88,14 @@ class OnlineDPOConfig(TrainingArguments):
     max_new_tokens: int = field(
         default=64,
         metadata={"help": "Maximum number of tokens to generate per completion."},
+    )
+    max_length: int = field(
+        default=256,
+        metadata={
+            "help": "Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If "
+            "the sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the "
+            "completion as possible."
+        },
     )
     temperature: float = field(
         default=0.9,
@@ -118,6 +132,13 @@ class OnlineDPOConfig(TrainingArguments):
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the model."},
+    )
+    use_vllm: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the vLLM for generating completions. Requires vLLM to be installed "
+            "(`pip install vllm`)."
+        },
     )
 
     def __post_init__(self):

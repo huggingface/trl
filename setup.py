@@ -91,6 +91,7 @@ EXTRAS = {
     "quantization": ["bitsandbytes"],
     "scikit": ["scikit-learn"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
+    "vllm": ["vllm"],
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []

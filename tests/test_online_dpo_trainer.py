@@ -18,10 +18,10 @@ import unittest
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft
+from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available
+from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available, is_vllm_available
 
 from .testing_utils import RandomPairwiseJudge
 
@@ -234,6 +234,36 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
                 processing_class=self.tokenizer,
+            )
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    @unittest.skipIf(not is_vllm_available(), "vllm is not available")
+    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @require_torch_accelerator
+    def test_training_with_vllm(self, config_name):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We neeed a bigger model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                use_vllm=True,
+                report_to="none",
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+
+            trainer = OnlineDPOTrainer(
+                model=model,
+                reward_model=self.reward_model,
+                args=training_args,
+                train_dataset=dummy_dataset["train"],
+                processing_class=tokenizer,
+                reward_processing_class=self.reward_tokenizer,
             )
             trainer.train()
 

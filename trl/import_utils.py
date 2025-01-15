@@ -28,6 +28,7 @@ _llm_blender_available = _is_package_available("llm_blender")
 _mergekit_available = _is_package_available("mergekit")
 _rich_available = _is_package_available("rich")
 _unsloth_available = _is_package_available("unsloth")
+_vllm_available = _is_package_available("vllm")
 
 
 def is_deepspeed_available() -> bool:
@@ -52,6 +53,10 @@ def is_rich_available() -> bool:
 
 def is_unsloth_available() -> bool:
     return _unsloth_available
+
+
+def is_vllm_available() -> bool:
+    return _vllm_available
 
 
 class _LazyModule(ModuleType):
