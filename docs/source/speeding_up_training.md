@@ -16,7 +16,7 @@ To use vLLM, first install it using:
 pip install vllm
 ```
 
-<hfoptions>
+<hfoptions id="vllm examples">
 <hfoption id="Online DPO">
 
 Then, enable it by passing `use_vllm=True` in the training arguments.
@@ -26,9 +26,6 @@ from trl import OnlineDPOConfig
 
 training_args = DPOConfig(..., use_vllm=True)
 ```
-
-</hfoption>
-<hfoption id="Does it require 2 sections?">
 
 </hfoption>
 </hfoptions>
