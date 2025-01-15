@@ -280,7 +280,6 @@ class DPOConfig(TrainingArguments):
         },
     )
 
-
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,
