@@ -28,4 +28,7 @@ training_args = DPOConfig(..., use_vllm=True)
 ```
 
 </hfoption>
+<hfoption id="Does it require 2 sections?">
+
+</hfoption>
 </hfoptions>
