@@ -93,6 +93,12 @@ class DPOConfig(TrainingArguments):
             Batch size to use when precomputing reference model log probabilities. This can be set higher than the
             training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
             training and `per_device_eval_batch_size` for evaluation.
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use Liger loss.
+        base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
+            Name of the attribute in the model that contains the base model. This is used to get the base model
+            from the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is
+            `True`.
 
         > Parameters that control the training
 
@@ -259,6 +265,18 @@ class DPOConfig(TrainingArguments):
             "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
             "than the training batch size to speed up preprocessing. If `None`, defaults to "
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
+        },
+    )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use Liger loss."},
+    )
+    base_model_attribute_name: str = field(
+        default="model",
+        metadata={
+            "help": "Name of the attribute in the model that contains the base model. This is used to get the base model "
+            "from the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is "
+            "`True`."
         },
     )
 
