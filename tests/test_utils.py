@@ -27,6 +27,7 @@ from trl.trainer.utils import (
     DataCollatorForChatML,
     batch_generation,
     decode_and_strip_padding,
+    flush_left,
     generate_model_card,
     get_peft_config,
     pad,
@@ -404,3 +405,49 @@ class TestComputeAccuracy(unittest.TestCase):
             "These instances are ignored in the accuracy computation."
         )
         self.assertEqual(str(cm.warning), expected_warning)
+
+
+class TestFlushLeft(unittest.TestCase):
+    def test_basic_case(self):
+        mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+        tensor1 = torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 0, 0]])
+        tensor2 = torch.tensor([[0, 0, 7, 8, 9], [0, 10, 11, 0, 0]])
+        new_mask, new_tensor1, new_tensor2 = flush_left(mask, tensor1, tensor2)
+
+        expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        expected_tensor1 = torch.tensor([[2, 3, 4], [5, 6, 0]])
+        expected_tensor2 = torch.tensor([[7, 8, 9], [10, 11, 0]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        self.assertTrue(torch.equal(new_tensor2, expected_tensor2))
+
+    def test_single_row(self):
+        mask = torch.tensor([[0, 0, 1, 1]])
+        tensor1 = torch.tensor([[0, 0, 2, 3]])
+        new_mask, new_tensor1 = flush_left(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1]])
+        expected_tensor1 = torch.tensor([[2, 3]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_shift_needed(self):
+        mask = torch.tensor([[1, 1, 0, 0], [1, 1, 0, 0]])
+        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 8, 0, 0]])
+        new_mask, new_tensor1 = flush_left(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1], [1, 1]])
+        expected_tensor1 = torch.tensor([[5, 6], [7, 8]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_tensors(self):
+        mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+        new_mask = flush_left(mask)
+
+        expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))

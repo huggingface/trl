@@ -21,6 +21,7 @@ from .scripts.chat import main as chat_main
 from .scripts.chat import make_parser as make_chat_parser
 from .scripts.dpo import make_parser as make_dpo_parser
 from .scripts.env import print_env
+from .scripts.grpo import make_parser as make_grpo_parser
 from .scripts.kto import make_parser as make_kto_parser
 from .scripts.sft import make_parser as make_sft_parser
 from .scripts.utils import TrlParser
@@ -36,6 +37,7 @@ def main():
     make_chat_parser(subparsers)
     make_dpo_parser(subparsers)
     subparsers.add_parser("env", help="Print the environment information")
+    make_grpo_parser(subparsers)
     make_kto_parser(subparsers)
     make_sft_parser(subparsers)
 
@@ -57,6 +59,15 @@ def main():
 
     elif args.command == "env":
         print_env()
+
+    elif args.command == "grpo":
+        # Get the default args for the launch command
+        grpo_training_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "grpo.py")
+        args = launch_command_parser().parse_args([grpo_training_script])
+
+        # Feed the args to the launch command
+        args.training_script_args = sys.argv[2:]  # remove "trl" and "grpo"
+        launch_command(args)  # launch training
 
     elif args.command == "kto":
         # Get the default args for the launch command

@@ -68,6 +68,8 @@
       title: Online DPO
     - local: gkd_trainer
       title: GKD
+    - local: grpo_trainer
+      title: GRPO
     - local: kto_trainer
       title: KTO
     - local: nash_md_trainer
