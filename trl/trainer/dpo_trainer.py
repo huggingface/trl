@@ -1233,9 +1233,10 @@ class DPOTrainer(Trainer):
                 ref_weight=ref_weight if not self.reference_free else None,
                 ref_bias=ref_bias if not self.reference_free else None,
             )
-            loss, (chosen_logps, rejected_logps, chosen_logits_mean, rejected_logits_mean, nll_loss, *aux_outputs) = (
-                loss_output
-            )
+            (
+                loss,
+                (chosen_logps, rejected_logps, chosen_logits_mean, rejected_logits_mean, nll_loss, _, _, *aux_outputs),
+            ) = loss_output
 
             output = {
                 "loss": loss,
@@ -1243,9 +1244,12 @@ class DPOTrainer(Trainer):
                 "rejected_logps": rejected_logps,
                 "mean_chosen_logits": chosen_logits_mean,
                 "mean_rejected_logits": rejected_logits_mean,
+                "nll_loss": nll_loss,
+                "chosen_rewards": aux_outputs[0],
+                "rejected_rewards": aux_outputs[1],
             }
-            if self.aux_loss_enabled and aux_outputs:
-                output["aux_loss"] = aux_outputs[0]  # Assuming aux_loss is the first aux output
+            if self.aux_loss_enabled:
+                output["aux_loss"] = outputs.aux_loss
 
             return output
         else:
@@ -1374,8 +1378,8 @@ class DPOTrainer(Trainer):
 
             if self.args.rpo_alpha is not None:
                 # Only use the chosen logits for the RPO loss
-                chosen_logits = logits[:num_examples]
-                chosen_labels = labels[:num_examples]
+                chosen_logits = logits[:num_examples, :-1] if not self.is_encoder_decoder else logits[:num_examples]
+                chosen_labels = labels[:num_examples, 1:] if self.is_encoder_decoder else labels[:num_examples]
 
                 # Compute the log probabilities of the labels
                 output["nll_loss"] = F.cross_entropy(

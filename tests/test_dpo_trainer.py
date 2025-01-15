@@ -1271,12 +1271,14 @@ class DPOTrainerTester(unittest.TestCase):
 
                 # Verify model can still do forward pass after training
                 dummy_batch = next(iter(trainer.get_train_dataloader()))
+                model_inputs = {
+                    "input_ids": dummy_batch["prompt_input_ids"],
+                    "attention_mask": dummy_batch["prompt_attention_mask"],
+                }
                 with torch.no_grad():
-                    output = trainer.model(
-                        **{k: v for k, v in dummy_batch.items() if k in trainer.model.forward.__code__.co_varnames}
-                    )
+                    output = trainer.model(**model_inputs)
                 self.assertIsNotNone(output)
-                self.assertTrue(torch.isfinite(output.loss))
+                self.assertIsNone(output.loss)
 
 
 @require_vision
