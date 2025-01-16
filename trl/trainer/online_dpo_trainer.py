@@ -267,7 +267,14 @@ class OnlineDPOTrainer(Trainer):
             # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
             # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
             # space for them. Setting gpu_memory_utilization to 0.55 seems to work well in practice.
-            self.llm = LLM(model=model.name_or_path, gpu_memory_utilization=0.55, dtype=torch.float32)
+            self.llm = LLM(
+                model=model.name_or_path,
+                gpu_memory_utilization=0.55,
+                dtype=torch.float32,
+                # When release by vLLM, we would be able to distribute the model on multiple GPUs
+                # tensor_parallel_size=torch.cuda.device_count(), 
+                # distributed_executor_backend="external_launcher",
+            )
         else:
             self.generation_config = GenerationConfig(
                 max_new_tokens=args.max_new_tokens,
