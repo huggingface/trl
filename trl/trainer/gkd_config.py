@@ -45,6 +45,16 @@ class GKDConfig(SFTConfig):
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT
             on teacher-generated output).
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use Liger loss.
+        base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
+            Name of the attribute in the model that contains the base model. This is used to get the base model
+            from the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is
+            `True`.
+        teacher_base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
+            Name of the attribute in the teacher model that contains the base model. This is used to get the base model
+            from the teacher model when the teacher model does not have a `get_decoder` method in the case when
+            `use_liger_loss` is `True`.
     """
 
     temperature: float = field(
@@ -93,6 +103,26 @@ class GKDConfig(SFTConfig):
         metadata={
             "help": "Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised "
             "FT on teacher-generated output)."
+        },
+    )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use Liger loss."},
+    )
+    base_model_attribute_name: str = field(
+        default="model",
+        metadata={
+            "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
+            "model from the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` "
+            "is `True`."
+        },
+    )
+    teacher_base_model_attribute_name: str = field(
+        default="model",
+        metadata={
+            "help": "Name of the attribute in the teacher model that contains the base model. This is used to get the "
+            "base model from the teacher model when the teacher model does not have a `get_decoder` method in the case "
+            "when `use_liger_loss` is `True`."
         },
     )
 
