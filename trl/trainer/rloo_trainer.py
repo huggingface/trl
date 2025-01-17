@@ -401,12 +401,13 @@ class RLOOTrainer(Trainer):
                     # Apply reward at the last non-padded token position for each sequence
                     eos_indices = sequence_lengths.unsqueeze(1) - 1
                     last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=scores.unsqueeze(1))
-                    non_score_reward = kl_reward.sum(1) + last_reward.sum(1)
+                    non_score_reward = kl_reward.sum(1)
+                    rlhf_reward = non_score_reward + last_reward.sum(1)
                 else:
                     # Sequence-level KL penalty: sum KL across tokens first
                     sequence_kl = kl.sum(1)
-                    non_score_reward = -args.kl_coef * sequence_kl + scores
-                rlhf_reward = non_score_reward
+                    non_score_reward = -args.kl_coef * sequence_kl
+                    rlhf_reward = non_score_reward + scores
 
                 # vectorized RLOO advantages implementation
                 rlhf_reward = rlhf_reward.reshape(args.rloo_k, -1)
