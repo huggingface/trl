@@ -10,36 +10,6 @@ body:
         🚩 If it is your first time submitting, be sure to check our [bug report guidelines](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md#did-you-find-a-bug)
 
   - type: textarea
-    id: system-info
-    attributes:
-      label: System Info
-      description: |
-        Please provide information about your system: platform, Python version, PyTorch version, Transformers version, devices, TRL version, ...
-        You can get this information by running `trl env` in your terminal.
-
-      placeholder: Copy-paste the output of `trl env`
-    validations:
-      required: true
-
-  - type: checkboxes
-    id: information-scripts-examples
-    attributes:
-      label: Information
-      description: 'The problem arises when using:'
-      options:
-        - label: "The official example scripts"
-        - label: "My own modified scripts"
-
-  - type: checkboxes
-    id: information-tasks
-    attributes:
-      label: Tasks
-      description: "The tasks I am working on are:"
-      options:
-        - label: "An officially supported task in the `examples` folder"
-        - label: "My own task or dataset (give details below)"
-
-  - type: textarea
     id: reproduction
     validations:
       required: true
@@ -66,12 +36,16 @@ body:
         ```
 
   - type: textarea
-    id: expected-behavior
+    id: system-info
+    attributes:
+      label: System Info
+      description: |
+        Please provide information about your system: platform, Python version, PyTorch version, Transformers version, devices, TRL version, ...
+        You can get this information by running `trl env` in your terminal.
+
+      placeholder: Copy-paste the output of `trl env`
     validations:
       required: true
-    attributes:
-      label: Expected behavior
-      description: "A clear and concise description of what you would expect to happen."
 
   - type: checkboxes
     id: terms
