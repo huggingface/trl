@@ -18,7 +18,7 @@ import unittest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
@@ -110,6 +110,14 @@ class GRPOTrainerTester(unittest.TestCase):
     def test_training_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-LlamaForSequenceClassification-3.2"
+        )
+        # When training with the raw model, the score are too low to have an impact on the training
+        # within the few generations we are running here. We multiply the weights by 1000 to make sure
+        # the reward has an impact.
+        with torch.no_grad():
+            reward_model.score.weight *= 1000
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
@@ -122,7 +130,7 @@ class GRPOTrainerTester(unittest.TestCase):
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_model="trl-internal-testing/tiny-LlamaForSequenceClassification-3.2",  # llama-based RM
+                reward_model=reward_model,  # llama-based RM
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -135,7 +143,5 @@ class GRPOTrainerTester(unittest.TestCase):
 
             # Check the params have changed
             for n, param in previous_trainable_params.items():
-                if n == "model.embed_tokens.weight":
-                    continue  # the embedding layer seems not to be updated, I'm not sure why
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
