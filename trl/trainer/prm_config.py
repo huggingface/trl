@@ -33,6 +33,8 @@ class PRMConfig(TrainingArguments):
             [`~transformers.TrainingArguments`].
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) used for truncation.
+        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
+            Maximum length of the prompt used for truncation.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
         disable_dropout (`bool`, *optional*, defaults to `True`):
@@ -55,6 +57,10 @@ class PRMConfig(TrainingArguments):
     max_length: Optional[int] = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) used for truncation."},
+    )
+    max_prompt_length: Optional[int] = field(
+        default=512,
+        metadata={"help": "Maximum length of the prompt used for truncation."},
     )
     max_completion_length: Optional[int] = field(
         default=None,
