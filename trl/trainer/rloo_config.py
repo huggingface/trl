@@ -93,6 +93,6 @@ class RLOOConfig(OnPolicyConfig):
         metadata={"help": "Whether to normalize advantages"},
     )
     token_level_kl: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to use token-level KL penalty or sequence-level KL penalty"},
     )
