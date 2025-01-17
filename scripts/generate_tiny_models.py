@@ -81,11 +81,13 @@ This is a minimal model built for unit tests in the [TRL](https://github.com/hug
 api = HfApi()
 
 
-def push_to_hub(model, tokenizer, suffix=None):
+def push_to_hub(model, tokenizer, prefix=None, suffix=None):
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
     model_card = ModelCard(content)
-    repo_id = f"{ORGANIZATION}/tiny-{model_class_name}"
+    if prefix is not None:
+        model_class_name = f"{prefix}-{model_class_name}"
+    repo_id = f"{ORGANIZATION}/{model_class_name}"
     if suffix is not None:
         repo_id += f"-{suffix}"
 
@@ -127,8 +129,20 @@ for model_id, config_class, model_class, suffix in [
         intermediate_size=32,
     )
     model = model_class(config)
-    push_to_hub(model, tokenizer, suffix)
+    push_to_hub(model, tokenizer, "tiny", suffix)
 
+# A slightly bigger model, required for vLLM testing
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
+config = Qwen2Config(
+    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    hidden_size=128,  # increase hidden size so that hidden_size // num_attention_heads = 32, required for vLLM
+    num_attention_heads=4,
+    num_key_value_heads=2,
+    num_hidden_layers=2,
+    intermediate_size=32,
+)
+model = Qwen2ForCausalLM(config)
+push_to_hub(model, tokenizer, "small", "2.5")
 
 # Encoder-decoder models
 for model_id, config_class, model_class, suffix in [
@@ -149,7 +163,7 @@ for model_id, config_class, model_class, suffix in [
         is_encoder_decoder=True,
     )
     model = model_class(config)
-    push_to_hub(model, tokenizer, suffix)
+    push_to_hub(model, tokenizer, "tiny", suffix)
 
 
 # Vision Language Models
@@ -190,4 +204,4 @@ for model_id, config_class, text_config_class, vision_config_class, model_class 
         **kwargs,
     )
     model = model_class(config)
-    push_to_hub(model, processor)
+    push_to_hub(model, processor, "tiny")
