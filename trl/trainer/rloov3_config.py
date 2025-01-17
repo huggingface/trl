@@ -32,8 +32,12 @@ class RLOOv3Config(TrainingArguments):
     )
 
     # rloo
+    num_mini_batches: int = field(
+        default=1,
+        metadata={"help": "Number of minibatches to split a batch into."},
+    )
     num_ppo_epochs: int = field(
-        default=4,
+        default=1,
         metadata={"help": "Number of epochs to train."},
     )
     whiten_rewards: bool = field(
