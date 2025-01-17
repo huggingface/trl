@@ -49,6 +49,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=20,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
