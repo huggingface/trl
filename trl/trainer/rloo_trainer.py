@@ -398,11 +398,18 @@ class RLOOTrainer(Trainer):
                 if args.token_level_kl:
                     # Token-level KL penalty: apply KL penalty per token
                     kl_reward = -args.kl_coef * kl
-                    # Apply reward at the last non-padded token position for each sequence
-                    eos_indices = sequence_lengths.unsqueeze(1) - 1
-                    last_reward = torch.zeros_like(kl).scatter_(dim=1, index=eos_indices, src=scores.unsqueeze(1))
-                    non_score_reward = kl_reward.sum(1)
-                    rlhf_reward = non_score_reward + last_reward.sum(1)
+
+                    # Get the index of the last non-padded token for each sequence
+                    eos_indices = padding_mask.size(1) - 1 - padding_mask.long().fliplr().argmax(dim=1, keepdim=True)
+                    last_reward = torch.zeros_like(kl)
+                    # Ensure scores has correct shape and type
+                    scores_shaped = scores.reshape(-1, 1).to(kl.dtype)
+                    last_reward.scatter_(dim=1, index=eos_indices, src=scores_shaped)
+
+                    # Combine KL reward and last reward
+                    non_score_reward = kl_reward.sum(1)  # Keep this for logging
+                    reward = last_reward + kl_reward
+                    rlhf_reward = reward.sum(1)  # Sum across sequence length
                 else:
                     # Sequence-level KL penalty: sum KL across tokens first
                     sequence_kl = kl.sum(1)

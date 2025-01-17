@@ -61,6 +61,8 @@ class RLOOTrainerTester(unittest.TestCase):
     def test_rloo_reward(self):
         local_batch_size = 3
         rloo_k = 4
+        sequence_length = 5  # Add sequence length for testing token-level rewards
+
         # fmt: off
         rlhf_reward = torch.tensor([
             1, 2, 3, # first rlhf reward for three prompts
@@ -68,8 +70,33 @@ class RLOOTrainerTester(unittest.TestCase):
             5, 6, 7, # third rlhf reward for three prompts
             8, 9, 10, # fourth rlhf reward for three prompts
         ]).float()
+
+        # Add sequence lengths tensor for testing token-level rewards
+        sequence_lengths = torch.tensor([
+            3, 4, 3,  # lengths for first batch
+            4, 3, 4,  # lengths for second batch
+            3, 4, 3,  # lengths for third batch
+            4, 3, 4,  # lengths for fourth batch
+        ])
+
+        # Add kl tensor for testing token-level rewards
+        kl = torch.ones(local_batch_size * rloo_k, sequence_length)  # Dummy KL values
         # fmt: on
 
+        # Test token-level KL rewards
+        kl_coef = 0.1
+        kl_reward = -kl_coef * kl
+        eos_indices = sequence_lengths.unsqueeze(1) - 1
+        batch_indices = torch.arange(len(sequence_lengths)).unsqueeze(1)
+        indices = torch.cat([batch_indices, eos_indices], dim=1)
+
+        last_reward = torch.zeros_like(kl)
+        last_reward.scatter_(dim=1, index=eos_indices, src=rlhf_reward.unsqueeze(1))
+
+        non_score_reward = kl_reward.sum(1)
+        token_level_rlhf_reward = non_score_reward + last_reward.sum(1)
+
+        # Test sequence-level rewards (existing test)
         baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
         advantages = torch.zeros_like(rlhf_reward)
         for i in range(0, len(advantages), local_batch_size):
@@ -83,8 +110,41 @@ class RLOOTrainerTester(unittest.TestCase):
         self.assertLess((1 - (2 + 5 + 8) / 3 - advantages[0].item()), 1e-6)
         self.assertLess((6 - (3 + 2 + 9) / 3 - advantages[7].item()), 1e-6)
 
-        # vectorized impl
+        # Test vectorized implementation
         rlhf_reward = rlhf_reward.reshape(rloo_k, local_batch_size)
         baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
         vec_advantages = rlhf_reward - baseline
         torch.testing.assert_close(vec_advantages.flatten(), advantages)
+
+    def test_rloo_training(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = RLOOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                per_device_eval_batch_size=2,
+                total_episodes=1,
+                num_train_epochs=1,
+                max_steps=2,
+                report_to="none",
+            )
+
+            # Create a simple dataset
+            dummy_text = [{"content": "Hello World!", "role": "user"}]
+            dummy_data = self.tokenizer.apply_chat_template(dummy_text)
+            dummy_dataset = Dataset.from_dict({"input_ids": [dummy_data, dummy_data]})
+
+            trainer = RLOOTrainer(
+                config=training_args,
+                policy=self.policy_model,
+                reward_model=self.reward_model,
+                ref_policy=self.policy_ref_model,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            # Test that training completes without errors
+            trainer.train()
+
+            # Check if objective/rlhf_reward is available
+            self.assertIn("objective/rlhf_reward", trainer.state.log_history[-1])
