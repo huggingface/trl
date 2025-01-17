@@ -8,13 +8,13 @@ Section under construction. Feel free to contribute!
 
 ## Truncation
 
-Sequence lengths in the dataset can vary widely, and by default, TRL does not modify the data. When data is batched, sequences are padded to match the longest one in the batch, which can cause high memory usage, even if most sequences are relatively short.
+Sequence lengths in the dataset can vary widely. When data is batched, sequences are padded to match the longest one in the batch, which can cause high memory usage, even if most sequences are relatively short.
 
 <div class="flex justify-center">
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png" alt="Truncation prompt completion" width="600"/>
 </div>
 
-To reduce memory usage, it’s important to truncate sequences to a reasonable length. Even discarding just a few tokens from the dataset can result in significant memory savings by minimizing unnecessary padding. Truncation is a good practice and should always be applied to ensure efficient use of resources. While the truncation limit doesn’t need to be overly restrictive, setting a sensible value is essential for optimal performance.
+To reduce memory usage, it’s important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
 
 <hfoptions id="dpo">
 <hfoption id="DPO">
@@ -30,7 +30,15 @@ To set the truncation parameters, use the following code snippet:
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., max_prompt_length=..., max_completion_length=..., max_length=...)
+training_args = DPOConfig(..., max_prompt_length=..., max_length=...)
+```
+
+You can also use the `max_completion_length` parameter to truncate the completion, though this is less common since the goal is typically to preserve the completion's full length whenever possible.
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., max_completion_length=...)
 ```
 
 </hfoption>
