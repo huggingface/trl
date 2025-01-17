@@ -276,7 +276,7 @@ The [Reinforce++](https://hijkzzz.notion.site/reinforce-plus-plus) report by Jia
 - Clipping rewards: limiting reward values within a specific range to mitigate the impact of extreme rewards on model updates, thus preventing gradient explosion
 - Normalizing rewards: scaling rewards to have a mean of 0 and a standard deviation of 1, which helps in stabilizing the training process
 - Normalizing advantages: scaling advantages to have a mean of 0 and a standard deviation of 1, which helps in stabilizing the training process
-- Using token-level KL penalty (default) vs. sequence-level KL penalty
+- Using token-level KL penalty that is defined as equation (1) of the report vs. sequence-level KL penalty (default)
 
 These options are available via the appropriate arguments in the [`RLOOConfig`] class.
 
