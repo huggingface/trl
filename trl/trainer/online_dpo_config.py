@@ -90,7 +90,7 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
     max_length: int = field(
-        default=256,
+        default=512,
         metadata={
             "help": "Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If "
             "the sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the "

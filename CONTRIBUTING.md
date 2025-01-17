@@ -257,6 +257,28 @@ That's how `make test` is implemented (without the `pip install` line)!
 You can specify a smaller set of tests to test only the feature
 you're working on.
 
+### Default values guidelines
+
+1. **Use defaults when appropriate**:  
+
+Provide default values unless the parameter's value varies significantly by use case. For example, datasets or models should not have defaults, but parameters like `learning_rate` should.
+
+2. **Prioritize proven defaults**:  
+
+Default values should align with those recommended in the original paper or method. Alternatives require strong evidence of superior performance in most cases.
+
+3. **Ensure safety and predictability**:  
+
+Defaults must be safe, expected and reliable. Avoid settings that could lead to surprising outcomes, such as excessive memory usage or poor performance in edge cases.
+
+4. **Balance consistency and flexibility**:  
+
+Aim for consistent defaults across similar functions or methods. However, consistency should not be preferred to point 2 or 3.
+
+5. **Opt-in for new features**:  
+
+Do not enable new features or improvements (e.g., novel loss functions) by default. Users should explicitly opt-in to use these.
+
 ### Writing documentation
 
 High-quality documentation is crucial for maintaining a project that is easy to use, understand, and extend. When adding new features, ensure they are thoroughly documented to maintain consistency and clarity throughout the project.
@@ -356,7 +378,7 @@ def replicate_str(string: str, n: int, sep: str = " ") -> str:
         ...
       ```
 
-### Deprecation and Backward Compatibility
+### Deprecation and backward compatibility
 
 Our approach to deprecation and backward compatibility is flexible and based on the feature’s usage and impact. Each deprecation is carefully evaluated, aiming to balance innovation with user needs.
 
