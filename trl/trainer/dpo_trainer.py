@@ -1142,13 +1142,6 @@ class DPOTrainer(Trainer):
             #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
             attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
 
-            # Get the first column idx that is all zeros and remove every column after that
-            empty_cols = torch.sum(attention_mask, dim=0) == 0
-            first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-            input_ids = input_ids[:, :first_empty_col]
-            attention_mask = attention_mask[:, :first_empty_col]
-            loss_mask = loss_mask[:, :first_empty_col]
-
             # Truncate right
             if self.args.max_length is not None:
                 input_ids = input_ids[:, : self.args.max_length]
