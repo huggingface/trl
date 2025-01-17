@@ -257,7 +257,7 @@ That's how `make test` is implemented (without the `pip install` line)!
 You can specify a smaller set of tests to test only the feature
 you're working on.
 
-### Default Values Guidelines
+### Default values guidelines
 
 1. **Use defaults when appropriate**:  
 
