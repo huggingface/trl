@@ -3,12 +3,11 @@ on:
   issues:
     types: opened
 
-permissions:
-  issues: write
-
 jobs:
   triage:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
     steps:
       - uses: actions/checkout@v3
       - uses: August-murr/auto-labeler@main
