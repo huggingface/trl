@@ -71,30 +71,54 @@ class RLOOTrainerTester(unittest.TestCase):
             8, 9, 10, # fourth rlhf reward for three prompts
         ]).float()
 
-        # Add sequence lengths tensor for testing token-level rewards
+        # Create padding mask where 1 indicates valid token, 0 indicates padding
+        padding_mask = torch.ones(local_batch_size * rloo_k, sequence_length)
+        # Set padding based on sequence lengths
         sequence_lengths = torch.tensor([
             3, 4, 3,  # lengths for first batch
             4, 3, 4,  # lengths for second batch
             3, 4, 3,  # lengths for third batch
             4, 3, 4,  # lengths for fourth batch
         ])
+        for i, length in enumerate(sequence_lengths):
+            padding_mask[i, length:] = 0
 
         # Add kl tensor for testing token-level rewards
         kl = torch.ones(local_batch_size * rloo_k, sequence_length)  # Dummy KL values
         # fmt: on
 
-        # Test token-level KL rewards
+        # Test token-level KL rewards following OpenRLHF implementation
         kl_coef = 0.1
         kl_reward = -kl_coef * kl
-        eos_indices = sequence_lengths.unsqueeze(1) - 1
-        batch_indices = torch.arange(len(sequence_lengths)).unsqueeze(1)
-        indices = torch.cat([batch_indices, eos_indices], dim=1)
 
+        # Find last non-padded position
+        eos_indices = padding_mask.size(1) - 1 - padding_mask.long().fliplr().argmax(dim=1, keepdim=True)
+
+        # Create last reward tensor
         last_reward = torch.zeros_like(kl)
-        last_reward.scatter_(dim=1, index=eos_indices, src=rlhf_reward.unsqueeze(1))
+        last_reward.scatter_(dim=1, index=eos_indices, src=rlhf_reward.reshape(-1, 1))
 
+        # Test last_reward - should have rlhf_reward at the last non-padded position
+        for i, (length, reward) in enumerate(zip(sequence_lengths, rlhf_reward)):
+            # Check reward is at correct position
+            self.assertEqual(last_reward[i, length - 1].item(), reward.item())
+            # Check zeros elsewhere
+            self.assertTrue(torch.all(last_reward[i, : length - 1] == 0))
+            self.assertTrue(torch.all(last_reward[i, length:] == 0))
+
+        # Combine rewards
+        reward = last_reward + kl_reward
         non_score_reward = kl_reward.sum(1)
-        token_level_rlhf_reward = non_score_reward + last_reward.sum(1)
+        token_level_rlhf_reward = reward.sum(1)
+
+        # Test reward components
+        # KL reward should be -0.1 for each token in sequence length
+        expected_kl_reward = -0.1 * sequence_length  # Each position gets -0.1 KL reward
+        torch.testing.assert_close(non_score_reward, torch.tensor(expected_kl_reward).expand_as(non_score_reward))
+
+        # Total reward should be rlhf_reward + kl_reward
+        expected_total = rlhf_reward + expected_kl_reward
+        torch.testing.assert_close(token_level_rlhf_reward, expected_total)
 
         # Test sequence-level rewards (existing test)
         baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
