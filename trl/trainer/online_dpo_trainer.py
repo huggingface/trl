@@ -47,6 +47,7 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..import_utils import is_vllm_available
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
@@ -78,6 +79,10 @@ if is_sagemaker_mp_enabled():
 
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
+
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
 
 if is_wandb_available():
     import wandb
@@ -223,6 +228,8 @@ class OnlineDPOTrainer(Trainer):
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(pad_token_id=processing_class.pad_token_id)
 
+        self.max_length = args.max_length
+
         self.stats = {
             "objective/kl": [],
             "objective/entropy": [],
@@ -241,14 +248,42 @@ class OnlineDPOTrainer(Trainer):
             self.stats["objective/scores_margin"] = []
             self.stats["objective/scores"] = []
 
-        self.generation_config = GenerationConfig(
-            max_new_tokens=args.max_new_tokens,
-            temperature=args.temperature,
-            top_k=0,
-            top_p=1.0,
-            do_sample=True,
-            use_cache=False if args.gradient_checkpointing else True,
-        )
+        if args.use_vllm:
+            if not is_vllm_available():
+                raise ImportError(
+                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
+                    "`pip install vllm` to use it."
+                )
+            self.generation_config = SamplingParams(
+                n=2,  # 2 generations per prompt
+                max_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_k=50,
+                top_p=1.0,
+                detokenize=False,  # to avoid vllm to decode (we don't need it)
+            )
+            # vLLM dynamically adjusts the size of the key-value cache based on available GPU memory at instanciation.
+            # A larger cache size improves speed, so we would expect gpu_memory_utilization=1.
+            # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
+            # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
+            # space for them. Setting gpu_memory_utilization to 0.55 seems to work well in practice.
+            self.llm = LLM(
+                model=model.name_or_path,
+                gpu_memory_utilization=0.55,
+                dtype=torch.float32,
+                # When release by vLLM, we would be able to distribute the model on multiple GPUs
+                # tensor_parallel_size=torch.cuda.device_count(),
+                # distributed_executor_backend="external_launcher",
+            )
+        else:
+            self.generation_config = GenerationConfig(
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_k=50,
+                top_p=1.0,
+                do_sample=True,
+                use_cache=False if args.gradient_checkpointing else True,
+            )
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
@@ -390,23 +425,55 @@ class OnlineDPOTrainer(Trainer):
 
         return self.accelerator.prepare(eval_dataloader)
 
-    def training_step(
-        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
-    ) -> torch.Tensor:
-        model.train()
+    def _generate_vllm(self, model, prompts):
+        eos_token_id = self.processing_class.eos_token_id
+        pad_token_id = self.processing_class.pad_token_id
 
-        # Apply chat template and tokenize the input.
-        # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
-        batch_size = len(next(iter(inputs.values())))
-        prompts = inputs["prompt"]
-        inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
+        # Load the latest weights
+        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+        llm_model.load_weights(model.state_dict().items())
+
+        if is_conversational({"prompt": prompts[0]}):
+            outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+        else:
+            outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
+
+        completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
+        prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+
+        # Create mask and pad the prompt and completion
+        max_prompt_length = max(len(ids) for ids in prompt_ids)
+        prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
+        prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
+        max_tokens = self.generation_config.max_tokens
+        completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
+        completion_ids = [
+            ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
+            for ids in completion_ids
+        ]
+        completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
+
+        # Convert to tensors
+        prompt_ids = torch.tensor(prompt_ids, device=self.accelerator.device)
+        prompt_mask = torch.tensor(prompt_mask, device=self.accelerator.device)
+        completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
+        completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
+
+        return prompt_ids, prompt_mask, completion_ids, completion_mask
+
+    def _generate(self, model, prompts):
+        eos_token_id = self.processing_class.eos_token_id
+        pad_token_id = self.processing_class.pad_token_id
+
+        # Apply chat template and tokenize the input. We do this on-the-fly to enable the use of reward models and
+        # policies with different tokenizers / chat templates.
+        inputs = [{"prompt": prompt} for prompt in prompts]
         inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
-        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class) for x in inputs]
+        inputs = [self.tokenize_row(x, model.config.is_encoder_decoder, self.processing_class) for x in inputs]
         inputs = self.data_collator(inputs)
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
-        num_examples, context_length = inputs["prompt_input_ids"].shape
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
         prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
@@ -415,42 +482,60 @@ class OnlineDPOTrainer(Trainer):
                 attention_mask=prompt_mask,
                 generation_config=self.generation_config,
             )
-        del inputs
 
-        completion_ids = output[:, context_length:]
-        completion_ids, completion_mask = truncate_right(
-            completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
-        )
-        contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
+        completion_ids = output[:, prompt_ids.size(1) :]
+        completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
+
+        return prompt_ids, prompt_mask, completion_ids, completion_mask
+
+    def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask):
+        # Get the number of tokens to truncate from prompt
+        num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
+
+        # Truncate left to avoid oom
+        prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
+        prompt_mask = prompt_mask[:, num_tokens_to_truncate:]
+
+        # Concat the prompt and completion
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)
 
         # Get the logprobs of the completions from the model
         output = model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-        # There is 1 offset, because the model predict the next token
-        logits = output.logits[:, context_length - 1 : -1]
-        # Turn logits into logprobs
-        all_logprobs = F.log_softmax(logits, dim=-1)
-        # Take the completion tokens logprob
-        logprobs = torch.take_along_dim(all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
-        del output, logits, all_logprobs  # free memory
 
-        # Same for the reference model
+        # There is 1 offset, because the model predict the next token
+        logits = output.logits[:, prompt_ids.size(1) - 1 : -1]
+
+        # Take the completion tokens logprob
+        logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
+        return logprobs
+
+    def training_step(
+        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
+    ) -> torch.Tensor:
+        model.train()
+
+        prompts = inputs["prompt"]
+        batch_size = len(prompts)
+
+        if self.args.use_vllm:
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(model, prompts)
+        else:
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts)
+
+        contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
+
+        logprobs = self._forward(model, prompt_ids, prompt_mask, completion_ids, completion_mask)
         with torch.no_grad():
             if self.ref_model is not None:
-                ref_output = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask)
+                ref_logprobs = self._forward(self.ref_model, prompt_ids, prompt_mask, completion_ids, completion_mask)
             else:  # peft case: we just need to disable the adapter
                 with self.model.disable_adapter():
-                    ref_output = self.model(prompt_completion_ids, attention_mask=prompt_completion_mask)
-            ref_logits = ref_output.logits[:, context_length - 1 : -1]
-            ref_all_logprobs = F.log_softmax(ref_logits, dim=-1)
-            ref_logprobs = torch.take_along_dim(ref_all_logprobs, completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
-            del ref_output, ref_logits, ref_all_logprobs  # free memory
+                    ref_logprobs = self._forward(self.model, prompt_ids, prompt_mask, completion_ids, completion_mask)
 
         # Decode the completions, and format them if the input is conversational
-        device = prompt_completion_ids.device
-        completions_ids = prompt_completion_ids[:, context_length:]
-        completions = self.processing_class.batch_decode(completions_ids, skip_special_tokens=True)
+        device = logprobs.device
+        completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational({"prompt": prompts[0]}):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
@@ -467,7 +552,7 @@ class OnlineDPOTrainer(Trainer):
                 completions = [template.render(messages=completion) for completion in completions]
 
             ranks_of_first_completion = self.judge.judge(
-                prompts, list(zip(completions[:num_examples], completions[num_examples:]))
+                prompts, list(zip(completions[:batch_size], completions[batch_size:]))
             )
 
             # convert ranks to a True/False mask:
@@ -508,14 +593,14 @@ class OnlineDPOTrainer(Trainer):
                     scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
             # Split the scores in 2 (the prompts of the first half are the same as the second half)
-            first_half, second_half = scores.split(num_examples)
+            first_half, second_half = scores.split(batch_size)
 
             # Get the indices of the chosen and rejected examples
             mask = first_half >= second_half
 
-        num_examples_range = torch.arange(num_examples, device=device)
-        chosen_indices = num_examples_range + (~mask * num_examples)
-        rejected_indices = num_examples_range + (mask * num_examples)
+        batch_range = torch.arange(batch_size, device=device)
+        chosen_indices = batch_range + (~mask * batch_size)
+        rejected_indices = batch_range + (mask * batch_size)
 
         # Build tensor so that the first half is the chosen examples and the second half the rejected examples
         cr_indices = torch.cat((chosen_indices, rejected_indices), dim=0)  # cr = chosen and rejected
@@ -530,8 +615,8 @@ class OnlineDPOTrainer(Trainer):
         cr_ref_logprobs_sum = (cr_ref_logprobs * ~cr_padding_mask).sum(1)
 
         # Split the chosen and rejected examples
-        chosen_logprobs_sum, rejected_logprobs_sum = torch.split(cr_logprobs_sum, num_examples)
-        chosen_ref_logprobs_sum, rejected_ref_logprobs_sum = torch.split(cr_ref_logprobs_sum, num_examples)
+        chosen_logprobs_sum, rejected_logprobs_sum = torch.split(cr_logprobs_sum, batch_size)
+        chosen_ref_logprobs_sum, rejected_ref_logprobs_sum = torch.split(cr_ref_logprobs_sum, batch_size)
         pi_logratios = chosen_logprobs_sum - rejected_logprobs_sum
         ref_logratios = chosen_ref_logprobs_sum - rejected_ref_logprobs_sum
 
