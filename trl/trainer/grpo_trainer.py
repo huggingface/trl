@@ -14,7 +14,7 @@
 
 import os
 import textwrap
-from typing import Any, Callable, Optional, Type, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -51,7 +51,7 @@ if is_wandb_available():
 class GRPOTrainer(Trainer):
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module] = None,
+        model: Union[str, PreTrainedModel, nn.Module] = None,
         reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
         args: GRPOConfig = None,
         data_collator: Optional[DataCollator] = None,
@@ -69,7 +69,9 @@ class GRPOTrainer(Trainer):
     ):
         # Args
         if args is None:
-            args = GRPOConfig("output_dir")
+            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model_name.split("/")[-1]
+            args = GRPOConfig(f"{model_name}-GRPO")
 
         # Models
         # Trained model
