@@ -31,7 +31,7 @@ class PRMConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-5`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        max_length (`int` or `None`, *optional*, defaults to `None`):
+        max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) used for truncation.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
@@ -53,7 +53,7 @@ class PRMConfig(TrainingArguments):
         },
     )
     max_length: Optional[int] = field(
-        default=None,
+        default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) used for truncation."},
     )
     max_completion_length: Optional[int] = field(

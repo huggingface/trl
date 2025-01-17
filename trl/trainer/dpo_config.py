@@ -73,11 +73,11 @@ class DPOConfig(TrainingArguments):
             Padding value to use for labels.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             Truncation mode to usewhen the prompt is too long, either `keep_end` or `keep_start`.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `None`):
+        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion.
-        max_length (`int` or `None`, *optional*, defaults to `None`):
+        max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the full sequence (prompt + completion).
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether forward passes are performed without padding by flattening all sequences in the batch
@@ -224,7 +224,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     max_prompt_length: Optional[int] = field(
-        default=None,
+        default=512,
         metadata={"help": "Maximum length of the prompt."},
     )
     max_completion_length: Optional[int] = field(
@@ -232,7 +232,7 @@ class DPOConfig(TrainingArguments):
         metadata={"help": "Maximum length of the completion."},
     )
     max_length: Optional[int] = field(
-        default=None,
+        default=1024,
         metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
     )
     padding_free: bool = field(
