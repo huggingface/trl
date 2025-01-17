@@ -398,9 +398,9 @@ class DPOTrainer(Trainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Liger kernel
-        if args.use_liger_loss and args.loss_type == "sigmoid":
+        if args.use_liger_loss:
             if not is_liger_kernel_available():
-                raise ValueError(
+                raise ImportError(
                     "You set `use_liger_loss=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
