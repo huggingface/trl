@@ -16,7 +16,7 @@ Sequence lengths in the dataset can vary widely, and by default, TRL does not mo
 
 To reduce memory usage, it’s important to truncate sequences to a reasonable length. Even discarding just a few tokens from the dataset can result in significant memory savings by minimizing unnecessary padding. Truncation is a good practice and should always be applied to ensure efficient use of resources. While the truncation limit doesn’t need to be overly restrictive, setting a sensible value is essential for optimal performance.
 
-<hfoptions id="dpo">
+<hfoptions id="truncation">
 <hfoption id="DPO">
 
 DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
@@ -85,3 +85,21 @@ training_args = SFTConfig(..., packing=True, max_seq_length=512)
 Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).
 
 </Tip>
+
+## Liger for reducing peak memory usage
+
+[To complete]
+
+<hfoptions id="liger">
+<hfoption id="DPO">
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., use_liger_loss=True)
+```
+
+</hfoption>
+</hfoptions>
