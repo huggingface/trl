@@ -1049,20 +1049,14 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long):
 
 
 def get_reward(
-    model: Union[torch.nn.Module, Callable],
-    processor: PreTrainedTokenizerBase,
-    query_responses: torch.Tensor,
-    pad_token_id: int,
-    context_length: int,
+    model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Computes the reward logits and the rewards for a given model/function and query responses.
+    Computes the reward logits and the rewards for a given model and query responses.
 
     Args:
-        model (`torch.nn.Module` or `Callable`):
-            The model or a custom function used to compute the reward logits.
-        processor:
-            The processor (e.g., tokenizer) to decode the input if needed.
+        model (`torch.nn.Module`):
+            The model used to compute the reward logits.
         query_responses (`torch.Tensor`):
             The tensor containing the query responses.
         pad_token_id (`int`):
@@ -1079,38 +1073,38 @@ def get_reward(
             - `sequence_lengths` (`torch.Tensor`):
                 The lengths of the sequences in the query responses.
     """
-
-    if isinstance(model, torch.nn.Module):
-        attention_mask = query_responses != pad_token_id
-        position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
-        lm_backbone = getattr(model, model.base_model_prefix)
-        input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
-        output = lm_backbone(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            return_dict=True,
-            output_hidden_states=True,
-            use_cache=False,  # otherwise mistral-based RM would error out
-        )
-        reward_logits = model.score(output.hidden_states[-1])
-        sequence_lengths = first_true_indices(query_responses[:, context_length:] == pad_token_id) - 1 + context_length
-        # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
-        return (
-            reward_logits,
-            reward_logits[
-                torch.arange(reward_logits.size(0), device=reward_logits.device),
-                sequence_lengths,
-            ].squeeze(-1),
+    attention_mask = query_responses != pad_token_id
+    position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
+    lm_backbone = getattr(model, model.base_model_prefix)
+    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+    output = lm_backbone(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        return_dict=True,
+        output_hidden_states=True,
+        use_cache=False,  # otherwise mistral-based RM would error out
+    )
+    reward_logits = model.score(output.hidden_states[-1])
+    sequence_lengths = first_true_indices(query_responses[:, context_length:] == pad_token_id) - 1 + context_length
+    # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
+    return (
+        reward_logits,
+        reward_logits[
+            torch.arange(reward_logits.size(0), device=reward_logits.device),
             sequence_lengths,
-        )
-    else:
-        texts = processor.batch_decode(query_responses)
-        rewards = model(texts)
-        rewards = torch.tensor(rewards, dtype=torch.float).to(query_responses.device)
-        final_rewards, sequence_lengths = None, None
-        return final_rewards, rewards, sequence_lengths
+        ].squeeze(-1),
+        sequence_lengths,
+    )
 
+def get_reward_custom(model: Callable, processor: PreTrainedTokenizerBase, query_responses: torch.Tensor) -> torch.Tensor:
+    """
+    This function ensures that the custom reward function produces the correct output structure for integration with the trainer script.
+    """
+    texts = processor.batch_decode(query_responses)
+    rewards = model(texts)
+    rewards = torch.tensor(rewards, dtype=torch.float).to(query_responses.device)
+    return rewards
 
 def forward(
     model: torch.nn.Module,

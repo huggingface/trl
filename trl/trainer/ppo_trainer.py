@@ -62,6 +62,7 @@ from .utils import (
     generate_model_card,
     get_comet_experiment_url,
     get_reward,
+    get_reward_custom,
     log_table_to_comet_experiment,
     peft_module_casting_to_bf16,
     prepare_deepspeed,
@@ -460,19 +461,19 @@ class PPOTrainer(Trainer):
                     unwrapped_value_model = accelerator.unwrap_model(model).value_model
                     full_value, _, _ = get_reward(
                         unwrapped_value_model,
-                        processing_class,
                         query_response,
                         processing_class.pad_token_id,
                         context_length,
                     )
                     value = full_value[:, context_length - 1 : -1].squeeze(-1)
-                    _, score, _ = get_reward(
-                        reward_model,
-                        processing_class,
-                        postprocessed_query_response,
-                        processing_class.pad_token_id,
-                        context_length,
-                    )
+                    if isinstance(reward_model, torch.nn.Module):
+                        _, score, _ = get_reward(
+                            reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
+                        )
+                    else:
+                        score = get_reward_custom(
+                            reward_model, processing_class, postprocessed_query_response
+                        )
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
@@ -722,13 +723,14 @@ class PPOTrainer(Trainer):
                     )
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                    _, score, _ = get_reward(
-                        self.reward_model,
-                        processing_class,
-                        postprocessed_query_response,
-                        processing_class.pad_token_id,
-                        context_length,
-                    )
+                    if isinstance(self.reward_model, torch.nn.Module):
+                        _, score, _ = get_reward(
+                            self.reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
+                        )
+                    else:
+                        score = get_reward_custom(
+                            self.reward_model, processing_class, postprocessed_query_response
+                        )
                     table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
 
                 if sampling:
