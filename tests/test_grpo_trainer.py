@@ -114,10 +114,10 @@ class GRPOTrainerTester(unittest.TestCase):
             "trl-internal-testing/tiny-LlamaForSequenceClassification-3.2"
         )
         # When training with the raw model, the score are too low to have an impact on the training
-        # within the few generations we are running here. We multiply the weights by 1000 to make sure
+        # within the few generations we are running here. We multiply the weights by 10000 to make sure
         # the reward has an impact.
         with torch.no_grad():
-            reward_model.score.weight *= 1000
+            reward_model.score.weight *= 10000
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
