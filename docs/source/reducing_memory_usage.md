@@ -55,7 +55,7 @@ To set the truncation parameter, use the following code snippet:
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., max_length=...)
+training_args = SFTConfig(..., max_seq_length=...)
 ```
 
 </hfoption>
