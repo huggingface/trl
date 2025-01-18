@@ -19,7 +19,9 @@ from typing import Any, Callable, Optional, Union
 import torch
 import torch.nn as nn
 import torch.utils.data
+import transformers
 from datasets import Dataset, IterableDataset
+from packaging import version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -284,7 +286,10 @@ class GRPOTrainer(Trainer):
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
         logs = {**logs, **metrics}
-        super().log(logs, start_time)
+        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+            return super().log(logs, start_time)
+        else:  # transformers<=4.46
+            return super().log(logs)
         self._metrics = {key: [] for key in self._metrics}
 
     def create_model_card(
