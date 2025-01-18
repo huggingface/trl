@@ -44,7 +44,7 @@ training_args = DPOConfig(..., max_completion_length=...)
 </hfoption>
 <hfoption id="SFT">
 
-SFT truncation is applied to the input sequence via the `max_length` parameter.
+SFT truncation is applied to the input sequence via the `max_seq_length` parameter.
 
 <div class="flex justify-center">
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_input_ids.png" alt="Truncation input ids" width="600"/>
