@@ -70,11 +70,10 @@ class RewardTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     def test_train_full_pretokenized(self):
@@ -90,11 +89,10 @@ class RewardTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @require_peft
@@ -133,12 +131,12 @@ class RewardTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
-            # check the non trainable params have not changed
+            # Check that the non trainable parameters have not changed
             for n, param in previous_non_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
@@ -181,12 +179,12 @@ class RewardTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
-            # check the non trainable params have not changed
+            # Check that the non trainable parameters have not changed
             for n, param in previous_non_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))

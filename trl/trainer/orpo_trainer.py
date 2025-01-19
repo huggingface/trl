@@ -778,12 +778,18 @@ class ORPOTrainer(Trainer):
             loss = loss_fct(logits, labels)
             return loss
 
-        labels = concatenated_batch["concatenated_labels"].clone()
+        if self.is_encoder_decoder:
+            labels = concatenated_batch["concatenated_labels"].clone()
+        else:
+            labels = concatenated_batch["concatenated_input_ids"].clone()
+            attention_mask = concatenated_batch["concatenated_attention_mask"]
+            labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
+        # orpo chosen nll loss is computed over the full prompt and response
         chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
             all_logits,
-            labels,
+            concatenated_batch["concatenated_labels"],
             average_log_prob=True,
             is_encoder_decoder=self.is_encoder_decoder,
             label_pad_token_id=self.label_pad_token_id,
@@ -1049,10 +1055,10 @@ class ORPOTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """

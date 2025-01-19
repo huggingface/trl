@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import AutoTokenizer, HfArgumentParser
 
 
@@ -64,6 +65,34 @@ def to_prompt_completion(example, tokenizer):
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+
+# LM-Human-Preferences-Descriptiveness Dataset
+
+## Summary
+
+The LM-Human-Preferences-Descriptiveness dataset is a processed subset of [OpenAI's LM-Human-Preferences](https://github.com/openai/lm-human-preferences), focusing specifically on enhancing the descriptiveness of generated text. It contains pairs of text samples, each labeled as either "chosen" or "rejected," based on human preferences regarding the level of detail and vividness in the descriptions. This dataset enables models to learn human preferences in descriptive language, improving their ability to generate rich and engaging narratives.
+
+## Data Structure
+
+- **Format**: [Standard](https://huggingface.co/docs/trl/main/dataset_formats#standard)
+- **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
+
+Columns:
+- `"pompt"`: The text sample.
+- `"chosen"`: A version of the text with enhanced descriptiveness.
+- `"rejected"`: A version of the text with less descriptiveness.
+
+This structure allows models to learn to prefer the _chosen_ response over the _rejected_ one, thereby aligning with human preferences in descriptive language.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/lm-human-preferences-descriptiveness.py).
+""")
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
@@ -88,3 +117,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")

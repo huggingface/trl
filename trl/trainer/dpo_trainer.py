@@ -50,7 +50,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_torch_xpu_available
 from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
@@ -61,6 +61,7 @@ from .utils import (
     RunningMoments,
     cap_exp,
     disable_dropout_in_model,
+    empty_cache,
     generate_model_card,
     get_comet_experiment_url,
     log_table_to_comet_experiment,
@@ -371,9 +372,10 @@ class DPOTrainer(Trainer):
                 self.padding_value = processing_class.tokenizer.pad_token_id
             else:
                 raise ValueError(
-                    "Can't find `pad_token_id` in the `processing_class`. "
-                    "Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`) "
-                    "before instantiating the trainer."
+                    "`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in the "
+                    "`processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
+                    "`tokenizer.pad_token` (e.g., `tokenizer.pad_token = tokenizer.eos_token`) before instantiating "
+                    "the trainer."
                 )
 
         if data_collator is None:
@@ -741,7 +743,7 @@ class DPOTrainer(Trainer):
                 ref_rejected_logps.append(ref_rejected_logp.cpu())
 
                 # Unnecessary cache clearing to avoid OOM
-                torch.cuda.empty_cache()
+                empty_cache()
                 self.accelerator.free_memory()
 
             all_ref_chosen_logps = torch.cat(ref_chosen_logps).float().numpy()
@@ -821,7 +823,8 @@ class DPOTrainer(Trainer):
 
     def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
-        compte_ref_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        device_type = "xpu" if is_torch_xpu_available() else "cuda"
+        compte_ref_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         with torch.no_grad(), compte_ref_context_manager:
             if self.ref_model is None:
                 with self.null_ref_context():
@@ -1333,7 +1336,10 @@ class DPOTrainer(Trainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
-        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        device_type = "xpu" if is_torch_xpu_available() else "cuda"
+        compute_loss_context_manager = (
+            amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
 
@@ -1351,8 +1357,9 @@ class DPOTrainer(Trainer):
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
-        # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        # the torch amp context manager as some hidden states are silently casted to full precision.
+        device_type = "xpu" if is_torch_xpu_available() else "cuda"
+        generate_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
 
         with generate_context_manager:
             policy_output = model.generate(
@@ -1360,7 +1367,7 @@ class DPOTrainer(Trainer):
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.processing_class.pad_token_id,
+                pad_token_id=self.padding_value,
             )
 
             # if ref_output in batch use that otherwise use the reference model
@@ -1374,7 +1381,7 @@ class DPOTrainer(Trainer):
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
                             do_sample=True,
-                            pad_token_id=self.processing_class.pad_token_id,
+                            pad_token_id=self.padding_value,
                         )
                 else:
                     ref_output = self.ref_model.generate(
@@ -1382,13 +1389,13 @@ class DPOTrainer(Trainer):
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
-                        pad_token_id=self.processing_class.pad_token_id,
+                        pad_token_id=self.padding_value,
                     )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
+        policy_output = pad_to_length(policy_output, self.max_length, self.padding_value)
         policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        ref_output = pad_to_length(ref_output, self.max_length, self.processing_class.pad_token_id)
+        ref_output = pad_to_length(ref_output, self.max_length, self.padding_value)
         ref_output_decoded = self.processing_class.batch_decode(ref_output, skip_special_tokens=True)
 
         return policy_output_decoded, ref_output_decoded
@@ -1406,7 +1413,8 @@ class DPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        device_type = "xpu" if is_torch_xpu_available() else "cuda"
+        prediction_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
 
         with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
@@ -1517,10 +1525,10 @@ class DPOTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """

@@ -68,6 +68,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
+            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -94,6 +95,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
+            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=True,
             is_eval=False,
@@ -104,6 +106,34 @@ class TestTokenizeRow(unittest.TestCase):
             {
                 "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
                 "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
+            },
+        )
+
+    def test_tokenize_row_prompt_truncation(self):
+        # Define the input features
+        features = {
+            "prompt": "Which number is larger, 9.8 or 9.11?",
+            "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
+            "labels": [True, False],
+        }
+
+        # Call the method with truncation on the completion
+        result = PRMTrainer.tokenize_row(
+            features=features,
+            tokenizer=self.tokenizer,
+            step_separator="\n",
+            max_length=None,
+            max_prompt_length=3,
+            max_completion_length=None,
+            train_on_last_step_only=False,
+            is_eval=False,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "input_ids": [6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
+                "labels": [-100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
             },
         )
 
@@ -121,6 +151,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
+            max_prompt_length=None,
             max_completion_length=6,
             train_on_last_step_only=False,
             is_eval=False,
@@ -148,6 +179,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=9,
+            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -175,6 +207,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n\n",
             max_length=None,
+            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -211,11 +244,10 @@ class PRMTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     def test_train_full_pretokenized(self):
@@ -266,11 +298,10 @@ class PRMTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @require_peft
@@ -309,12 +340,12 @@ class PRMTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
-            # check the non trainable params have not changed
+            # Check that the non trainable parameters have not changed
             for n, param in previous_non_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
