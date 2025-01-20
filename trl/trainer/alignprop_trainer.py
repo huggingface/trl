@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,10 +22,11 @@ import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
+from huggingface_hub import PyTorchModelHubMixin
 from transformers import is_wandb_available
 
 from ..models import DDPOStableDiffusionPipeline
-from . import AlignPropConfig, BaseTrainer
+from .alignprop_config import AlignPropConfig
 from .utils import generate_model_card, get_comet_experiment_url
 
 
@@ -35,7 +36,7 @@ if is_wandb_available():
 logger = get_logger(__name__)
 
 
-class AlignPropTrainer(BaseTrainer):
+class AlignPropTrainer(PyTorchModelHubMixin):
     """
     The AlignPropTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
     Note, this trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
@@ -401,10 +402,10 @@ class AlignPropTrainer(BaseTrainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """

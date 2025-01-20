@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -90,7 +90,7 @@ def setup_chat_format(
         model (`~transformers.PreTrainedModel`): The model to be modified.
         tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
         format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
-        resize_to_multiple_of (`Optional[int]`): Number to resize the embedding layer to. Defaults to None.
+        resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
         model (`~transformers.PreTrainedModel`): The modified model.

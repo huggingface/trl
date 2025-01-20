@@ -68,7 +68,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 
 To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/u2sqci34), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/ppov2_completions.gif)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2_completions.gif)
 
 
 In the logs the sampled generations look like 
@@ -251,7 +251,7 @@ The RLOO checkpoint gets a 51.2% preferred rate vs the 33.0% preference rate of 
 
 Metrics:
 
-![](https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/benchmark/pr-1540/rloo.png)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/rloo.png)
 
 
 ```bash
@@ -268,6 +268,17 @@ python -m openrlbenchmark.rlops_multi_metrics \
     --output-filename benchmark/trl/pr-1540/rloo \
     --scan-history
 ```
+
+## Reinforce++
+
+The [Reinforce++](https://hijkzzz.notion.site/reinforce-plus-plus) report by Jian Hu suggests several optimization tricks to enhance performance and stability of RLHF. They include:
+
+- Clipping rewards: limiting reward values within a specific range to mitigate the impact of extreme rewards on model updates, thus preventing gradient explosion
+- Normalizing rewards: scaling rewards to have a mean of 0 and a standard deviation of 1, which helps in stabilizing the training process
+- Normalizing advantages: scaling advantages to have a mean of 0 and a standard deviation of 1, which helps in stabilizing the training process
+- Using token-level KL penalty that is defined as equation (1) of the report vs. sequence-level KL penalty (default)
+
+These options are available via the appropriate arguments in the [`RLOOConfig`] class.
 
 
 ## RLOOTrainer

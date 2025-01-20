@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.13.0.dev0"
+__version__ = "0.14.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -21,7 +21,6 @@ from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffus
 
 _import_structure = {
     "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
-    "core": ["set_seed"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -37,6 +36,10 @@ _import_structure = {
         "is_deepspeed_available",
         "is_diffusers_available",
         "is_llm_blender_available",
+        "is_mergekit_available",
+        "is_rich_available",
+        "is_unsloth_available",
+        "is_vllm_available",
     ],
     "models": [
         "SUPPORTED_ARCHITECTURES",
@@ -115,7 +118,6 @@ else:
     _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
-    from .core import set_seed
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
@@ -127,7 +129,15 @@ if TYPE_CHECKING:
     )
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
-    from .import_utils import is_deepspeed_available, is_diffusers_available, is_llm_blender_available
+    from .import_utils import (
+        is_deepspeed_available,
+        is_diffusers_available,
+        is_llm_blender_available,
+        is_mergekit_available,
+        is_rich_available,
+        is_unsloth_available,
+        is_vllm_available,
+    )
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,

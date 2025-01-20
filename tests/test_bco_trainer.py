@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -98,11 +98,10 @@ class BCOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     @require_sklearn
@@ -220,11 +219,10 @@ class BCOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     @require_sklearn
@@ -268,11 +266,10 @@ class BCOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     @require_sklearn
@@ -318,12 +315,11 @@ class BCOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 if "lora" in n:
                     new_param = trainer.model.get_parameter(n)
-                    # check the params have changed - ignore 0 biases
-                    if param.sum() != 0:
+                    if param.sum() != 0:  # ignore 0 biases
                         self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     @require_sklearn
@@ -346,8 +342,8 @@ class BCOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex="`generate_during_eval=True` requires Weights and Biases to be installed."
-                " Please install with `pip install wandb` to resolve.",
+                expected_regex="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+                " Please install `wandb` or `comet-ml` to resolve.",
             ):
                 BCOTrainer(
                     model=self.model,

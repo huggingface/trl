@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -71,7 +71,7 @@ To create the package for pypi.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.13.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.14.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "accelerate>=0.34.0",
@@ -91,6 +91,7 @@ EXTRAS = {
     "quantization": ["bitsandbytes"],
     "scikit": ["scikit-learn"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
+    "vllm": ["vllm; sys_platform != 'win32'"],  # vllm is not available on Windows
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []

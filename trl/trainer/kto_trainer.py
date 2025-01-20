@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.amp as amp
 import torch.nn as nn
@@ -45,11 +46,11 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainingArguments,
+    is_comet_available,
     is_wandb_available,
 )
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -59,6 +60,7 @@ from .utils import (
     disable_dropout_in_model,
     generate_model_card,
     get_comet_experiment_url,
+    log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
 )
@@ -305,8 +307,6 @@ class KTOTrainer(Trainer):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        disable_dropout (`bool`, defaults to `True`):
-            Whether or not to disable dropouts in `model` and `ref_model`.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
@@ -318,9 +318,6 @@ class KTOTrainer(Trainer):
 
     _tag_names = ["trl", "kto"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.14.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         model: Union[PreTrainedModel, nn.Module, str] = None,
@@ -450,10 +447,10 @@ class KTOTrainer(Trainer):
 
                 model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-        if args.generate_during_eval and not is_wandb_available():
+        if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
             raise ValueError(
-                "`generate_during_eval=True` requires Weights and Biases to be installed."
-                " Please install with `pip install wandb` to resolve."
+                "`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+                " Please install `wandb` or `comet-ml` to resolve."
             )
 
         if model is not None:
@@ -530,6 +527,7 @@ class KTOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
+        # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
@@ -1142,7 +1140,7 @@ class KTOTrainer(Trainer):
         """
         if self.calculate_KL:
             kl = (policy_KL_logps - reference_KL_logps).mean().detach()
-            kl = self.accelerator.gather(kl).mean().clamp(min=0)
+            kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(policy_chosen_logps.device)
 
@@ -1251,19 +1249,31 @@ class KTOTrainer(Trainer):
         num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
         num_rejected = torch.Tensor([len(rejected_rewards)]).to(self.accelerator.device)
 
-        all_num_chosen = self.accelerator.gather(num_chosen).sum().item()
-        all_num_rejected = self.accelerator.gather(num_rejected).sum().item()
+        all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
+        all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
         if all_num_chosen > 0:
-            metrics["rewards/chosen_sum"] = self.accelerator.gather(chosen_rewards.nansum()).nansum().item()
-            metrics["logps/chosen_sum"] = self.accelerator.gather(policy_chosen_logps.nansum()).nansum().item()
-            metrics["logits/chosen_sum"] = self.accelerator.gather(policy_chosen_logits.nansum()).nansum().item()
+            metrics["rewards/chosen_sum"] = (
+                self.accelerator.gather_for_metrics(chosen_rewards.nansum()).nansum().item()
+            )
+            metrics["logps/chosen_sum"] = (
+                self.accelerator.gather_for_metrics(policy_chosen_logps.nansum()).nansum().item()
+            )
+            metrics["logits/chosen_sum"] = (
+                self.accelerator.gather_for_metrics(policy_chosen_logits.nansum()).nansum().item()
+            )
             metrics["count/chosen"] = all_num_chosen
 
         if all_num_rejected > 0:
-            metrics["rewards/rejected_sum"] = self.accelerator.gather(rejected_rewards.nansum()).nansum().item()
-            metrics["logps/rejected_sum"] = self.accelerator.gather(policy_rejected_logps.nansum()).nansum().item()
-            metrics["logits/rejected_sum"] = self.accelerator.gather(policy_rejected_logits.nansum()).nansum().item()
+            metrics["rewards/rejected_sum"] = (
+                self.accelerator.gather_for_metrics(rejected_rewards.nansum()).nansum().item()
+            )
+            metrics["logps/rejected_sum"] = (
+                self.accelerator.gather_for_metrics(policy_rejected_logps.nansum()).nansum().item()
+            )
+            metrics["logits/rejected_sum"] = (
+                self.accelerator.gather_for_metrics(policy_rejected_logits.nansum()).nansum().item()
+            )
             metrics["count/rejected"] = all_num_rejected
 
         loss = losses.nanmean()
@@ -1419,20 +1429,21 @@ class KTOTrainer(Trainer):
             }
             policy_output_decoded, ref_output_decoded = self.generate_from_model_and_ref(self.model, target_batch)
 
-            self.log(
-                {
-                    "game_log": wandb.Table(
-                        columns=["Prompt", "Policy", "Ref Model"],
-                        rows=[
-                            [prompt, pol[len(prompt) :], ref[len(prompt) :]]
-                            for prompt, pol, ref in zip(
-                                target_batch["prompt"], policy_output_decoded, ref_output_decoded
-                            )
-                        ],
-                    )
-                }
+            table = pd.DataFrame(
+                columns=["Prompt", "Policy", "Ref Model"],
+                data=[
+                    [prompt, pol[len(prompt) :], ref[len(prompt) :]]
+                    for prompt, pol, ref in zip(target_batch["prompt"], policy_output_decoded, ref_output_decoded)
+                ],
             )
-            self.state.log_history.pop()
+            if "wandb" in self.args.report_to:
+                wandb.log({"game_log": wandb.Table(data=table)})
+
+            if "comet_ml" in self.args.report_to:
+                log_table_to_comet_experiment(
+                    name="game_log.csv",
+                    table=table,
+                )
 
         # Base evaluation
         initial_output = super().evaluation_loop(
@@ -1490,10 +1501,10 @@ class KTOTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
