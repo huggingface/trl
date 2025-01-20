@@ -15,7 +15,7 @@
 import warnings
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Literal, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from transformers import TrainingArguments
 
