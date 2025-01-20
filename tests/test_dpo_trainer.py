@@ -1186,7 +1186,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-            self.assertIn("get_current_temperature", trainer.train_dataset["prompt"][0])
+            self.assertIn("get_current_temperature", tokenizer.decode(trainer.train_dataset["prompt_input_ids"][0]))
 
     def test_padding_free(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
