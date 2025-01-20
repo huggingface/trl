@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import sys
 import tempfile
 import unittest
 from io import StringIO
@@ -21,6 +22,11 @@ from unittest.mock import patch
 from trl.cli import main
 
 
+@unittest.skipIf(
+    sys.version_info < (3, 10),
+    "Transformers' generation codebase uses a Python >3.10 syntax (`str | None`), which seems to cause the CLI tests "
+    "to fail on Python <3.10.",  # let's say it's a known issue, but not expected to be fixed, because too niche
+)
 class TestCLI(unittest.TestCase):
     def test_dpo(self):
         with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
