@@ -1569,3 +1569,69 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     experiment = comet_ml.get_running_experiment()
     if experiment is not None:
         experiment.log_table(tabular_data=table, filename=name)
+
+
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """
+    Shift non-zero elements in the mask and corresponding tensors to the left.
+
+    This function operates on a binary mask and any number of additional tensors with the same dimensions as the mask.
+    For each row, non-zero values are shifted to the leftmost positions. Then, columns that contain only zeros across
+    all rows are truncated from the mask and tensors. Visually, this operation can be represented as follows:
+
+    ```
+    [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+     [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+    ```
+
+    Args:
+
+        mask (`torch.Tensor`):
+            2D tensor (binary mask) with shape `(N, M)`.
+        *tensors (`torch.Tensor`)
+            One or more 2D tensors with the same shape as `mask`. These tensors will be processed alongside `mask`,
+            with non-zero values shifted and excess zero columns truncated in the same manner.
+
+    Returns:
+        `torch.Tensor`:
+            Updated binary mask with non-zero values flushed to the left and trailing zero columns removed.
+        `*torch.Tensor`
+            Updated tensors, processed in the same way as the mask.
+
+    Example:
+    ```python
+    >>> mask = torch.tensor([[0, 0, 1, 1, 1],
+    ...                      [0, 1, 1, 0, 0]])
+    >>> tensor = torch.tensor([[9, 9, 2, 3, 4],
+    ...                        [9, 5, 6, 9, 9]])
+    >>> new_mask, new_tensor = flush_left(mask, tensor)
+    >>> print(new_mask)
+    tensor([[1, 1, 1],
+            [1, 1, 0]])
+    >>> print(new_tensor)
+    tensor([[2, 3, 4],
+            [5, 6, 0]])
+    ```
+    """
+    # Create copy of mask and tensors
+    mask = mask.clone()
+    tensors = [t.clone() for t in tensors]
+
+    # Shift non-zero values to the left
+    for i in range(mask.size(0)):
+        first_one_idx = torch.nonzero(mask[i])[0].item()
+        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
+        for tensor in tensors:
+            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+
+    # Get the first column idx that is all zeros and remove every column after that
+    empty_cols = torch.sum(mask, dim=0) == 0
+    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
+    mask = mask[:, :first_empty_col]
+    for i, tensor in enumerate(tensors):
+        tensors[i] = tensor[:, :first_empty_col]
+
+    if not tensors:
+        return mask
+    else:
+        return mask, *tensors
