@@ -1185,7 +1185,9 @@ class DPOTrainerTester(unittest.TestCase):
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
-
+            # We don't run the training, but at this stage, the dataset is supposed to be pre-processed. When
+            # pre-processing, we expect the available tools to be explicitly mentioned in the system prompt. That's
+            # what we're checking here
             self.assertIn("get_current_temperature", tokenizer.decode(trainer.train_dataset["prompt_input_ids"][0]))
 
     def test_padding_free(self):
