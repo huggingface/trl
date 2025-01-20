@@ -110,8 +110,9 @@ In TRL though, as in the original paper, we only do one update per generation, s
 
 The GRPO Trainer logs the following metrics:
 
-- `reward`: The mean reward of the completions.
-- ...
+- `reward`: The average reward.
+- `reward_std` : The average standard deviation within reward groups.
+- `kl` : The average KL divergence between the model and the reference model calculated on completions.
 
 ## GRPOTrainer
 
