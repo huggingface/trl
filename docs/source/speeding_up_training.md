@@ -24,7 +24,18 @@ Then, enable it by passing `use_vllm=True` in the training arguments.
 ```python
 from trl import OnlineDPOConfig
 
-training_args = DPOConfig(..., use_vllm=True)
+training_args = OnlineDPOConfig(..., use_vllm=True)
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+Then, enable it by passing `use_vllm=True` in the training arguments.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_vllm=True)
 ```
 
 </hfoption>
