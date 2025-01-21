@@ -47,6 +47,8 @@ class GRPOConfig(TrainingArguments):
             Temperature for sampling. The higher the temperature, the more random the completions.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the generated completion.
+        use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use the vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
 
         > Parameters that control the training
 
@@ -84,6 +86,13 @@ class GRPOConfig(TrainingArguments):
     max_completion_length: Optional[int] = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
+    )
+    use_vllm: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the vLLM for generating completions. Requires vLLM to be installed "
+            "(`pip install vllm`)."
+        },
     )
 
     # Parameters that control the training
