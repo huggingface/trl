@@ -16,7 +16,7 @@ import dataclasses
 import inspect
 import os
 import warnings
-from typing import Callable, Optional, Union
+from typing import Callable, List, Optional, Union
 
 import datasets
 import torch
@@ -48,6 +48,7 @@ from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
+    compute_token_accuracy,
     generate_model_card,
     get_comet_experiment_url,
     peft_module_casting_to_bf16,
@@ -546,3 +547,55 @@ class SFTTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
+    def training_step(self, model, inputs, num_items_in_batch=None) -> torch.Tensor:
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+
+        # Get loss and logits from parent class
+        loss = super().training_step(model, inputs)
+
+        # Compute token accuracy for training
+        if "labels" in inputs:
+            with torch.no_grad():
+                outputs = model(**inputs)
+                train_accuracy = compute_token_accuracy(outputs.logits, inputs["labels"])
+                self.log({"train_mean_token_accuracy": train_accuracy})
+
+        return loss
+
+    def evaluation_loop(
+        self,
+        dataloader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ):
+        # Run regular evaluation loop
+        eval_output = super().evaluation_loop(
+            dataloader,
+            description,
+            prediction_loss_only,
+            ignore_keys,
+            metric_key_prefix,
+        )
+
+        # Add validation token accuracy
+        if not prediction_loss_only:
+            validation_accuracies = []
+            model = self._wrap_model(self.model, training=False, dataloader=dataloader)
+
+            for inputs in dataloader:
+                inputs = self._prepare_inputs(inputs)
+                if "labels" in inputs:
+                    with torch.no_grad():
+                        outputs = model(**inputs)
+                        accuracy = compute_token_accuracy(outputs.logits, inputs["labels"])
+                        validation_accuracies.append(accuracy)
+
+            if validation_accuracies:
+                mean_accuracy = sum(validation_accuracies) / len(validation_accuracies)
+                eval_output.metrics[f"{metric_key_prefix}_mean_token_accuracy"] = mean_accuracy
+
+        return eval_output
