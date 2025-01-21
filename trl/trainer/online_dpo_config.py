@@ -142,7 +142,7 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to use the vLLM for generating completions. Requires vLLM to be installed "
             "(`pip install vllm`)."
-        }
+        },
     )
     ds3_gather_for_generation: bool = field(
         default=True,
