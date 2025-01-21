@@ -1111,6 +1111,174 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
+    def _compute_loss_liger(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
+        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
+
+        model_kwargs = {}
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
+
+        # Add the pixel values and attention masks for vision models
+        if "pixel_values" in concatenated_batch:
+            model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
+        if "pixel_attention_mask" in concatenated_batch:
+            model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+        if "image_sizes" in concatenated_batch:
+            model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
+
+        if self.is_encoder_decoder:
+            # 1. Get encoder outputs
+            encoder_outputs = model.get_encoder()(
+                concatenated_batch["prompt_input_ids"],
+                attention_mask=concatenated_batch["prompt_attention_mask"],
+                return_dict=True,
+            )
+            # 2. Prepare decoder inputs
+            decoder_input_ids = shift_tokens_right(
+                concatenated_batch["completion_input_ids"], self.padding_value, model.config.decoder_start_token_id
+            )
+            # 3. Get decoder outputs
+            decoder_outputs = model.get_decoder()(
+                input_ids=decoder_input_ids,
+                attention_mask=concatenated_batch["completion_attention_mask"],
+                encoder_hidden_states=encoder_outputs.last_hidden_state,
+                encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
+                use_cache=False,
+            )
+            hidden_states = decoder_outputs.last_hidden_state
+
+            ref_hidden_states = None
+            if not self.reference_free and self.ref_model is not None:
+                ref_encoder_outputs = self.ref_model.get_encoder()(
+                    concatenated_batch["prompt_input_ids"],
+                    attention_mask=concatenated_batch["prompt_attention_mask"],
+                    return_dict=True,
+                )
+                ref_decoder_outputs = self.ref_model.get_decoder()(
+                    input_ids=decoder_input_ids,
+                    attention_mask=concatenated_batch["completion_attention_mask"],
+                    encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
+                    encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
+                    use_cache=False,
+                )
+                ref_hidden_states = ref_decoder_outputs.last_hidden_state
+            elif not self.reference_free:
+                with self.null_ref_context():
+                    ref_encoder_outputs = model.get_encoder()(
+                        concatenated_batch["prompt_input_ids"],
+                        attention_mask=concatenated_batch["prompt_attention_mask"],
+                        return_dict=True,
+                    )
+                    ref_decoder_outputs = model.get_decoder()(
+                        input_ids=decoder_input_ids,
+                        attention_mask=concatenated_batch["completion_attention_mask"],
+                        encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
+                        encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
+                        use_cache=False,
+                    )
+                    ref_hidden_states = ref_decoder_outputs.last_hidden_state
+
+            labels = concatenated_batch["completion_input_ids"]
+        else:
+            # For decoder-only models
+            input_ids = torch.cat(
+                (concatenated_batch["prompt_input_ids"], concatenated_batch["completion_input_ids"]), dim=1
+            )
+            attention_mask = torch.cat(
+                (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]),
+                dim=1,
+            )
+
+            # Get the base model outputs (before LM head)
+            if hasattr(model, "get_decoder"):
+                base_model = model.get_decoder()
+            else:
+                base_model = getattr(model, self.args.base_model_attribute_name, model)
+
+            outputs = base_model(
+                input_ids,
+                attention_mask=attention_mask,
+                use_cache=False,
+                **model_kwargs,
+            )
+            hidden_states = outputs.last_hidden_state[:, :-1]
+
+            # Get reference hidden states if needed
+            ref_hidden_states = None
+            if not self.reference_free and self.ref_model is not None:
+                if hasattr(self.ref_model, "get_decoder"):
+                    ref_base_model = self.ref_model.get_decoder()
+                else:
+                    ref_base_model = getattr(self.ref_model, self.args.base_model_attribute_name, self.ref_model)
+
+                ref_outputs = ref_base_model(
+                    input_ids,
+                    attention_mask=attention_mask,
+                    use_cache=False,
+                    **model_kwargs,
+                )
+                ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
+            elif not self.reference_free:
+                if hasattr(model, "get_decoder"):
+                    ref_base_model = model.get_decoder()
+                else:
+                    ref_base_model = getattr(model, self.args.base_model_attribute_name, model)
+                with self.null_ref_context():
+                    ref_outputs = ref_base_model(
+                        input_ids,
+                        attention_mask=attention_mask,
+                        use_cache=False,
+                        **model_kwargs,
+                    )
+                    ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
+
+            labels = input_ids[:, 1:]  # Shift right for casual LM
+
+        # Get the LM head
+        lm_head = model.get_output_embeddings()
+
+        # Get reference model weights if needed
+        ref_weight = None
+        ref_bias = None
+        if not self.reference_free:
+            if self.ref_model is not None:
+                ref_lm_head = self.ref_model.get_output_embeddings()
+            else:
+                with self.null_ref_context():
+                    ref_lm_head = model.get_output_embeddings()
+            ref_weight = ref_lm_head.weight
+            ref_bias = ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
+
+        # Compute loss using Liger kernel
+        loss_output = self.dpo_loss_fn(
+            lm_head.weight,
+            hidden_states,
+            labels,
+            bias=lm_head.bias if hasattr(lm_head, "bias") else None,
+            ref_input=ref_hidden_states if not self.reference_free else None,
+            ref_weight=ref_weight if not self.reference_free else None,
+            ref_bias=ref_bias if not self.reference_free else None,
+        )
+        (
+            loss,
+            (chosen_logps, rejected_logps, chosen_logits_mean, rejected_logits_mean, nll_loss, _, _, *aux_outputs),
+        ) = loss_output
+
+        output = {
+            "loss": loss,
+            "chosen_logps": chosen_logps,
+            "rejected_logps": rejected_logps,
+            "mean_chosen_logits": chosen_logits_mean,
+            "mean_rejected_logits": rejected_logits_mean,
+            "nll_loss": nll_loss,
+            "chosen_rewards": aux_outputs[0],
+            "rejected_rewards": aux_outputs[1],
+        }
+        if self.aux_loss_enabled:
+            output["aux_loss"] = outputs.aux_loss
+
+        return output
+
     def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
@@ -1132,319 +1300,161 @@ class DPOTrainer(Trainer):
         if "image_sizes" in concatenated_batch:
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
 
-        if self.args.use_liger_loss and self.loss_type == "sigmoid":
-            if self.is_encoder_decoder:
-                # 1. Get encoder outputs
-                encoder_outputs = model.get_encoder()(
-                    concatenated_batch["prompt_input_ids"],
-                    attention_mask=concatenated_batch["prompt_attention_mask"],
-                    return_dict=True,
-                )
-                # 2. Prepare decoder inputs
-                decoder_input_ids = shift_tokens_right(
-                    concatenated_batch["completion_input_ids"], self.padding_value, model.config.decoder_start_token_id
-                )
-                # 3. Get decoder outputs
-                decoder_outputs = model.get_decoder()(
-                    input_ids=decoder_input_ids,
-                    attention_mask=concatenated_batch["completion_attention_mask"],
-                    encoder_hidden_states=encoder_outputs.last_hidden_state,
-                    encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
-                    use_cache=False,
-                )
-                hidden_states = decoder_outputs.last_hidden_state
-
-                ref_hidden_states = None
-                if not self.reference_free and self.ref_model is not None:
-                    ref_encoder_outputs = self.ref_model.get_encoder()(
-                        concatenated_batch["prompt_input_ids"],
-                        attention_mask=concatenated_batch["prompt_attention_mask"],
-                        return_dict=True,
-                    )
-                    ref_decoder_outputs = self.ref_model.get_decoder()(
-                        input_ids=decoder_input_ids,
-                        attention_mask=concatenated_batch["completion_attention_mask"],
-                        encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
-                        encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
-                        use_cache=False,
-                    )
-                    ref_hidden_states = ref_decoder_outputs.last_hidden_state
-                elif not self.reference_free:
-                    with self.null_ref_context():
-                        ref_encoder_outputs = model.get_encoder()(
-                            concatenated_batch["prompt_input_ids"],
-                            attention_mask=concatenated_batch["prompt_attention_mask"],
-                            return_dict=True,
-                        )
-                        ref_decoder_outputs = model.get_decoder()(
-                            input_ids=decoder_input_ids,
-                            attention_mask=concatenated_batch["completion_attention_mask"],
-                            encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
-                            encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
-                            use_cache=False,
-                        )
-                        ref_hidden_states = ref_decoder_outputs.last_hidden_state
-
-                labels = concatenated_batch["completion_input_ids"]
-            else:
-                # For decoder-only models
-                input_ids = torch.cat(
-                    (concatenated_batch["prompt_input_ids"], concatenated_batch["completion_input_ids"]), dim=1
-                )
-                attention_mask = torch.cat(
-                    (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]),
-                    dim=1,
-                )
-
-                # Get the base model outputs (before LM head)
-                if hasattr(model, "get_decoder"):
-                    base_model = model.get_decoder()
-                else:
-                    base_model = getattr(model, self.args.base_model_attribute_name, model)
-
-                outputs = base_model(
-                    input_ids,
-                    attention_mask=attention_mask,
-                    use_cache=False,
-                    **model_kwargs,
-                )
-                hidden_states = outputs.last_hidden_state[:, :-1]
-
-                # Get reference hidden states if needed
-                ref_hidden_states = None
-                if not self.reference_free and self.ref_model is not None:
-                    if hasattr(self.ref_model, "get_decoder"):
-                        ref_base_model = self.ref_model.get_decoder()
-                    else:
-                        ref_base_model = getattr(self.ref_model, self.args.base_model_attribute_name, self.ref_model)
-
-                    ref_outputs = ref_base_model(
-                        input_ids,
-                        attention_mask=attention_mask,
-                        use_cache=False,
-                        **model_kwargs,
-                    )
-                    ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
-                elif not self.reference_free:
-                    if hasattr(model, "get_decoder"):
-                        ref_base_model = model.get_decoder()
-                    else:
-                        ref_base_model = getattr(model, self.args.base_model_attribute_name, model)
-                    with self.null_ref_context():
-                        ref_outputs = ref_base_model(
-                            input_ids,
-                            attention_mask=attention_mask,
-                            use_cache=False,
-                            **model_kwargs,
-                        )
-                        ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
-
-                labels = input_ids[:, 1:]  # Shift right for casual LM
-
-            # Get the LM head
-            lm_head = model.get_output_embeddings()
-
-            # Get reference model weights if needed
-            ref_weight = None
-            ref_bias = None
-            if not self.reference_free:
-                if self.ref_model is not None:
-                    ref_lm_head = self.ref_model.get_output_embeddings()
-                else:
-                    with self.null_ref_context():
-                        ref_lm_head = model.get_output_embeddings()
-                ref_weight = ref_lm_head.weight
-                ref_bias = ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
-
-            # Compute loss using Liger kernel
-            loss_output = self.dpo_loss_fn(
-                lm_head.weight,
-                hidden_states,
-                labels,
-                bias=lm_head.bias if hasattr(lm_head, "bias") else None,
-                ref_input=ref_hidden_states if not self.reference_free else None,
-                ref_weight=ref_weight if not self.reference_free else None,
-                ref_bias=ref_bias if not self.reference_free else None,
+        prompt_input_ids = concatenated_batch["prompt_input_ids"]
+        prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
+        completion_input_ids = concatenated_batch["completion_input_ids"]
+        completion_attention_mask = concatenated_batch["completion_attention_mask"]
+        if self.is_encoder_decoder:
+            labels = completion_input_ids
+            labels[completion_attention_mask == 0] = self.label_pad_token_id
+            outputs = model(
+                input_ids=prompt_input_ids,
+                attention_mask=prompt_attention_mask,
+                labels=labels,  # we need the labels for the logits to be returned
+                **model_kwargs,
             )
-            (
-                loss,
-                (chosen_logps, rejected_logps, chosen_logits_mean, rejected_logits_mean, nll_loss, _, _, *aux_outputs),
-            ) = loss_output
-
-            output = {
-                "loss": loss,
-                "chosen_logps": chosen_logps,
-                "rejected_logps": rejected_logps,
-                "mean_chosen_logits": chosen_logits_mean,
-                "mean_rejected_logits": rejected_logits_mean,
-                "nll_loss": nll_loss,
-                "chosen_rewards": aux_outputs[0],
-                "rejected_rewards": aux_outputs[1],
-            }
-            if self.aux_loss_enabled:
-                output["aux_loss"] = outputs.aux_loss
-
-            return output
+            logits = outputs.logits
+            loss_mask = completion_attention_mask.bool()
         else:
-            prompt_input_ids = concatenated_batch["prompt_input_ids"]
-            prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
-            completion_input_ids = concatenated_batch["completion_input_ids"]
-            completion_attention_mask = concatenated_batch["completion_attention_mask"]
-            if self.is_encoder_decoder:
-                labels = completion_input_ids
-                labels[completion_attention_mask == 0] = self.label_pad_token_id
-                outputs = model(
-                    input_ids=prompt_input_ids,
-                    attention_mask=prompt_attention_mask,
-                    labels=labels,  # we need the labels for the logits to be returned
-                    **model_kwargs,
-                )
-                logits = outputs.logits
-                loss_mask = completion_attention_mask.bool()
+            # Concatenate the prompt and completion inputs
+            input_ids = torch.cat((prompt_input_ids, completion_input_ids), dim=1)
+            attention_mask = torch.cat((prompt_attention_mask, completion_attention_mask), dim=1)
+            # Mask the prompt but not the completion for the loss
+            loss_mask = torch.cat(
+                (torch.zeros_like(prompt_attention_mask), completion_attention_mask),
+                dim=1,
+            )
+
+            # Flush left to reduce the memory usage
+            # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+            #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+            for i in range(attention_mask.size(0)):
+                first_one_idx = torch.nonzero(attention_mask[i])[0].item()
+                input_ids[i] = torch.roll(input_ids[i], shifts=-first_one_idx)
+                attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
+                loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
+
+            # Get the first column idx that is all zeros and remove every column after that
+            empty_cols = torch.sum(attention_mask, dim=0) == 0
+            first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
+            input_ids = input_ids[:, :first_empty_col]
+            attention_mask = attention_mask[:, :first_empty_col]
+            loss_mask = loss_mask[:, :first_empty_col]
+
+            # Truncate right
+            if self.args.max_length is not None:
+                input_ids = input_ids[:, : self.args.max_length]
+                attention_mask = attention_mask[:, : self.args.max_length]
+                loss_mask = loss_mask[:, : self.args.max_length]
+
+            if self.use_num_logits_to_keep:
+                # Compute num_logits_to_keep based on loss_mask pattern:
+                # [[0, 0, 0, x, x, x, x],
+                #  [0, 0, 0, x, x, x, 0]]
+                #         ^ start computing logits from here ([:, -(7-3+1):])
+                first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
+                num_logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1  # +1 for the first label
+                model_kwargs["num_logits_to_keep"] = num_logits_to_keep
+
+            if self.padding_free:
+                # Flatten the input_ids, position_ids, and loss_mask
+                # input_ids = [[a, b, c, 0], ->     input_ids = [[a, b, c, d, e, f, g]]
+                #              [d, e, f, g]]     position_ids = [[0, 1, 2, 0, 1, 2, 3]]
+                input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
+                loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
+                position_ids = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
+                model_kwargs["position_ids"] = position_ids
             else:
-                # Concatenate the prompt and completion inputs
-                input_ids = torch.cat((prompt_input_ids, completion_input_ids), dim=1)
-                attention_mask = torch.cat((prompt_attention_mask, completion_attention_mask), dim=1)
-                # Mask the prompt but not the completion for the loss
-                loss_mask = torch.cat(
-                    (torch.zeros_like(prompt_attention_mask), completion_attention_mask),
-                    dim=1,
-                )
+                model_kwargs["attention_mask"] = attention_mask
 
-                # Flush left to reduce the memory usage
-                # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
-                #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
-                for i in range(attention_mask.size(0)):
-                    first_one_idx = torch.nonzero(attention_mask[i])[0].item()
-                    input_ids[i] = torch.roll(input_ids[i], shifts=-first_one_idx)
-                    attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
-                    loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
+            outputs = model(input_ids, **model_kwargs)
+            logits = outputs.logits
 
-                # Get the first column idx that is all zeros and remove every column after that
-                empty_cols = torch.sum(attention_mask, dim=0) == 0
-                first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-                input_ids = input_ids[:, :first_empty_col]
-                attention_mask = attention_mask[:, :first_empty_col]
-                loss_mask = loss_mask[:, :first_empty_col]
+            # Offset the logits by one to align with the labels
+            labels = torch.roll(input_ids, shifts=-1, dims=1)
+            loss_mask = torch.roll(loss_mask, shifts=-1, dims=1).bool()
 
-                # Truncate right
-                if self.args.max_length is not None:
-                    input_ids = input_ids[:, : self.args.max_length]
-                    attention_mask = attention_mask[:, : self.args.max_length]
-                    loss_mask = loss_mask[:, : self.args.max_length]
+            if self.use_num_logits_to_keep:
+                # Align labels with logits
+                # logits:    -,  -, [x2, x3, x4, x5, x6]
+                #                     ^ --------- ^       after logits[:, :-1, :]
+                # labels:   [y0, y1, y2, y3, y4, y5, y6]
+                #                         ^ --------- ^   with num_logits_to_keep=4, [:, -4:]
+                # loss_mask: [0,  0,  0,  1,  1,  1,  1]
+                labels = labels[:, -num_logits_to_keep:]
+                loss_mask = loss_mask[:, -num_logits_to_keep:]
 
-                if self.use_num_logits_to_keep:
-                    # Compute num_logits_to_keep based on loss_mask pattern:
-                    # [[0, 0, 0, x, x, x, x],
-                    #  [0, 0, 0, x, x, x, 0]]
-                    #         ^ start computing logits from here ([:, -(7-3+1):])
-                    first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
-                    num_logits_to_keep = (
-                        loss_mask.shape[1] - first_compute_index
-                    ).item() + 1  # +1 for the first label
-                    model_kwargs["num_logits_to_keep"] = num_logits_to_keep
+        if logits.shape[:2] != labels.shape[:2]:
+            # for llava, the returned logits include the image tokens (placed before the text tokens)
+            seq_len = labels.shape[1]
+            logits = logits[:, -seq_len:]
 
-                if self.padding_free:
-                    # Flatten the input_ids, position_ids, and loss_mask
-                    # input_ids = [[a, b, c, 0], ->     input_ids = [[a, b, c, d, e, f, g]]
-                    #              [d, e, f, g]]     position_ids = [[0, 1, 2, 0, 1, 2, 3]]
-                    input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
-                    loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
-                    position_ids = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
-                    model_kwargs["position_ids"] = position_ids
-                else:
-                    model_kwargs["attention_mask"] = attention_mask
+        # Compute the log probabilities of the labels
+        labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
+        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps[~loss_mask] = 0
+        per_token_logps = torch.roll(per_token_logps, shifts=1, dims=1)
 
-                outputs = model(input_ids, **model_kwargs)
-                logits = outputs.logits
+        if self.padding_free:
+            # Unflatten the per_token_logps (shape: [1, sum_seq_len] -> [batch_size, seq_len])
+            batch_size, seq_len = attention_mask.shape
+            per_token_logps_ = torch.zeros(
+                batch_size, seq_len, device=outputs.logits.device, dtype=outputs.logits.dtype
+            )
+            per_token_logps_[attention_mask.bool()] = per_token_logps
+            per_token_logps = per_token_logps_
 
-                # Offset the logits by one to align with the labels
-                labels = torch.roll(input_ids, shifts=-1, dims=1)
-                loss_mask = torch.roll(loss_mask, shifts=-1, dims=1).bool()
+        all_logps = per_token_logps.sum(-1)
 
-                if self.use_num_logits_to_keep:
-                    # Align labels with logits
-                    # logits:    -,  -, [x2, x3, x4, x5, x6]
-                    #                     ^ --------- ^       after logits[:, :-1, :]
-                    # labels:   [y0, y1, y2, y3, y4, y5, y6]
-                    #                         ^ --------- ^   with num_logits_to_keep=4, [:, -4:]
-                    # loss_mask: [0,  0,  0,  1,  1,  1,  1]
-                    labels = labels[:, -num_logits_to_keep:]
-                    loss_mask = loss_mask[:, -num_logits_to_keep:]
+        output = {}
 
-            if logits.shape[:2] != labels.shape[:2]:
-                # for llava, the returned logits include the image tokens (placed before the text tokens)
-                seq_len = labels.shape[1]
-                logits = logits[:, -seq_len:]
+        if self.use_weighting:
+            with torch.no_grad():
+                # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
+                logprobs = F.log_softmax(logits, dim=-1)
+                weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)  # same as sum(probs**2) in log space
+                per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
+                all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
+                chosen_weights = all_weights[:num_examples]
+                rejected_weights = all_weights[num_examples:]
+                output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
+
+        if self.args.rpo_alpha is not None:
+            # Only use the chosen logits for the RPO loss
+            chosen_logits = logits[:num_examples, :-1] if not self.is_encoder_decoder else logits[:num_examples]
+            chosen_labels = labels[:num_examples, 1:] if self.is_encoder_decoder else labels[:num_examples]
 
             # Compute the log probabilities of the labels
-            labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
-            per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-            per_token_logps[~loss_mask] = 0
-            per_token_logps = torch.roll(per_token_logps, shifts=1, dims=1)
+            output["nll_loss"] = F.cross_entropy(
+                torch.flatten(chosen_logits, end_dim=1), torch.flatten(chosen_labels, end_dim=1), ignore_index=0
+            )
 
-            if self.padding_free:
-                # Unflatten the per_token_logps (shape: [1, sum_seq_len] -> [batch_size, seq_len])
-                batch_size, seq_len = attention_mask.shape
-                per_token_logps_ = torch.zeros(
-                    batch_size, seq_len, device=outputs.logits.device, dtype=outputs.logits.dtype
-                )
-                per_token_logps_[attention_mask.bool()] = per_token_logps
-                per_token_logps = per_token_logps_
+        if self.loss_type == "ipo":
+            all_logps = all_logps / loss_mask.sum(-1)
 
-            all_logps = per_token_logps.sum(-1)
+        output["chosen_logps"] = all_logps[:num_examples]
+        output["rejected_logps"] = all_logps[num_examples:]
 
-            output = {}
+        # Compute the mean logits
+        if self.padding_free:
+            # position_ids contains a sequence of range identifiers (e.g., [[0, 1, 2, 0, 1, 2, 3, ...]]).
+            # There are 2*num_examples ranges in total: the first half corresponds to the chosen tokens,
+            # and the second half to the rejected tokens.
+            # To find the start of the rejected tokens, we look for the num_examples+1-th zero in pos_id.
+            split_idx = (position_ids == 0).nonzero(as_tuple=True)[1][num_examples]
+            mean_chosen_logits = logits[0, :split_idx][loss_mask[0, :split_idx]].mean()
+            mean_rejected_logits = logits[0, split_idx:][loss_mask[0, split_idx:]].mean()
+        else:
+            mean_chosen_logits = logits[:num_examples][loss_mask[:num_examples]].mean()
+            mean_rejected_logits = logits[num_examples:][loss_mask[num_examples:]].mean()
 
-            if self.use_weighting:
-                with torch.no_grad():
-                    # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
-                    logprobs = F.log_softmax(logits, dim=-1)
-                    weights_adjustment_factor = torch.logsumexp(
-                        2 * logprobs, dim=-1
-                    )  # same as sum(probs**2) in log space
-                    per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
-                    all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
-                    chosen_weights = all_weights[:num_examples]
-                    rejected_weights = all_weights[num_examples:]
-                    output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
+        output["mean_chosen_logits"] = mean_chosen_logits
+        output["mean_rejected_logits"] = mean_rejected_logits
 
-            if self.args.rpo_alpha is not None:
-                # Only use the chosen logits for the RPO loss
-                chosen_logits = logits[:num_examples, :-1] if not self.is_encoder_decoder else logits[:num_examples]
-                chosen_labels = labels[:num_examples, 1:] if self.is_encoder_decoder else labels[:num_examples]
+        if self.aux_loss_enabled:
+            output["aux_loss"] = outputs.aux_loss
 
-                # Compute the log probabilities of the labels
-                output["nll_loss"] = F.cross_entropy(
-                    torch.flatten(chosen_logits, end_dim=1), torch.flatten(chosen_labels, end_dim=1), ignore_index=0
-                )
-
-            if self.loss_type == "ipo":
-                all_logps = all_logps / loss_mask.sum(-1)
-
-            output["chosen_logps"] = all_logps[:num_examples]
-            output["rejected_logps"] = all_logps[num_examples:]
-
-            # Compute the mean logits
-            if self.padding_free:
-                # position_ids contains a sequence of range identifiers (e.g., [[0, 1, 2, 0, 1, 2, 3, ...]]).
-                # There are 2*num_examples ranges in total: the first half corresponds to the chosen tokens,
-                # and the second half to the rejected tokens.
-                # To find the start of the rejected tokens, we look for the num_examples+1-th zero in pos_id.
-                split_idx = (position_ids == 0).nonzero(as_tuple=True)[1][num_examples]
-                mean_chosen_logits = logits[0, :split_idx][loss_mask[0, :split_idx]].mean()
-                mean_rejected_logits = logits[0, split_idx:][loss_mask[0, split_idx:]].mean()
-            else:
-                mean_chosen_logits = logits[:num_examples][loss_mask[:num_examples]].mean()
-                mean_rejected_logits = logits[num_examples:][loss_mask[num_examples:]].mean()
-
-            output["mean_chosen_logits"] = mean_chosen_logits
-            output["mean_rejected_logits"] = mean_rejected_logits
-
-            if self.aux_loss_enabled:
-                output["aux_loss"] = outputs.aux_loss
-
-            return output
+        return output
 
     def get_batch_loss_metrics(
         self,
@@ -1455,13 +1465,14 @@ class DPOTrainer(Trainer):
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
-        model_output = self.concatenated_forward(model, batch)
-
-        if self.args.use_liger_loss:
+        if self.args.use_liger_loss and self.loss_type == "sigmoid":
+            model_output = self._compute_loss_liger(model, batch)
             losses = model_output["loss"]
             chosen_rewards = model_output["chosen_rewards"]
             rejected_rewards = model_output["rejected_rewards"]
         else:
+            model_output = self.concatenated_forward(model, batch)
+
             # if ref_chosen_logps and ref_rejected_logps in batch use them, otherwise use the reference model
             if "ref_chosen_logps" in batch and "ref_rejected_logps" in batch:
                 ref_chosen_logps = batch["ref_chosen_logps"]
