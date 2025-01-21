@@ -68,6 +68,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
+            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -94,6 +95,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
+            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=True,
             is_eval=False,
@@ -104,6 +106,34 @@ class TestTokenizeRow(unittest.TestCase):
             {
                 "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
                 "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
+            },
+        )
+
+    def test_tokenize_row_prompt_truncation(self):
+        # Define the input features
+        features = {
+            "prompt": "Which number is larger, 9.8 or 9.11?",
+            "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
+            "labels": [True, False],
+        }
+
+        # Call the method with truncation on the completion
+        result = PRMTrainer.tokenize_row(
+            features=features,
+            tokenizer=self.tokenizer,
+            step_separator="\n",
+            max_length=None,
+            max_prompt_length=3,
+            max_completion_length=None,
+            train_on_last_step_only=False,
+            is_eval=False,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "input_ids": [6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
+                "labels": [-100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
             },
         )
 
@@ -121,6 +151,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=None,
+            max_prompt_length=None,
             max_completion_length=6,
             train_on_last_step_only=False,
             is_eval=False,
@@ -148,6 +179,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n",
             max_length=9,
+            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
@@ -175,6 +207,7 @@ class TestTokenizeRow(unittest.TestCase):
             tokenizer=self.tokenizer,
             step_separator="\n\n",
             max_length=None,
+            max_prompt_length=None,
             max_completion_length=None,
             train_on_last_step_only=False,
             is_eval=False,
