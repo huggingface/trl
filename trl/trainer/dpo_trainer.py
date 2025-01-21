@@ -62,6 +62,7 @@ from .utils import (
     cap_exp,
     disable_dropout_in_model,
     empty_cache,
+    flush_left,
     generate_model_card,
     get_comet_experiment_url,
     log_table_to_comet_experiment,
@@ -372,9 +373,10 @@ class DPOTrainer(Trainer):
                 self.padding_value = processing_class.tokenizer.pad_token_id
             else:
                 raise ValueError(
-                    "Can't find `pad_token_id` in the `processing_class`. "
-                    "Explicitly set `tokenizer.pad_token` (e.g. `tokenizer.pad_token = tokenizer.eos_token`) "
-                    "before instantiating the trainer."
+                    "`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in the "
+                    "`processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
+                    "`tokenizer.pad_token` (e.g., `tokenizer.pad_token = tokenizer.eos_token`) before instantiating "
+                    "the trainer."
                 )
 
         if data_collator is None:
@@ -541,7 +543,9 @@ class DPOTrainer(Trainer):
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
-            dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
+            dataset = dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class, "tools": args.tools}, **map_kwargs
+            )
 
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -1138,18 +1142,7 @@ class DPOTrainer(Trainer):
             # Flush left to reduce the memory usage
             # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
             #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
-            for i in range(attention_mask.size(0)):
-                first_one_idx = torch.nonzero(attention_mask[i])[0].item()
-                input_ids[i] = torch.roll(input_ids[i], shifts=-first_one_idx)
-                attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
-                loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
-
-            # Get the first column idx that is all zeros and remove every column after that
-            empty_cols = torch.sum(attention_mask, dim=0) == 0
-            first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-            input_ids = input_ids[:, :first_empty_col]
-            attention_mask = attention_mask[:, :first_empty_col]
-            loss_mask = loss_mask[:, :first_empty_col]
+            attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
 
             # Truncate right
             if self.args.max_length is not None:
@@ -1366,7 +1359,7 @@ class DPOTrainer(Trainer):
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.processing_class.pad_token_id,
+                pad_token_id=self.padding_value,
             )
 
             # if ref_output in batch use that otherwise use the reference model
@@ -1380,7 +1373,7 @@ class DPOTrainer(Trainer):
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
                             do_sample=True,
-                            pad_token_id=self.processing_class.pad_token_id,
+                            pad_token_id=self.padding_value,
                         )
                 else:
                     ref_output = self.ref_model.generate(
@@ -1388,13 +1381,13 @@ class DPOTrainer(Trainer):
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
-                        pad_token_id=self.processing_class.pad_token_id,
+                        pad_token_id=self.padding_value,
                     )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
+        policy_output = pad_to_length(policy_output, self.max_length, self.padding_value)
         policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        ref_output = pad_to_length(ref_output, self.max_length, self.processing_class.pad_token_id)
+        ref_output = pad_to_length(ref_output, self.max_length, self.padding_value)
         ref_output_decoded = self.processing_class.batch_decode(ref_output, skip_special_tokens=True)
 
         return policy_output_decoded, ref_output_decoded
@@ -1524,10 +1517,10 @@ class DPOTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
