@@ -51,8 +51,8 @@ class StringStoppingCriteria(StoppingCriteria):
                 or self.tokenizer.eos_token_id in input_ids[i, self.start_length :]
             )
             done.append(sequence_complete)
-            if not sequence_complete:
-                self.generated_tokens[i] += 1
+            # we still consider the last generated token to be valid
+            self.generated_tokens[i] += 1
 
         if all(done):
             self.first_call = True
@@ -717,8 +717,9 @@ class TextEnvironment:
 
                 # remove chunk generated after stopping criteria in batch mode
                 generated_tokens = output[:num_generated_tokens]
-                if num_generated_tokens < 1:
-                    raise Exception("Generation failed to produce any valid token")
+                if len(generated_tokens) < 1:
+                    input_length = padded_inputs["input_ids"].shape[0]
+                    raise Exception(f"Generation failed to produce any valid token; input length {input_length}")
 
                 outputs.append(generated_tokens)
                 # Do not attend to invalid tokens that were generated after <call> or <submit> or the last valid generated token, as we move it to the end of the sequence
