@@ -559,7 +559,9 @@ class SFTTrainer(Trainer):
         if "labels" in inputs:
             with torch.no_grad():
                 outputs = model(**inputs)
-                train_accuracy = compute_token_accuracy(outputs.logits, inputs["labels"])
+                shift_logits = outputs.logits[..., :-1, :].contiguous()
+                shift_labels = inputs["labels"][..., 1:].contiguous()
+                train_accuracy = compute_token_accuracy(shift_logits, shift_labels)
                 self.log({"train_mean_token_accuracy": train_accuracy})
 
         return loss
@@ -591,7 +593,9 @@ class SFTTrainer(Trainer):
                 if "labels" in inputs:
                     with torch.no_grad():
                         outputs = model(**inputs)
-                        accuracy = compute_token_accuracy(outputs.logits, inputs["labels"])
+                        shift_logits = outputs.logits[..., :-1, :].contiguous()
+                        shift_labels = inputs["labels"][..., 1:].contiguous()
+                        accuracy = compute_token_accuracy(shift_logits, shift_labels)
                         validation_accuracies.append(accuracy)
 
             if validation_accuracies:
