@@ -43,6 +43,7 @@ from transformers import (
     Idefics2ForConditionalGeneration,
     LlamaConfig,
     LlamaForCausalLM,
+    LlamaForSequenceClassification,
     LlavaConfig,
     LlavaForConditionalGeneration,
     LlavaNextConfig,
@@ -57,6 +58,7 @@ from transformers import (
     Phi3ForCausalLM,
     Qwen2Config,
     Qwen2ForCausalLM,
+    Qwen2ForSequenceClassification,
     SiglipVisionConfig,
     T5Config,
     T5ForConditionalGeneration,
@@ -131,6 +133,7 @@ for model_id, config_class, model_class, suffix in [
     model = model_class(config)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
+
 # A slightly bigger model, required for vLLM testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
 config = Qwen2Config(
@@ -143,6 +146,26 @@ config = Qwen2Config(
 )
 model = Qwen2ForCausalLM(config)
 push_to_hub(model, tokenizer, "small", "2.5")
+
+
+# Reward models
+for model_id, config_class, model_class, suffix in [
+    ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForSequenceClassification, "3.2"),
+    ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForSequenceClassification, "2.5"),
+]:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    config = config_class(
+        vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        hidden_size=8,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_hidden_layers=2,
+        intermediate_size=32,
+        num_labels=1,
+    )
+    model = model_class(config)
+    push_to_hub(model, tokenizer, "tiny", suffix)
+
 
 # Encoder-decoder models
 for model_id, config_class, model_class, suffix in [
