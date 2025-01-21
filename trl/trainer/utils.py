@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,16 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
 import warnings
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.metadata import version
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal, Optional, Union
 
+import datasets
 import numpy as np
 import pandas as pd
 import torch
@@ -35,10 +37,12 @@ from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
+    EvalPrediction,
     GenerationConfig,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
+    is_comet_available,
 )
 from transformers.utils import (
     is_peft_available,
@@ -47,40 +51,14 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_unsloth_available
 from ..trainer.model_config import ModelConfig
 
 
+if is_comet_available():
+    import comet_ml
+
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
-
-
-class AdaptiveKLController:
-    """
-    Adaptive KL controller described in the paper:
-    https://huggingface.co/papers/1909.08593
-    """
-
-    def __init__(self, init_kl_coef, target, horizon):
-        self.value = init_kl_coef
-        self.target = target
-        self.horizon = horizon
-
-    def update(self, current, n_steps):
-        target = self.target
-        proportional_error = np.clip(current / target - 1, -0.2, 0.2)
-        mult = 1 + proportional_error * n_steps / self.horizon
-        self.value *= mult
-
-
-class FixedKLController:
-    """Fixed KL controller."""
-
-    def __init__(self, kl_coef):
-        self.value = kl_coef
-
-    def update(self, current, n_steps):
-        pass
 
 
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
@@ -90,12 +68,12 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     calculated on the completion made by the assistant.
 
     Args:
-        response_template (`Union[str, List[int]]`): the template form that indicates the start of the response, typically something like
+        response_template (`Union[str, list[int]]`): the template form that indicates the start of the response, typically something like
             '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
             differently if it does not have proper context.
-        instruction_template (`Union[str, List[int]]`): the template form that indicates the start of the human instruction, typically something like
+        instruction_template (`Union[str, list[int]]`): the template form that indicates the start of the human instruction, typically something like
             '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
-        mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
+        mlm (`bool`, *optional*, defaults to `False`): Whether to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
         ignore_index (`int`, *optional*, defaults to `-100`):
@@ -104,8 +82,8 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
     def __init__(
         self,
-        response_template: Union[str, List[int]],
-        instruction_template: Optional[Union[str, List[int]]] = None,
+        response_template: Union[str, list[int]],
+        instruction_template: Optional[Union[str, list[int]]] = None,
         *args,
         mlm: bool = False,
         ignore_index: int = -100,
@@ -135,13 +113,14 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                 "The pad_token_id and eos_token_id values of this tokenizer are identical. "
                 "If you are planning for multi-turn training, "
                 "it can result in the model continuously generating questions and answers without eos token. "
-                "To avoid this, set the pad_token_id to a different value."
+                "To avoid this, set the pad_token_id to a different value.",
+                UserWarning,
             )
 
         self.ignore_index = ignore_index
         self.padding_free = padding_free
 
-    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         batch = super().torch_call(examples)
 
         if self.instruction_template is None:
@@ -158,10 +137,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if response_token_ids_start_idx is None:
                     warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find response key `{self.response_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
                 else:
@@ -185,10 +164,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(response_token_ids_idxs) == 0:
                     warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find response key `{self.response_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
 
@@ -200,10 +179,10 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
 
                 if len(human_token_ids_idxs) == 0:
                     warnings.warn(
-                        f"Could not find instruction key `{self.instruction_template}` in the "
-                        f'following instance: {self.tokenizer.decode(batch["input_ids"][i])} '
-                        f"This instance will be ignored in loss calculation. "
-                        f"Note, if this happens often, consider increasing the `max_seq_length`."
+                        f"Could not find instruction key `{self.instruction_template}` in the following instance: "
+                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
+                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
 
@@ -232,6 +211,25 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             batch["labels"] = batch["labels"][attn_mask.bool()].unsqueeze(0)
             batch["labels"][batch["position_ids"] == 0] = self.ignore_index
 
+            # Calculate cumulative sequence lengths for queries and keys to prevent graph breaks during further computations.
+            flattened_position_ids = batch["position_ids"].flatten()
+            indices_q = torch.arange(
+                flattened_position_ids.size(0), device=flattened_position_ids.device, dtype=torch.int32
+            )
+            batch["cu_seq_lens_q"] = torch.cat(
+                (
+                    indices_q[flattened_position_ids == 0],
+                    torch.tensor(
+                        flattened_position_ids.size(), device=flattened_position_ids.device, dtype=torch.int32
+                    ),
+                )
+            )
+            batch["cu_seq_lens_k"] = batch["cu_seq_lens_q"]
+
+            # Determine maximum sequence lengths to prevent graph breaks during further computations.
+            batch["max_length_k"] = flattened_position_ids.max().item() + 1
+            batch["max_length_q"] = batch["max_length_k"]
+
         return batch
 
 
@@ -254,7 +252,7 @@ class DataCollatorForChatML:
             # set a sensible default
             self.max_length = min(self.tokenizer.model_max_length, 1024)
 
-    def __call__(self, examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+    def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
         input_ids = []
         attention_mask = []
         prompts_input_ids = []
@@ -272,7 +270,7 @@ class DataCollatorForChatML:
             if "input_ids" not in example:
                 message = example[self.messages_key]
                 formatted_message = self.tokenizer.apply_chat_template(
-                    message, tokenize=False, add_generation_prompt=True
+                    message, tokenize=False, add_generation_prompt=False
                 )
                 tokenized_message = self.tokenizer(
                     formatted_message,
@@ -338,7 +336,7 @@ class RewardDataCollatorWithPadding:
             The tokenizer used for encoding the data.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
-        pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
+        pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.
         return_tensors (`str`, `optional`, defaults to `"pt"`):
             The tensor type to use.
@@ -349,7 +347,7 @@ class RewardDataCollatorWithPadding:
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         features_chosen = []
         features_rejected = []
         margin = []
@@ -406,12 +404,12 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
-def pad(tensors: List[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
+def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
 
     Args:
-        tensors (`List[torch.Tensor]`):
+        tensors (`list[torch.Tensor]`):
             List of input tensors to pad.
         padding_value (`int`):
             Value to use for padding. Default is 0.
@@ -465,15 +463,15 @@ class DPODataCollatorWithPadding:
             The tokenizer's pad_token_id.
         label_pad_token_id (`int`, defaults to -100):
             The label used for masking.
-        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
-            Whether or not you model has an encoder_decoder architecture.
+        is_encoder_decoder (`bool` or `None`, `optional`, defaults to `None`):
+            Whether you model has an encoder_decoder architecture.
     """
 
     pad_token_id: int = 0
     label_pad_token_id: int = -100
     is_encoder_decoder: Optional[bool] = False
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         # first, pad everything to the same length
         padded_batch = {}
         for k in features[0].keys():
@@ -550,11 +548,11 @@ class ConstantLengthDataset(IterableDataset):
             The processor used for processing the data.
         dataset (`dataset.Dataset`):
             Dataset with text files.
-        dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
+        dataset_text_field (`str` or `None`, *optional*, defaults to `None`):
             Name of the field in the dataset that contains the text. Only one of `dataset_text_field` and
             `formatting_func` should be provided.
         formatting_func (`Callable`, *optional*):
-            Function that formats the text before tokenization. Usually it is recommended to have follows a certain
+            Function that formats the text before tokenization. Usually it is recommended to follow a certain
             pattern such as `"### Question: {question} ### Answer: {answer}"`. Only one of `dataset_text_field` and
             `formatting_func` should be provided.
         infinite (`bool`, *optional*, defaults to `False`):
@@ -591,13 +589,6 @@ class ConstantLengthDataset(IterableDataset):
         add_special_tokens=True,
     ):
         self.tokenizer = tokenizer
-
-        if tokenizer.eos_token_id is None:
-            warnings.warn(
-                "The passed tokenizer does not have an EOS token. We will use the passed eos_token_id instead which corresponds"
-                f" to {eos_token_id}. If this is not the correct EOS token, make sure to pass the correct eos_token_id."
-            )
-
         self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
         self.dataset = dataset
         self.seq_length = seq_length
@@ -611,7 +602,8 @@ class ConstantLengthDataset(IterableDataset):
         if dataset_text_field is not None and formatting_func is not None:
             warnings.warn(
                 "Only one of `dataset_text_field` and `formatting_func` should be provided. "
-                "Ignoring `dataset_text_field` and using `formatting_func`."
+                "Ignoring `dataset_text_field` and using `formatting_func`.",
+                UserWarning,
             )
 
         if formatting_func is not None:
@@ -621,12 +613,14 @@ class ConstantLengthDataset(IterableDataset):
         else:  # neither is provided
             raise ValueError("Either `dataset_text_field` or `formatting_func` should be provided.")
 
-        if formatting_func is not None:
-            if formatting_func.__code__.co_argcount > 1:
-                warnings.warn(
-                    "The passed formatting_func has more than one argument. Usually that function should have a single argument `example`"
-                    " which corresponds to the dictionary returned by each element of the dataset. Make sure you know what you are doing."
-                )
+        self.pretokenized = False
+        column_names = (
+            dataset.column_names if isinstance(dataset, (datasets.Dataset, datasets.IterableDataset)) else None
+        )
+        if column_names is not None and "input_ids" in column_names:
+            self.pretokenized = True
+            # since the dataset is tokenized, the unit of buffer size should be tokens
+            self.max_buffer_size = seq_length * num_of_sequences
 
     def __len__(self):
         return len(self.dataset)
@@ -645,15 +639,17 @@ class ConstantLengthDataset(IterableDataset):
                 except StopIteration:
                     if self.infinite:
                         iterator = iter(self.dataset)
-                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
                     else:
                         more_examples = False
                         break
             if self.shuffle:
                 random.shuffle(buffer)
-            tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
-                "input_ids"
-            ]
+            if self.pretokenized:
+                tokenized_inputs = buffer
+            else:
+                tokenized_inputs = self.tokenizer(
+                    buffer, add_special_tokens=self.add_special_tokens, truncation=False
+                )["input_ids"]
             all_token_ids = []
             for tokenized_input in tokenized_inputs:
                 if self.append_concat_token:
@@ -689,7 +685,7 @@ class RunningMoments:
     count: float = 1e-24
 
     @torch.no_grad()
-    def update(self, xs: torch.Tensor) -> Tuple[float, float]:
+    def update(self, xs: torch.Tensor) -> tuple[float, float]:
         """
         Updates running moments from batch's moments computed across ranks
         """
@@ -737,7 +733,7 @@ class RunningMoments:
 @torch.no_grad()
 def get_global_statistics(
     accelerator, xs: torch.Tensor, mask=None, device="cpu"
-) -> Tuple[torch.Tensor, torch.Tensor, int]:
+) -> tuple[torch.Tensor, torch.Tensor, int]:
     """
     Computes element-wise mean and variance of the tensor across processes. Reference:
     https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L57C1-L73C75
@@ -755,15 +751,38 @@ def get_global_statistics(
     return global_mean.to(device), global_var.to(device), count.item()
 
 
-def compute_accuracy(eval_pred) -> Dict[str, float]:
+def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
     predictions, labels = eval_pred
-    # Here, predictions is rewards_chosen and rewards_rejected.
-    # We want to see how much of the time rewards_chosen > rewards_rejected.
-    if np.array(predictions[:, 0] == predictions[:, 1], dtype=float).sum() > 0:
-        warnings.warn(
-            f"There are {np.array(predictions[:, 0] == predictions[:, 1]).sum()} out of {len(predictions[:, 0])} instances where the predictions for both options are equal. As a consequence the accuracy can be misleading."
+    if predictions.ndim == 3:
+        # Token classification task. Shapes are (batch_size, seq_len, num_labels) and (batch_size, seq_len)
+        # Used to compute the accuracy in the prm_trainer.
+        predictions = np.argmax(predictions, axis=2)
+
+        # Flatten the predictions and labels to remove the ignored tokens.
+        predictions = np.array(
+            [p for prediction, label in zip(predictions, labels) for (p, lbl) in zip(prediction, label) if lbl != -100]
         )
-    predictions = np.argmax(predictions, axis=1)
+        labels = np.array([lbl for label in labels for lbl in label if lbl != -100])
+
+    else:
+        # Here, predictions is rewards_chosen and rewards_rejected. Shapes are (batch_size, 2) and (batch_size,)
+        # We want to see how much of the time rewards_chosen > rewards_rejected.
+        equal_mask = predictions[:, 0] == predictions[:, 1]
+        equal_predictions_count = int(equal_mask.sum())
+
+        if equal_predictions_count > 0:
+            warnings.warn(
+                f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
+                "for both options are equal. These instances are ignored in the accuracy computation.",
+                UserWarning,
+            )
+
+        # Filter out equal predictions
+        predictions = predictions[~equal_mask]
+        labels = labels[~equal_mask]
+
+        # Use the remaining predictions for accuracy calculation
+        predictions = np.argmax(predictions, axis=1)
 
     accuracy = np.array(predictions == labels, dtype=float).mean().item()
     return {"accuracy": accuracy}
@@ -849,34 +868,16 @@ def peft_module_casting_to_bf16(model):
                     module = module.to(torch.bfloat16)
 
 
-def trl_sanitze_kwargs_for_tagging(model, tag_names, kwargs=None):
-    if is_unsloth_available():
-        # Unsloth adds a new attribute in the model config `unsloth_version`
-        # to keep track of models that have been patched with unsloth.
-        if hasattr(model, "config") and getattr(model.config, "unsloth_version", None) is not None:
-            tag_names.append("unsloth")
-
-    if kwargs is not None:
-        if "tags" not in kwargs:
-            kwargs["tags"] = tag_names
-        elif "tags" in kwargs and isinstance(kwargs["tags"], list):
-            kwargs["tags"].extend(tag_names)
-        elif "tags" in kwargs and isinstance(kwargs["tags"], str):
-            tag_names.append(kwargs["tags"])
-            kwargs["tags"] = tag_names
-    return kwargs
-
-
-def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesConfig]:
-    if model_config.load_in_4bit:
+def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesConfig]:
+    if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=model_config.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
-            bnb_4bit_quant_type=model_config.bnb_4bit_quant_type,
-            bnb_4bit_use_double_quant=model_config.use_bnb_nested_quant,
-            bnb_4bit_quant_storage=model_config.torch_dtype,
+            bnb_4bit_compute_dtype=model_args.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
+            bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
+            bnb_4bit_use_double_quant=model_args.use_bnb_nested_quant,
+            bnb_4bit_quant_storage=model_args.torch_dtype,
         )
-    elif model_config.load_in_8bit:
+    elif model_args.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
             load_in_8bit=True,
         )
@@ -886,7 +887,7 @@ def get_quantization_config(model_config: ModelConfig) -> Optional[BitsAndBytesC
     return quantization_config
 
 
-def get_kbit_device_map() -> Optional[Dict[str, int]]:
+def get_kbit_device_map() -> Optional[dict[str, int]]:
     if is_torch_xpu_available():
         return {"": f"xpu:{PartialState().local_process_index}"}
     elif torch.cuda.is_available():
@@ -895,8 +896,8 @@ def get_kbit_device_map() -> Optional[Dict[str, int]]:
         return None
 
 
-def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
-    if model_config.use_peft is False:
+def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
+    if model_args.use_peft is False:
         return None
 
     if not is_peft_available():
@@ -906,14 +907,14 @@ def get_peft_config(model_config: ModelConfig) -> "Optional[PeftConfig]":
         )
 
     peft_config = LoraConfig(
-        task_type=model_config.lora_task_type,
-        r=model_config.lora_r,
-        target_modules=model_config.lora_target_modules,
-        lora_alpha=model_config.lora_alpha,
-        lora_dropout=model_config.lora_dropout,
+        task_type=model_args.lora_task_type,
+        r=model_args.lora_r,
+        target_modules=model_args.lora_target_modules,
+        lora_alpha=model_args.lora_alpha,
+        lora_dropout=model_args.lora_dropout,
         bias="none",
-        use_rslora=model_config.use_rslora,
-        modules_to_save=model_config.lora_modules_to_save,
+        use_rslora=model_args.use_rslora,
+        modules_to_save=model_args.lora_modules_to_save,
     )
 
     return peft_config
@@ -977,13 +978,13 @@ class OnPolicyConfig(TrainingArguments):
     command line.
 
     Parameters:
-        run_name (`Optional[str]`, *optional*, defaults to `None`):
+        run_name (`str` or `None`, *optional*, defaults to `None`):
             Name of the run.
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
             Number of minibatches to split a batch into.
-        total_episodes (`Optional[int]`, *optional*, defaults to `None`):
+        total_episodes (`int` or `None`, *optional*, defaults to `None`):
             Total number of episodes in the dataset.
         local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
             Per rank no grad forward pass in the rollout phase.
@@ -991,56 +992,125 @@ class OnPolicyConfig(TrainingArguments):
             Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
-        stop_token (`Optional[str]`, *optional*, defaults to `None`):
+        stop_token (`str` or `None`, *optional*, defaults to `None`):
             Stop token.
-        stop_token_id (`Optional[int]`, *optional*, defaults to `None`):
+        stop_token_id (`int` or `None`, *optional*, defaults to `None`):
             Truncation token id.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
-        missing_eos_penalty (`Optional[float]`, *optional*, defaults to `None`):
+        missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
             to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
-        world_size (`Optional[int]`, *optional*, defaults to `None`):
+        world_size (`int` or `None`, *optional*, defaults to `None`):
             Number of processes (GPUs) to use for the training.
-        num_total_batches (`Optional[int]`, *optional*, defaults to `None`):
+        num_total_batches (`int` or `None`, *optional*, defaults to `None`):
             Number of total batches to train.
-        micro_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        micro_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
-        local_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        local_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
-        batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        batch_size (`int` or `None`, *optional*, defaults to `None`):
             Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`).
-        local_mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        local_mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Mini batch size per GPU.
-        mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Mini batch size across GPUs.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the model to the Hub after training.
     """
 
-    run_name: Optional[str] = None
-    dataset_num_proc: Optional[int] = None
-    num_mini_batches: int = 1
-    total_episodes: Optional[int] = None
-    local_rollout_forward_batch_size: int = 64
-    num_sample_generations: int = 10
-    response_length: int = 53
-    stop_token: Optional[Literal["eos"]] = None
-    stop_token_id: Optional[int] = None
-    temperature: float = 0.7
-    missing_eos_penalty: Optional[float] = None
-    sft_model_path: str = "EleutherAI/pythia-160m"
-    world_size: Optional[int] = None
-    num_total_batches: Optional[int] = None
-    micro_batch_size: Optional[int] = None
-    local_batch_size: Optional[int] = None
-    batch_size: Optional[int] = None
-    local_mini_batch_size: Optional[int] = None
-    mini_batch_size: Optional[int] = None
-    push_to_hub: bool = False
+    run_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Name of the run."},
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    num_mini_batches: int = field(
+        default=1,
+        metadata={"help": "Number of minibatches to split a batch into."},
+    )
+    total_episodes: Optional[int] = field(
+        default=None,
+        metadata={"help": "Total number of episodes in the dataset."},
+    )
+    local_rollout_forward_batch_size: int = field(
+        default=64,
+        metadata={"help": "Per rank no grad forward pass in the rollout phase."},
+    )
+    num_sample_generations: int = field(
+        default=10,
+        metadata={
+            "help": "Number of debugging samples generations (i.e., `generate_completions` calls) throughout training."
+        },
+    )
+    response_length: int = field(
+        default=53,
+        metadata={"help": "Length of the response."},
+    )
+    stop_token: Optional[Literal["eos"]] = field(
+        default=None,
+        metadata={"help": "Stop token."},
+    )
+    stop_token_id: Optional[int] = field(
+        default=None,
+        metadata={"help": "Truncation token id."},
+    )
+    temperature: float = field(
+        default=0.7,
+        metadata={"help": "Sampling temperature."},
+    )
+    missing_eos_penalty: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Penalty applied to the score when the model fails to generate an EOS token. This is useful to "
+            "encourage to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be "
+            "a positive value."
+        },
+    )
+    sft_model_path: str = field(
+        default="EleutherAI/pythia-160m",
+        metadata={"help": "Path to the SFT model."},
+    )
+    world_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes (GPUs) to use for the training."},
+    )
+    num_total_batches: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of total batches to train."},
+    )
+    micro_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)."},
+    )
+    local_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)."},
+    )
+    batch_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * "
+            "`gradient_accumulation_steps`)."
+        },
+    )
+    local_mini_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Mini batch size per GPU."},
+    )
+    mini_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Mini batch size across GPUs."},
+    )
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the model to the Hub after training."},
+    )
 
 
 def first_true_indices(bools: torch.Tensor, dtype=torch.long):
@@ -1068,7 +1138,7 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long):
 
 def get_reward(
     model: torch.nn.Module, query_responses: torch.Tensor, pad_token_id: int, context_length: int
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Computes the reward logits and the rewards for a given model and query responses.
 
@@ -1227,7 +1297,7 @@ def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Te
 
 def generate(
     lm_backbone: torch.nn.Module, queries: torch.Tensor, pad_token_id: int, generation_config: GenerationConfig
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generates sequences from the language model backbone in a way that does not affect padding tokens.
 
@@ -1274,7 +1344,8 @@ def batch_generation(
 ):
     query_responses = []
     logitss = []
-    for i in range(0, queries.shape[0], local_rollout_forward_batch_size):
+    batch_size = queries.shape[0]
+    for i in range(0, batch_size, local_rollout_forward_batch_size):
         query = queries[i : i + local_rollout_forward_batch_size]
         query_response, logits = generate(
             model,
@@ -1284,17 +1355,26 @@ def batch_generation(
         )
         query_responses.append(query_response)
         logitss.append(logits)
-    return torch.cat(query_responses, 0), torch.cat(logitss, 0)
+
+    # padding tensors
+    padded_query_responses = pad(query_responses, padding_value=pad_token_id, padding_side="right")
+    padded_logitss = pad(logitss, padding_value=0, padding_side="right")
+
+    # reshaping
+    padded_query_responses = padded_query_responses.view(-1, padded_query_responses.shape[-1])[:batch_size]
+    padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
+
+    return padded_query_responses, padded_logitss
 
 
 def add_bos_token_if_needed(
     bos_token_id: Optional[int],
     prompt_len_input_ids: int,
-    prompt_tokens: Dict[str, List[int]],
+    prompt_tokens: dict[str, list[int]],
     chosen_prompt_len_input_ids: int,
-    chosen_tokens: Dict[str, List[int]],
+    chosen_tokens: dict[str, list[int]],
     rejected_prompt_len_input_ids: int,
-    rejected_tokens: Dict[str, List[int]],
+    rejected_tokens: dict[str, list[int]],
 ):
     if bos_token_id is not None:
         if prompt_len_input_ids == 0 or bos_token_id != prompt_tokens["prompt_input_ids"][0]:
@@ -1310,7 +1390,7 @@ def add_bos_token_if_needed(
 
 
 def add_eos_token_if_needed(
-    eos_token_id: int, chosen_tokens: Dict[str, List[int]], rejected_tokens: Dict[str, List[int]]
+    eos_token_id: int, chosen_tokens: dict[str, list[int]], rejected_tokens: dict[str, list[int]]
 ):
     if len(chosen_tokens["input_ids"]) == 0 or eos_token_id != chosen_tokens["input_ids"][-1]:
         chosen_tokens["input_ids"].append(eos_token_id)
@@ -1323,7 +1403,7 @@ def add_eos_token_if_needed(
 
 def truncate_right(
     input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Truncates the input tensor from the right side after the first occurrence of the stop token.
 
@@ -1368,7 +1448,7 @@ def empty_cache() -> None:
         torch.cuda.empty_cache()
 
 
-def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> List[str]:
+def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> list[str]:
     """
     Decodes the input tensor and strips the padding tokens.
 
@@ -1379,7 +1459,7 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
             The tokenizer used to decode the input tensor.
 
     Returns:
-        `List[str]`:
+        `list[str]`:
             The list of decoded strings with padding tokens stripped.
     """
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
@@ -1391,12 +1471,13 @@ def generate_model_card(
     model_name: str,
     hub_model_id: str,
     dataset_name: Optional[str],
-    tags: List[str],
+    tags: list[str],
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
+    comet_url: Optional[str] = None,
 ) -> ModelCard:
     """
     Generate a `ModelCard` from a template.
@@ -1410,10 +1491,12 @@ def generate_model_card(
             Hub model ID as `username/model_id`.
         dataset_name (`str` or `None`):
             Dataset name.
-        tags (`List[str]`):
+        tags (`list[str]`):
             Tags.
         wandb_url (`str` or `None`):
             Weights & Biases run URL.
+        comet_url (`str` or `None`):
+            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
@@ -1443,6 +1526,7 @@ def generate_model_card(
         hub_model_id=hub_model_id,
         dataset_name=dataset_name,
         wandb_url=wandb_url,
+        comet_url=comet_url,
         trainer_name=trainer_name,
         trainer_citation=trainer_citation,
         paper_title=paper_title,
@@ -1454,3 +1538,100 @@ def generate_model_card(
         tokenizers_version=version("tokenizers"),
     )
     return card
+
+
+def get_comet_experiment_url() -> Optional[str]:
+    """
+    If Comet integration is enabled, return the URL of the current Comet experiment; otherwise, return `None`.
+    """
+    if not is_comet_available():
+        return None
+
+    if comet_ml.get_running_experiment() is not None:
+        return comet_ml.get_running_experiment().url
+
+    return None
+
+
+def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
+    """
+    If Comet integration is enabled logs a table to the Comet experiment if it is currently running.
+
+    Args:
+        name (`str`):
+            Table name.
+        table (`pd.DataFrame`):
+            The Pandas DataFrame containing the table to log.
+    """
+    if not is_comet_available():
+        raise ModuleNotFoundError("The comet-ml is not installed. Please install it first: pip install comet-ml")
+
+    experiment = comet_ml.get_running_experiment()
+    if experiment is not None:
+        experiment.log_table(tabular_data=table, filename=name)
+
+
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """
+    Shift non-zero elements in the mask and corresponding tensors to the left.
+
+    This function operates on a binary mask and any number of additional tensors with the same dimensions as the mask.
+    For each row, non-zero values are shifted to the leftmost positions. Then, columns that contain only zeros across
+    all rows are truncated from the mask and tensors. Visually, this operation can be represented as follows:
+
+    ```
+    [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+     [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+    ```
+
+    Args:
+
+        mask (`torch.Tensor`):
+            2D tensor (binary mask) with shape `(N, M)`.
+        *tensors (`torch.Tensor`)
+            One or more 2D tensors with the same shape as `mask`. These tensors will be processed alongside `mask`,
+            with non-zero values shifted and excess zero columns truncated in the same manner.
+
+    Returns:
+        `torch.Tensor`:
+            Updated binary mask with non-zero values flushed to the left and trailing zero columns removed.
+        `*torch.Tensor`
+            Updated tensors, processed in the same way as the mask.
+
+    Example:
+    ```python
+    >>> mask = torch.tensor([[0, 0, 1, 1, 1],
+    ...                      [0, 1, 1, 0, 0]])
+    >>> tensor = torch.tensor([[9, 9, 2, 3, 4],
+    ...                        [9, 5, 6, 9, 9]])
+    >>> new_mask, new_tensor = flush_left(mask, tensor)
+    >>> print(new_mask)
+    tensor([[1, 1, 1],
+            [1, 1, 0]])
+    >>> print(new_tensor)
+    tensor([[2, 3, 4],
+            [5, 6, 0]])
+    ```
+    """
+    # Create copy of mask and tensors
+    mask = mask.clone()
+    tensors = [t.clone() for t in tensors]
+
+    # Shift non-zero values to the left
+    for i in range(mask.size(0)):
+        first_one_idx = torch.nonzero(mask[i])[0].item()
+        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
+        for tensor in tensors:
+            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+
+    # Get the first column idx that is all zeros and remove every column after that
+    empty_cols = torch.sum(mask, dim=0) == 0
+    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
+    mask = mask[:, :first_empty_col]
+    for i, tensor in enumerate(tensors):
+        tensors[i] = tensor[:, :first_empty_col]
+
+    if not tensors:
+        return mask
+    else:
+        return mask, *tensors

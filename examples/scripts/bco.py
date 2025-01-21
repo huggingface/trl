@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         model, tokenizer = setup_chat_format(model, tokenizer)
 
-    dataset = load_dataset(script_args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
     accelerator = Accelerator()
     embedding_model = AutoModel.from_pretrained(
@@ -151,7 +151,7 @@ if __name__ == "__main__":
         ref_model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
         embedding_func=embedding_func,

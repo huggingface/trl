@@ -1,4 +1,4 @@
-# Copyright 2022 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, is_torch_npu_available, is_torch_xpu_available
@@ -69,9 +70,6 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     Class attributes:
         - **transformers_parent_class** (`transformers.PreTrainedModel`) -- The parent class of the wrapped model. This
             should be set to `transformers.AutoModelForCausalLM` for this class.
-        - **lm_head_namings** (`tuple`) -- A tuple of strings that are used to identify the language model head of the
-            wrapped model. This is set to `("lm_head", "embed_out")` for this class but can be changed for other models
-            in the future
         - **supported_args** (`tuple`) -- A tuple of strings that are used to identify the arguments that are supported
             by the `ValueHead` class. Currently, the supported args are:
             - **summary_dropout_prob** (`float`, `optional`, defaults to `None`) -- The dropout probability for the
@@ -86,7 +84,6 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     """
 
     transformers_parent_class = AutoModelForCausalLM
-    lm_head_namings = ["lm_head", "embed_out"]
     supported_args = (
         "summary_dropout_prob",
         "v_head_initializer_range",
@@ -106,12 +103,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         """
         super().__init__(pretrained_model, **kwargs)
         v_head_kwargs, _, _ = self._split_kwargs(kwargs)
-
-        if not any(hasattr(self.pretrained_model, attribute) for attribute in self.lm_head_namings):
-            raise ValueError("The model does not have a language model head, please use a model that has one.")
-
         self.v_head = ValueHead(self.pretrained_model.config, **v_head_kwargs)
-
         self._init_weights(**v_head_kwargs)
 
     def _init_weights(self, **kwargs):

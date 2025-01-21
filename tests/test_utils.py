@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,16 +14,20 @@
 
 import unittest
 
+import numpy as np
 import torch
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl.trainer.model_config import ModelConfig
+from trl import ModelConfig
+from trl.trainer import compute_accuracy
 from trl.trainer.utils import (
     DataCollatorForChatML,
+    batch_generation,
     decode_and_strip_padding,
+    flush_left,
     generate_model_card,
     get_peft_config,
     pad,
@@ -90,8 +94,8 @@ class TestPad(unittest.TestCase):
 class TestGetPEFTConfig(unittest.TestCase):
     def test_create_peft_config_use_peft_false(self):
         """Test that when use_peft is False, the function returns None."""
-        model_config = ModelConfig(use_peft=False)
-        peft_config = get_peft_config(model_config)
+        model_args = ModelConfig(use_peft=False)
+        peft_config = get_peft_config(model_args)
         self.assertIsNone(peft_config)
 
     def test_create_peft_config_use_peft_true(self):
@@ -106,8 +110,8 @@ class TestGetPEFTConfig(unittest.TestCase):
             "lora_target_modules": ["up_proj", "down_proj"],
             "lora_modules_to_save": ["up_proj"],
         }
-        model_config = ModelConfig(use_peft=True, **peft_kwargs)
-        peft_config = get_peft_config(model_config)
+        model_args = ModelConfig(use_peft=True, **peft_kwargs)
+        peft_config = get_peft_config(model_args)
         self.assertTrue(isinstance(peft_config, LoraConfig))
         for arg, value in peft_kwargs.items():
             # Test that lists of modules are converted to sets
@@ -122,7 +126,7 @@ class TestGetPEFTConfig(unittest.TestCase):
 
 class TestDecodeAndStripPadding(unittest.TestCase):
     def setUp(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
     def test_example_with_padding(self):
         inputs = self.tokenizer(["Hello world", "Hello"], padding=True, return_tensors="pt")
@@ -144,20 +148,22 @@ class TestGenerateModelCard(unittest.TestCase):
             dataset_name="username/my_dataset",
             tags=["trl", "trainer-tag"],
             wandb_url="https://wandb.ai/username/project_id/runs/abcd1234",
+            comet_url="https://www.comet.com/username/project_id/experiment_id",
             trainer_name="My Trainer",
             trainer_citation="@article{my_trainer, ...}",
             paper_title="My Paper",
             paper_id="1234.56789",
         )
         card_text = str(model_card)
-        assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
-        assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
-        assert "datasets: username/my_dataset" in card_text
-        assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
-        assert "My Trainer" in card_text
-        assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
-        assert "[My Paper](https://huggingface.co/papers/1234.56789)" in card_text
+        self.assertIn("[username/my_base_model](https://huggingface.co/username/my_base_model)", card_text)
+        self.assertIn("my_model", card_text)
+        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
+        self.assertIn("datasets: username/my_dataset", card_text)
+        self.assertIn("](https://wandb.ai/username/project_id/runs/abcd1234)", card_text)
+        self.assertIn("](https://www.comet.com/username/project_id/experiment_id", card_text)
+        self.assertIn("My Trainer", card_text)
+        self.assertIn("```bibtex\n@article{my_trainer, ...}\n```", card_text)
+        self.assertIn("[My Paper](https://huggingface.co/papers/1234.56789)", card_text)
 
     def test_val_none(self):
         model_card = generate_model_card(
@@ -167,21 +173,22 @@ class TestGenerateModelCard(unittest.TestCase):
             dataset_name=None,
             tags=[],
             wandb_url=None,
+            comet_url=None,
             trainer_name="My Trainer",
             trainer_citation=None,
             paper_title=None,
             paper_id=None,
         )
         card_text = str(model_card)
-        assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
-        assert "My Trainer" in card_text
+        self.assertIn("my_model", card_text)
+        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
+        self.assertIn("My Trainer", card_text)
 
 
 class TestDataCollatorForChatML(unittest.TestCase):
     def setUp(self):
         # Initialize the tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained("codellama/CodeLlama-7b-Instruct-hf")
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -208,45 +215,239 @@ class TestDataCollatorForChatML(unittest.TestCase):
         # Process the data
         data = self.collator(self.examples)
 
+        # Verify basic shapes and types
+        self.assertIn("input_ids", data)
+        self.assertIn("attention_mask", data)
+        self.assertIn("labels", data)
+        self.assertIn("prompts", data)
+        self.assertIn("prompt_attention_mask", data)
+
         # Decode input_ids and labels for verification
         input_ids = data["input_ids"][0].tolist()
         labels = data["labels"][0].tolist()
         prompt_only = data["prompts"][0].tolist()
 
-        # Verify that input_ids start with optional padding tokens  and a single BOS token and there are no extra ones
-        first_non_pad = next(token for token in input_ids if token != self.tokenizer.pad_token_id)
-        self.assertEqual(
-            first_non_pad, self.bos_token_id, "The first non-padding token of input_ids should be BOS token."
+        # Get the last assistant's response for comparison
+        last_message = self.examples[0][self.messages_key][-1]
+        self.assertEqual(last_message["role"], "assistant", "Last message should be from assistant")
+        last_assistant_response = last_message["content"]
+
+        # Verify that input_ids contain both prompt and response
+        decoded_input = self.tokenizer.decode(input_ids)
+        self.assertIn(last_assistant_response, decoded_input, "Input should contain assistant's response")
+
+        # Verify that prompts only contain the conversation up to the last response
+        decoded_prompt = self.tokenizer.decode(prompt_only)
+        self.assertNotIn(last_assistant_response, decoded_prompt, "Prompt should not contain assistant's response")
+
+        # Verify labels are -100 for non-assistant parts
+        prompt_length = len(prompt_only)
+        self.assertTrue(
+            all(label == self.ignore_index for label in labels[:prompt_length]),
+            "Labels should be ignore_index for prompt tokens",
         )
-        self.assertEqual(input_ids.count(self.bos_token_id), 1, "There should be exactly one BOS token in input_ids.")
 
-        # Verify that the assistant's response token is present in input_ids and not in the prompt_only
-        last_assistant_response = self.examples[0][self.messages_key][-1]["content"]
-        last_assistant_response_tokens = self.tokenizer.encode(last_assistant_response, add_special_tokens=False)
-        response_in_input_ids = all(token in input_ids for token in last_assistant_response_tokens)
-        self.assertTrue(response_in_input_ids, "The assistant's response should be present in input_ids.")
+        # Verify labels match assistant response after prompt
+        # Add a filter to remove any trailing tokens after the first <|im_end|>
+        last_assistant_response_with_end = last_assistant_response + self.tokenizer.eos_token
+        last_assistant_response_tokens = self.tokenizer.encode(
+            last_assistant_response_with_end, add_special_tokens=False
+        )
 
-        # Check if the last assistant's response tokens are not in prompt_only
-        response_in_prompt = all(token in prompt_only for token in last_assistant_response_tokens)
-        self.assertFalse(response_in_prompt, "The assistant's response should not be present in prompt_only.")
-
-        # Verify that EOS token is at the end of input_ids
-        self.assertEqual(input_ids[-1], self.eos_token_id, "The last token of input_ids should be EOS token.")
-
-        # Verify that the labels preserved the target string (last_assistant_response)
-        last_assistant_response = self.examples[0][self.messages_key][-1]["content"]
-        last_assistant_response_tokens = self.tokenizer.encode(last_assistant_response, add_special_tokens=False)
-
-        # Find the start and end of the last assistant's response in the labels
-        response_start = next(i for i, label in enumerate(labels) if label != self.ignore_index)
-        response_end = next(i for i in range(len(labels) - 1, -1, -1) if labels[i] != self.ignore_index)
-
-        actual_response = labels[response_start : response_end - 1]
+        response_labels = []
+        for label in labels[prompt_length:]:
+            if label == self.ignore_index:
+                continue
+            response_labels.append(label)
+            if label == self.tokenizer.convert_tokens_to_ids("<|im_end|>"):
+                break
         self.assertEqual(
-            actual_response,
+            response_labels,
             last_assistant_response_tokens,
-            "The labels should preserve the last assistant's response tokens.",
+            "Labels should match assistant response tokens",
         )
 
-        # Verify that EOS token is at the end of labels
-        self.assertEqual(labels[-1], self.eos_token_id, "The last token of labels should be EOS token.")
+        # Verify there isn't a generation prompt at the end
+        generation_prompt = "<|im_start|>assistant"
+        self.assertFalse(
+            decoded_input.strip().endswith(generation_prompt),
+            f"Input should not end with generation prompt '{generation_prompt}'",
+        )
+
+        self.assertEqual(
+            response_labels,
+            last_assistant_response_tokens,
+            "Labels should match assistant response tokens",
+        )
+
+
+class TestBatchGeneration(unittest.TestCase):
+    def setUp(self):
+        # Initialize the tokenizer
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+
+        self.generation_config = GenerationConfig(
+            max_new_tokens=128,
+            temperature=0.5,
+            do_sample=True,
+            top_k=0,
+            pad_token_id=self.tokenizer.pad_token_id,
+        )
+
+        # Example input
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        self.examples = dataset["messages"]
+        self.mini_batch_size = 3
+
+    def test_mini_batch_generation(self):
+        batch = [
+            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
+            for example in self.examples
+        ]
+        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"]
+        bs, context_length = queries.shape
+
+        query_responses, logits = batch_generation(
+            self.model, queries, self.mini_batch_size, self.tokenizer.pad_token_id, self.generation_config
+        )
+
+        max_length_query = query_responses.shape[1]
+        max_length_logits = max_length_query - context_length
+
+        self.assertGreater(max_length_query, context_length)
+        self.assertEqual(query_responses.shape, (bs, max_length_query))
+        self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
+
+    def test_single_batch_generation(self):
+        batch = [
+            self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
+            for example in self.examples
+        ]
+        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"]
+        bs, context_length = queries.shape
+
+        query_responses, logits = batch_generation(
+            self.model, queries, bs, self.tokenizer.pad_token_id, self.generation_config
+        )
+
+        max_length_query = query_responses.shape[1]
+        max_length_logits = max_length_query - context_length
+
+        self.assertGreater(max_length_query, context_length)
+        self.assertEqual(query_responses.shape, (bs, max_length_query))
+        self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
+
+
+class TestComputeAccuracy(unittest.TestCase):
+    def test_token_classification_task(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[0, 1], [1, 0]]),
+        )
+        expected_accuracy = 0.5  # 2 matches, 2 mismatches
+        result = compute_accuracy(eval_pred)
+        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+
+    def test_token_classification_task_with_ignored_tokens_0(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[1, 0], [1, -100]]),
+        )
+        expected_accuracy = 1.0  # All non-ignored tokens match
+        result = compute_accuracy(eval_pred)
+        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+
+    def test_token_classification_task_with_ignored_tokens_1(self):
+        eval_pred = (
+            np.array(
+                [
+                    [[0.1, 0.9], [0.8, 0.2]],  # Batch 1
+                    [[0.3, 0.7], [0.6, 0.4]],  # Batch 2
+                ]
+            ),
+            np.array([[1, 1], [0, -100]]),
+        )
+        expected_accuracy = 1 / 3  # 1 match, 2 mismatch, 1 ignored
+        result = compute_accuracy(eval_pred)
+        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+
+    def test_rewards_comparison_task(self):
+        eval_pred = (
+            np.array(
+                [
+                    [0.9, 0.1],  # Batch 1
+                    [0.6, 0.4],  # Batch 2
+                    [0.5, 0.5],  # Batch 3 (equal)
+                ]
+            ),
+            np.array([0, 1, 1]),
+        )
+        expected_accuracy = 0.5  # 1 match, 1 mismatch, 1 equal (ignored)
+
+        with self.assertWarns(UserWarning) as cm:
+            result = compute_accuracy(eval_pred)
+
+        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+        expected_warning = (
+            "There are 1 out of 3 instances where the predictions for both options are equal. "
+            "These instances are ignored in the accuracy computation."
+        )
+        self.assertEqual(str(cm.warning), expected_warning)
+
+
+class TestFlushLeft(unittest.TestCase):
+    def test_basic_case(self):
+        mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+        tensor1 = torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 0, 0]])
+        tensor2 = torch.tensor([[0, 0, 7, 8, 9], [0, 10, 11, 0, 0]])
+        new_mask, new_tensor1, new_tensor2 = flush_left(mask, tensor1, tensor2)
+
+        expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        expected_tensor1 = torch.tensor([[2, 3, 4], [5, 6, 0]])
+        expected_tensor2 = torch.tensor([[7, 8, 9], [10, 11, 0]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        self.assertTrue(torch.equal(new_tensor2, expected_tensor2))
+
+    def test_single_row(self):
+        mask = torch.tensor([[0, 0, 1, 1]])
+        tensor1 = torch.tensor([[0, 0, 2, 3]])
+        new_mask, new_tensor1 = flush_left(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1]])
+        expected_tensor1 = torch.tensor([[2, 3]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_shift_needed(self):
+        mask = torch.tensor([[1, 1, 0, 0], [1, 1, 0, 0]])
+        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 8, 0, 0]])
+        new_mask, new_tensor1 = flush_left(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1], [1, 1]])
+        expected_tensor1 = torch.tensor([[5, 6], [7, 8]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_tensors(self):
+        mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+        new_mask = flush_left(mask)
+
+        expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))

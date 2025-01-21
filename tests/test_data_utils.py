@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,12 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import itertools
 import unittest
 
 from datasets import Dataset, DatasetDict
 from parameterized import parameterized
-from transformers import AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer
 
 from trl.data_utils import (
     apply_chat_template,
@@ -85,15 +86,18 @@ class IsConversationalTester(unittest.TestCase):
 
 class ApplyChatTemplateTester(unittest.TestCase):
     tokenizers = [
-        "trl-internal-testing/tiny-random-Qwen2-7B-Instruct",
-        "trl-internal-testing/tiny-random-Meta-Llama-3.1-8B-Instruct",
-        "trl-internal-testing/tiny-random-Meta-Llama-3-8B-Instruct",
-        "trl-internal-testing/tiny-random-DeepSeek-Coder-V2-Instruct",
-        "trl-internal-testing/tiny-random-Phi-3-mini-128k-instruct",
-        "trl-internal-testing/tiny-random-gemma-2-9b-it",
-        "trl-internal-testing/tiny-random-Mistral-7B-Instruct-v0.1",
-        "trl-internal-testing/tiny-random-Mistral-7B-Instruct-v0.2",
-        "trl-internal-testing/tiny-random-Mistral-7B-Instruct-v0.3",
+        "trl-internal-testing/tiny-CohereForCausalLM",
+        "trl-internal-testing/tiny-DbrxForCausalLM",
+        "trl-internal-testing/tiny-FalconMambaForCausalLM",
+        "trl-internal-testing/tiny-Gemma2ForCausalLM",
+        "trl-internal-testing/tiny-GemmaForCausalLM",
+        "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+        "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+        "trl-internal-testing/tiny-LlamaForCausalLM-3",
+        "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+        "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+        "trl-internal-testing/tiny-Phi3ForCausalLM",
+        "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     ]
 
     conversational_examples = [
@@ -191,6 +195,37 @@ class ApplyChatTemplateTester(unittest.TestCase):
             self.assertIn("label", result)
             self.assertIsInstance(result["label"], bool)
             self.assertEqual(result["label"], example["label"])
+
+    def test_apply_chat_template_with_tools(self):
+        tokenizer = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+
+        # Define dummy test tools
+        def get_current_temperature(location: str):
+            """
+            Gets the temperature at a given location.
+
+            Args:
+                location: The location to get the temperature for
+            """
+            return 22.0
+
+        # Define test case
+        test_case = {
+            "prompt": [
+                {"content": "Whats the temperature in London?", "role": "user"},
+            ]
+        }
+        # Test with tools
+        result_with_tools = apply_chat_template(test_case, tokenizer, tools=[get_current_temperature])
+
+        # Verify tools are included in the output
+        self.assertIn("get_current_temperature", result_with_tools["prompt"])
+
+        # Test without tools
+        result_without_tools = apply_chat_template(test_case, tokenizer, tools=None)
+
+        # Verify tools are not included in the output
+        self.assertNotIn("get_current_temperature", result_without_tools["prompt"])
 
 
 class UnpairPreferenceDatasetTester(unittest.TestCase):

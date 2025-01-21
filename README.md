@@ -1,7 +1,7 @@
 # TRL - Transformer Reinforcement Learning
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl_banner_dark.png" alt="TRL Banner">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
 </div>
 
 <hr> <br>
@@ -66,13 +66,17 @@ You can use the TRL Command Line Interface (CLI) to quickly get started with Sup
 **SFT:**
 
 ```bash
-trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name trl-lib/Capybara --output_dir Qwen2.5-0.5B-SFT
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --output_dir Qwen2.5-0.5B-SFT
 ```
 
 **DPO:**
 
 ```bash
-trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct --dataset_name argilla/Capybara-Preferences --output_dir Qwen2.5-0.5B-DPO 
+trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --dataset_name argilla/Capybara-Preferences \
+    --output_dir Qwen2.5-0.5B-DPO 
 ```
 
 **Chat:**
@@ -194,7 +198,7 @@ If you want to contribute to `trl` or customize it to your needs make sure to re
 ```bash
 git clone https://github.com/huggingface/trl.git
 cd trl/
-make dev
+pip install -e .[dev]
 ```
 
 ## Citation

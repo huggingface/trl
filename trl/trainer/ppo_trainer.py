@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,8 @@ import os
 import textwrap
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple, Union
+from contextlib import contextmanager, nullcontext
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -44,24 +45,33 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
+from transformers.utils import is_peft_available
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..core import masked_mean, masked_whiten
+from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
-from ..trainer.utils import (
+from .ppo_config import PPOConfig
+from .utils import (
     OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
     exact_div,
     first_true_indices,
     forward,
+    generate_model_card,
+    get_comet_experiment_url,
     get_reward,
+    log_table_to_comet_experiment,
+    peft_module_casting_to_bf16,
     prepare_deepspeed,
     print_rich_table,
     truncate_response,
 )
-from .ppo_config import PPOConfig
-from .utils import generate_model_card
 
+
+if is_peft_available():
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_wandb_available():
     import wandb
@@ -80,9 +90,7 @@ class PolicyAndValueWrapper(nn.Module):
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
 
     def forward(self, **kwargs):
-        output = self.critic_backbone(
-            **kwargs,
-        )
+        output = self.critic_backbone(**kwargs)
         logits = self.value_model.score(output.hidden_states[-1])
         return self.policy(**kwargs), logits
 
@@ -90,40 +98,77 @@ class PolicyAndValueWrapper(nn.Module):
 class PPOTrainer(Trainer):
     _tag_names = ["trl", "ppo"]
 
+    @deprecate_kwarg("config", "0.15.0", "args", warn_if_greater_or_equal_version=True, raise_if_both_names=True)
+    @deprecate_kwarg(
+        "tokenizer", "0.15.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
+    @deprecate_kwarg("policy", "0.15.0", "model", warn_if_greater_or_equal_version=True, raise_if_both_names=True)
+    @deprecate_kwarg(
+        "ref_policy", "0.15.0", "ref_model", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
     def __init__(
         self,
-        config: PPOConfig,
+        args: PPOConfig,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ],
-        policy: nn.Module,
-        ref_policy: nn.Module,
+        model: nn.Module,
+        ref_model: Optional[nn.Module],
         reward_model: nn.Module,
         train_dataset: Dataset,
         value_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         # less commonly used
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        callbacks: Optional[list[TrainerCallback]] = None,
+        peft_config: Optional["PeftConfig"] = None,
     ) -> None:
-        if ref_policy is policy:
+        if ref_model is model:
             raise ValueError(
-                "`policy` and `ref_policy` cannot be the same object. If you want `ref_policy` to be the "
-                "same as `policy`, you must mass a copy of it, or `None` if you use peft."
+                "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
+                "same as `model`, you must make a copy of it, or `None` if you use peft."
             )
 
-        self.args = config
-        args = config
+        self.args = args
         self.processing_class = processing_class
-        self.policy = policy
+        self.policy_model = model
 
-        self.policy.generation_config.eos_token_id = (
+        # Define the collator if not provided
+        if data_collator is None:
+            data_collator = DataCollatorWithPadding(self.processing_class)
+
+        self.policy_model.generation_config.eos_token_id = (
             None  # disable `pad_token_id` and `eos_token_id` because we just want to
         )
-        self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
+        self.policy_model.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
-        self.ref_policy = ref_policy
+        # peft support
+        if not is_peft_available() and peft_config is not None:
+            raise ImportError(
+                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
+            )
+        elif is_peft_available() and peft_config is not None:
+            # if model is a peft model and we have a peft_confg, we merge and unload it first
+            if isinstance(self.policy_model, PeftModel):
+                self.policy_model = self.policy_model.merge_and_unload()
+
+            # get peft model with the given config
+            self.policy_model = get_peft_model(self.policy_model, peft_config)
+            if args.bf16 and getattr(self.policy_model, "is_loaded_in_4bit", False):
+                peft_module_casting_to_bf16(self.policy_model)
+
+        self.is_peft_model = is_peft_available() and isinstance(self.policy_model, PeftModel)
+        self.model_adapter_name = args.model_adapter_name
+        self.ref_adapter_name = args.ref_adapter_name
+
+        if ref_model:
+            self.ref_model = ref_model
+        elif self.is_peft_model:
+            self.ref_model = None
+        else:
+            self.ref_model = create_reference_model(self.policy_model)
+
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
@@ -131,6 +176,7 @@ class PPOTrainer(Trainer):
         self.data_collator = data_collator
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
+        self.optimizer_cls_and_kwargs = None  # needed for transformers >= 4.47
 
         #########
         # calculate various batch sizes
@@ -171,12 +217,13 @@ class PPOTrainer(Trainer):
         #########
         # setup model, optimizer, and others
         #########
-        for module in [policy, ref_policy, value_model, reward_model]:
-            disable_dropout_in_model(module)
+        for module in [self.policy_model, self.ref_model, self.value_model, self.reward_model]:
+            if module is not None:
+                disable_dropout_in_model(module)
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = processing_class.eos_token_id
-        self.model = PolicyAndValueWrapper(policy, value_model)
-        self.model.config = policy.config  # needed for pushing to hub
+        self.model = PolicyAndValueWrapper(self.policy_model, self.value_model)
+        self.model.config = self.policy_model.config  # needed for pushing to hub
         self.create_optimizer_and_scheduler(
             num_training_steps=args.num_total_batches
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
@@ -220,7 +267,7 @@ class PPOTrainer(Trainer):
             self.train_dataset,
             batch_size=self.local_dataloader_batch_size,
             shuffle=True,
-            collate_fn=DataCollatorWithPadding(self.processing_class),
+            collate_fn=self.data_collator,
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
@@ -232,7 +279,7 @@ class PPOTrainer(Trainer):
         self.eval_dataloader = DataLoader(
             self.eval_dataset,
             batch_size=args.per_device_eval_batch_size,
-            collate_fn=DataCollatorWithPadding(self.processing_class),
+            collate_fn=self.data_collator,
             drop_last=True,
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
@@ -241,11 +288,20 @@ class PPOTrainer(Trainer):
             self.reward_model = prepare_deepspeed(
                 self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
             )
-            self.ref_policy = prepare_deepspeed(
-                self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+
+            if self.ref_model is None:
+                if not self.is_peft_model:
+                    raise ValueError("No reference model and model is not a Peft model.")
+            else:
+                self.ref_model = prepare_deepspeed(
+                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
         else:
-            self.ref_policy = self.ref_policy.to(self.accelerator.device)
+            if self.ref_model is None:
+                if not self.is_peft_model:
+                    raise ValueError("No reference model and model is not a Peft model.")
+            else:
+                self.ref_model = self.ref_model.to(self.accelerator.device)
             self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
@@ -253,6 +309,18 @@ class PPOTrainer(Trainer):
 
     def get_eval_dataloader(self) -> DataLoader:
         return self.eval_dataloader
+
+    @contextmanager
+    def null_ref_context(self):
+        """Context manager for handling null reference model (that is, peft adapter manipulation)."""
+        with self.accelerator.unwrap_model(
+            self.model.policy
+        ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
+            if self.ref_adapter_name:
+                self.model.policy.set_adapter(self.ref_adapter_name)
+            yield
+            if self.ref_adapter_name:
+                self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         backup_model = self.model
@@ -274,7 +342,7 @@ class PPOTrainer(Trainer):
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
-        ref_policy = self.ref_policy
+        ref_policy = self.ref_model
         reward_model = self.reward_model
         processing_class = self.processing_class
         dataloader = self.dataloader
@@ -365,7 +433,11 @@ class PPOTrainer(Trainer):
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
-                    ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
+                    if ref_policy is None:
+                        with self.null_ref_context():
+                            ref_output = forward(model.policy, query_response, processing_class.pad_token_id)
+                    else:
+                        ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
                     ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
@@ -543,19 +615,21 @@ class PPOTrainer(Trainer):
                 eps = int(self.state.episode / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
-                metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
-                metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
-                metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
-                metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
-                metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
-                metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
-                metrics["policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
-                metrics["loss/policy_avg"] = self.accelerator.gather(pg_loss_stats).mean().item()
-                metrics["loss/value_avg"] = self.accelerator.gather(vf_loss_stats).mean().item()
-                metrics["val/clipfrac_avg"] = self.accelerator.gather(vf_clipfrac_stats).mean().item()
-                metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
-                metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
-                metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
+                metrics["objective/kl"] = self.accelerator.gather_for_metrics(mean_kl).mean().item()
+                metrics["objective/entropy"] = self.accelerator.gather_for_metrics(mean_entropy).mean().item()
+                metrics["objective/non_score_reward"] = (
+                    self.accelerator.gather_for_metrics(mean_non_score_reward).mean().item()
+                )
+                metrics["objective/rlhf_reward"] = self.accelerator.gather_for_metrics(rlhf_reward).mean().item()
+                metrics["objective/scores"] = self.accelerator.gather_for_metrics(scores.mean()).mean().item()
+                metrics["policy/approxkl_avg"] = self.accelerator.gather_for_metrics(approxkl_stats).mean().item()
+                metrics["policy/clipfrac_avg"] = self.accelerator.gather_for_metrics(pg_clipfrac_stats).mean().item()
+                metrics["loss/policy_avg"] = self.accelerator.gather_for_metrics(pg_loss_stats).mean().item()
+                metrics["loss/value_avg"] = self.accelerator.gather_for_metrics(vf_loss_stats).mean().item()
+                metrics["val/clipfrac_avg"] = self.accelerator.gather_for_metrics(vf_clipfrac_stats).mean().item()
+                metrics["policy/entropy_avg"] = self.accelerator.gather_for_metrics(entropy_stats).mean().item()
+                metrics["val/ratio"] = self.accelerator.gather_for_metrics(ratio_stats).mean().item()
+                metrics["val/ratio_var"] = self.accelerator.gather_for_metrics(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == processing_class.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
@@ -566,7 +640,7 @@ class PPOTrainer(Trainer):
             self.lr_scheduler.step()
             self.control = self.callback_handler.on_step_end(args, self.state, self.control)
             if self.control.should_save:
-                self._save_checkpoint(model, trial=None, metrics=metrics)
+                self._save_checkpoint(model, trial=None)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
             torch.cuda.empty_cache()
@@ -643,7 +717,7 @@ class PPOTrainer(Trainer):
                     _, score, _ = get_reward(
                         self.reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
                     )
-                    table["score"].extend(self.accelerator.gather(score).float().cpu().numpy())
+                    table["score"].extend(self.accelerator.gather_for_metrics(score).float().cpu().numpy())
 
                 if sampling:
                     break
@@ -657,21 +731,27 @@ class PPOTrainer(Trainer):
                 if wandb.run is not None:
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
+            if "comet_ml" in args.report_to:
+                log_table_to_comet_experiment(
+                    name="completions.csv",
+                    table=df,
+                )
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -704,6 +784,7 @@ class PPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="PPO",
             trainer_citation=citation,
             paper_title="Fine-Tuning Language Models from Human Preferences",

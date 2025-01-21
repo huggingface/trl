@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -105,7 +105,7 @@ config = PPOConfig(
     seed=script_args.seed,
     optimize_cuda_cache=True,
 )
-ppo_trainer = PPOTrainer(config=config, model=model, tokenizer=tokenizer)
+ppo_trainer = PPOTrainer(args=config, model=model, tokenizer=tokenizer)
 dataset = load_dataset("mandarjoshi/trivia_qa", "rc", split="train")
 local_seed = script_args.seed + ppo_trainer.accelerator.process_index * 100003  # Prime
 dataset = dataset.shuffle(local_seed)

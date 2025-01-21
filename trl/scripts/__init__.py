@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,17 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
+from typing import TYPE_CHECKING
 
-from .ppo_trainer import PPOTrainer
+from ..import_utils import _LazyModule
 
 
-# Define an alias for PPOv2Trainer that raises a warning
-class PPOv2Trainer(PPOTrainer):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "`PPOv2Trainer` is deprecated and has been renamed to `PPOTrainer`. Please use `PPOTrainer` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        super().__init__(*args, **kwargs)
+_import_structure = {
+    "utils": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
+}
+
+if TYPE_CHECKING:
+    from .utils import ScriptArguments, TrlParser, init_zero_verbose
+else:
+    import sys
+
+    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)

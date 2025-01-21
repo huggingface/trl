@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from datasets import Dataset
 from transformers import HfArgumentParser
@@ -28,13 +28,22 @@ class ScriptArguments:
             Fraction of the dataset to include in the test split.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the dataset to the Hugging Face Hub.
-        repo_id (`str`, *optional*, defaults to `"trl-lib/zen"`):
+        repo_id (`str`, *optional*, defaults to `"trl-internal-testing/zen"`):
             Hugging Face repository ID to push the dataset to.
     """
 
-    test_size: float = 0.1
-    push_to_hub: bool = False
-    repo_id: str = "trl-lib/zen"
+    test_size: float = field(
+        default=0.1,
+        metadata={"help": "Fraction of the dataset to include in the test split."},
+    )
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the dataset to the Hugging Face Hub."},
+    )
+    repo_id: str = field(
+        default="trl-internal-testing/zen",
+        metadata={"help": "Hugging Face repository ID to push the dataset to."},
+    )
 
 
 def main(test_size, push_to_hub, repo_id):
@@ -62,7 +71,7 @@ def main(test_size, push_to_hub, repo_id):
             "Namespaces are one honking great idea -- let's do more of those!",
         ],
     })
-    standard_language_modeling_dataset = standard_language_modeling_dataset.train_test_split(test_size=test_size)
+    standard_language_modeling_dataset = standard_language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_language_modeling_dataset.push_to_hub(repo_id, config_name="standard_language_modeling")
 
@@ -89,7 +98,7 @@ def main(test_size, push_to_hub, repo_id):
             "Namespaces are one honking great",
         ],
     })
-    standard_prompt_only_dataset = standard_prompt_only_dataset.train_test_split(test_size=test_size)
+    standard_prompt_only_dataset = standard_prompt_only_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_prompt_only_dataset.push_to_hub(repo_id, config_name="standard_prompt_only")
 
@@ -137,7 +146,7 @@ def main(test_size, push_to_hub, repo_id):
             " idea -- let's do more of those!",
         ],
     })
-    standard_prompt_completion_dataset = standard_prompt_completion_dataset.train_test_split(test_size=test_size)
+    standard_prompt_completion_dataset = standard_prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_prompt_completion_dataset.push_to_hub(repo_id, config_name="standard_prompt_completion")
 
@@ -206,7 +215,7 @@ def main(test_size, push_to_hub, repo_id):
             " watermelon -- let's plant some!",
         ],
     })
-    standard_preference_dataset = standard_preference_dataset.train_test_split(test_size=test_size)
+    standard_preference_dataset = standard_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_preference_dataset.push_to_hub(repo_id, config_name="standard_preference")
 
@@ -254,7 +263,7 @@ def main(test_size, push_to_hub, repo_id):
             "Namespaces are one honking great watermelon -- let's plant some!",
         ],
     })
-    standard_implicit_prompt_preference_dataset = standard_implicit_prompt_preference_dataset.train_test_split(test_size=test_size)
+    standard_implicit_prompt_preference_dataset = standard_implicit_prompt_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_implicit_prompt_preference_dataset.push_to_hub(repo_id, config_name="standard_implicit_prompt_preference")
 
@@ -303,9 +312,77 @@ def main(test_size, push_to_hub, repo_id):
         ],
         "label": [True, False, False, True, True, False, True, False, True, True, False, True, True, False, True, False, True, False, False],
     })
-    standard_unpaired_preference_dataset = standard_unpaired_preference_dataset.train_test_split(test_size=test_size)
+    standard_unpaired_preference_dataset = standard_unpaired_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_unpaired_preference_dataset.push_to_hub(repo_id, config_name="standard_unpaired_preference")
+
+    standard_stepwise_supervision_dataset = Dataset.from_dict({
+        "prompt": [
+            "Beautiful is better than",
+            "Explicit is better than",
+            "Simple is better than",
+            "Complex is better than",
+            "Flat is better than",
+            "Sparse is better than",
+            "Readability counts",
+            "Special cases aren't special enough",
+            "Although practicality beats",
+            "Errors should never pass",
+            "In the face of ambiguity, refuse",
+            "There should be one-- and preferably only one --",
+            "Although that way may not be",
+            "Now is better than",
+            "Never is often better than",
+            "If the implementation is hard to explain, it's",
+            "If the implementation is easy to explain, it",
+            "Namespaces are one",
+            "Although practicality sometimes beats purity,",
+        ],
+        "completions":[
+            [", let me think...", " ugly."],
+            [", of course,", " implicit.", " because clarity matters."],
+            ["... let's keep it basic,", " complex."],
+            [" when needed,", " complicated."],
+            [" in terms of structure,", " nested."],
+            ["... especially for readability."],
+            [" especially when others read it."],
+            [", unless...", " they follow the rules."],
+            [" some theoretical elegance,", " purity."],
+            [" silently,", " unless explicitly silenced."],
+            [" the temptation to guess."],
+            [" way to do it,"," but sometimes it's not obvious.", " especially when there's more than one possibility."],
+            [" clear at first,", " it will eventually emerge."],
+            [" later."],
+            [" problematic fixes."],
+            [" likely because it's too complicated."],
+            [" might be a good design."],
+            [" of those great ideas,", " that solve many problems."],
+            [" the code should still aim for balance."],
+        ],
+        "labels": [
+            [False, True],
+            [False, True, False],
+            [False, True],
+            [True, True],
+            [True, False],
+            [True],
+            [False],
+            [True, False],
+            [False, False],
+            [False, False],
+            [True],
+            [True, True, False],
+            [True, True],
+            [False],
+            [True], [False],
+            [False],
+            [True, True],
+            [False]
+        ]
+    })
+    standard_stepwise_supervision_dataset = standard_stepwise_supervision_dataset.train_test_split(test_size=test_size, shuffle=False)
+    if push_to_hub:
+        standard_stepwise_supervision_dataset.push_to_hub(repo_id, config_name="standard_stepwise_supervision")
 
     conversational_language_modeling_dataset = Dataset.from_dict({
         "messages": [
@@ -330,7 +407,7 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "Any great ideas?"}, {"role": "assistant", "content": "Namespaces are one honking great idea."}],
         ],
     })
-    conversational_language_modeling_dataset = conversational_language_modeling_dataset.train_test_split(test_size=test_size)
+    conversational_language_modeling_dataset = conversational_language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_language_modeling_dataset.push_to_hub(repo_id, config_name="conversational_language_modeling")
 
@@ -357,7 +434,7 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "Any great ideas?"}],
         ],
     })
-    conversational_prompt_only_dataset = conversational_prompt_only_dataset.train_test_split(test_size=test_size)
+    conversational_prompt_only_dataset = conversational_prompt_only_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_prompt_only_dataset.push_to_hub(repo_id, config_name="conversational_prompt_only")
 
@@ -405,7 +482,7 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "assistant", "content": "Namespaces are one honking great idea."}],
         ],
     })
-    conversational_prompt_completion_dataset = conversational_prompt_completion_dataset.train_test_split(test_size=test_size)
+    conversational_prompt_completion_dataset = conversational_prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_prompt_completion_dataset.push_to_hub(repo_id, config_name="conversational_prompt_completion")
 
@@ -474,7 +551,7 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "assistant", "content": "Recursion."}],
         ],
     })
-    conversational_preference_dataset = conversational_preference_dataset.train_test_split(test_size=test_size)
+    conversational_preference_dataset = conversational_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_preference_dataset.push_to_hub(repo_id, config_name="conversational_preference")
 
@@ -522,7 +599,7 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "Any great ideas?"}, {"role": "assistant", "content": "Recursion."}],
         ],
     })
-    conversational_implicit_prompt_preference_dataset = conversational_implicit_prompt_preference_dataset.train_test_split(test_size=test_size)
+    conversational_implicit_prompt_preference_dataset = conversational_implicit_prompt_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_implicit_prompt_preference_dataset.push_to_hub(repo_id, config_name="conversational_implicit_prompt_preference")
 
@@ -571,7 +648,7 @@ def main(test_size, push_to_hub, repo_id):
         ],
         "label": [True, True, True, False, True, True, True, False, True, False, True, False, True, False, False, True, True, True, True],
     })
-    conversational_unpaired_preference_dataset = conversational_unpaired_preference_dataset.train_test_split(test_size=test_size)
+    conversational_unpaired_preference_dataset = conversational_unpaired_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_unpaired_preference_dataset.push_to_hub(repo_id, config_name="conversational_unpaired_preference")
     # fmt: on

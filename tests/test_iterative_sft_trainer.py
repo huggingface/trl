@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import tempfile
 import unittest
 from functools import partial
@@ -25,13 +26,13 @@ from trl import IterativeSFTTrainer
 
 class IterativeTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab-calibrated"
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -70,8 +71,8 @@ class IterativeTrainerTester(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ["gpt2", "tensor"],
-            ["gpt2", "text"],
+            ["qwen", "tensor"],
+            ["qwen", "text"],
             ["t5", "tensor"],
             ["t5", "text"],
         ]
@@ -93,7 +94,7 @@ class IterativeTrainerTester(unittest.TestCase):
                     "texts_labels": dummy_dataset["texts_labels"],
                 }
 
-            if model_name == "gpt2":
+            if model_name == "qwen":
                 model = self.model
                 tokenizer = self.tokenizer
             else:
@@ -113,4 +114,4 @@ class IterativeTrainerTester(unittest.TestCase):
             iterative_trainer.step(**inputs)
 
             for param in iterative_trainer.model.parameters():
-                assert param.grad is not None
+                self.assertIsNotNone(param.grad)

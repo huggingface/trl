@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,17 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import tempfile
 import unittest
 
 import torch
 from datasets import Dataset, load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import RewardConfig, RewardTrainer, maybe_apply_chat_template
-from trl.trainer import compute_accuracy
 from trl.trainer.reward_trainer import _tokenize
 
 
@@ -31,15 +31,10 @@ if is_peft_available():
 
 class RewardTrainerTester(unittest.TestCase):
     def setUp(self):
-        self.model_id = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.tokenizer.chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
         self.model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
-
-    def test_accuracy_metrics(self):
-        dummy_eval_predictions = EvalPrediction(torch.FloatTensor([[0.1, 0.9], [0.9, 0.1]]), torch.LongTensor([0, 0]))
-        accuracy = compute_accuracy(dummy_eval_predictions)
-        assert accuracy["accuracy"] == 0.5
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
 
     def test_preprocessing_conversational(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -75,11 +70,10 @@ class RewardTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     def test_train_full_pretokenized(self):
@@ -95,11 +89,10 @@ class RewardTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @require_peft
@@ -138,12 +131,12 @@ class RewardTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
-            # check the non trainable params have not changed
+            # Check that the non trainable parameters have not changed
             for n, param in previous_non_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
@@ -186,12 +179,12 @@ class RewardTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
-            # check the non trainable params have not changed
+            # Check that the non trainable parameters have not changed
             for n, param in previous_non_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))

@@ -1,6 +1,4 @@
-# ORPO Authors: Jiwoo Hong, Noah Lee, and James Thorne
-# Official code: https://github.com/xfactlab/orpo
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,16 +20,19 @@ import warnings
 from collections import defaultdict
 from contextlib import nullcontext
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Literal, Optional, Union
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available
 from datasets import Dataset
+from packaging import version
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -42,12 +43,14 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     Trainer,
+    is_comet_available,
     is_torch_xla_available,
     is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
+from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper
@@ -58,6 +61,8 @@ from .utils import (
     add_eos_token_if_needed,
     disable_dropout_in_model,
     generate_model_card,
+    get_comet_experiment_url,
+    log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
 )
@@ -99,37 +104,40 @@ class ORPOTrainer(Trainer):
             reuse the fine-tuned model.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
-        callbacks (`List[transformers.TrainerCallback]`):
+        callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
-        optimizers (`Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
-        peft_config (`Dict`, defaults to `None`):
+        peft_config (`dict`, defaults to `None`):
             The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
-        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return
             a dictionary string to metric values.
     """
 
     _tag_names = ["trl", "orpo"]
 
+    @deprecate_kwarg(
+        "tokenizer", "0.15.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
+    )
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: Optional[ORPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        callbacks: Optional[list[TrainerCallback]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[Dict] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], Dict]] = None,
+        peft_config: Optional[dict] = None,
+        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
     ):
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
@@ -149,10 +157,6 @@ class ORPOTrainer(Trainer):
                 model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
-            warnings.warn(
-                "You passed a model_id to the ORPOTrainer. This will automatically create an "
-                "`AutoModelForCausalLM` or a `PeftModel` (if you passed a `peft_config`) for you."
-            )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
@@ -213,10 +217,10 @@ class ORPOTrainer(Trainer):
 
                 model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-        if args.generate_during_eval and not is_wandb_available():
+        if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
             raise ValueError(
-                "`generate_during_eval=True` requires Weights and Biases to be installed."
-                " Please install `wandb` to resolve."
+                "`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+                " Please install `wandb` or `comet-ml` to resolve."
             )
 
         if model is not None:
@@ -281,6 +285,7 @@ class ORPOTrainer(Trainer):
         else:
             self.use_dpo_data_collator = False
 
+        # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
 
@@ -297,11 +302,23 @@ class ORPOTrainer(Trainer):
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
             warnings.warn(
-                "You set `output_router_logits` to True in the model config, but `router_aux_loss_coef` is set to 0.0,"
-                " meaning the auxiliary loss will not be used."
+                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
+                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
+                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
+                "loss.",
+                UserWarning,
             )
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
+
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in ORPO, the sampled data does not include the
+        # "input_ids" key. Instead, the available keys are "prompt_input_ids", "chosen_input_ids", and
+        # "rejected_input_ids". As a result, the trainer issues the warning: "Could not estimate the number of tokens
+        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
+        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
+        # that the warning has already been issued.
+        model.warnings_issued["estimate_tokens"] = True
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
@@ -425,7 +442,7 @@ class ORPOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
-    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> Dict:
+    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> dict:
         """Tokenize a single row from a ORPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
@@ -583,12 +600,12 @@ class ORPOTrainer(Trainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: Dict[str, Union[List, torch.LongTensor]],
+        batch: dict[str, Union[list, torch.LongTensor]],
         is_encoder_decoder: bool = False,
         label_pad_token_id: int = -100,
         padding_value: int = 0,
         device: Optional[torch.device] = None,
-    ) -> Dict[str, torch.LongTensor]:
+    ) -> dict[str, torch.LongTensor]:
         """Concatenate the chosen and rejected inputs into a single tensor.
 
         Args:
@@ -647,7 +664,7 @@ class ORPOTrainer(Trainer):
         self,
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute ORPO's odds ratio (OR) loss for a batch of policy and reference model log probabilities.
 
         Args:
@@ -666,8 +683,7 @@ class ORPOTrainer(Trainer):
         log_odds = (policy_chosen_logps - policy_rejected_logps) - (
             torch.log1p(-torch.exp(policy_chosen_logps)) - torch.log1p(-torch.exp(policy_rejected_logps))
         )
-        sig_ratio = F.sigmoid(log_odds)
-        ratio = torch.log(sig_ratio)
+        ratio = F.logsigmoid(log_odds)
         losses = self.beta * ratio
 
         chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
@@ -714,8 +730,8 @@ class ORPOTrainer(Trainer):
             return (per_token_logps * loss_mask).sum(-1)
 
     def concatenated_forward(
-        self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
@@ -768,7 +784,7 @@ class ORPOTrainer(Trainer):
             labels = concatenated_batch["concatenated_input_ids"].clone()
             attention_mask = concatenated_batch["concatenated_attention_mask"]
             labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
-
+        # orpo chosen nll loss is computed over the full prompt and response
         chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
 
         all_logps = self.get_batch_logps(
@@ -782,8 +798,12 @@ class ORPOTrainer(Trainer):
         chosen_logps = all_logps[:len_chosen]
         rejected_logps = all_logps[len_chosen:]
 
-        chosen_logits = all_logits[:len_chosen]
-        rejected_logits = all_logits[len_chosen:]
+        if not self.is_encoder_decoder:
+            chosen_logits = all_logits[:len_chosen, :-1, :]
+            rejected_logits = all_logits[len_chosen:, :-1, :]
+        else:
+            chosen_logits = all_logits[:len_chosen]
+            rejected_logits = all_logits[len_chosen:]
 
         if self.aux_loss_enabled:
             return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss, outputs.aux_loss)
@@ -793,7 +813,7 @@ class ORPOTrainer(Trainer):
     def get_batch_loss_metrics(
         self,
         model,
-        batch: Dict[str, Union[List, torch.LongTensor]],
+        batch: dict[str, Union[list, torch.LongTensor]],
         train_eval: Literal["train", "eval"] = "train",
     ):
         """Compute the ORPO loss and other metrics for the given batch of inputs for train or test."""
@@ -819,17 +839,21 @@ class ORPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().mean()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean()
-        metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean()
-        metrics[f"{prefix}log_odds_ratio"] = log_odds_ratio
-        metrics[f"{prefix}log_odds_chosen"] = log_odds_chosen
+        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather_for_metrics(chosen_rewards).mean()
+        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather_for_metrics(rejected_rewards).mean()
+        metrics[f"{prefix}rewards/accuracies"] = self.accelerator.gather_for_metrics(reward_accuracies).mean()
+        metrics[f"{prefix}rewards/margins"] = self.accelerator.gather_for_metrics(
+            chosen_rewards - rejected_rewards
+        ).mean()
+        metrics[f"{prefix}logps/rejected"] = self.accelerator.gather_for_metrics(policy_rejected_logps).detach().mean()
+        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean()
+        metrics[f"{prefix}logits/rejected"] = (
+            self.accelerator.gather_for_metrics(policy_rejected_logits).detach().mean()
+        )
+        metrics[f"{prefix}logits/chosen"] = self.accelerator.gather_for_metrics(policy_chosen_logits).detach().mean()
+        metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean()
+        metrics[f"{prefix}log_odds_ratio"] = self.accelerator.gather_for_metrics(log_odds_ratio).mean()
+        metrics[f"{prefix}log_odds_chosen"] = self.accelerator.gather_for_metrics(log_odds_chosen).mean()
         if is_torch_xla_available():
             xm.mark_step()  # needed because .item() calls
         for k, v in metrics.items():
@@ -842,15 +866,10 @@ class ORPOTrainer(Trainer):
     def compute_loss(
         self,
         model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        if not self.use_dpo_data_collator:
-            warnings.warn(
-                "compute_loss is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
-            )
-
+        num_items_in_batch=None,
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
         compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
 
         with compute_loss_context_manager:
@@ -866,7 +885,7 @@ class ORPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def generate_from_model(self, model, batch: dict[str, torch.LongTensor]) -> str:
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
@@ -890,9 +909,9 @@ class ORPOTrainer(Trainer):
     def prediction_step(
         self,
         model: Union[PreTrainedModel, nn.Module],
-        inputs: Dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = None,
+        ignore_keys: Optional[list[str]] = None,
     ):
         if not self.use_dpo_data_collator:
             warnings.warn(
@@ -927,7 +946,7 @@ class ORPOTrainer(Trainer):
 
         return (loss.detach(), logits, labels)
 
-    def store_metrics(self, metrics: Dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+    def store_metrics(self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
 
@@ -936,7 +955,7 @@ class ORPOTrainer(Trainer):
         dataloader: DataLoader,
         description: str,
         prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[List[str]] = None,
+        ignore_keys: Optional[list[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
@@ -957,20 +976,22 @@ class ORPOTrainer(Trainer):
             random_batch = self.data_collator(random_batch_dataset)
             random_batch = self._prepare_inputs(random_batch)
 
-            policy_output_decoded = self.get_batch_samples(self.model, random_batch)
+            policy_output_decoded = self.generate_from_model(self.model, random_batch)
 
-            self.log(
-                {
-                    "game_log": wandb.Table(
-                        columns=["Prompt", "Policy"],
-                        rows=[
-                            [prompt, pol[len(prompt) :]]
-                            for prompt, pol in zip(random_batch["prompt"], policy_output_decoded)
-                        ],
-                    )
-                }
+            table = pd.DataFrame(
+                columns=["Prompt", "Policy"],
+                data=[
+                    [prompt, pol[len(prompt) :]] for prompt, pol in zip(random_batch["prompt"], policy_output_decoded)
+                ],
             )
-            self.state.log_history.pop()
+            if "wandb" in self.args.report_to:
+                wandb.log({"game_log": wandb.Table(data=table)})
+
+            if "comet_ml" in self.args.report_to:
+                log_table_to_comet_experiment(
+                    name="game_log.csv",
+                    table=table,
+                )
 
         # Base evaluation
         initial_output = super().evaluation_loop(
@@ -979,13 +1000,15 @@ class ORPOTrainer(Trainer):
 
         return initial_output
 
-    def log(self, logs: Dict[str, float]) -> None:
+    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         """
         Log `logs` on the various objects watching training, including stored metrics.
 
         Args:
-            logs (`Dict[str, float]`):
+            logs (`dict[str, float]`):
                 The values to log.
+            start_time (`float` or `None`, *optional*, defaults to `None`):
+                Start time of the training.
         """
         # logs either has 'loss' or 'eval_loss'
         train_eval = "train" if "loss" in logs else "eval"
@@ -993,7 +1016,11 @@ class ORPOTrainer(Trainer):
         for key, metrics in self._stored_metrics[train_eval].items():
             logs[key] = torch.tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]
-        return super().log(logs)
+
+        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+            return super().log(logs, start_time)
+        else:  # transformers<=4.46
+            return super().log(logs)
 
     def _shift_right(self, input_ids):
         if self.decoder_start_token_id is None:
@@ -1022,17 +1049,17 @@ class ORPOTrainer(Trainer):
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
-            tags (`str`, `List[str]` or `None`, *optional*, defaults to `None`):
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -1065,6 +1092,7 @@ class ORPOTrainer(Trainer):
             dataset_name=dataset_name,
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
             trainer_name="ORPO",
             trainer_citation=citation,
             paper_title="ORPO: Monolithic Preference Optimization without Reference Model",

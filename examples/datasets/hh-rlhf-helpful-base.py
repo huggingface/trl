@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,10 +13,11 @@
 # limitations under the License.
 
 import re
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -30,13 +31,20 @@ class ScriptArguments:
             Whether to push the dataset to the Hugging Face Hub.
         repo_id (`str`, *optional*, defaults to `"trl-lib/hh-rlhf-helpful-base"`):
             Hugging Face repository ID to push the dataset to.
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of workers to use for dataset processing.
     """
 
-    push_to_hub: bool = False
-    repo_id: str = "trl-lib/hh-rlhf-helpful-base"
-    dataset_num_proc: Optional[int] = None
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the dataset to the Hugging Face Hub."},
+    )
+    repo_id: str = field(
+        default="trl-lib/hh-rlhf-helpful-base", metadata={"help": "Hugging Face repository ID to push the dataset to."}
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None, metadata={"help": "Number of workers to use for dataset processing."}
+    )
 
 
 def common_start(str1: str, str2: str) -> str:
@@ -51,7 +59,7 @@ def common_start(str1: str, str2: str) -> str:
     return "".join(common_chars)
 
 
-def extract_dialogue(example: str) -> List[Dict[str, str]]:
+def extract_dialogue(example: str) -> list[dict[str, str]]:
     # Extract the prompt, which corresponds to the common start of the chosen and rejected dialogues
     prompt_text = common_start(example["chosen"], example["rejected"])
 
@@ -79,11 +87,39 @@ def extract_dialogue(example: str) -> List[Dict[str, str]]:
         prompt.append({"role": role, "content": content})
 
     # Remove the prompt from the chosen and rejected dialogues
-    chosen = [{"role": "assitant", "content": chosen_line}]
+    chosen = [{"role": "assistant", "content": chosen_line}]
     rejected = [{"role": "assistant", "content": rejected_line}]
 
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
+
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+
+# HH-RLHF-Helpful-Base Dataset
+
+## Summary
+
+The HH-RLHF-Helpful-Base dataset is a processed version of [Anthropic's HH-RLHF](https://huggingface.co/datasets/Anthropic/hh-rlhf) dataset, specifically curated to train models using the [TRL library](https://github.com/huggingface/trl) for preference learning and alignment tasks. It contains pairs of text samples, each labeled as either "chosen" or "rejected," based on human preferences regarding the helpfulness of the responses. This dataset enables models to learn human preferences in generating helpful responses, enhancing their ability to assist users effectively.
+
+## Data Structure
+
+- **Format**: [Conversational](https://huggingface.co/docs/trl/main/dataset_formats#conversational)
+- **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
+
+Columns:
+- `"pompt"`: The user query.
+- `"chosen"`: A response deemed helpful by human evaluators.
+- `"rejected"`: A response considered less helpful or unhelpful.
+
+This structure allows models to learn to prefer the _chosen_ response over the _rejected_ one, thereby aligning with human preferences in helpfulness.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/hh-rlhf-helpful-base.py).
+""")
 
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
@@ -94,3 +130,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")

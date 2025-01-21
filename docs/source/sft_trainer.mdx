@@ -1,10 +1,10 @@
 # Supervised Fine-tuning Trainer
 
-[![](https://img.shields.io/badge/All_models-SFT-blue)](https://huggingface.co/models?other=sft,trl)
+[![](https://img.shields.io/badge/All_models-SFT-blue)](https://huggingface.co/models?other=sft,trl) [![](https://img.shields.io/badge/smol_course-Chapter_1-yellow)](https://github.com/huggingface/smol-course/tree/main/1_instruction_tuning)
 
 Supervised fine-tuning (or SFT for short) is a crucial step in RLHF. In TRL we provide an easy-to-use API to create your SFT models and train them with few lines of code on your dataset.
 
-Check out a complete flexible example at [`examples/scripts/sft.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft.py).
+Check out a complete flexible example at [`trl/scripts/sft.py`](https://github.com/huggingface/trl/tree/main/trl/scripts/sft.py).
 Experimental support for Vision Language Models is also included in the example [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_vlm.py).
 
 ## Quickstart
@@ -331,32 +331,37 @@ Note that all keyword arguments of `from_pretrained()` are supported.
 
 ### Training adapters
 
-We also support tight integration with 🤗 PEFT library so that any user can conveniently train adapters and share them on the Hub instead of training the entire model
+We also support tight integration with 🤗 PEFT library so that any user can conveniently train adapters and share them on the Hub instead of training the entire model.
 
 ```python
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig
 
-dataset = load_dataset("stanfordnlp/imdb", split="train")
+dataset = load_dataset("trl-lib/Capybara", split="train")
 
 peft_config = LoraConfig(
     r=16,
     lora_alpha=32,
     lora_dropout=0.05,
-    bias="none",
+    target_modules="all-linear",
+    modules_to_save=["lm_head", "embed_token"],
     task_type="CAUSAL_LM",
 )
 
 trainer = SFTTrainer(
-    "EleutherAI/gpt-neo-125m",
+    "Qwen/Qwen2.5-0.5B",
     train_dataset=dataset,
-    args=SFTConfig(output_dir="/tmp"),
+    args=SFTConfig(output_dir="Qwen2.5-0.5B-SFT"),
     peft_config=peft_config
 )
 
 trainer.train()
 ```
+
+> [!WARNING]
+> If the chat template contains special tokens like `<|im_start|>` (ChatML) or `<|eot_id|>` (Llama), the embedding layer and LM head must be included in the trainable parameters via the `modules_to_save` argument. Without this, the fine-tuned model will produce unbounded or nonsense generations. If the chat template doesn't contain special tokens (e.g. Alpaca), then the `modules_to_save` argument can be ignored or set to `None`.
+
 
 You can also continue training your `PeftModel`. For that, first load a `PeftModel` outside `SFTTrainer` and pass it directly to the trainer without the `peft_config` argument being passed.
 
@@ -463,30 +468,30 @@ We included a utility function to create your model.
 
 ```python
 from trl import ModelConfig, SFTTrainer, get_kbit_device_map, get_peft_config, get_quantization_config
-model_config = ModelConfig(
+model_args = ModelConfig(
     model_name_or_path="facebook/opt-350m"
     attn_implementation=None, # or "flash_attention_2"
 )
 torch_dtype = (
-    model_config.torch_dtype
-    if model_config.torch_dtype in ["auto", None]
-    else getattr(torch, model_config.torch_dtype)
+    model_args.torch_dtype
+    if model_args.torch_dtype in ["auto", None]
+    else getattr(torch, model_args.torch_dtype)
 )
-quantization_config = get_quantization_config(model_config)
+quantization_config = get_quantization_config(model_args)
 model_kwargs = dict(
-    revision=model_config.model_revision,
-    trust_remote_code=model_config.trust_remote_code,
-    attn_implementation=model_config.attn_implementation,
+    revision=model_args.model_revision,
+    trust_remote_code=model_args.trust_remote_code,
+    attn_implementation=model_args.attn_implementation,
     torch_dtype=torch_dtype,
     use_cache=False if training_args.gradient_checkpointing else True,
     device_map=get_kbit_device_map() if quantization_config is not None else None,
     quantization_config=quantization_config,
 )
-model = AutoModelForCausalLM.from_pretrained(model_config.model_name_or_path, **model_kwargs)
+model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 trainer = SFTTrainer(
     ...,
-    model=model_config.model_name_or_path,
-    peft_config=get_peft_config(model_config),
+    model=model_args.model_name_or_path,
+    peft_config=get_peft_config(model_args),
 )
 ```
 
@@ -497,7 +502,7 @@ NEFTune is a technique to boost the performance of chat models and was introduce
 >  Standard finetuning of LLaMA-2-7B using Alpaca achieves 29.79% on AlpacaEval, which rises to 64.69% using noisy embeddings. NEFTune also improves over strong baselines on modern instruction datasets. Models trained with Evol-Instruct see a 10% improvement, with ShareGPT an 8% improvement, and with OpenPlatypus an 8% improvement. Even powerful models further refined with RLHF such as LLaMA-2-Chat benefit from additional training with NEFTune.
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/neft-screenshot.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/neft-screenshot.png">
 </div>
 
 To use it in `SFTTrainer` simply pass `neftune_noise_alpha` when creating your `SFTConfig` instance. Note that to avoid any surprising behaviour, NEFTune is disabled after training to retrieve back the original behaviour of the embedding layer.
@@ -522,7 +527,7 @@ trainer.train()
 We have tested NEFTune by training `mistralai/Mistral-7B-v0.1` on the [OpenAssistant dataset](https://huggingface.co/datasets/timdettmers/openassistant-guanaco) and validated that using NEFTune led to a performance boost of ~25% on MT Bench.
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-internal-testing/example-images/resolve/main/images/trl-neftune-mistral-7b.png">
+<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-neftune-mistral-7b.png">
 </div>
 
 Note however, that the amount of performance gain is _dataset dependent_ and in particular, applying NEFTune on synthetic datasets like [UltraChat](https://huggingface.co/datasets/stingning/ultrachat) typically produces smaller gains.
@@ -619,7 +624,7 @@ To learn more about Liger-Kernel, visit their [official repository](https://gith
 
 Pay attention to the following best practices when training a model with that trainer:
 
-- [`SFTTrainer`] always pads by default the sequences to the `max_seq_length` argument of the [`SFTTrainer`]. If none is passed, the trainer will retrieve that value from the tokenizer. Some tokenizers do not provide a default value, so there is a check to retrieve the minimum between 2048 and that value. Make sure to check it before training.
+- [`SFTTrainer`] always truncates by default the sequences to the `max_seq_length` argument of the [`SFTTrainer`]. If none is passed, the trainer will retrieve that value from the tokenizer. Some tokenizers do not provide a default value, so there is a check to retrieve the minimum between 1024 and that value. Make sure to check it before training.
 - For training adapters in 8bit, you might need to tweak the arguments of the `prepare_model_for_kbit_training` method from PEFT, hence we advise users to use `prepare_in_int8_kwargs` field, or create the `PeftModel` outside the [`SFTTrainer`] and pass it.
 - For a more memory-efficient training using adapters, you can load the base model in 8bit, for that simply add `load_in_8bit` argument when creating the [`SFTTrainer`], or create a base model in 8bit outside the trainer and pass it.
 - If you create a model outside the trainer, make sure to not pass to the trainer any additional keyword arguments that are relative to `from_pretrained()` method.

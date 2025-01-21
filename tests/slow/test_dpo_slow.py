@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import gc
 import itertools
 import tempfile
@@ -21,11 +22,12 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers.testing_utils import require_bitsandbytes, require_peft, require_torch_accelerator, torch_device
+from transformers.testing_utils import require_peft, require_torch_accelerator, torch_device
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
 
+from ..testing_utils import require_bitsandbytes
 from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST
 
 
@@ -61,6 +63,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
         """
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
@@ -115,6 +118,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
         """
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
@@ -148,8 +152,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
-            assert trainer.ref_model is None
+            self.assertIsInstance(trainer.model, PeftModel)
+            self.assertIsNone(trainer.ref_model)
 
             # train the model
             trainer.train()
@@ -179,6 +183,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
 
         model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
@@ -212,8 +217,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
                 peft_config=self.peft_config,
             )
 
-            assert isinstance(trainer.model, PeftModel)
-            assert trainer.ref_model is None
+            self.assertIsInstance(trainer.model, PeftModel)
+            self.assertIsNone(trainer.ref_model)
 
             # train the model
             trainer.train()

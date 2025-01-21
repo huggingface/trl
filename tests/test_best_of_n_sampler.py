@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ class BestOfNSamplerTester(unittest.TestCase):
     Tests the BestOfNSampler class
     """
 
-    ref_model_name = "trl-internal-testing/dummy-GPT2-correct-vocab"
+    ref_model_name = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
     output_length_sampler = LengthSampler(2, 6)
     model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_model_name)
     tokenizer = AutoTokenizer.from_pretrained(ref_model_name)
@@ -73,8 +73,8 @@ class BestOfNSamplerTester(unittest.TestCase):
 
         for q, expected_length in various_queries_formats:
             results = best_of_n.generate(q)
-            assert isinstance(results, list)
-            assert len(results) == expected_length
+            self.assertIsInstance(results, list)
+            self.assertEqual(len(results), expected_length)
 
     def test_different_sample_sizes_and_n_candidates_values(self):
         r"""
@@ -109,4 +109,4 @@ class BestOfNSamplerTester(unittest.TestCase):
             tokenized_queries = [self.tokenizer.encode(query) for query in queries]
             results = best_of_n.generate(tokenized_queries)
             for result in results:
-                assert len(result) == expected
+                self.assertEqual(len(result), expected)

@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from datasets import load_dataset
+from huggingface_hub import ModelCard
 from transformers import HfArgumentParser
 
 
@@ -29,13 +30,22 @@ class ScriptArguments:
             Whether to push the dataset to the Hugging Face Hub.
         repo_id (`str`, *optional*, defaults to `"trl-lib/tldr-preference"`):
             Hugging Face repository ID to push the dataset to.
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of workers to use for dataset processing.
     """
 
-    push_to_hub: bool = False
-    repo_id: str = "trl-lib/tldr-preference"
-    dataset_num_proc: Optional[int] = None
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the dataset to the Hugging Face Hub."},
+    )
+    repo_id: str = field(
+        default="trl-lib/tldr-preference",
+        metadata={"help": "Hugging Face repository ID to push the dataset to."},
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of workers to use for dataset processing."},
+    )
 
 
 def to_preference(example):
@@ -56,6 +66,34 @@ def to_preference(example):
     return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
 
+model_card = ModelCard("""
+---
+tags: [trl]
+---
+
+# TL;DR Dataset for Preference Learning
+
+## Summary
+
+The TL;DR dataset is a processed version of Reddit posts, specifically curated to train models using the [TRL library](https://github.com/huggingface/trl) for preference learning and Reinforcement Learning from Human Feedback (RLHF) tasks. It leverages the common practice on Reddit where users append "TL;DR" (Too Long; Didn't Read) summaries to lengthy posts, providing a rich source of paired text data for training models to understand and generate concise summaries.
+
+## Data Structure
+
+- **Format**: [Standard](https://huggingface.co/docs/trl/main/dataset_formats#standard)
+- **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
+
+Columns:
+- `"pompt"`: The unabridged Reddit post.
+- `"chosen"`: The concise "TL;DR" summary appended by the author.
+- `"rejected"`: An alternative summary or response that was not selected.
+
+This structure enables models to learn the relationship between detailed content and its abbreviated form, enhancing their summarization capabilities.
+
+## Generation script
+
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/tldr_preference.py).
+""")
+
 if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
@@ -70,3 +108,4 @@ if __name__ == "__main__":
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id)
+        model_card.push_to_hub(script_args.repo_id, repo_type="dataset")
