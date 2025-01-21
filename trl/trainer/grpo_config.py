@@ -39,6 +39,8 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control the data preprocessing
 
+        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
+            Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `8`):
             Number of generations per prompt to sample.
         temperature (`float`, *optional*, defaults to `0.9`):
@@ -65,6 +67,12 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
+    max_prompt_length: Optional[int] = field(
+        default=512,
+        metadata={
+            "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left."
+        },
+    )
     num_generations: Optional[int] = field(
         default=8,
         metadata={"help": "Number of generations to sample."},
