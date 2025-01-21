@@ -22,6 +22,7 @@ import torch.utils.data
 import transformers
 from datasets import Dataset, IterableDataset
 from packaging import version
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -48,6 +49,28 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+
+def prepare_fsdp(model, accelerator):
+    if not isinstance(model, FSDP):
+        accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+        fsdp_plugin = accelerator.state.fsdp_plugin
+        kwargs = {
+            "sharding_strategy": fsdp_plugin.sharding_strategy,
+            "cpu_offload": fsdp_plugin.cpu_offload,
+            "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
+            "mixed_precision": fsdp_plugin.mixed_precision_policy,
+            "sync_module_states": fsdp_plugin.sync_module_states,
+            "backward_prefetch": fsdp_plugin.backward_prefetch,
+            "forward_prefetch": fsdp_plugin.forward_prefetch,
+            "use_orig_params": fsdp_plugin.use_orig_params,
+            "param_init_fn": fsdp_plugin.param_init_fn,
+            "ignored_modules": fsdp_plugin.ignored_modules,
+            "limit_all_gathers": fsdp_plugin.limit_all_gathers,
+            "device_id": accelerator.device,
+        }
+        model = FSDP(model, **kwargs)
+    return model
 
 
 class GRPOTrainer(Trainer):
@@ -176,9 +199,18 @@ class GRPOTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Prepare the ref model
         if self.ref_model is not None:
-            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-        self.reward_model = self.accelerator.prepare_model(self.reward_model, evaluation_mode=True)
+            if self.is_fsdp_enabled:
+                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
+        # Prepare the reward model
+        if self.is_fsdp_enabled:
+            self.reward_model = prepare_fsdp(self.reward_model, self.accelerator)
+        else:
+            self.reward_model = self.accelerator.prepare_model(self.reward_model, evaluation_mode=True)
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -209,8 +241,15 @@ class GRPOTrainer(Trainer):
             prompt_inputs["attention_mask"] = prompt_inputs["attention_mask"][:, -self.max_prompt_length :]
 
         # Generate completions
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
+        if self.is_fsdp_enabled:
+            # From https://github.com/databricks/Compose-RL/blob/36c7a859128240efd6e1c7d2f2ca7f69f323c5f4/compose_rl/ppo/model.py#L158
+            with FSDP.summon_full_params(model, writeback=False, recurse=False):
+                prompt_completion_ids = model.generate(**prompt_inputs, generation_config=self.generation_config)
+        else:
+            with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                prompt_completion_ids = unwrapped_model.generate(
+                    **prompt_inputs, generation_config=self.generation_config
+                )
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
@@ -296,7 +335,7 @@ class GRPOTrainer(Trainer):
         return loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items() if val}  # average the metrics
         logs = {**logs, **metrics}
         if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
             super().log(logs, start_time)
