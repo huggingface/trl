@@ -1000,8 +1000,8 @@ class OnPolicyConfig(TrainingArguments):
             - `'eos'`: Uses the tokenizer's `eos_token`.
 
         stop_token_id (`int` or `None`, *optional*, defaults to `None`):
-            Specifies the ID of the stop token to use for text generation. If `None`, stop token ID is applied, unless
-            `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
+            Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
+            unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
@@ -1068,7 +1068,7 @@ class OnPolicyConfig(TrainingArguments):
     stop_token_id: Optional[int] = field(
         default=None,
         metadata={
-            "help": "Specifies the ID of the stop token to use for text generation. If `None`, stop token ID is "
+            "help": "Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is "
             "applied, unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`."
         },
     )
