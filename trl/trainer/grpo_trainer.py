@@ -49,7 +49,26 @@ if is_wandb_available():
 
 class GRPOTrainer(Trainer):
     """
-    ...
+    Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
+    paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300).
+
+    Example:
+
+    ```python
+    # train_grpo.py
+    from datasets import load_dataset
+    from trl import GRPOTrainer
+
+    dataset = load_dataset("trl-lib/tldr", split="train")
+
+    trainer = GRPOTrainer(
+        model="Qwen/Qwen2-0.5B-Instruct",
+        reward_model="weqweasdas/RM-Gemma-2B",
+        train_dataset=dataset,
+    )
+
+    trainer.train()
+    ```
 
     Args:
         model (`Union[str, PreTrainedModel]`):
