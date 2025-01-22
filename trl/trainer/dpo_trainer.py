@@ -1159,7 +1159,7 @@ class DPOTrainer(Trainer):
                 else:
                     raise ValueError(
                         f"Unknown truncation mode: '{self.truncation_mode}'. Should be one of ['keep_end', "
-                        "'keep_start']"
+                        "'keep_start']."
                     )
 
             if self.use_num_logits_to_keep:
