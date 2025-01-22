@@ -90,7 +90,7 @@ class GRPOConfig(TrainingArguments):
     use_vllm: Optional[bool] = field(
         default=False,
         metadata={
-            "help": "Whether to use the vLLM for generating completions. Requires vLLM to be installed "
+            "help": "Whether to use vLLM for generating completions. Requires vLLM to be installed "
             "(`pip install vllm`)."
         },
     )
