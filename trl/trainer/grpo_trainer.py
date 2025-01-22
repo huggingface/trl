@@ -180,8 +180,8 @@ class GRPOTrainer(Trainer):
                 n=self.num_generations,  # 2 generations per prompt
                 max_tokens=args.max_completion_length,
                 temperature=args.temperature,
-                # top_k=50,
-                # top_p=1.0,
+                top_k=50,
+                top_p=1.0,
                 detokenize=False,  # to avoid vllm to decode (we don't need it)
             )
             # vLLM dynamically adjusts the size of the key-value cache based on available GPU memory at instantiation.
