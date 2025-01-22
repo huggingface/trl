@@ -140,7 +140,7 @@ class PPOTrainer(Trainer):
 
         # Handle stop token settings
         if args.stop_token and args.stop_token_id:
-            raise ValueError("You cannot set both `stop_token` and `stop_token_id`. ")
+            raise ValueError("You cannot set both `stop_token` and `stop_token_id`.")
         if args.stop_token:
             if args.stop_token == "eos":
                 args.stop_token_id = processing_class.eos_token_id
