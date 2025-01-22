@@ -93,7 +93,7 @@ class GRPOTrainer(Trainer):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks
             detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
-            If you want to remove one of the default callbacks used, use the [`~transformers/Trainer.remove_callback`]
+            If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
