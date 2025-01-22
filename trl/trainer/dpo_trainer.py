@@ -388,12 +388,12 @@ class DPOTrainer(Trainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
-        self.max_length = args.max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
         self.max_prompt_length = args.max_prompt_length
-        self.truncation_mode = args.truncation_mode
         self.max_completion_length = args.max_completion_length
+        self.max_length = args.max_length
+        self.truncation_mode = args.truncation_mode
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
         self.use_num_logits_to_keep = args.use_num_logits_to_keep
 
@@ -595,7 +595,9 @@ class DPOTrainer(Trainer):
         >>> from transformers import GPT2Tokenizer
         >>> tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         >>> features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
-        >>> DPOTrainer.tokenize_row(features, tokenizer, max_prompt_length=3, max_completion_length=3, add_special_tokens=False)
+        >>> DPOTrainer.tokenize_row(
+        ...     features, tokenizer, max_prompt_length=3, max_completion_length=3, add_special_tokens=False
+        ... )
         {'prompt_input_ids': [464, 6766, 318], 'chosen_input_ids': [4171, 50256], 'rejected_input_ids': [4077, 50256]}
         ```
         """
@@ -1145,10 +1147,20 @@ class DPOTrainer(Trainer):
             attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
 
             # Truncate right
-            if self.args.max_length is not None:
-                input_ids = input_ids[:, : self.args.max_length]
-                attention_mask = attention_mask[:, : self.args.max_length]
-                loss_mask = loss_mask[:, : self.args.max_length]
+            if self.max_length is not None:
+                if self.truncation_mode == "keep_end":
+                    input_ids = input_ids[:, -self.max_length :]
+                    attention_mask = attention_mask[:, -self.max_length :]
+                    loss_mask = loss_mask[:, -self.max_length :]
+                elif self.truncation_mode == "keep_start":
+                    input_ids = input_ids[:, : self.max_length]
+                    attention_mask = attention_mask[:, : self.max_length]
+                    loss_mask = loss_mask[:, : self.max_length]
+                else:
+                    raise ValueError(
+                        f"Unknown truncation mode: '{self.truncation_mode}'. Should be one of ['keep_end', "
+                        "'keep_start']."
+                    )
 
             if self.use_num_logits_to_keep:
                 # Compute num_logits_to_keep based on loss_mask pattern:
