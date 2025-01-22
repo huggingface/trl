@@ -55,7 +55,6 @@ class GRPOTrainer(Trainer):
     Example:
 
     ```python
-    # train_grpo.py
     from datasets import load_dataset
     from trl import GRPOTrainer
 
