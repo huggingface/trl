@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import json
 import random
 import warnings
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any, Literal, Optional, Union
 
@@ -73,7 +73,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             differently if it does not have proper context.
         instruction_template (`Union[str, list[int]]`): the template form that indicates the start of the human instruction, typically something like
             '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
-        mlm (`bool`, *optional*, defaults to `False`): Whether or not to use masked language modeling in the underlying
+        mlm (`bool`, *optional*, defaults to `False`): Whether to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
         ignore_index (`int`, *optional*, defaults to `-100`):
@@ -211,6 +211,25 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
             batch["labels"] = batch["labels"][attn_mask.bool()].unsqueeze(0)
             batch["labels"][batch["position_ids"] == 0] = self.ignore_index
 
+            # Calculate cumulative sequence lengths for queries and keys to prevent graph breaks during further computations.
+            flattened_position_ids = batch["position_ids"].flatten()
+            indices_q = torch.arange(
+                flattened_position_ids.size(0), device=flattened_position_ids.device, dtype=torch.int32
+            )
+            batch["cu_seq_lens_q"] = torch.cat(
+                (
+                    indices_q[flattened_position_ids == 0],
+                    torch.tensor(
+                        flattened_position_ids.size(), device=flattened_position_ids.device, dtype=torch.int32
+                    ),
+                )
+            )
+            batch["cu_seq_lens_k"] = batch["cu_seq_lens_q"]
+
+            # Determine maximum sequence lengths to prevent graph breaks during further computations.
+            batch["max_length_k"] = flattened_position_ids.max().item() + 1
+            batch["max_length_q"] = batch["max_length_k"]
+
         return batch
 
 
@@ -317,7 +336,7 @@ class RewardDataCollatorWithPadding:
             The tokenizer used for encoding the data.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
-        pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
+        pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.
         return_tensors (`str`, `optional`, defaults to `"pt"`):
             The tensor type to use.
@@ -444,8 +463,8 @@ class DPODataCollatorWithPadding:
             The tokenizer's pad_token_id.
         label_pad_token_id (`int`, defaults to -100):
             The label used for masking.
-        is_encoder_decoder (`Optional[bool]`, `optional`, defaults to `None`):
-            Whether or not you model has an encoder_decoder architecture.
+        is_encoder_decoder (`bool` or `None`, `optional`, defaults to `None`):
+            Whether you model has an encoder_decoder architecture.
     """
 
     pad_token_id: int = 0
@@ -529,11 +548,11 @@ class ConstantLengthDataset(IterableDataset):
             The processor used for processing the data.
         dataset (`dataset.Dataset`):
             Dataset with text files.
-        dataset_text_field (`Optional[str]`, *optional*, defaults to `None`):
+        dataset_text_field (`str` or `None`, *optional*, defaults to `None`):
             Name of the field in the dataset that contains the text. Only one of `dataset_text_field` and
             `formatting_func` should be provided.
         formatting_func (`Callable`, *optional*):
-            Function that formats the text before tokenization. Usually it is recommended to have follows a certain
+            Function that formats the text before tokenization. Usually it is recommended to follow a certain
             pattern such as `"### Question: {question} ### Answer: {answer}"`. Only one of `dataset_text_field` and
             `formatting_func` should be provided.
         infinite (`bool`, *optional*, defaults to `False`):
@@ -959,13 +978,13 @@ class OnPolicyConfig(TrainingArguments):
     command line.
 
     Parameters:
-        run_name (`Optional[str]`, *optional*, defaults to `None`):
+        run_name (`str` or `None`, *optional*, defaults to `None`):
             Name of the run.
-        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
             Number of minibatches to split a batch into.
-        total_episodes (`Optional[int]`, *optional*, defaults to `None`):
+        total_episodes (`int` or `None`, *optional*, defaults to `None`):
             Total number of episodes in the dataset.
         local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
             Per rank no grad forward pass in the rollout phase.
@@ -973,56 +992,125 @@ class OnPolicyConfig(TrainingArguments):
             Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
-        stop_token (`Optional[str]`, *optional*, defaults to `None`):
+        stop_token (`str` or `None`, *optional*, defaults to `None`):
             Stop token.
-        stop_token_id (`Optional[int]`, *optional*, defaults to `None`):
+        stop_token_id (`int` or `None`, *optional*, defaults to `None`):
             Truncation token id.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
-        missing_eos_penalty (`Optional[float]`, *optional*, defaults to `None`):
+        missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
             to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
-        world_size (`Optional[int]`, *optional*, defaults to `None`):
+        world_size (`int` or `None`, *optional*, defaults to `None`):
             Number of processes (GPUs) to use for the training.
-        num_total_batches (`Optional[int]`, *optional*, defaults to `None`):
+        num_total_batches (`int` or `None`, *optional*, defaults to `None`):
             Number of total batches to train.
-        micro_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        micro_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
-        local_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        local_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
-        batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        batch_size (`int` or `None`, *optional*, defaults to `None`):
             Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`).
-        local_mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        local_mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Mini batch size per GPU.
-        mini_batch_size (`Optional[int]`, *optional*, defaults to `None`):
+        mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Mini batch size across GPUs.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the model to the Hub after training.
     """
 
-    run_name: Optional[str] = None
-    dataset_num_proc: Optional[int] = None
-    num_mini_batches: int = 1
-    total_episodes: Optional[int] = None
-    local_rollout_forward_batch_size: int = 64
-    num_sample_generations: int = 10
-    response_length: int = 53
-    stop_token: Optional[Literal["eos"]] = None
-    stop_token_id: Optional[int] = None
-    temperature: float = 0.7
-    missing_eos_penalty: Optional[float] = None
-    sft_model_path: str = "EleutherAI/pythia-160m"
-    world_size: Optional[int] = None
-    num_total_batches: Optional[int] = None
-    micro_batch_size: Optional[int] = None
-    local_batch_size: Optional[int] = None
-    batch_size: Optional[int] = None
-    local_mini_batch_size: Optional[int] = None
-    mini_batch_size: Optional[int] = None
-    push_to_hub: bool = False
+    run_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "Name of the run."},
+    )
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    num_mini_batches: int = field(
+        default=1,
+        metadata={"help": "Number of minibatches to split a batch into."},
+    )
+    total_episodes: Optional[int] = field(
+        default=None,
+        metadata={"help": "Total number of episodes in the dataset."},
+    )
+    local_rollout_forward_batch_size: int = field(
+        default=64,
+        metadata={"help": "Per rank no grad forward pass in the rollout phase."},
+    )
+    num_sample_generations: int = field(
+        default=10,
+        metadata={
+            "help": "Number of debugging samples generations (i.e., `generate_completions` calls) throughout training."
+        },
+    )
+    response_length: int = field(
+        default=53,
+        metadata={"help": "Length of the response."},
+    )
+    stop_token: Optional[Literal["eos"]] = field(
+        default=None,
+        metadata={"help": "Stop token."},
+    )
+    stop_token_id: Optional[int] = field(
+        default=None,
+        metadata={"help": "Truncation token id."},
+    )
+    temperature: float = field(
+        default=0.7,
+        metadata={"help": "Sampling temperature."},
+    )
+    missing_eos_penalty: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Penalty applied to the score when the model fails to generate an EOS token. This is useful to "
+            "encourage to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be "
+            "a positive value."
+        },
+    )
+    sft_model_path: str = field(
+        default="EleutherAI/pythia-160m",
+        metadata={"help": "Path to the SFT model."},
+    )
+    world_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes (GPUs) to use for the training."},
+    )
+    num_total_batches: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of total batches to train."},
+    )
+    micro_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`)."},
+    )
+    local_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`)."},
+    )
+    batch_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * "
+            "`gradient_accumulation_steps`)."
+        },
+    )
+    local_mini_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Mini batch size per GPU."},
+    )
+    mini_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Mini batch size across GPUs."},
+    )
+    push_to_hub: bool = field(
+        default=False,
+        metadata={"help": "Whether to push the model to the Hub after training."},
+    )
 
 
 def first_true_indices(bools: torch.Tensor, dtype=torch.long):
@@ -1481,3 +1569,69 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     experiment = comet_ml.get_running_experiment()
     if experiment is not None:
         experiment.log_table(tabular_data=table, filename=name)
+
+
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """
+    Shift non-zero elements in the mask and corresponding tensors to the left.
+
+    This function operates on a binary mask and any number of additional tensors with the same dimensions as the mask.
+    For each row, non-zero values are shifted to the leftmost positions. Then, columns that contain only zeros across
+    all rows are truncated from the mask and tensors. Visually, this operation can be represented as follows:
+
+    ```
+    [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+     [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+    ```
+
+    Args:
+
+        mask (`torch.Tensor`):
+            2D tensor (binary mask) with shape `(N, M)`.
+        *tensors (`torch.Tensor`)
+            One or more 2D tensors with the same shape as `mask`. These tensors will be processed alongside `mask`,
+            with non-zero values shifted and excess zero columns truncated in the same manner.
+
+    Returns:
+        `torch.Tensor`:
+            Updated binary mask with non-zero values flushed to the left and trailing zero columns removed.
+        `*torch.Tensor`
+            Updated tensors, processed in the same way as the mask.
+
+    Example:
+    ```python
+    >>> mask = torch.tensor([[0, 0, 1, 1, 1],
+    ...                      [0, 1, 1, 0, 0]])
+    >>> tensor = torch.tensor([[9, 9, 2, 3, 4],
+    ...                        [9, 5, 6, 9, 9]])
+    >>> new_mask, new_tensor = flush_left(mask, tensor)
+    >>> print(new_mask)
+    tensor([[1, 1, 1],
+            [1, 1, 0]])
+    >>> print(new_tensor)
+    tensor([[2, 3, 4],
+            [5, 6, 0]])
+    ```
+    """
+    # Create copy of mask and tensors
+    mask = mask.clone()
+    tensors = [t.clone() for t in tensors]
+
+    # Shift non-zero values to the left
+    for i in range(mask.size(0)):
+        first_one_idx = torch.nonzero(mask[i])[0].item()
+        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
+        for tensor in tensors:
+            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+
+    # Get the first column idx that is all zeros and remove every column after that
+    empty_cols = torch.sum(mask, dim=0) == 0
+    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
+    mask = mask[:, :first_empty_col]
+    for i, tensor in enumerate(tensors):
+        tensors[i] = tensor[:, :first_empty_col]
+
+    if not tensors:
+        return mask
+    else:
+        return mask, *tensors
