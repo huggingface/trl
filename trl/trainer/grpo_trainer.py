@@ -123,7 +123,7 @@ class GRPOTrainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_model: Union[str, PreTrainedModel, Callable[[list[str]], list[float]]],
+        reward_model: Union[str, PreTrainedModel, Callable[[Any, Any], list[float]]],
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
