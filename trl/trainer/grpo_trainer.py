@@ -369,9 +369,9 @@ class GRPOTrainer(Trainer):
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
         logs = {**logs, **metrics}
         if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
-            return super().log(logs, start_time)
+            super().log(logs, start_time)
         else:  # transformers<=4.46
-            return super().log(logs)
+            super().log(logs)
         self._metrics = {key: [] for key in self._metrics}
 
     def create_model_card(
