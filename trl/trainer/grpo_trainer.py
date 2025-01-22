@@ -71,9 +71,9 @@ class GRPOTrainer(Trainer):
             - A [`~transformers.PreTrainedModel`] object. Only sequence classification models are supported.
             - A custom reward function that takes a list of prompts and completions and returns a list of rewards. For
               more details, see [Using a custom reward function](#using-a-custom-reward-function).
-        args (`GRPOConfig`, *optional*, defaults to `None`):
+        args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
-        train_dataset (`Union[Dataset, IterableDataset]`):
+        train_dataset ([`Union[~datasets.Dataset, ~datasets.IterableDataset]`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
 
