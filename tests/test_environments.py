@@ -406,21 +406,28 @@ class TextEnvironmentTester(unittest.TestCase):
         model_inputs2.append(
             torch.tensor([self.gpt2_tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
         )
-
-        outputs_cached, _, _, _, _ = env._generate_batched(
+        outputs_cached, _, _, _, _, all_logits_cached = env._generate_batched(
             model_inputs2,
             batch_size=2,
             combined_past_key_values=past_key_values,
             combined_past_attention_masks=past_attention_masks,
             combined_past_input_ids=past_input_ids,
+            output_logits=True,
         )
 
         model_inputs2_full = [
             torch.concat([in1, out1, in2], dim=0) for in1, out1, in2 in zip(model_inputs[:-1], outputs, model_inputs2)
         ]
-        outputs_uncached, _, _, _, _ = env._generate_batched(model_inputs2_full, batch_size=2)
-        for cached, uncached in zip(outputs_cached, outputs_uncached):
+        outputs_uncached, _, _, _, _, all_logits_uncached = env._generate_batched(
+            model_inputs2_full, batch_size=2, output_logits=True
+        )
+        for cached, uncached, logits_cached, logits_uncached in zip(
+            outputs_cached, outputs_uncached, all_logits_cached, all_logits_uncached
+        ):
             self.assertTrue(torch.all(cached == uncached))
+            self.assertEqual(logits_cached.shape[0], 4)
+            self.assertEqual(logits_uncached.shape[0], 4)
+            self.assertTrue(torch.all(torch.abs(logits_cached - logits_uncached) < 1e-6))
 
     def test_different_sequence_lengths(self):
         generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.gpt2_tokenizer.eos_token_id}
@@ -467,17 +474,29 @@ class TextEnvironmentTester(unittest.TestCase):
         model_inputs2.append(
             torch.tensor([self.gpt2_tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
         )
-        outputs_cached, _, _, _, _ = env._generate_batched(
+        outputs_cached, _, _, _, _, all_logits_cached = env._generate_batched(
             model_inputs2,
             batch_size=2,
             combined_past_key_values=past_key_values,
             combined_past_attention_masks=past_attention_masks,
             combined_past_input_ids=past_input_ids,
+            output_logits=True,
         )
         outputs[2] = outputs[2][:-2]  # remove last two generated tokens from input
         model_inputs2_full = [
             torch.concat([in1, out1, in2], dim=0) for in1, out1, in2 in zip(model_inputs, outputs, model_inputs2)
         ]
-        outputs_uncached, _, _, _, _ = env._generate_batched(model_inputs2_full, batch_size=2)
-        for cached, uncached in zip(outputs_cached, outputs_uncached):
+        outputs_uncached, _, _, _, _, all_logits_uncached = env._generate_batched(
+            model_inputs2_full, batch_size=2, output_logits=True
+        )
+        for cached, uncached, logits_cached, logits_uncached in zip(
+            outputs_cached, outputs_uncached, all_logits_cached, all_logits_uncached
+        ):
             self.assertTrue(torch.all(cached == uncached))
+            self.assertEqual(logits_cached.shape[0], 4)
+            self.assertEqual(logits_uncached.shape[0], 4)
+            self.assertTrue(torch.all(torch.abs(logits_cached - logits_uncached) < 1e-6))
+
+
+if __name__ == "__main__":
+    pass

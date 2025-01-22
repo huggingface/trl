@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import re
+import copy
 
 from typing import Optional
 
@@ -600,6 +601,7 @@ class TextEnvironment:
         combined_past_key_values=None,
         combined_past_attention_masks=None,
         combined_past_input_ids=None,
+        output_logits=False,
     ):
         """
         Generate responses for a list of query tensors.
@@ -624,6 +626,8 @@ class TextEnvironment:
         new_past_key_values = []
         new_past_attention_masks = []
         new_past_input_ids = []
+        if output_logits:
+            all_logits = []
 
         # pad all batches to same length for cache compatibility
         mask = [torch.ones_like(element) for element in query_tensors]
@@ -655,13 +659,16 @@ class TextEnvironment:
             input_attention_mask = padded_inputs["attention_mask"].clone()
             stopping_criteria = StringStoppingCriteria([self.call_token, self.submit_token], self.tokenizer)
 
-            self.generation_kwargs["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
-            self.generation_kwargs["use_cache"] = True
-            self.generation_kwargs["return_dict_in_generate"] = True
+            generation_kwargs = copy.deepcopy(self.generation_kwargs)
+
+            generation_kwargs["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
+            generation_kwargs["use_cache"] = True
+            generation_kwargs["return_dict_in_generate"] = True
+            if output_logits:
+                generation_kwargs["output_logits"] = True
+
             # handle caching
-            self.generation_kwargs["past_key_values"] = (
-                past_key_values if past_key_values is not None else DynamicCache()
-            )
+            generation_kwargs["past_key_values"] = past_key_values if past_key_values is not None else DynamicCache()
             if past_attention_masks is not None:
                 padded_inputs["attention_mask"] = torch.concatenate(
                     [past_attention_masks, padded_inputs["attention_mask"]], dim=1
@@ -672,7 +679,7 @@ class TextEnvironment:
             if self.max_length is not None and padded_inputs["input_ids"].shape[-1] > self.max_length:
                 return None, None, None, None, True
 
-            generations = extract_model_from_parallel(self.model).generate(**padded_inputs, **self.generation_kwargs)
+            generations = extract_model_from_parallel(self.model).generate(**padded_inputs, **generation_kwargs)
 
             if generations.past_key_values.to_legacy_cache()[0][0].shape[2] != generations.sequences.shape[1] - 1:
                 raise Exception("Cache should not contain keys and values for last generated token")
@@ -688,6 +695,8 @@ class TextEnvironment:
             ] = 0
             past_attention_mask[:, : input_attention_mask.shape[1]] = input_attention_mask
 
+            if output_logits:
+                logits = generations.logits
             generations = generations.sequences
             # copy for in-place modification
             batch_new_past_input_ids = generations.detach().clone()
@@ -727,8 +736,15 @@ class TextEnvironment:
                 # move last valid generated token to the end of the sequence to be the start of the next generation
                 padding_removed_b_n_past_input_ids[-1] = padding_removed_b_n_past_input_ids[num_generated_tokens - 1]
                 padding_removed_past_attention_mask[-1] = 1  # attend to the last valid generated token
+            if output_logits:
+                for i, num_generated_tokens in enumerate(stopping_criteria.generated_tokens):
+                    relevant_logits = [batched_logits[i] for batched_logits in logits[:num_generated_tokens]]
+                    all_logits.append(torch.stack(relevant_logits, dim=0))
 
             new_past_attention_masks.append(past_attention_mask)
             new_past_input_ids.append(batch_new_past_input_ids)
         self.tokenizer.padding_side = padding_side_default
+        if output_logits:
+            return outputs, new_past_key_values, new_past_attention_masks, new_past_input_ids, False, all_logits
+
         return outputs, new_past_key_values, new_past_attention_masks, new_past_input_ids, False
