@@ -112,14 +112,14 @@ class TextEnvironmentTester(unittest.TestCase):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
         # get models and tokenizer
-        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
-        self.gpt2_tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
+        self.model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
     def test_text_environment_setup(self):
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools=[DummyTool()],
             reward_fn=lambda x: torch.tensor(1),
             prompt="I am a prompt!\n",
@@ -130,10 +130,10 @@ class TextEnvironmentTester(unittest.TestCase):
         self.assertEqual(env.reward_fn("Hello there!"), 1)
 
     def test_text_environment_generate(self):
-        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.gpt2_tokenizer.eos_token_id}
+        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools=[DummyTool()],
             reward_fn=lambda x: torch.tensor(1),
             prompt="I am a prompt!\n",
@@ -142,13 +142,13 @@ class TextEnvironmentTester(unittest.TestCase):
 
         input_texts = ["this is a test", "this is another, longer test"]
 
-        model_inputs = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
 
         generations_batched, _, _, _, _ = env._generate_batched(model_inputs, batch_size=2)
-        generations_batched = self.gpt2_tokenizer.batch_decode(generations_batched)
+        generations_batched = self.tokenizer.batch_decode(generations_batched)
 
         generations_single = [env._generate_batched([inputs], batch_size=1)[0][0] for inputs in model_inputs]
-        generations_single = self.gpt2_tokenizer.batch_decode(generations_single)
+        generations_single = self.tokenizer.batch_decode(generations_single)
 
         self.assertEqual(generations_single, generations_batched)
 
@@ -160,8 +160,8 @@ class TextEnvironmentTester(unittest.TestCase):
         string_invalid_random = "<>abcdefghijklm<>nopqrstuvwxyz<>"
 
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools=[DummyTool()],
             reward_fn=lambda x: torch.tensor(1),
             prompt="I am a prompt!\n",
@@ -188,8 +188,8 @@ class TextEnvironmentTester(unittest.TestCase):
 
     def test_text_environment_tool_truncation(self):
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools={"dummy": lambda x: "a" * 1000},
             reward_fn=lambda x: torch.tensor(1),
             prompt="I am a prompt!\n",
@@ -214,8 +214,8 @@ class TextEnvironmentTester(unittest.TestCase):
     @patch.object(TextEnvironment, "generate", side_effect=dummy_generate)
     def test_text_environment_max_calls(self, mock_generate):
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools={"DummyTool": DummyTool()},
             reward_fn=lambda x: [torch.tensor(1) for _ in x],
             prompt="I am a prompt!\n",
@@ -244,8 +244,8 @@ class TextEnvironmentTester(unittest.TestCase):
 
     def test_text_environment_compute_rewards(self):
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools={"DummyTool": DummyTool()},
             reward_fn=lambda x: [torch.tensor(i) for i, _ in enumerate(x)],
             prompt="I am a prompt!\n",
@@ -260,8 +260,8 @@ class TextEnvironmentTester(unittest.TestCase):
     @patch.object(TextEnvironment, "generate", side_effect=dummy_generate)
     def test_text_environment_run(self, mock_generate):
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools={"DummyTool": DummyTool()},
             reward_fn=lambda x: [torch.tensor(i) for i, _ in enumerate(x)],
             prompt="I am a prompt!\n",
@@ -292,8 +292,8 @@ class TextEnvironmentTester(unittest.TestCase):
 
     def test_combine_cache(self):
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools={"DummyTool": DummyTool()},
             reward_fn=lambda x: [torch.tensor(i) for i, _ in enumerate(x)],
             prompt="I am a prompt!\n",
@@ -320,7 +320,7 @@ class TextEnvironmentTester(unittest.TestCase):
             (torch.tensor([[[[7], [17]]], [[[0], [11]]]]), torch.tensor([[[[9], [19]]], [[[0], [12]]]])),
         )
         expected_attention_mask = torch.tensor([[-1, 1, 7], [0, 2, 4]])
-        expected_input_ids = torch.tensor([[1, 4, 7], [self.gpt2_tokenizer.pad_token_id, 3, 6]])
+        expected_input_ids = torch.tensor([[1, 4, 7], [self.tokenizer.pad_token_id, 3, 6]])
 
         combined_cache, combined_attention_masks, combined_input_ids = env._combine_cache(
             example_mask, caches, attention_masks, input_ids
@@ -338,8 +338,8 @@ class TextEnvironmentTester(unittest.TestCase):
 
     def test_get_batched_cache(self):
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools={"DummyTool": DummyTool()},
             reward_fn=lambda x: [torch.tensor(i) for i, _ in enumerate(x)],
             prompt="I am a prompt!\n",
@@ -380,10 +380,10 @@ class TextEnvironmentTester(unittest.TestCase):
         self.assertTrue(torch.all(batched_input_ids == expected_input_ids))
 
     def test_cached_generate_batched(self):
-        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.gpt2_tokenizer.eos_token_id}
+        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools=[DummyTool()],
             reward_fn=lambda x: torch.tensor(1),
             prompt="I am a prompt!\n",
@@ -391,7 +391,7 @@ class TextEnvironmentTester(unittest.TestCase):
         )
 
         input_texts = ["this is a test", "this is another, longer test", "some other batch", "something unnecessary"]
-        model_inputs = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
         outputs, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
             model_inputs, batch_size=2
         )
@@ -401,10 +401,10 @@ class TextEnvironmentTester(unittest.TestCase):
         )
 
         input_texts2 = [" short interim", " a somewhat longer section in between"]
-        model_inputs2 = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
+        model_inputs2 = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
         # for single token query
         model_inputs2.append(
-            torch.tensor([self.gpt2_tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
+            torch.tensor([self.tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
         )
         outputs_cached, _, _, _, _, all_logits_cached = env._generate_batched(
             model_inputs2,
@@ -430,10 +430,10 @@ class TextEnvironmentTester(unittest.TestCase):
             self.assertTrue(torch.all(torch.abs(logits_cached - logits_uncached) < 1e-6))
 
     def test_different_sequence_lengths(self):
-        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.gpt2_tokenizer.eos_token_id}
+        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
         env = TextEnvironment(
-            self.gpt2_model,
-            self.gpt2_tokenizer,
+            self.model,
+            self.tokenizer,
             tools=[DummyTool()],
             reward_fn=lambda x: torch.tensor(1),
             prompt="I am a prompt!\n",
@@ -441,7 +441,7 @@ class TextEnvironmentTester(unittest.TestCase):
         )
 
         input_texts = ["this is a test", "this is another, longer test", "some other batch"]
-        model_inputs = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
         outputs, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
             model_inputs, batch_size=2
         )
@@ -469,10 +469,10 @@ class TextEnvironmentTester(unittest.TestCase):
         self.assertEqual(past_key_values[0][0].shape[2], past_attention_masks.shape[1] - 1)
         self.assertEqual(past_key_values[0][0].shape[0], past_attention_masks.shape[0])
         input_texts2 = [" short interim", " a somewhat longer section in between"]
-        model_inputs2 = [self.gpt2_tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
+        model_inputs2 = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
         # for single token query
         model_inputs2.append(
-            torch.tensor([self.gpt2_tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
+            torch.tensor([self.tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
         )
         outputs_cached, _, _, _, _, all_logits_cached = env._generate_batched(
             model_inputs2,
