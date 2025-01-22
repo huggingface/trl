@@ -79,7 +79,7 @@ class GRPOTrainer(Trainer):
               loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
               in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        reward_model (`Union[str, PreTrainedModel, Callable[[list[str], list[float]]]`):
+        reward_model (`Union[str, PreTrainedModel, Callable[[list, list], list[float]]`):
             Reward model to be used for computing the rewards. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
@@ -123,7 +123,7 @@ class GRPOTrainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_model: Union[str, PreTrainedModel, Callable[[Any, Any], list[float]]],
+        reward_model: Union[str, PreTrainedModel, Callable[[list, list], list[float]]],
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
