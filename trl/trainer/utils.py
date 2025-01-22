@@ -992,8 +992,12 @@ class OnPolicyConfig(TrainingArguments):
             Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
-        stop_token (`str` or `None`, *optional*, defaults to `None`):
-            Stop token.
+        stop_token (`str` or `None`, *optional*, defaults to `None`):  
+            Specifies the token at which truncation should stop:  
+            
+            - `None`: No truncation is applied.  
+            - `"eos"`: Uses the tokenizer's `eos_token` as the stop token.  
+
         stop_token_id (`int` or `None`, *optional*, defaults to `None`):
             Truncation token id.
         temperature (`float`, *optional*, defaults to `0.7`):
