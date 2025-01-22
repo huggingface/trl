@@ -1264,7 +1264,7 @@ class DPOTrainer(Trainer):
         )
         (
             loss,
-            (chosen_logps, rejected_logps, chosen_logits_mean, rejected_logits_mean, nll_loss, _, _, *aux_outputs),
+            (chosen_logps, rejected_logps, chosen_logits_mean, rejected_logits_mean, nll_loss, *aux_outputs),
         ) = loss_output
 
         output = {
