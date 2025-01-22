@@ -150,6 +150,7 @@ class PRMTrainer(Trainer):
                     "tokenizer": processing_class,
                     "step_separator": args.step_separator,
                     "max_length": args.max_length,
+                    "max_prompt_length": args.max_prompt_length,
                     "max_completion_length": args.max_completion_length,
                     "train_on_last_step_only": args.train_on_last_step_only,
                 }
@@ -204,7 +205,14 @@ class PRMTrainer(Trainer):
 
     @staticmethod
     def tokenize_row(
-        features, tokenizer, step_separator, max_length, max_completion_length, train_on_last_step_only, is_eval
+        features,
+        tokenizer,
+        step_separator,
+        max_length,
+        max_prompt_length,
+        max_completion_length,
+        train_on_last_step_only,
+        is_eval,
     ):
         r"""
         Tokenize a row of the dataset.
@@ -218,6 +226,8 @@ class PRMTrainer(Trainer):
                 Separator between steps in the completion.
             max_length (`int` or `None`):
                Maximum length of the sequences (prompt + completion). If `None`, the sequences are not truncated.
+            max_prompt_length (`int` or `None`):
+                Maximum length of the prompt. If `None`, the prompt is not truncated.
             max_completion_length (`int` or `None`):
                 Maximum length of the completion sequences. If `None`, the completion sequences are not truncated.
             train_on_last_step_only (`bool`):
@@ -264,12 +274,15 @@ class PRMTrainer(Trainer):
         completion_ids = list(chain(*completions_ids))
         labels = list(chain(*labels))
 
+        if tokenizer.bos_token_id is not None:
+            prompt_ids = [tokenizer.bos_token_id] + prompt_ids
+
+        # Truncate prompt and completion sequences
+        if max_prompt_length is not None:
+            prompt_ids = prompt_ids[-max_prompt_length:]
         if max_completion_length is not None:
             completion_ids = completion_ids[:max_completion_length]
             labels = labels[:max_completion_length]
-
-        if tokenizer.bos_token_id is not None:
-            prompt_ids = [tokenizer.bos_token_id] + prompt_ids
 
         input_ids = prompt_ids + completion_ids
         labels = [-100] * len(prompt_ids) + labels
@@ -288,11 +301,12 @@ class PRMTrainer(Trainer):
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.
+
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """
@@ -313,7 +327,7 @@ class PRMTrainer(Trainer):
 
         citation = textwrap.dedent("""\
         @article{uesato2022solving,
-            title        = {Solving Math Word Problems With Process- and Outcome-Based Feedback},
+            title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},
             author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
             year         = 2022,
             journal      = {arXiv preprint arXiv:2211.14275}
