@@ -62,7 +62,7 @@ class GRPOTrainer(Trainer):
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
               loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`].
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        reward_model (`Optional[Union[str, PreTrainedModel, Callable[[list[str]], list[float]]]`):
+        reward_model (`Union[str, PreTrainedModel, Callable[[list[str], list[float]]]`):
             Reward model to be used for computing the rewards. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
@@ -70,31 +70,14 @@ class GRPOTrainer(Trainer):
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
               loaded using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1`.
             - A [`~transformers.PreTrainedModel`] object. Only sequence classification models are supported.
-            - A custom reward function that takes a list of prompts and completions and returns a list of rewards.
-              The reward model will be called with the prompts and completions as arguments. If the data is [standard](dataset_formats#standard) then the inputs will be a list of strings. If the data is [conversational](dataset_formats#conversational) then the inputs will be a list of messages.
-              Examples
-
-              For standard data:
-
-              ```python
-              def reward_func(prompts, completions):
-                  "Reward function that rewards longer completions."
-                  return [float(len(completion)) for completion in completions]
-
-              For conversational data:
-
-              ```python
-              def reward_func(prompts, completions):
-                  "Reward function that rewards longer completions."
-                  completion_contents = [completion[0]["content"] for completion in completions]
-                  return [float(len(completion)) for completion in completion_contents]
-              ```
+            - A custom reward function that takes a list of prompts and completions and returns a list of rewards. For
+              more details, see [Using a custom reward function](#using-a-custom-reward-function).
     """
 
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_model: Optional[Union[str, PreTrainedModel, Callable[[list[str]], list[float]]]],
+        reward_model: Union[str, PreTrainedModel, Callable[[list[str]], list[float]]],
         args: GRPOConfig = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
