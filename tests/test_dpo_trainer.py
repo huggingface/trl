@@ -74,7 +74,6 @@ class TestTokenizeRow(unittest.TestCase):
             max_prompt_length=None,
             max_completion_length=None,
             add_special_tokens=False,
-            truncation_mode="keep_end",
         )
 
         # Assert the correct output without truncation or special tokens
@@ -87,7 +86,7 @@ class TestTokenizeRow(unittest.TestCase):
             },
         )
 
-    def test_tokenize_row_with_truncation_keep_end(self):
+    def test_tokenize_row_with_truncation(self):
         # Define the input features
         features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
 
@@ -98,7 +97,6 @@ class TestTokenizeRow(unittest.TestCase):
             max_prompt_length=2,
             max_completion_length=1,
             add_special_tokens=False,
-            truncation_mode="keep_end",
         )
 
         # Assert the correct output with truncation applied
@@ -111,41 +109,6 @@ class TestTokenizeRow(unittest.TestCase):
             },
         )
 
-    def test_tokenize_row_with_truncation_keep_start(self):
-        # Define the input features
-        features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
-
-        # Call the method with truncation
-        result = DPOTrainer.tokenize_row(
-            features=features,
-            processing_class=self.tokenizer,
-            max_prompt_length=2,
-            max_completion_length=1,
-            add_special_tokens=False,
-            truncation_mode="keep_start",
-        )
-
-        # Assert the correct output with truncation applied
-        self.assertEqual(
-            result,
-            {
-                "prompt_input_ids": [464, 6766],  # truncated to the first 2 tokens
-                "chosen_input_ids": [4171],  # truncated to 1 token
-                "rejected_input_ids": [4077],  # truncated to 1 token
-            },
-        )
-
-    def test_tokenize_row_invalid_truncation_mode(self):
-        with self.assertRaises(ValueError):
-            DPOTrainer.tokenize_row(
-                features={"prompt": "The sky is", "chosen": " blue", "rejected": " green"},
-                processing_class=self.tokenizer,
-                max_prompt_length=2,
-                max_completion_length=1,
-                add_special_tokens=False,
-                truncation_mode="invalid",
-            )
-
     def test_tokenize_row_with_special_tokens(self):
         # Define the input features
         features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
@@ -157,7 +120,6 @@ class TestTokenizeRow(unittest.TestCase):
             max_prompt_length=None,
             max_completion_length=None,
             add_special_tokens=True,
-            truncation_mode="keep_end",
         )
 
         # Assert the correct output with special tokens added
@@ -181,7 +143,6 @@ class TestTokenizeRow(unittest.TestCase):
             max_prompt_length=4,
             max_completion_length=1,
             add_special_tokens=True,
-            truncation_mode="keep_end",
         )
 
         # Assert the correct output with both truncation and special tokens
