@@ -138,20 +138,18 @@ class PPOTrainer(Trainer):
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
 
-        # Handle stop token settings
+        # Handle stop token settings: update policy model's generation_config to use provided stop token
         if args.stop_token and args.stop_token_id:
             raise ValueError("You cannot set both `stop_token` and `stop_token_id`.")
         elif args.stop_token:
             if args.stop_token == "eos":
-                stop_token_id = processing_class.eos_token_id
+                self.policy_model.generation_config.eos_token_id = processing_class.eos_token_id
             else:
                 raise ValueError(
-                    f"Unknown `stop_token` {args.stop_token}. " f"Allowed values are: `eos` and `None` (no stop token)"
+                    f"Unknown `stop_token` {args.stop_token}. Allowed values are: `'eos'` and `None` (no stop token)."
                 )
-        elif args.stop_token_id:
-             stop_token_id = processing_class.eos_token_id
-        # Update policy model's generation_config to use provided stop token
-        self.policy_model.generation_config.eos_token_id = args.stop_token_id
+        else:
+            self.policy_model.generation_config.eos_token_id = args.stop_token_id  # either None or an integer
 
         # peft support
         if not is_peft_available() and peft_config is not None:
