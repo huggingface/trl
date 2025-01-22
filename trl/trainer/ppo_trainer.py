@@ -141,13 +141,15 @@ class PPOTrainer(Trainer):
         # Handle stop token settings
         if args.stop_token and args.stop_token_id:
             raise ValueError("You cannot set both `stop_token` and `stop_token_id`.")
-        if args.stop_token:
+        elif args.stop_token:
             if args.stop_token == "eos":
-                args.stop_token_id = processing_class.eos_token_id
+                stop_token_id = processing_class.eos_token_id
             else:
                 raise ValueError(
-                    f"Unknown `stop_token` {args.stop_token}. " f"Allowed values are: `eos`, None (no stop token)"
+                    f"Unknown `stop_token` {args.stop_token}. " f"Allowed values are: `eos` and `None` (no stop token)"
                 )
+        elif args.stop_token_id:
+             stop_token_id = processing_class.eos_token_id
         # Update policy model's generation_config to use provided stop token
         self.policy_model.generation_config.eos_token_id = args.stop_token_id
 
