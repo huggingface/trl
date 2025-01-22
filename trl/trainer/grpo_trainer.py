@@ -25,7 +25,6 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
-    DataCollator,
     EvalPrediction,
     GenerationConfig,
     PreTrainedModel,
@@ -76,7 +75,7 @@ class GRPOTrainer(Trainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset (`Union[Dataset, IterableDataset]`):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
-            ignored. The format of the samples can be either 
+            ignored. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
@@ -168,11 +167,9 @@ class GRPOTrainer(Trainer):
         elif self._reward_model_type == "function":
             self.reward_processing_class = None
 
-        # Data loading and preprocessing
-        if data_collator is None:
-
-            def data_collator(features):  # No data collation is needed in GRPO
-                return features
+        # Data collator
+        def data_collator(features):  # No data collation is needed in GRPO
+            return features
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
