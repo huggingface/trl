@@ -143,13 +143,13 @@ class PPOTrainer(Trainer):
             raise ValueError("You cannot set both `stop_token` and `stop_token_id`.")
         elif args.stop_token:
             if args.stop_token == "eos":
-                self.policy_model.generation_config.eos_token_id = self.eos_token_id = processing_class.eos_token_id
+                self.policy_model.generation_config.eos_token_id = self.stop_token_id = processing_class.eos_token_id
             else:
                 raise ValueError(
                     f"Unknown `stop_token` {args.stop_token}. Allowed values are: `'eos'` and `None` (no stop token)."
                 )
         else:
-            self.policy_model.generation_config.eos_token_id = self.eos_token_id = args.stop_token_id  # None or int
+            self.policy_model.generation_config.eos_token_id = self.stop_token_id = args.stop_token_id  # None or int
 
         # peft support
         if not is_peft_available() and peft_config is not None:
