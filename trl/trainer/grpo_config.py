@@ -48,7 +48,7 @@ class GRPOConfig(TrainingArguments):
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the generated completion.
         use_vllm (`bool`, *optional*, defaults to `False`):
-            Whether to use the vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
+            Whether to use vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
 
         > Parameters that control the training
 
