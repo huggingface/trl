@@ -31,10 +31,10 @@ class ORPOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        max_length (`int` or `None`, *optional*, defaults to `None`):
+        max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `None`):
+        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. This argument is required if you want to use the default data collator.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion. This argument is required if you want to use the default data collator
@@ -71,11 +71,11 @@ class ORPOConfig(TrainingArguments):
         },
     )
     max_length: Optional[int] = field(
-        default=None,
+        default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
     )
     max_prompt_length: Optional[int] = field(
-        default=None,
+        default=512,
         metadata={
             "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
             "collator and your model is an encoder-decoder."

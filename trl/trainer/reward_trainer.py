@@ -105,7 +105,6 @@ class RewardTrainer(Trainer):
             None,
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        max_length: Optional[int] = None,
         peft_config: Optional[dict] = None,
     ):
         """
@@ -140,10 +139,6 @@ class RewardTrainer(Trainer):
             peft_config (`dict`, defaults to `None`):
                 The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
         """
-        if max_length is not None and args.max_length is not None:
-            raise ValueError(
-                "You cannot specify both `max_length` and `args.max_length`. Please use the `RewardConfig` to set `max_length` once."
-            )
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
@@ -182,8 +177,8 @@ class RewardTrainer(Trainer):
                 raise ValueError(
                     "A processing_class must be specified when using the default RewardDataCollatorWithPadding"
                 )
-            if max_length is None:
-                max_length = 512 if args.max_length is None else args.max_length
+
+            max_length = args.max_length
 
             data_collator = RewardDataCollatorWithPadding(processing_class)
 
@@ -382,10 +377,10 @@ class RewardTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """

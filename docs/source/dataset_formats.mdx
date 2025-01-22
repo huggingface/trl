@@ -270,6 +270,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`CPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
 | [`DPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
 | [`GKDTrainer`]          | [Prompt-completion](#prompt-completion)                                                                |
+| [`GRPOTrainer`]         | [Prompt-only](#prompt-only)                                                                            |
 | [`IterativeSFTTrainer`] | [Unpaired preference](#unpaired-preference)                                                            |
 | [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                                                                            |
