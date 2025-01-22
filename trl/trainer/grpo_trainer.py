@@ -17,7 +17,6 @@ import textwrap
 from typing import Any, Callable, Optional, Union
 
 import torch
-import torch.nn as nn
 import torch.utils.data
 import transformers
 from datasets import Dataset, IterableDataset
@@ -51,10 +50,51 @@ if is_wandb_available():
 
 
 class GRPOTrainer(Trainer):
+    """
+    ...
+
+    Args:
+        model (`Union[str, PreTrainedModel]`):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
+              a path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
+              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`].
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+        reward_model (`Optional[Union[str, PreTrainedModel, Callable[[list[str]], list[float]]]`):
+            Reward model to be used for computing the rewards. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
+              a path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
+              loaded using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1`.
+            - A [`~transformers.PreTrainedModel`] object. Only sequence classification models are supported.
+            - A custom reward function that takes a list of prompts and completions and returns a list of rewards.
+              The reward model will be called with the prompts and completions as arguments. If the data is [standard](dataset_formats#standard) then the inputs will be a list of strings. If the data is [conversational](dataset_formats#conversational) then the inputs will be a list of messages.
+              Examples
+
+              For standard data:
+
+              ```python
+              def reward_func(prompts, completions):
+                  "Reward function that rewards longer completions."
+                  return [float(len(completion)) for completion in completions]
+
+              For conversational data:
+
+              ```python
+              def reward_func(prompts, completions):
+                  "Reward function that rewards longer completions."
+                  completion_contents = [completion[0]["content"] for completion in completions]
+                  return [float(len(completion)) for completion in completion_contents]
+              ```
+    """
+
     def __init__(
         self,
-        model: Union[str, PreTrainedModel, nn.Module] = None,
-        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
+        model: Union[str, PreTrainedModel],
+        reward_model: Optional[Union[str, PreTrainedModel, Callable[[list[str]], list[float]]]],
         args: GRPOConfig = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -119,17 +159,23 @@ class GRPOTrainer(Trainer):
             reward_model = AutoModelForSequenceClassification.from_pretrained(
                 reward_model, num_labels=1, **model_init_kwargs
             )
+        # The GRPO implementation supports either a pretrained reward model (sequence classifier) or a custom reward
+        # function. A private attribute is used to indicate the type of the reward model.
+        self._reward_model_type = "pretrained" if isinstance(reward_model, PreTrainedModel) else "function"
         self.reward_model = reward_model
 
         # Reward processing class
-        if reward_processing_class is None:
-            reward_processing_class = AutoTokenizer.from_pretrained(reward_model.config._name_or_path)
-        if reward_processing_class.pad_token_id is None:
-            reward_processing_class.pad_token = reward_processing_class.eos_token
-        self.reward_processing_class = reward_processing_class
-        # The reward model computes the reward for the latest non-padded token in the input sequence.
-        # So it's important to set the pad token ID to the padding token ID of the processing class.
-        self.reward_model.config.pad_token_id = reward_processing_class.pad_token_id
+        if self._reward_model_type == "pretrained":
+            if reward_processing_class is None:
+                reward_processing_class = AutoTokenizer.from_pretrained(reward_model.config._name_or_path)
+            if reward_processing_class.pad_token_id is None:
+                reward_processing_class.pad_token = reward_processing_class.eos_token
+            self.reward_processing_class = reward_processing_class
+            # The reward model computes the reward for the latest non-padded token in the input sequence.
+            # So it's important to set the pad token ID to the padding token ID of the processing class.
+            self.reward_model.config.pad_token_id = reward_processing_class.pad_token_id
+        elif self._reward_model_type == "function":
+            self.reward_processing_class = None
 
         # Data loading and preprocessing
         if data_collator is None:
@@ -178,7 +224,9 @@ class GRPOTrainer(Trainer):
 
         if self.ref_model is not None:
             self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-        self.reward_model = self.accelerator.prepare_model(self.reward_model, evaluation_mode=True)
+
+        if self._reward_model_type == "pretrained":
+            self.reward_model = self.accelerator.prepare_model(self.reward_model, evaluation_mode=True)
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -252,24 +300,28 @@ class GRPOTrainer(Trainer):
 
         # Decode the generated completions
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        if is_conversational(inputs[0]):
+            completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
         # Compute the rewards
         prompts = [prompt for prompt in prompts for _ in range(self.num_generations)]
-        if is_conversational(inputs[0]):
-            completions = [[{"role": "assistant", "content": completion}] for completion in completions]
-            messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
-            texts = [apply_chat_template(x, self.reward_processing_class)["text"] for x in messages]
+
+        if self._reward_model_type == "pretrained":
+            if is_conversational(inputs[0]):
+                messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+                texts = [apply_chat_template(x, self.reward_processing_class)["text"] for x in messages]
+            else:
+                texts = [p + c for p, c in zip(prompts, completions)]
             reward_inputs = self.reward_processing_class(
                 texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
             )
-        else:
-            texts = [p + c for p, c in zip(prompts, completions)]
-            reward_inputs = self.reward_processing_class(
-                texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
-            )
-        reward_inputs = super()._prepare_inputs(reward_inputs)
-        with torch.inference_mode():
-            rewards = self.reward_model(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+            reward_inputs = super()._prepare_inputs(reward_inputs)
+            with torch.inference_mode():
+                rewards = self.reward_model(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+
+        elif self._reward_model_type == "function":
+            rewards = self.reward_model(prompts, completions)
+            rewards = torch.tensor(rewards, dtype=torch.float, device=device)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -299,9 +351,9 @@ class GRPOTrainer(Trainer):
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
         logs = {**logs, **metrics}
         if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
-            super().log(logs, start_time)
+            return super().log(logs, start_time)
         else:  # transformers<=4.46
-            super().log(logs)
+            return super().log(logs)
         self._metrics = {key: [] for key in self._metrics}
 
     def create_model_card(
