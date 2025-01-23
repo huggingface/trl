@@ -54,7 +54,6 @@ from ..trainer.utils import (
     first_true_indices,
     forward,
     get_reward,
-    get_reward_custom,
     prepare_deepspeed,
     print_rich_table,
     truncate_response,
@@ -80,7 +79,7 @@ class RLOOTrainer(Trainer):
         ],
         policy: nn.Module,
         ref_policy: nn.Module,
-        reward_model: Union[nn.Module, Callable],
+        reward_model: Union[nn.Module, Callable[[list[str]], list[float]]],
         train_dataset: Dataset,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
@@ -360,7 +359,11 @@ class RLOOTrainer(Trainer):
                             reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
                         )
                     else:
-                        score = get_reward_custom(reward_model, processing_class, postprocessed_query_response)
+                        score = torch.tensor(
+                            reward_model(
+                                processing_class.batch_decode(postprocessed_query_response, skip_special_tokens=True)
+                            )
+                        ).to(device)
 
                     # Store batch results
                     responses.append(response)
@@ -612,7 +615,11 @@ class RLOOTrainer(Trainer):
                             context_length,
                         )
                     else:
-                        score = get_reward_custom(self.reward_model, processing_class, postprocessed_query_response)
+                        score = torch.tensor(
+                            self.reward_model(
+                                processing_class.batch_decode(postprocessed_query_response, skip_special_tokens=True)
+                            )
+                        ).to(device)
                     table["score"].extend(self.accelerator.gather_for_metrics(score).float().cpu().numpy())
 
                 if sampling:

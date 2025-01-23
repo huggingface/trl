@@ -20,7 +20,7 @@ import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from importlib.metadata import version
-from typing import Any, Callable, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 import datasets
 import numpy as np
@@ -1196,18 +1196,6 @@ def get_reward(
         ].squeeze(-1),
         sequence_lengths,
     )
-
-
-def get_reward_custom(
-    model: Callable, processor: PreTrainedTokenizerBase, query_responses: torch.Tensor
-) -> torch.Tensor:
-    """
-    This function ensures that the custom reward function produces the correct output structure for integration with the trainer script.
-    """
-    texts = processor.batch_decode(query_responses, skip_special_tokens=True)
-    rewards = model(texts)
-    rewards = torch.tensor(rewards, dtype=torch.float).to(query_responses.device)
-    return rewards
 
 
 def forward(
