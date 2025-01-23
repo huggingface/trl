@@ -128,7 +128,7 @@ The [`GRPOTrainer`] supports using custom reward function. To ensure compatibili
 
 2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
 
-#### Example 1: Standard format
+#### Example 1: Reward longer completions
 
 Below is an example of a reward function for a standard format that rewards longer completions:
 
@@ -147,9 +147,10 @@ You can test it as follows:
 [6.0, 12.0]
 ```
 
-#### Example 2: Conversational format
+#### Example 2: Reward completions with specific format
 
-For conversational format, completions consist of structured messages. Here’s an example of reward function that checks if the completion has a specific format. This example is inspired by the reward function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the reward function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+It is designed for conversational format, where prompts and completions consist of structured messages.
 
 ```python
 import re
