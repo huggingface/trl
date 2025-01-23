@@ -459,6 +459,7 @@ class TestReward(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         text = ["this text is extactly 37 letters long"]
+        actual_reward = len(text[0])
 
         # defining dummy reward function
         def reward_function(texts):
@@ -468,4 +469,4 @@ class TestReward(unittest.TestCase):
 
         tokenized_text = tokenizer(text, return_tensors="pt")["input_ids"]
         reward = get_reward_custom(reward_function, tokenizer, tokenized_text)
-        self.assertTrue(float(reward[0]) == 37)
+        self.assertTrue(float(reward[0]) == actual_reward)
