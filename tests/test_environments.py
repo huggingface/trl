@@ -445,7 +445,7 @@ class TextEnvironmentTester(unittest.TestCase):
             ]
             model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
             outputs, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
-                model_inputs, batch_size=2
+                model_inputs, batch_size=2, return_cache=True
             )
 
             past_key_values, past_attention_masks, past_input_ids = env._combine_cache(
@@ -498,7 +498,9 @@ class TextEnvironmentTester(unittest.TestCase):
 
         input_texts = ["test"]
         model_inputs = list(self.tokenizer(input_texts, return_tensors="pt").input_ids)
-        _, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(model_inputs, batch_size=2)
+        _, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
+            model_inputs, batch_size=2, return_cache=True
+        )
 
         past_key_values, past_attention_masks, past_input_ids = env._combine_cache(
             [True], past_key_values, past_attention_masks, past_input_ids
@@ -540,7 +542,7 @@ class TextEnvironmentTester(unittest.TestCase):
             input_texts = ["this is a test", "this is another, longer test", "some other batch"]
             model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
             outputs, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
-                model_inputs, batch_size=2
+                model_inputs, batch_size=2, return_cache=True
             )
             # remove the last two tokens from the second batch to pretend they were never generated
             second_cache = past_key_values[1]
