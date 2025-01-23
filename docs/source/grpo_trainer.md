@@ -114,6 +114,99 @@ The GRPO Trainer logs the following metrics:
 - `reward_std` : The average standard deviation within reward groups.
 - `kl` : The average KL divergence between the model and the reference model calculated on completions.
 
+## Customization
+
+### Using a custom reward function
+
+The [`GRPOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
+
+1. **Input arguments**:
+   - The function must accept two arguments: `prompts` and `completions`.
+   - Depending on the dataset format, the input will vary:
+     - For [standard format](dataset_formats#standard), `prompts` and `completions` will be lists of strings.
+     - For [conversational format](dataset_formats#conversational), `prompts` and `completions` will be lists of message dictionaries.
+
+2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
+
+#### Example 1: Reward longer completions
+
+Below is an example of a reward function for a standard format that rewards longer completions:
+
+```python
+def reward_func(prompts, completions):
+    """Reward function that gives higher scores to longer completions."""
+    return [float(len(completion)) for completion in completions]
+```
+
+You can test it as follows:
+
+```python
+>>> prompts = ["The sky is", "The sun is"]
+>>> completions = [" blue.", " in the sky."]
+>>> print(reward_func(prompts, completions))
+[6.0, 12.0]
+```
+
+#### Example 2: Reward completions with specific format
+
+Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the reward function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+It is designed for conversational format, where prompts and completions consist of structured messages.
+
+```python
+import re
+
+def format_reward_func(prompts, completions):
+    """Reward function that checks if the completion has a specific format."""
+    pattern = r"^<think>.*?</think><answer>.*?</answer>$"
+    completion_contents = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, content) for content in completion_contents]
+    return [1.0 if match else 0.0 for match in matches]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = [
+...     [{"role": "assistant", "content": "What is the result of (1 + 2) * 4?"}],
+...     [{"role": "assistant", "content": "What is the result of (3 + 1) * 2?"}],
+... ]
+>>> completions = [
+...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
+...     [{"role": "assistant", "content": "The sum of 3 and 1 is 4, which we multiply by 2 to get 8. So (3 + 1) * 2 = 8."}],
+... ]
+>>> format_reward_func(prompts, completions)
+[1.0, 0.0]
+>>>
+```
+
+#### Passing the reward function to the trainer
+
+To use your custom reward function, pass it to the `GRPOTrainer` as follows:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    reward_funcs=reward_func,
+    ...,
+)
+```
+
+If you have multiple reward functions, you can pass them as a list:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    reward_funcs=[reward_func1, reward_func2],
+    ...,
+)
+```
+
+and the reward will be computed as the sum of the rewards from each function.
+
+Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+
 ## GRPOTrainer
 
 [[autodoc]] GRPOTrainer
