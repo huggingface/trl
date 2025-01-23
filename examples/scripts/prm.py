@@ -89,6 +89,15 @@ if __name__ == "__main__":
     # Align padding tokens between tokenizer and model
     model.config.pad_token_id = tokenizer.pad_token_id
 
+    if training_args.step_token is not None:
+        tokenizer.add_special_tokens({"additional_special_tokens": [training_args.step_token]})
+        model.resize_token_embeddings(
+            len(tokenizer),
+            pad_to_multiple_of=(
+                training_args.resize_to_multiple_of if training_args.resize_to_multiple_of is not None else None
+            ),
+        )
+
     if model_config.use_peft and model_config.lora_task_type != "TOKEN_CLS":
         warnings.warn(
             "You are using a `task_type` that is different than `TOKEN_CLS` for PEFT. This will lead to silent bugs"
