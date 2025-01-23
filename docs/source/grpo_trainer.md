@@ -173,7 +173,7 @@ You can test this function as follows:
 [11.0, 11.0]
 ```
 
-#### Passing the Reward Function to the Trainer
+#### Passing the reward function to the trainer
 
 To use your custom reward function, pass it to the `GRPOTrainer` as follows:
 
@@ -181,10 +181,23 @@ To use your custom reward function, pass it to the `GRPOTrainer` as follows:
 from trl import GRPOTrainer
 
 trainer = GRPOTrainer(
-    reward_func=reward_func,
+    reward_funcs=reward_func,
     ...,
 )
 ```
+
+If you have multiple reward functions, you can pass them as a list:
+
+```python
+trainer = GRPOTrainer(
+    reward_funcs=[reward_func1, reward_func2],
+    ...,
+)
+```
+
+and the reward will be computed as the sum of the rewards from each function.
+
+Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
 ## GRPOTrainer
 
