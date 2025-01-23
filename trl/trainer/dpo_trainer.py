@@ -428,6 +428,7 @@ class DPOTrainer(Trainer):
 
         self.beta = args.beta
         self.label_smoothing = args.label_smoothing
+        self.loss_weights = args.loss_weights
         self.loss_type = args.loss_type
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.use_weighting = args.use_weighting
