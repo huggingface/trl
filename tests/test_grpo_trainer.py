@@ -133,7 +133,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 reward_funcs=reward_model,
                 args=training_args,
                 train_dataset=dataset,
-                reward_processing_class=reward_tokenizer,
+                reward_processing_classes=reward_tokenizer,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
