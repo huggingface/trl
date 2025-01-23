@@ -118,7 +118,7 @@ The GRPO Trainer logs the following metrics:
 
 ### Using a custom reward function
 
-The [`GRPOTrainer`] supports using custom reward function. To ensure compatibility, your reward function must satisfy the following requirements:
+The [`GRPOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
 
 1. **Input arguments**:
    - The function must accept two arguments: `prompts` and `completions`.
