@@ -50,6 +50,7 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+
 class GRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -90,12 +91,12 @@ class GRPOTrainer(Trainer):
                 - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
                 path to a *directory* containing model weights saved using
                 [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-                using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1` and the 
+                using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1` and the
                 keyword arguments in `args.model_init_kwargs`.
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
                 - A custom reward function: This should take a list of prompts and completions and return a list of
                 rewards. For more details, see [Using a custom reward function](#using-a-custom-reward-function).
-            - A list of reward functions, where each item can independently be any of the above types. Mixing different 
+            - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
