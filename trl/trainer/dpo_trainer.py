@@ -1086,6 +1086,9 @@ class DPOTrainer(Trainer):
             # Blend between logistic and exponential component based on log ratio modulation
             losses = logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
 
+        elif self.loss_type == "sft":
+            losses = -chosen_logps.mean() # Cross entropy loss b/w the completion and the chosen completion
+
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
@@ -1293,22 +1296,31 @@ class DPOTrainer(Trainer):
         else:
             ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
 
-        if "," in self.loss_type:
-            loss_type = self.loss_type
-            loss_type_list = loss_type.split(",")
+        if isinstance(self.loss_type, list):
+            # Hold the list of losses
+            loss_type_list = self.loss_type
 
+            # Initialize the losses and rewards
             losses, chosen_rewards, rejected_rewards = 0, 0, 0
-            for curr_type in loss_type_list:
-                self.loss_type = curr_type
+
+            # Iterate over the list of losses
+            for curr_loss_type in loss_type_list:
+                # Set the `loss_type` as the current loss, used for dpo_loss computation
+                self.loss_type = curr_loss_type
+
+                # Compute loss with current loss type
                 curr_losses, curr_chosen_rewards, curr_rejected_rewards = self.dpo_loss(
                     model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
                 )
-                curr_weight = getattr(self.args, f"{curr_type}_loss_weight")
-                losses = losses + curr_losses * curr_weight
-                chosen_rewards = chosen_rewards + curr_chosen_rewards * curr_weight
-                rejected_rewards = rejected_rewards + curr_rejected_rewards * curr_weight
+                curr_loss_weight = getattr(self.loss_weights, curr_loss_type, 1.0)
+                
+                # Weigth the losses
+                losses = losses + curr_losses * curr_loss_weight
+                chosen_rewards = chosen_rewards + curr_chosen_rewards * curr_loss_weight
+                rejected_rewards = rejected_rewards + curr_rejected_rewards * curr_loss_weight
 
-            self.loss_type = loss_type
+            # Set the `loss_type` back to the list of losses
+            self.loss_type = loss_type_list
         else:
             losses, chosen_rewards, rejected_rewards = self.dpo_loss(
                 model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps

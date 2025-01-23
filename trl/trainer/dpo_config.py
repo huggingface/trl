@@ -15,7 +15,7 @@
 import warnings
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, List, Dict
 
 from transformers import TrainingArguments
 
@@ -103,7 +103,9 @@ class DPOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        loss_type (`str`, *optional*, defaults to `"sigmoid"`):
+        loss_weights (`dict`, *optional*, defaults to `{"sigmoid": 1.0}`):
+            Use to weight a combination of losses.
+        loss_type (`str` or `list`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
@@ -282,7 +284,10 @@ class DPOConfig(TrainingArguments):
             "`transformers.TrainingArguments`."
         },
     )
-    loss_type: str = field(
+    loss_weights: Optional[Dict[str, float]] = field(
+        default={"sigmoid": 1.0},
+    )
+    loss_type: List[str] | str = field(
         default="sigmoid",
         metadata={
             "help": "Type of loss to use.",
