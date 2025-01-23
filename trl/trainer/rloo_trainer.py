@@ -619,7 +619,7 @@ class RLOOTrainer(Trainer):
                             self.reward_model(
                                 processing_class.batch_decode(postprocessed_query_response, skip_special_tokens=True)
                             )
-                        ).to(device)
+                        ).to(self.device)
                     table["score"].extend(self.accelerator.gather_for_metrics(score).float().cpu().numpy())
 
                 if sampling:
