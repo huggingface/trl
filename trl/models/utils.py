@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -90,7 +90,7 @@ def setup_chat_format(
         model (`~transformers.PreTrainedModel`): The model to be modified.
         tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
         format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
-        resize_to_multiple_of (`Optional[int]`): Number to resize the embedding layer to. Defaults to None.
+        resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
         model (`~transformers.PreTrainedModel`): The modified model.
@@ -172,7 +172,10 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 @contextmanager
 def unwrap_model_for_generation(
-    model: Union["DistributedDataParallel", "DeepSpeedEngine"], accelerator: "Accelerator", is_peft_model: bool = False
+    model: Union["DistributedDataParallel", "DeepSpeedEngine"],
+    accelerator: "Accelerator",
+    is_peft_model: bool = False,
+    gather_deepspeed3_params: bool = True,
 ) -> Union["PreTrainedModelWrapper", "DeepSpeedEngine"]:
     """Context manager to unwrap a model for generation.
     For ZeRO-3 models, we gather the weights once to speed up generation.
@@ -181,6 +184,8 @@ def unwrap_model_for_generation(
     if is_peft_model:
         unwrapped_model.pretrained_model.disable_adapter()
     if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
+        if not gather_deepspeed3_params:
+            yield accelerator.unwrap_model(model)
         with deepspeed.zero.GatheredParameters(model.parameters()):
             remove_hooks(model)
             yield accelerator.unwrap_model(model)

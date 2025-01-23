@@ -38,7 +38,7 @@ pip install -e .[dev]
 
 ## Fixing outstanding issues
 
-If you notice an issue with the existing code and have a fix in mind, feel free to [start contributing](#create-a-pull-request) and open a Pull Request!
+If you notice an issue with the existing code and have a fix in mind, feel free to [start contributing](#submitting-a-pull-request-pr) and open a Pull Request!
 
 ## Submitting a bug-related issue or feature request
 
@@ -257,7 +257,128 @@ That's how `make test` is implemented (without the `pip install` line)!
 You can specify a smaller set of tests to test only the feature
 you're working on.
 
-### Deprecation and Backward Compatibility
+### Default values guidelines
+
+1. **Use defaults when appropriate**:  
+
+Provide default values unless the parameter's value varies significantly by use case. For example, datasets or models should not have defaults, but parameters like `learning_rate` should.
+
+2. **Prioritize proven defaults**:  
+
+Default values should align with those recommended in the original paper or method. Alternatives require strong evidence of superior performance in most cases.
+
+3. **Ensure safety and predictability**:  
+
+Defaults must be safe, expected and reliable. Avoid settings that could lead to surprising outcomes, such as excessive memory usage or poor performance in edge cases.
+
+4. **Balance consistency and flexibility**:  
+
+Aim for consistent defaults across similar functions or methods. However, consistency should not be preferred to point 2 or 3.
+
+5. **Opt-in for new features**:  
+
+Do not enable new features or improvements (e.g., novel loss functions) by default. Users should explicitly opt-in to use these.
+
+### Writing documentation
+
+High-quality documentation is crucial for maintaining a project that is easy to use, understand, and extend. When adding new features, ensure they are thoroughly documented to maintain consistency and clarity throughout the project.
+
+To illustrate what good documentation looks like, here’s an example of a well-documented function:
+
+````python
+def replicate_str(string: str, n: int, sep: str = " ") -> str:
+    r"""
+    Replicate a string `n` times with a separator.
+
+    Args:
+        string (`str`):
+            String to replicate.
+        n (`int`):
+            Number of times to replicate the string.
+        sep (`str`, *optional*, defaults to `" "`):
+            Separator to use between each replication.
+    
+    Returns:
+        `str`: The replicated string.
+    
+    Examples:
+    ```python
+    >>> replicate_str("hello", 3)
+    "hello hello hello"
+    >>> replicate_str("hello", 3, sep=", ")
+    "hello, hello, hello"
+    ```
+    """
+    return sep.join([string] * n)
+````
+
+* **Line Wrapping:** Applied a consistent line wrap at column 120 to improve readability.
+* **Definite Articles:** Removed definite articles where possible to streamline language. (Eg: Changed "The string to replicate" to "String to replicate")
+* **Type Annotations:**
+  * Always include type definitions, indicating if a parameter is optional and specifying the default value.
+  * Note that `Optional` means that the value can be `None`, and `*optional*` means that it is not required for the user to pass a value.
+    E.g., for arguments that can't be `None` and aren't required:
+
+    ```python
+    foo (`int`, *optional*, defaults to `4`):
+    ```
+
+    For arguments that can be `None` and are required:
+
+    ```python
+    foo (`Optional[int]`):
+    ```
+
+    for arguments that can be `None` and aren't required:
+
+    ```python
+    foo (`Optional[int]`, *optional*, defaults to `None`):
+    ```
+
+* **String Defaults:**
+  * Ensured that default string values are wrapped in double quotes:
+
+    ```python
+    defaults to `"foo"`
+    ```
+
+* **Dictionary Typing:**
+  * Replaced generic `dict` type hints with more explicit `dict[str, Any]` to clarify expected key-value pairs.
+* **Default Value Formatting:**
+  * Consistently surrounded default values with backticks for improved formatting:
+
+    ```python
+    defaults to `4`
+    ```
+
+* **Sub-sectioning:** When the number of arguments is large, consider breaking them into sub-sections for better readability.
+
+    ```python
+    def calculate_statistics(data: list[float], precision: int = 2, include_variance: bool = False) -> dict[str, float]:
+        r"""
+        Calculates basic statistics for a given dataset.
+    
+        Args:
+            > Data inputs
+    
+            data (`list[float]`):
+                A list of numerical values to analyze.
+    
+            > Configuration parameters
+    
+            precision (`int`, *optional*, defaults to `2`):
+                Number of decimal places to round the results.
+            include_variance (`bool`, *optional*, defaults to `False`):
+                Whether to include the variance of the dataset in the results.
+    
+        Returns:
+            `dict[str, float]`:
+                A dictionary containing calculated statistics such as mean, median, and optionally variance.
+        """
+        ...
+      ```
+
+### Deprecation and backward compatibility
 
 Our approach to deprecation and backward compatibility is flexible and based on the feature’s usage and impact. Each deprecation is carefully evaluated, aiming to balance innovation with user needs.
 

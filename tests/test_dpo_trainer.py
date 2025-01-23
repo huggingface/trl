@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -236,11 +236,10 @@ class DPOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     def test_dpo_trainer_with_weighting(self):
@@ -277,11 +276,10 @@ class DPOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @parameterized.expand(
@@ -323,11 +321,10 @@ class DPOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.equal(param, new_param))
 
     def test_dpo_trainer_with_ref_model_is_model(self):
@@ -377,11 +374,10 @@ class DPOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @require_peft
@@ -428,12 +424,11 @@ class DPOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 if "lora" in n:
                     new_param = trainer.model.get_parameter(n)
-                    # check the params have changed - ignore 0 biases
-                    if param.sum() != 0:
+                    if param.sum() != 0:  # ignore 0 biases
                         self.assertFalse(torch.equal(param, new_param))
 
     def test_dpo_trainer_padding_token_is_none(self):
@@ -457,9 +452,10 @@ class DPOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
-                r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
-                r"before instantiating the trainer.",
+                expected_regex=r"`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in "
+                r"the `processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
+                r"`tokenizer.pad_token` \(e.g., `tokenizer.pad_token = tokenizer.eos_token`\) before instantiating "
+                r"the trainer.",
             ):
                 trainer = DPOTrainer(
                     model=self.model,
@@ -490,24 +486,16 @@ class DPOTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
             tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-            tokenizer.pad_token = None
 
-            with self.assertRaisesRegex(
-                ValueError,
-                expected_regex=r"Can't find `pad_token_id` in the `processing_class`. "
-                r"Explicitly set `tokenizer.pad_token` \(e.g. `tokenizer.pad_token = tokenizer.eos_token`\) "
-                r"before instantiating the trainer.",
-            ):
-                trainer = DPOTrainer(
-                    model=self.model,
-                    ref_model=None,
-                    args=training_args,
-                    processing_class=tokenizer,
-                    train_dataset=dummy_dataset["train"],
-                    eval_dataset=dummy_dataset["test"],
-                )
+            trainer = DPOTrainer(
+                model=self.model,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
 
-                trainer.train()
+            trainer.train()
 
     def test_tr_dpo_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -544,11 +532,10 @@ class DPOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.ref_model.get_parameter(n)
-                # check the ref model's params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.equal(param, new_param))
 
     @require_no_wandb
@@ -1112,7 +1099,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -1122,7 +1109,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=model,
                 ref_model=None,
                 args=training_args,
-                tokenizer=tokenizer,
+                processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -1164,6 +1151,81 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
             trainer.train()
+
+    def test_dpo_trainer_with_tools(self):
+        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        # Define dummy test tools
+        def get_current_temperature(location: str):
+            """
+            Gets the temperature at a given location.
+
+            Args:
+                location: The location to get the temperature for
+            """
+            return 22.0
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                tools=[get_current_temperature],
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference")
+
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+            # We don't run the training, but at this stage, the dataset is supposed to be pre-processed. When
+            # pre-processing, we expect the available tools to be explicitly mentioned in the system prompt. That's
+            # what we're checking here
+            self.assertIn("get_current_temperature", tokenizer.decode(trainer.train_dataset["prompt_input_ids"][0]))
+
+    def test_padding_free(self):
+        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        # Normally, we need `attn_implementation="flash_attention_2"` to that the model returns correct logits.
+        # Without it, the logits may be incorrect, but that's fine here. This test focuses only on the inner logic
+        # of padding_free.
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=9e-1,
+                per_device_train_batch_size=2,
+                padding_free=True,
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            trainer = DPOTrainer(
+                model=model,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            # Check that the parameters have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:  # ignore 0 biases
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
 
 @require_vision
@@ -1223,6 +1285,8 @@ class DPOVisionTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 remove_unused_columns=False,
                 learning_rate=0.01,  # increase learning rate to speed up test
+                max_prompt_length=None,  # don't truncate to avoid issues with patch tokens
+                max_length=None,
                 report_to="none",
             )
             trainer = DPOTrainer(
