@@ -410,18 +410,17 @@ class TextEnvironment:
 
         Args:
             batch_examples (list[bool]): mask indicating for each example, whether it is supposed to remain or not
-            past_key_values (list[transformers.DynamicCache]) : Batched list of caches from the last generation
+            past_key_values (tuple[tuple[torch.Tensor]]) : Batched list of caches (in legacy format) from the last generation
             past_attention_masks (list[torch.Tensor]): Batched list of attention masks from the last generation
             past_input_ids (list[torch.Tensor]): Batched list of input ids from the last generation
         """
         max_sequence_length = max([attention_mask.shape[1] for attention_mask in past_attention_masks])
 
-        legacy_format = [cache.to_legacy_cache() for cache in past_key_values]
         combined_cache = []
-        for layer_id in range(len(legacy_format[0])):
+        for layer_id in range(len(past_key_values[0])):
             combined_layer = None
             example_mask_offset = 0
-            for cache in legacy_format:
+            for cache in past_key_values:
                 layer = cache[layer_id]
                 num_examples = len(layer[0])
                 extracted_keys = layer[0][example_mask[example_mask_offset : example_mask_offset + num_examples]]
@@ -493,7 +492,7 @@ class TextEnvironment:
         Either all of past_key_values, past_attention_masks, past_input_ids,last_active_histories are provided or all are None.
         Args:
             histories (list[TextHistory]):
-            past_key_values (Optional[list[transformers.DynamicCache]]): Batched list of caches from the last generation
+            past_key_values (Optional[tuple[tuple[torch.Tensor]]]): Batched list of caches in legacy format from the last generation
             past_attention_masks (Optional[list[torch.Tensor]]): Batched list of attention masks from the last generation
             past_input_ids (Optional[list[torch.Tensor]]): Batched list of input ids from the last generation
             last_active_histories (Optional[list[int]]): indices of histories for which generation took place during the last generation turn
@@ -591,7 +590,7 @@ class TextEnvironment:
             current_cache.append((new_keys, new_values))
         current_cache = tuple(current_cache)
         return (
-            DynamicCache().from_legacy_cache(current_cache),
+            current_cache,
             combined_attention_masks[start_index:end_index],
             combined_input_ids[start_index:end_index],
         )
@@ -666,13 +665,14 @@ class TextEnvironment:
             generation_kwargs = copy.deepcopy(self.generation_kwargs)
 
             generation_kwargs["stopping_criteria"] = StoppingCriteriaList([stopping_criteria])
-            generation_kwargs["use_cache"] = True
             generation_kwargs["return_dict_in_generate"] = True
+
             if output_logits:
                 generation_kwargs["output_logits"] = True
 
             # handle caching
-            generation_kwargs["past_key_values"] = past_key_values if past_key_values is not None else DynamicCache()
+            generation_kwargs["use_cache"] = True
+            generation_kwargs["return_legacy_cache"] = True
             if past_attention_masks is not None:
                 padded_inputs["attention_mask"] = torch.concatenate(
                     [past_attention_masks, padded_inputs["attention_mask"]], dim=1
@@ -683,9 +683,19 @@ class TextEnvironment:
             if self.max_length is not None and padded_inputs["input_ids"].shape[-1] > self.max_length:
                 return None, None, None, None, True
 
-            generations = extract_model_from_parallel(self.model).generate(**padded_inputs, **generation_kwargs)
+            extracted_model = extract_model_from_parallel(self.model)
+            if extracted_model.pretrained_model._supports_cache_class:
+                generation_kwargs["past_key_values"] = (
+                    DynamicCache().from_legacy_cache(past_key_values)
+                    if past_key_values is not None
+                    else DynamicCache()
+                )
+            else:
+                generation_kwargs["past_key_values"] = past_key_values
 
-            if generations.past_key_values.to_legacy_cache()[0][0].shape[2] != generations.sequences.shape[1] - 1:
+            generations = extracted_model.generate(**padded_inputs, **generation_kwargs)
+
+            if generations.past_key_values[0][0].shape[2] != generations.sequences.shape[1] - 1:
                 raise Exception("Cache should not contain keys and values for last generated token")
             new_past_key_values.append(generations.past_key_values)
 
