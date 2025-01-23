@@ -43,6 +43,7 @@ class StringStoppingCriteria(StoppingCriteria):
             self.generated_tokens = [0 for _ in range(input_ids.shape[0])]
             self.start_length = input_ids.shape[-1] - 1
             self.first_call = False
+            self.last_done = [False for _ in range(input_ids.shape[0])]
         decoded_generations = self.tokenizer.batch_decode(input_ids[:, self.start_length :])
         done = []
 
@@ -53,7 +54,10 @@ class StringStoppingCriteria(StoppingCriteria):
             )
             done.append(sequence_complete)
             # we still consider the last generated token to be valid
-            self.generated_tokens[i] += 1
+            if not self.last_done[i]:
+                self.generated_tokens[i] += 1
+
+        self.last_done = done
 
         if all(done):
             self.first_call = True

@@ -19,6 +19,7 @@ import torch
 from transformers import AutoTokenizer, DynamicCache
 
 from trl import AutoModelForCausalLMWithValueHead, TextEnvironment, TextHistory
+from trl.environment.base_environment import StringStoppingCriteria
 
 
 class DummyTool:
@@ -115,6 +116,34 @@ class TextEnvironmentTester(unittest.TestCase):
         self.model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def test_stopping_criteria(self):
+        stopping_criteria = StringStoppingCriteria(["stop", "end"], self.tokenizer)
+        encoded = self.tokenizer(
+            ["Lorem ipsum stop dolor sit amet", "ipsumenddolor sit amet, consectetur adipiscing", "token"],
+            return_tensors="pt",
+            padding=True,
+            padding_side="right",
+        )
+        end_positions = []
+        end_positions.append(encoded.char_to_token(batch_or_char_index=0, char_index=15))
+        end_positions.append(encoded.char_to_token(batch_or_char_index=1, char_index=7))
+        end_index = encoded.char_to_token(batch_or_char_index=1, char_index=4)
+        encoded["input_ids"][end_index + 1] = self.tokenizer.eos_token_id
+        end_positions.append(end_index)
+        i = 0
+        is_stopped = False
+        while not is_stopped and i < 100:
+            # the first token is assumed to be the original input
+            is_stopped = stopping_criteria(encoded["input_ids"][:, : i + 2], None)
+            self.assertEqual(
+                stopping_criteria.generated_tokens, [min(end_position, i + 1) for end_position in end_positions]
+            )
+            i += 1
+
+        self.assertTrue(is_stopped)
+        self.assertEqual(i, max(*end_positions))
+        self.assertEqual(end_positions, stopping_criteria.generated_tokens)
 
     def test_text_environment_setup(self):
         env = TextEnvironment(
