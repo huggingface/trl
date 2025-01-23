@@ -362,7 +362,8 @@ class RLOOTrainer(Trainer):
                         score = torch.tensor(
                             reward_model(
                                 processing_class.batch_decode(postprocessed_query_response, skip_special_tokens=True)
-                            )
+                            ),
+                            dtype=torch.float,
                         ).to(device)
 
                     # Store batch results
@@ -618,8 +619,9 @@ class RLOOTrainer(Trainer):
                         score = torch.tensor(
                             self.reward_model(
                                 processing_class.batch_decode(postprocessed_query_response, skip_special_tokens=True)
-                            )
-                        ).to(self.device)
+                            ),
+                            dtype=torch.float,
+                        ).to(postprocessed_query_response.device)
                     table["score"].extend(self.accelerator.gather_for_metrics(score).float().cpu().numpy())
 
                 if sampling:
