@@ -30,7 +30,6 @@ from trl.trainer.utils import (
     flush_left,
     generate_model_card,
     get_peft_config,
-    get_reward_custom,
     pad,
 )
 
@@ -452,21 +451,3 @@ class TestFlushLeft(unittest.TestCase):
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
 
         self.assertTrue(torch.equal(new_mask, expected_mask))
-
-
-class TestReward(unittest.TestCase):
-    def test_get_reward_custom(self):
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
-        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        text = ["this text is extactly 37 letters long"]
-        actual_reward = len(text[0])
-
-        # defining dummy reward function
-        def reward_function(texts):
-            # based on length of text
-            rewards = [len(text) for text in texts]
-            return rewards
-
-        tokenized_text = tokenizer(text, return_tensors="pt")["input_ids"]
-        reward = get_reward_custom(reward_function, tokenizer, tokenized_text)
-        self.assertTrue(float(reward[0]) == actual_reward)
