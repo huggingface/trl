@@ -285,9 +285,6 @@ class DPOConfig(TrainingArguments):
         },
     )
     loss_weights: Optional[Dict[str, float]] = field(
-        default={"sigmoid": 1.0},
-    )
-    loss_weights: Optional[Dict[str, float]] = field(
         default_factory=lambda: ["your_values"]
     )
     loss_type: List[str] | str = field(
