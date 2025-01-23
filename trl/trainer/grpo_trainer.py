@@ -46,6 +46,9 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
+# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
+# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
+RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 class GRPOTrainer(Trainer):
     """
@@ -62,7 +65,7 @@ class GRPOTrainer(Trainer):
 
     trainer = GRPOTrainer(
         model="Qwen/Qwen2-0.5B-Instruct",
-        reward_model="weqweasdas/RM-Gemma-2B",
+        reward_funcs="weqweasdas/RM-Gemma-2B",
         train_dataset=dataset,
     )
 
@@ -79,17 +82,21 @@ class GRPOTrainer(Trainer):
               loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
               in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        reward_model (`Union[str, PreTrainedModel, Callable[[list, list], list[float]]`):
-            Reward model to be used for computing the rewards. Can be either:
+        reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
+            Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
+            functions with the prompts and completions and sum the rewards. Can be either:
 
-            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
-              a path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
-              loaded using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1` and
-              the keywork arguments in `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object. Only sequence classification models are supported.
-            - A custom reward function that takes a list of prompts and completions and returns a list of rewards. For
-              more details, see [Using a custom reward function](#using-a-custom-reward-function).
+            - A single reward function, such as:
+                - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
+                path to a *directory* containing model weights saved using
+                [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+                using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1` and the 
+                keyword arguments in `args.model_init_kwargs`.
+                - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
+                - A custom reward function: This should take a list of prompts and completions and return a list of
+                rewards. For more details, see [Using a custom reward function](#using-a-custom-reward-function).
+            - A list of reward functions, where each item can independently be any of the above types. Mixing different 
+            types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -123,7 +130,7 @@ class GRPOTrainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_model: Union[str, PreTrainedModel, Callable[[list, list], list[float]]],
+        reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
