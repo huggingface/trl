@@ -195,6 +195,8 @@ trainer = GRPOTrainer(
 If you have multiple reward functions, you can pass them as a list:
 
 ```python
+from trl import GRPOTrainer
+
 trainer = GRPOTrainer(
     reward_funcs=[reward_func1, reward_func2],
     ...,
