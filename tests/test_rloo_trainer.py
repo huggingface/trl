@@ -172,12 +172,14 @@ class RLOOTrainerTester(unittest.TestCase):
 
             # Check if objective/rlhf_reward is available
             self.assertIn("objective/rlhf_reward", trainer.state.log_history[-1])
+
     def test_rloo_training_with_custom_reward(self):
         # dummy reward function
         def reward_function(texts):
             # based on length of text
             rewards = [len(text) for text in texts]
             return rewards
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RLOOConfig(
                 output_dir=tmp_dir,
