@@ -583,11 +583,12 @@ class GRPOTrainer(Trainer):
 
         citation = textwrap.dedent(
             """\
-            @article{zhihong2024deepseekmath,
-                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
-                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
-                year         = 2024,
-                eprint       = {arXiv:2402.03300},
+            @article{ramesh2024grpo,
+                title={Group Robust Preference Optimization in Reward-free RLHF},
+                author={Shyam Sundhar Ramesh, Iason Chaimalas, Viraj Mehta, Haitham Bou Ammar, 
+                        Pier Giuseppe Sessa, Yifan Hu, Ilija Bogunovic},
+                year={2024}
+            }
             """
         )
 
