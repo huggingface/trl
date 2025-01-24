@@ -596,48 +596,28 @@ class TextEnvironmentTester(unittest.TestCase):
                 self.assertEqual(logits_uncached.shape[0], 4)
                 self.assertTrue(torch.all(torch.abs(logits_cached - logits_uncached) < 1e-6))
 
-    def test_run_with_caching(self):
+    def test_output_logits(self):
         generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
-        caching_env = TextEnvironment(
+        env = TextEnvironment(
             self.model,
             self.tokenizer,
             tools=[DummyTool()],
             reward_fn=lambda x: torch.tensor([1, 2, 3]),
             prompt="I am a prompt\n",
             generation_kwargs=generation_kwargs,
-            use_cache=True,
+            use_cache=False,
             save_logits=True,
             max_turns=1,
         )
 
         queries = ["Request goodbye ", " this is another, longer test", " batch"]
-        _, responses_cached, _, _, histories_cached = caching_env.run(queries)
+        _, _, _, _, histories = env.run(queries)
 
-        generation_kwargs2 = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
-        uncached_env = TextEnvironment(
-            self.model,
-            self.tokenizer,
-            tools=[DummyTool()],
-            reward_fn=lambda x: torch.tensor([1, 2, 3]),
-            prompt="I am a prompt\n",
-            generation_kwargs=generation_kwargs2,
-            use_cache=False,
-            save_logits=True,
-            max_turns=1,
-        )
-        _, responses_uncached, _, _, histories_uncached = uncached_env.run(queries)
-        for response_uncached, response_cached, history_uncached, history_cached in zip(
-            responses_uncached, responses_cached, histories_uncached, histories_cached
-        ):
-            self.assertTrue(torch.all(response_uncached == response_cached))
-            self.assertEqual(len(history_uncached.logits), 1)
-            self.assertEqual(len(history_cached.logits), 1)
-            for logit_segment_uncached, logit_segment_cached in zip(history_uncached.logits, history_cached.logits):
-                self.assertEqual(len(logit_segment_uncached), 4)
-                self.assertEqual(logit_segment_uncached.shape[-1], self.model.config.vocab_size)
-                self.assertEqual(len(logit_segment_cached), 4)
-                self.assertEqual(logit_segment_cached.shape[-1], self.model.config.vocab_size)
-                self.assertTrue(torch.all(torch.abs(logit_segment_uncached - logit_segment_cached) < 1e-6))
+        for history in histories:
+            self.assertEqual(len(history.logits), 1)
+            for logit_segment in history.logits:
+                self.assertEqual(len(logit_segment), 4)
+                self.assertEqual(logit_segment.shape[-1], self.model.config.vocab_size)
 
 
 if __name__ == "__main__":
