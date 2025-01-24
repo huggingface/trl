@@ -115,7 +115,7 @@ Each choice of `beta` has a maximum learning rate it can tolerate before learnin
 ### Imbalanced data
 
 The `desirable_weight` and `undesirable_weight` of the [`KTOConfig`] refer to the weights placed on the losses for desirable/positive and undesirable/negative examples.
-By default, they are both 1. However, if you have more of one or the other, then you should upweight the less common type such that the ratio of (`desirable_weight` \\(\times\\) number of positives) to (`undesirable_weight` \\(\times\\) number of negatives) is in the range 1:1 to 4:3.
+By default, they are both 1. However, if you have more of one or the other, then you should upweight the less common type such that the ratio of (`desirable_weight`  \\(\times\\) number of positives) to (`undesirable_weight`  \\(\times\\) number of negatives) is in the range 1:1 to 4:3.
 
 ## Logged metrics
 

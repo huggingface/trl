@@ -476,7 +476,9 @@ class OnlineDPOTrainer(Trainer):
         inputs = self._prepare_inputs(inputs)
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
         prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+        with unwrap_model_for_generation(
+            model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+        ) as unwrapped_model:
             output = unwrapped_model.generate(
                 input_ids=prompt_ids,
                 attention_mask=prompt_mask,
