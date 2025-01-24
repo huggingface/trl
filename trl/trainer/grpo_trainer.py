@@ -334,7 +334,7 @@ class GRPOTrainer(Trainer):
         else:
             self.reward_model = self.accelerator.prepare_model(self.reward_model, evaluation_mode=True)
 
-            # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
@@ -478,7 +478,7 @@ class GRPOTrainer(Trainer):
         # Compute the rewards
         prompts = [prompt for prompt in prompts for _ in range(self.num_generations)]
 
-        rewards = torch.zeros(len(self.reward_funcs), len(prompts), device=device)
+        rewards = torch.zeros(len(self.reward_funcs), len(prompts), device=self.accelerator.device)
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
@@ -502,7 +502,7 @@ class GRPOTrainer(Trainer):
                         # Repeat each value in the column for `num_generations` times
                         reward_kwargs[key].extend([example[key]] * self.num_generations)
                 output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
-                rewards[i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+                rewards[i] = torch.tensor(output_reward_func, dtype=torch.float32, device=self.accelerator.device)
         # Sum the rewards from all reward functions
         rewards = rewards.sum(dim=0)
 
