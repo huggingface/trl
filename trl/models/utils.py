@@ -186,9 +186,10 @@ def unwrap_model_for_generation(
     if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
         if not gather_deepspeed3_params:
             yield accelerator.unwrap_model(model)
-        with deepspeed.zero.GatheredParameters(model.parameters()):
-            remove_hooks(model)
-            yield accelerator.unwrap_model(model)
-            add_hooks(model)
+        else:
+            with deepspeed.zero.GatheredParameters(model.parameters()):
+                remove_hooks(model)
+                yield accelerator.unwrap_model(model)
+                add_hooks(model)
     else:
         yield unwrapped_model

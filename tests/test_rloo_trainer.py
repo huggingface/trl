@@ -172,3 +172,42 @@ class RLOOTrainerTester(unittest.TestCase):
 
             # Check if objective/rlhf_reward is available
             self.assertIn("objective/rlhf_reward", trainer.state.log_history[-1])
+
+    def test_rloo_training_with_custom_reward(self):
+        # dummy reward function
+        def reward_function(texts):
+            # based on length of text
+            rewards = [len(text) for text in texts]
+            return rewards
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = RLOOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                per_device_eval_batch_size=2,
+                total_episodes=1,
+                num_train_epochs=1,
+                max_steps=2,
+                report_to="none",
+            )
+
+            # Create a simple dataset
+            dummy_text = [{"content": "Hello World!", "role": "user"}]
+            dummy_data = self.tokenizer.apply_chat_template(dummy_text)
+            dummy_dataset = Dataset.from_dict({"input_ids": [dummy_data, dummy_data]})
+
+            trainer = RLOOTrainer(
+                config=training_args,
+                policy=self.policy_model,
+                reward_model=reward_function,
+                ref_policy=self.policy_ref_model,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+                eval_dataset=dummy_dataset,
+            )
+
+            # Test that training completes without errors
+            trainer.train()
+
+            # Check if objective/rlhf_reward is available
+            self.assertIn("objective/rlhf_reward", trainer.state.log_history[-1])
