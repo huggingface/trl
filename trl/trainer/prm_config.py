@@ -39,10 +39,9 @@ class PRMConfig(TrainingArguments):
             Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
-        step_separator (`str`, *optional*, defaults to `""`):
-            Separator used to separate each step of the reasoning process.
-        step_token (`str`, *optional*, defaults to `"<|step_token|>"`):
-            Step to mark the position for calculating step rewards.
+        step_separator (`str`, *optional*, defaults to `"<|step_token|>"`):
+            Separator used to separate each step of the reasoning process. It will be used as the specific token for
+            the steps to predict the rewards afterwards. If the token is not in the vocabulary, it will be added.
         resize_to_multiple_of (`int`, *optional*, defaults to `64`):
             Resize the input to multiple of this value. Only takes effect if `step_token` is not `None`.
         train_on_last_step_only (`bool`, *optional*, defaults to `False`):
@@ -78,12 +77,13 @@ class PRMConfig(TrainingArguments):
         metadata={"help": "Whether to disable dropout in the model and reference model."},
     )
     step_separator: Optional[str] = field(
-        default="",
-        metadata={"help": "Separator used to separate each step of the reasoning process."},
-    )
-    step_token: Optional[str] = field(
         default="<|step_token|>",
-        metadata={"help": "Step to mark the position for calculating step rewards."},
+        metadata={
+            "help": (
+                "Separator used to separate each step of the reasoning process. It will be used as the specific token for "
+                "the steps to predict the rewards afterwards. If the token is not in the vocabulary, it will be added."
+            )
+        },
     )
     resize_to_multiple_of: Optional[int] = field(
         default=64,
