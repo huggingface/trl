@@ -602,8 +602,8 @@ class GRPOTrainer(Trainer):
             comet_url=get_comet_experiment_url(),
             trainer_name="GRPO",
             trainer_citation=citation,
-            paper_title="DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
-            paper_id="2402.03300",
+            paper_title="Group Robust Preference Optimization in Reward-free RLHF",
+            paper_id="2405.20304",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
