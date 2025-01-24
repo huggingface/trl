@@ -629,13 +629,6 @@ class TextEnvironment:
             generated_tokens (list[int]): The number of tokens generated for each history in the batch
         """
         new_past_attention_mask = torch.ones_like(sequences)
-        # Don't attend to generated padding or eos tokens
-        new_past_attention_mask[
-            torch.logical_or(
-                sequences == self.tokenizer.eos_token_id,
-                sequences == self.tokenizer.pad_token_id,
-            )
-        ] = 0
         new_past_attention_mask[:, : input_attention_mask.shape[1]] = input_attention_mask
         # copy for in-place modification
         for mask, num_generated_tokens, new_attention_mask in zip(

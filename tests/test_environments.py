@@ -431,6 +431,41 @@ class TextEnvironmentTester(unittest.TestCase):
         expected_input_ids = torch.tensor([[5], [6]])
         self.assertTrue(torch.all(batched_input_ids == expected_input_ids))
 
+    def test_extract_generation(self):
+        env = TextEnvironment(
+            self.model,
+            self.tokenizer,
+            tools=[DummyTool()],
+            reward_fn=lambda x: torch.tensor(1),
+            prompt="I am a prompt!\n",
+        )
+        sequences = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8], [9, 10, 11, 12, 13, 14, 15, 16]])
+        attention_mask = torch.tensor([[0, 0, 0, 1, 1, 1], [1, 1, 1, 1, 1, 1]])
+        out1 = env._extract_generation(sequences[0], attention_mask[0])
+        self.assertTrue(torch.all(out1 == torch.tensor([7, 8])))
+        out2 = env._extract_generation(sequences[1], attention_mask[1])
+        self.assertTrue(torch.all(out2 == torch.tensor([15, 16])))
+
+    def test_create_new_past_attention_mask(self):
+        env = TextEnvironment(
+            self.model,
+            self.tokenizer,
+            tools=[DummyTool()],
+            reward_fn=lambda x: torch.tensor(1),
+            prompt="I am a prompt!\n",
+        )
+        sequences = torch.tensor(
+            [
+                [1, 2, 3, 4, 5, 6, 7, self.tokenizer.pad_token_id, 100, 200],
+                [9, 10, 11, 12, 13, 14, self.tokenizer.pad_token_id, 400, self.tokenizer.eos_token_id, 16],
+            ]
+        )
+        attention_mask = torch.tensor([[0, 0, 0, 1, 1, 1], [1, 1, 1, 1, 1, 1]])
+        generated_tokens = [2, 3]
+        expected_attention_mask = torch.tensor([[0, 0, 0, 1, 1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 1, 1, 1, 1, 1, 0]])
+        created_attention_mask = env._create_new_past_attention_mask(sequences, attention_mask, generated_tokens)
+        self.assertTrue(torch.all(expected_attention_mask == created_attention_mask))
+
     @parameterized.expand([(True,), (False,)])
     def test_cached_generate_batched(self, support_cache_class):
         with patch.object(self.model.pretrained_model, "_supports_cache_class", new=support_cache_class):
