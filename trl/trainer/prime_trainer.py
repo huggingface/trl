@@ -18,6 +18,7 @@ from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.data
 import transformers
 from datasets import Dataset, IterableDataset
@@ -337,27 +338,24 @@ class PrimeTrainer(Trainer):
         completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if return_outputs:
-            raise ValueError("The PrimeTrainer does not support returning outputs")
-
-        # Generate completions
-        prompts = [x["prompt"] for x in inputs]
+    def _generate_candidates(self, model, prompts):
+        """Generate candidate completions using either vLLM or standard generation."""
         if self.use_vllm:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(model, prompts)
+            return self._generate_vllm(model, prompts)
         else:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts)
+            return self._generate(model, prompts)
 
+    def _compute_kl_divergence(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask):
+        """Compute KL divergence between policy and reference model."""
         prompt_length = prompt_ids.size(1)
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         prompt_completion_mask = torch.cat([prompt_mask, completion_mask], dim=1)
 
-        # Get the per-token log probabilities for the completions for the model and the reference model
         def get_per_token_logps(model, input_ids, attention_mask):
-            logits = model(input_ids, attention_mask).logits  # (B, L, V)
-            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-            input_ids = input_ids[:, 1:]  # (B, L-1), exclude the first input ID since we don't have logits for it
-            # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
+            logits = model(input_ids, attention_mask).logits
+            logits = logits[:, :-1, :]  # exclude last prediction
+            input_ids = input_ids[:, 1:]  # exclude first input ID
+
             per_token_logps = []
             for logits_row, input_ids_row in zip(logits, input_ids):
                 log_probs = logits_row.log_softmax(dim=-1)
@@ -365,10 +363,11 @@ class PrimeTrainer(Trainer):
                 per_token_logps.append(token_log_prob)
             return torch.stack(per_token_logps)
 
+        # Get policy log probs
         per_token_logps = get_per_token_logps(model, prompt_completion_ids, prompt_completion_mask)
-        # Get rid of the prompt (-1 because of the shift done in get_per_token_logps)
         per_token_logps = per_token_logps[:, prompt_length - 1 :]
 
+        # Get reference model log probs
         with torch.inference_mode():
             if self.ref_model is not None:
                 ref_per_token_logps = get_per_token_logps(
@@ -379,53 +378,395 @@ class PrimeTrainer(Trainer):
                     ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids, prompt_completion_mask)
         ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
 
-        # Compute the KL divergence between the model and the reference model
+        # Compute KL divergence
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
 
-        # Decode the generated completions
+        return per_token_logps, ref_per_token_logps, per_token_kl
+
+    def _compute_prm_loss(
+        self,
+        prompt_ids,
+        prompt_mask,
+        completion_ids,
+        completion_mask,
+        verifier_rewards,
+    ):
+        """
+        Compute Cross-Entropy loss for updating the Process Reward Model (PRM).
+
+        As per the PRIME algorithm:
+        L_CE(φ) = E_(x,y,r)~T [r log σ(r_φ(y)) + (1-r) log(1-σ(r_φ(y)))]
+        where:
+        - r_φ(y) is the process reward from PRM
+        - r is the verifier (outcome) reward
+        - σ is the sigmoid function
+        """
+        # Get PRM logits
+        prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        prompt_completion_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+
+        # Forward pass through reward model to get process rewards
+        prm_outputs = self.reward_model(
+            input_ids=prompt_completion_ids,
+            attention_mask=prompt_completion_mask,
+        )
+        prm_logits = prm_outputs.logits[:, 0]  # Shape: [batch_size]
+
+        # Convert verifier rewards to binary labels (0 or 1)
+        binary_labels = (verifier_rewards > self.args.reward_threshold).float()
+
+        # Compute binary cross-entropy loss
+        bce_loss = F.binary_cross_entropy_with_logits(prm_logits, binary_labels, reduction="none")
+
+        # Average loss over non-padded tokens
+        loss = bce_loss.mean()
+
+        return loss
+
+    def _compute_rewards(self, prompts, completion_ids, completion_mask):
+        """
+        Compute both verifier rewards and implicit process rewards.
+
+        Returns:
+            tuple: (verifier_rewards, process_rewards, mean_rewards, std_rewards)
+        """
+        # 1. Get verifier rewards (outcome rewards)
+        verifier_rewards = []
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
 
-        # Compute the rewards
-        prompts = [prompt for prompt in prompts for _ in range(self.num_generations)]
-        if is_conversational(inputs[0]):
+        for prompt, completion in zip(prompts, completions):
+            if self.verifier_function is not None:
+                reward = self.verifier_function(prompt, completion)
+                verifier_rewards.append(reward)
+
+        verifier_rewards = torch.tensor(verifier_rewards, device=self.accelerator.device)
+
+        # 2. Get process rewards from reward model (implicit rewards)
+        if is_conversational({"prompt": prompts[0]}):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
             messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
             texts = [apply_chat_template(x, self.reward_processing_class)["text"] for x in messages]
-            reward_inputs = self.reward_processing_class(
-                texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
-            )
         else:
             texts = [p + c for p, c in zip(prompts, completions)]
-            reward_inputs = self.reward_processing_class(
-                texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
-            )
+
+        reward_inputs = self.reward_processing_class(
+            texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+        )
         reward_inputs = super()._prepare_inputs(reward_inputs)
+
         with torch.inference_mode():
-            rewards = self.reward_model(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+            process_rewards = self.reward_model(**reward_inputs).logits[:, 0]
 
-        # Compute grouped-wise rewards
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        # Compute grouped rewards statistics
+        mean_verifier_rewards = verifier_rewards.view(-1, self.num_generations).mean(dim=1)
+        std_verifier_rewards = verifier_rewards.view(-1, self.num_generations).std(dim=1)
+        mean_process_rewards = process_rewards.view(-1, self.num_generations).mean(dim=1)
+        std_process_rewards = process_rewards.view(-1, self.num_generations).std(dim=1)
 
-        # Normalize the rewards to compute the advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
+        # Repeat for each generation
+        mean_verifier_rewards = mean_verifier_rewards.repeat_interleave(self.num_generations, dim=0)
+        std_verifier_rewards = std_verifier_rewards.repeat_interleave(self.num_generations, dim=0)
+        mean_process_rewards = mean_process_rewards.repeat_interleave(self.num_generations, dim=0)
+        std_process_rewards = std_process_rewards.repeat_interleave(self.num_generations, dim=0)
 
-        # x - x.detach() allows for preserving gradients from x
-        advantages = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
-        per_token_loss = -(advantages - self.beta * per_token_kl)
-        loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+        return (
+            verifier_rewards,
+            process_rewards,
+            mean_verifier_rewards,
+            std_verifier_rewards,
+            mean_process_rewards,
+            std_process_rewards,
+        )
 
-        # Log the metrics
-        self._metrics["reward"].append(self.accelerator.gather_for_metrics(rewards).mean().item())
+    def _compute_prime_loss(
+        self,
+        model,
+        prompt_ids,
+        prompt_mask,
+        completion_ids,
+        completion_mask,
+        verifier_rewards,
+        process_rewards,
+        old_logprobs=None,
+    ):
+        """
+        Compute the PRIME loss using PPO with the combined advantages from verifier and process rewards.
 
-        self._metrics["reward_std"].append(self.accelerator.gather_for_metrics(std_grouped_rewards).mean().item())
+        The advantage is computed as:
+        A_i = r_i - (1/(K-1)) * sum_{j≠i} r_j + sum_{t} gamma^(t) * (r_i^t - (1/(K-1)) * sum_{j≠i} r_j^t)
+        where:
+        - r_i is the verifier (outcome) reward for sequence i
+        - r_i^t is the process reward at token t for sequence i
+        """
+        # Get current policy logprobs
+        prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        prompt_completion_mask = torch.cat([prompt_mask, completion_mask], dim=1)
 
-        mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
-        self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+        logits = model(prompt_completion_ids, attention_mask=prompt_completion_mask).logits
+        logits = logits[:, :-1]  # Remove last logit
+        current_logprobs = F.log_softmax(logits, dim=-1)
 
-        return loss
+        # Gather only the logprobs for the completion tokens
+        completion_ids_shifted = completion_ids[:, 1:]  # Remove first token
+        current_logprobs = torch.gather(current_logprobs, dim=2, index=completion_ids_shifted.unsqueeze(-1)).squeeze(
+            -1
+        )
+
+        # If old_logprobs not provided (first iteration), use current logprobs
+        if old_logprobs is None:
+            old_logprobs = current_logprobs.detach()
+
+        # Compute advantages using RLOO for both reward types
+        K = self.args.num_generations
+        batch_size = verifier_rewards.size(0) // K
+
+        # Reshape rewards for RLOO computation
+        grouped_verifier_rewards = verifier_rewards.view(batch_size, K)
+        grouped_process_rewards = process_rewards.view(batch_size, K)
+
+        # Compute leave-one-out means
+        loo_verifier_means = (grouped_verifier_rewards.sum(dim=1, keepdim=True) - grouped_verifier_rewards) / (K - 1)
+        loo_process_means = (grouped_process_rewards.sum(dim=1, keepdim=True) - grouped_process_rewards) / (K - 1)
+
+        # Compute advantages for each sequence
+        verifier_advantages = (grouped_verifier_rewards - loo_verifier_means).view(-1)  # Shape: [batch_size * K]
+        process_advantages = (grouped_process_rewards - loo_process_means).view(-1)  # Shape: [batch_size * K]
+
+        # Compute discounted process rewards
+        discount_factors = self.args.gamma ** torch.arange(
+            completion_mask.size(1), device=completion_mask.device
+        ).unsqueeze(0)
+
+        # Combine advantages as per PRIME paper
+        advantages = (
+            verifier_advantages.unsqueeze(1)  # Shape: [batch_size * K, 1]
+            + process_advantages.unsqueeze(1) * discount_factors  # Shape: [batch_size * K, seq_len]
+        )
+
+        # Normalize advantages
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        # Compute PPO policy loss
+        ratio = torch.exp(current_logprobs - old_logprobs)
+        clip_range = self.args.epsilon
+
+        # Policy loss with clipping
+        pg_loss1 = advantages * ratio
+        pg_loss2 = advantages * torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range)
+        pg_loss = -torch.min(pg_loss1, pg_loss2)
+
+        # Compute KL divergence for logging
+        approx_kl = 0.5 * ((current_logprobs - old_logprobs) ** 2).mean()
+        clipfrac = ((ratio - 1.0).abs() > clip_range).float().mean()
+
+        # Mask out padding tokens
+        pg_loss = (pg_loss * completion_mask[:, 1:]).sum(dim=1) / completion_mask[:, 1:].sum(dim=1)
+        pg_loss = pg_loss.mean()
+
+        # Add KL penalty term from reference model
+        if self.ref_model is not None:
+            with torch.no_grad():
+                ref_logits = self.ref_model(prompt_completion_ids, attention_mask=prompt_completion_mask).logits[
+                    :, :-1
+                ]
+                ref_logprobs = F.log_softmax(ref_logits, dim=-1)
+                ref_logprobs = torch.gather(ref_logprobs, dim=2, index=completion_ids_shifted.unsqueeze(-1)).squeeze(
+                    -1
+                )
+        else:
+            with self.accelerator.unwrap_model(model).disable_adapter():
+                ref_logits = model(prompt_completion_ids, attention_mask=prompt_completion_mask).logits[:, :-1]
+                ref_logprobs = F.log_softmax(ref_logits, dim=-1)
+                ref_logprobs = torch.gather(ref_logprobs, dim=2, index=completion_ids_shifted.unsqueeze(-1)).squeeze(
+                    -1
+                )
+
+        kl_div = (current_logprobs - ref_logprobs) * completion_mask[:, 1:]
+        kl_div = kl_div.sum(dim=1) / completion_mask[:, 1:].sum(dim=1)
+        kl_div = kl_div.mean()
+
+        # Combine losses
+        loss = pg_loss + self.args.beta * kl_div
+
+        return loss, {
+            "policy_loss": pg_loss.item(),
+            "kl_div": kl_div.item(),
+            "approx_kl": approx_kl.item(),
+            "clipfrac": clipfrac.item(),
+        }
+
+    def train(self):
+        """
+        Main training loop for PRIME algorithm.
+
+        Algorithm steps:
+        1. Initialize policy, PRM, and reference models from SFT model
+        2. For N iterations:
+            a. Sample batch of prompts
+            b. Generate K candidates per prompt
+            c. Filter based on correct response ratio
+            d. For M PPO epochs:
+                - Update PRM with cross-entropy loss
+                - Compute advantages and update policy with PPO
+        """
+        args = self.args
+        accelerator = self.accelerator
+        model = self.model
+        optimizer = self.optimizer
+
+        # Initialize models and metrics
+        model.train()
+        self.ref_model.eval()
+        self.ref_model.to(accelerator.device)
+        self.reward_model.train()
+        self.reward_model.to(accelerator.device)
+
+        # Create separate optimizer for PRM
+        prm_optimizer = torch.optim.AdamW(
+            self.reward_model.parameters(),
+            lr=args.learning_rate,
+            weight_decay=args.weight_decay,
+        )
+
+        # Initialize metrics to include both reward types
+        self._metrics = {
+            "policy_loss": [],
+            "prm_loss": [],
+            "kl_div": [],
+            "approx_kl": [],
+            "clipfrac": [],
+            "verifier_reward": [],
+            "process_reward": [],
+        }
+
+        # Training state initialization
+        self.state.global_step = 0
+        self.state.epoch = 0
+        self.state.max_steps = args.num_total_batches
+        self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+
+        # Main training loop
+        for epoch in range(args.num_train_epochs):
+            for step, batch in enumerate(self.get_train_dataloader()):
+                # Step 1: Generate candidates and compute initial metrics
+                prompts = [x["prompt"] for x in batch]
+                generation_outputs = self._generate_candidates(model, prompts)
+                prompt_ids, prompt_mask, completion_ids, completion_mask = generation_outputs
+
+                # Step 2: Filter based on correct response ratio
+                with torch.no_grad():
+                    # Compute rewards to determine correct responses
+                    reward_outputs = self._compute_rewards(prompts, completion_ids, completion_mask)
+                    verifier_rewards, process_rewards = reward_outputs[:2]
+
+                    # Filter based on verifier rewards
+                    grouped_verifier_rewards = verifier_rewards.view(-1, args.num_generations)
+                    correct_responses = (grouped_verifier_rewards > args.reward_threshold).sum(dim=1)
+                    correct_ratios = correct_responses.float() / args.num_generations
+
+                    # Apply filtering
+                    valid_mask = (correct_ratios >= args.correct_ratio_min) & (
+                        correct_ratios <= args.correct_ratio_max
+                    )
+                    if not valid_mask.any():
+                        continue
+
+                    # Update all tensors with valid mask
+                    prompt_ids = prompt_ids[valid_mask.repeat_interleave(args.num_generations)]
+                    prompt_mask = prompt_mask[valid_mask.repeat_interleave(args.num_generations)]
+                    completion_ids = completion_ids[valid_mask.repeat_interleave(args.num_generations)]
+                    completion_mask = completion_mask[valid_mask.repeat_interleave(args.num_generations)]
+                    verifier_rewards = verifier_rewards[valid_mask.repeat_interleave(args.num_generations)]
+                    process_rewards = process_rewards[valid_mask.repeat_interleave(args.num_generations)]
+
+                # Get initial logprobs for PPO
+                with torch.no_grad():
+                    old_logprobs = None  # Will be computed in first iteration
+
+                # Step 3: PPO Training Loop
+                for _ in range(args.num_ppo_epochs):
+                    # Shuffle data for each PPO epoch
+                    perm = torch.randperm(len(prompt_ids), device=prompt_ids.device)
+                    prompt_ids = prompt_ids[perm]
+                    prompt_mask = prompt_mask[perm]
+                    completion_ids = completion_ids[perm]
+                    completion_mask = completion_mask[perm]
+                    verifier_rewards = verifier_rewards[perm]
+                    process_rewards = process_rewards[perm]
+                    if old_logprobs is not None:
+                        old_logprobs = old_logprobs[perm]
+
+                    # Process in mini-batches
+                    for mb_start in range(0, len(prompt_ids), args.per_device_train_batch_size):
+                        mb_end = min(mb_start + args.per_device_train_batch_size, len(prompt_ids))
+                        mb_slice = slice(mb_start, mb_end)
+
+                        # 1. Update PRM with Cross-Entropy loss
+                        with self.accelerator.accumulate(self.reward_model):
+                            prm_loss = self._compute_prm_loss(
+                                prompt_ids[mb_slice],
+                                prompt_mask[mb_slice],
+                                completion_ids[mb_slice],
+                                completion_mask[mb_slice],
+                                verifier_rewards[mb_slice],
+                            )
+
+                            self.accelerator.backward(prm_loss)
+                            if args.max_grad_norm is not None:
+                                self.accelerator.clip_grad_norm_(self.reward_model.parameters(), args.max_grad_norm)
+                            prm_optimizer.step()
+                            prm_optimizer.zero_grad()
+
+                            self._metrics["prm_loss"].append(prm_loss.item())
+
+                        # 2. Update policy with PPO loss
+                        with accelerator.accumulate(model):
+                            # Get updated process rewards after PRM update
+                            with torch.no_grad():
+                                _, process_rewards_updated = self._compute_rewards(
+                                    prompts[mb_slice], completion_ids[mb_slice], completion_mask[mb_slice]
+                                )[:2]
+
+                            # Compute PPO loss with PRIME advantages
+                            policy_loss, metrics = self._compute_prime_loss(
+                                model,
+                                prompt_ids[mb_slice],
+                                prompt_mask[mb_slice],
+                                completion_ids[mb_slice],
+                                completion_mask[mb_slice],
+                                verifier_rewards[mb_slice],
+                                process_rewards_updated,
+                                old_logprobs[mb_slice] if old_logprobs is not None else None,
+                            )
+
+                            # Backward pass and optimization
+                            accelerator.backward(policy_loss)
+                            if args.max_grad_norm is not None and args.max_grad_norm > 0:
+                                accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                            optimizer.step()
+                            optimizer.zero_grad()
+
+                            # Store metrics
+                            for k, v in metrics.items():
+                                self._metrics[k].append(v)
+
+                # Update training state
+                self.state.global_step += 1
+                self.state.epoch = epoch + (step + 1) / len(self.get_train_dataloader())
+
+                # Handle callbacks and saving
+                self.control = self.callback_handler.on_step_end(args, self.state, self.control)
+                if self.control.should_save:
+                    self._save_checkpoint(model, trial=None)
+
+                if self.control.should_training_stop:
+                    break
+
+            if self.control.should_training_stop:
+                break
+
+        # End of training
+        self.control = self.callback_handler.on_train_end(args, self.state, self.control)
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
@@ -470,11 +811,7 @@ class PrimeTrainer(Trainer):
 
         citation = textwrap.dedent(
             """\
-            @article{zhihong2024deepseekmath,
-                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
-                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
-                year         = 2024,
-                eprint       = {arXiv:2402.03300},
+                TODO
             """
         )
 
