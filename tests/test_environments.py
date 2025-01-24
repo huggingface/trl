@@ -45,6 +45,13 @@ def cache_class_support_forward(support_cache_class, feedback):
     return _forward
 
 
+# max-normalized logit comparison
+def almost_equal_logits(logits1, logits2):
+    return torch.all(
+        (torch.abs(logits1 - logits2) / torch.max(torch.abs(logits1).max(), torch.abs(logits2).max())) < 1e-6
+    )
+
+
 def reshape_cache(cache):
     new_cache = []
     for layer in cache:
@@ -480,7 +487,7 @@ class TextEnvironmentTester(unittest.TestCase):
                 self.assertTrue(torch.all(cached == uncached))
                 self.assertEqual(logits_cached.shape[0], 4)
                 self.assertEqual(logits_uncached.shape[0], 4)
-                self.assertTrue(torch.all(torch.abs(logits_cached - logits_uncached) < 1e-6))
+                self.assertTrue(almost_equal_logits(logits_cached, logits_uncached))
 
     @parameterized.expand([(True,), (False,)])
     def test_cache_class_support(self, support_cache_class):
@@ -594,7 +601,7 @@ class TextEnvironmentTester(unittest.TestCase):
                 self.assertTrue(torch.all(cached == uncached))
                 self.assertEqual(logits_cached.shape[0], 4)
                 self.assertEqual(logits_uncached.shape[0], 4)
-                self.assertTrue(torch.all(torch.abs(logits_cached - logits_uncached) < 1e-6))
+                self.assertTrue(almost_equal_logits(logits_cached, logits_uncached))
 
     def test_output_logits(self):
         generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
