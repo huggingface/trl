@@ -153,7 +153,7 @@ You can test it as follows:
 
 #### Example 2: Reward completions with specific format
 
-Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the reward function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the _format reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
 It is designed for conversational format, where prompts and completions consist of structured messages.
 
 ```python
@@ -180,12 +180,12 @@ You can test this function as follows:
 ... ]
 >>> format_reward_func(prompts=prompts, completions=completions)
 [1.0, 0.0]
->>>
 ```
 
 #### Example 3: Reward completions based on a reference
 
-Below is an example of a reward function that rewards completions based on a reference ground truth. This example is designed for [standard format](dataset_formats#standard), where the dataset contains a column named `ground_truth`.
+Below is an example of a reward function that checks if the is correct. This example is inspired by the _accuracy reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+This example is designed for [standard format](dataset_formats#standard), where the dataset contains a column named `ground_truth`.
 
 ```python
 import re
