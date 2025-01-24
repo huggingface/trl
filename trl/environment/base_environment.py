@@ -81,6 +81,7 @@ class TextHistory:
         self.text_spans = []
         self.token_spans = []
         self.token_masks = torch.tensor([], dtype=torch.long).to(tokens.device)
+        self.logits = []
         self.text = ""
         self.tokens = torch.tensor([], dtype=torch.long).to(tokens.device)
         self.completed = False
@@ -94,7 +95,7 @@ class TextHistory:
 
         self.append_segment(text, tokens, system=system)
 
-    def append_segment(self, text, tokens, system=True):
+    def append_segment(self, text, tokens, system=True, logits=None):
         """
         Append a new segment to the history.
 
@@ -102,6 +103,7 @@ class TextHistory:
             text (`str`): The text of the new segment.
             tokens (`torch.LongTensor`): The tokens of the new segment.
             system (`bool`, *optional*): Whether the new segment is a system or user segment.
+            logits (`torch.Tensor`, *optional*): The logits for a non-system segment.
         """
 
         if len(text) == 0 or len(tokens) == 0:
@@ -120,6 +122,8 @@ class TextHistory:
             self.token_masks = torch.cat((self.token_masks, torch.zeros_like(tokens)))
         else:
             self.token_masks = torch.cat((self.token_masks, torch.ones_like(tokens)))
+            if logits is not None:
+                self.logits.append(logits)
         self.token_spans.append((original_token_length, len(self.tokens)))
 
     def complete(self, truncated=False):
@@ -244,6 +248,7 @@ class TextEnvironment:
         max_length=None,
         generation_kwargs=None,
         use_cache=False,
+        save_logits=False,
     ):
         """
         Initialize TextEnvironment.
@@ -259,6 +264,7 @@ class TextEnvironment:
             max_length (Optional[int]): The maximum number of tokens to allow in an episode.
             generation_kwargs (Optional[dict]): A dictionary of keyword arguments to pass to the model's generate method.
             use_cache (bool): Whether to cache past_key_values between segments. When using caching, [`TextEnvironment`] is not suited for training use, i.e. backpropagation through the generated graph. Use with Trainers is of course possible. Furthermore, caching requires, that there be no calculation dependencies between examples at inference time. When using `BatchNorm`, the model should thus be in eval mode.
+            save_logits (bool): Whether to save logits in the returned histories. Mainly intended to help the user test caching for their use case. Backpropagation through logits is not supported.
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -276,6 +282,7 @@ class TextEnvironment:
         self.max_turns = max_turns
         self.max_tool_response = max_tool_reponse
         self.use_cache = use_cache
+        self.save_logits = save_logits
 
         if generation_kwargs is None:
             self.generation_kwargs = dict()
@@ -509,28 +516,29 @@ class TextEnvironment:
         else:
             query_tensors = [histories[i].tokens for i in active_histories]
 
-        response_tensors, past_key_values, past_attention_masks, past_input_ids, truncated = self._generate_batched(
-            query_tensors,
-            combined_past_key_values=combined_past_key_values,
-            combined_past_attention_masks=combined_past_attention_masks,
-            combined_past_input_ids=combined_past_input_ids,
-            return_cache=self.use_cache,
+        response_tensors, past_key_values, past_attention_masks, past_input_ids, truncated, logits = (
+            self._generate_batched(
+                query_tensors,
+                combined_past_key_values=combined_past_key_values,
+                combined_past_attention_masks=combined_past_attention_masks,
+                combined_past_input_ids=combined_past_input_ids,
+                return_cache=self.use_cache,
+                output_logits=self.save_logits,
+            )
         )
         if not truncated:
             response_texts = self.tokenizer.batch_decode(response_tensors)
-            for i, response_text, response_tensor in zip(active_histories, response_texts, response_tensors):
+            for i, response_text, response_tensor, j in zip(
+                active_histories, response_texts, response_tensors, range(len(active_histories))
+            ):
                 history = histories[i]
                 if not history.completed:
-                    history.append_segment(response_text, response_tensor, system=False)
+                    history.append_segment(
+                        response_text, response_tensor, system=False, logits=(logits[j] if self.save_logits else None)
+                    )
         else:
             for history in histories:
                 if not history.completed:
-                    # Adds an eos token, so that we end on a non-system segment
-                    history.append_segment(
-                        self.tokenizer.eos_token,
-                        torch.tensor([self.tokenizer.eos_token_id]).to(self.current_device),
-                        system=False,
-                    )
                     history.complete(truncated=True)
             return histories, None, None, None, []  # invalidate cache
 
@@ -686,6 +694,8 @@ class TextEnvironment:
 
         if output_logits:
             all_logits = []
+        else:
+            all_logits = None
 
         # pad all batches to same length for cache compatibility
         mask = [torch.ones_like(element) for element in query_tensors]
@@ -778,10 +788,8 @@ class TextEnvironment:
             if output_logits:
                 for i, num_generated_tokens in enumerate(stopping_criteria.generated_tokens):
                     relevant_logits = [batched_logits[i] for batched_logits in logits[:num_generated_tokens]]
-                    all_logits.append(torch.stack(relevant_logits, dim=0))
+                    all_logits.append(torch.stack(relevant_logits, dim=0).detach().clone())
 
         self.tokenizer.padding_side = padding_side_default
-        if output_logits:
-            return outputs, new_past_key_values, new_past_attention_masks, new_past_input_ids, False, all_logits
 
-        return outputs, new_past_key_values, new_past_attention_masks, new_past_input_ids, False
+        return outputs, new_past_key_values, new_past_attention_masks, new_past_input_ids, False, all_logits

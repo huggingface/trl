@@ -191,7 +191,7 @@ class TextEnvironmentTester(unittest.TestCase):
 
         model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
 
-        generations_batched, _, _, _, _ = env._generate_batched(model_inputs, batch_size=2)
+        generations_batched, _, _, _, _, _ = env._generate_batched(model_inputs, batch_size=2)
         generations_batched = self.tokenizer.batch_decode(generations_batched)
 
         generations_single = [env._generate_batched([inputs], batch_size=1)[0][0] for inputs in model_inputs]
@@ -444,7 +444,7 @@ class TextEnvironmentTester(unittest.TestCase):
                 "something unnecessary",
             ]
             model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
-            outputs, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
+            outputs, past_key_values, past_attention_masks, past_input_ids, _, _ = env._generate_batched(
                 model_inputs, batch_size=2, return_cache=True
             )
 
@@ -498,7 +498,7 @@ class TextEnvironmentTester(unittest.TestCase):
 
         input_texts = ["test"]
         model_inputs = list(self.tokenizer(input_texts, return_tensors="pt").input_ids)
-        _, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
+        _, past_key_values, past_attention_masks, past_input_ids, _, _ = env._generate_batched(
             model_inputs, batch_size=2, return_cache=True
         )
 
@@ -514,7 +514,7 @@ class TextEnvironmentTester(unittest.TestCase):
                 self.model.pretrained_model, "forward", new=cache_class_support_forward(support_cache_class, feedback)
             ):
                 try:
-                    _, _, _, _, _, all_logits_cached = env._generate_batched(
+                    _, _, _, _, _, _ = env._generate_batched(
                         model_inputs2,
                         batch_size=2,
                         combined_past_key_values=past_key_values,
@@ -541,7 +541,7 @@ class TextEnvironmentTester(unittest.TestCase):
 
             input_texts = ["this is a test", "this is another, longer test", "some other batch"]
             model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
-            outputs, past_key_values, past_attention_masks, past_input_ids, _ = env._generate_batched(
+            outputs, past_key_values, past_attention_masks, past_input_ids, _, _ = env._generate_batched(
                 model_inputs, batch_size=2, return_cache=True
             )
             # remove the last two tokens from the second batch to pretend they were never generated
@@ -595,6 +595,49 @@ class TextEnvironmentTester(unittest.TestCase):
                 self.assertEqual(logits_cached.shape[0], 4)
                 self.assertEqual(logits_uncached.shape[0], 4)
                 self.assertTrue(torch.all(torch.abs(logits_cached - logits_uncached) < 1e-6))
+
+    def test_run_with_caching(self):
+        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
+        caching_env = TextEnvironment(
+            self.model,
+            self.tokenizer,
+            tools=[DummyTool()],
+            reward_fn=lambda x: torch.tensor([1, 2, 3]),
+            prompt="I am a prompt\n",
+            generation_kwargs=generation_kwargs,
+            use_cache=True,
+            save_logits=True,
+            max_turns=1,
+        )
+
+        queries = ["Request goodbye ", " this is another, longer test", " batch"]
+        _, responses_cached, _, _, histories_cached = caching_env.run(queries)
+
+        generation_kwargs2 = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
+        uncached_env = TextEnvironment(
+            self.model,
+            self.tokenizer,
+            tools=[DummyTool()],
+            reward_fn=lambda x: torch.tensor([1, 2, 3]),
+            prompt="I am a prompt\n",
+            generation_kwargs=generation_kwargs2,
+            use_cache=False,
+            save_logits=True,
+            max_turns=1,
+        )
+        _, responses_uncached, _, _, histories_uncached = uncached_env.run(queries)
+        for response_uncached, response_cached, history_uncached, history_cached in zip(
+            responses_uncached, responses_cached, histories_uncached, histories_cached
+        ):
+            self.assertTrue(torch.all(response_uncached == response_cached))
+            self.assertEqual(len(history_uncached.logits), 1)
+            self.assertEqual(len(history_cached.logits), 1)
+            for logit_segment_uncached, logit_segment_cached in zip(history_uncached.logits, history_cached.logits):
+                self.assertEqual(len(logit_segment_uncached), 4)
+                self.assertEqual(logit_segment_uncached.shape[-1], self.model.config.vocab_size)
+                self.assertEqual(len(logit_segment_cached), 4)
+                self.assertEqual(logit_segment_cached.shape[-1], self.model.config.vocab_size)
+                self.assertTrue(torch.all(torch.abs(logit_segment_uncached - logit_segment_cached) < 1e-6))
 
 
 if __name__ == "__main__":
