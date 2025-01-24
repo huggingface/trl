@@ -43,7 +43,7 @@ training_args = GRPOConfig(
 )
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_model="weqweasdas/RM-Gemma-2B",
+    reward_funcs="weqweasdas/RM-Gemma-2B",
     args=training_args,
     train_dataset=dataset,
     peft_config=LoraConfig(task_type="CAUSAL_LM"),
