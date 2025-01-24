@@ -125,7 +125,8 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
      - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
-    The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
+
+     The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
    - Depending on the dataset format, the input will vary:
      - For [standard format](dataset_formats#standard), `prompts` and `completions` will be lists of strings.
      - For [conversational format](dataset_formats#conversational), `prompts` and `completions` will be lists of message dictionaries.
