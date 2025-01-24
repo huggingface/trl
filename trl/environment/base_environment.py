@@ -697,17 +697,6 @@ class TextEnvironment:
         else:
             all_logits = None
 
-        # pad all batches to same length for cache compatibility
-        mask = [torch.ones_like(element) for element in query_tensors]
-        inputs = {"input_ids": query_tensors, "attention_mask": mask}
-        all_padded_inputs = self.tokenizer.pad(
-            inputs,
-            padding=True,
-            max_length=None,
-            pad_to_multiple_of=pad_to_multiple_of,
-            return_tensors="pt",
-        ).to(self.current_device)
-
         # in case we have fewer examples than bs
         batch_size = min(len(query_tensors), batch_size)
         for i in range(0, len(query_tensors), batch_size):
@@ -719,12 +708,16 @@ class TextEnvironment:
                     i, end_index, combined_past_key_values, combined_past_attention_masks, combined_past_input_ids
                 )
 
-            padded_inputs = {
-                "input_ids": all_padded_inputs["input_ids"][i:end_index],
-                "attention_mask": all_padded_inputs["attention_mask"][i:end_index],
-            }
-
-            input_attention_mask = padded_inputs["attention_mask"].clone()
+            query_batch = query_tensors[i:end_index]
+            mask = [torch.ones_like(element) for element in query_batch]
+            inputs = {"input_ids": query_batch, "attention_mask": mask}
+            padded_inputs = self.tokenizer.pad(
+                inputs,
+                padding=True,
+                max_length=None,
+                pad_to_multiple_of=pad_to_multiple_of,
+                return_tensors="pt",
+            ).to(self.current_device)
             stopping_criteria = StringStoppingCriteria([self.call_token, self.submit_token], self.tokenizer)
 
             generation_kwargs = copy.deepcopy(self.generation_kwargs)
