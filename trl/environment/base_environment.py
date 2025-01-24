@@ -596,7 +596,7 @@ class TextEnvironment:
             combined_input_ids[start_index:end_index],
         )
 
-    def extract_generation(self, sequence, mask):
+    def _extract_generation(self, sequence, mask):
         """Remove padding and prompt based on the attention mask to extract generated tokens
         Args:
             sequence (torch.Tensor): A sequence with length corresponding to input sequence length + generation sequence length
@@ -612,6 +612,39 @@ class TextEnvironment:
             # remove prompt
             output = output[(mask).sum() :]
         return output
+
+    def _create_new_past_inputs(self, sequences, input_attention_mask, generated_tokens):
+        """Creates the new past_input_ids and new past_attention_mask for a batch.
+        Args:
+            sequences (torch.Tensor): The sequences returned by model.generate(...)
+            input_attention_mask (torch.Tensor): The attention mask that was input into model.generate(...)
+            generated_tokens (list[int]): The number of tokens generated for each history in the batch
+        """
+        new_past_attention_mask = torch.ones_like(sequences)
+        # Don't attend to generated padding or eos tokens
+        new_past_attention_mask[
+            torch.logical_or(
+                sequences == self.tokenizer.eos_token_id,
+                sequences == self.tokenizer.pad_token_id,
+            )
+        ] = 0
+        new_past_attention_mask[:, : input_attention_mask.shape[1]] = input_attention_mask
+        # copy for in-place modification
+        batch_new_past_input_ids = sequences.detach().clone()
+        for mask, num_generated_tokens, new_attention_mask, example_input_ids in zip(
+            input_attention_mask,
+            generated_tokens,
+            new_past_attention_mask,
+            batch_new_past_input_ids,
+        ):
+            extracted_past_input_ids = self._extract_generation(example_input_ids, mask)
+            extracted_past_attention_mask = self._extract_generation(new_attention_mask, mask)
+            # Do not attend to invalid tokens that were generated after <call> or <submit> or the last valid generated token, as we move it to the end of the sequence
+            extracted_past_attention_mask[num_generated_tokens - 1 :] = 0
+            # move last valid generated token to the end of the sequence to be the start of the next generation
+            extracted_past_input_ids[-1] = extracted_past_input_ids[num_generated_tokens - 1]
+            extracted_past_attention_mask[-1] = 1  # attend to the last valid generated token
+        return batch_new_past_input_ids, new_past_attention_mask
 
     # TODO make batch_size changeable
     def _generate_batched(
@@ -720,12 +753,10 @@ class TextEnvironment:
             if output_logits:
                 logits = generations.logits
             sequences = generations.sequences
-            # copy for in-place modification
-            batch_new_past_input_ids = sequences.detach().clone()
             for generation, mask, num_generated_tokens in zip(
                 sequences, padded_inputs["attention_mask"], stopping_criteria.generated_tokens
             ):
-                output = self.extract_generation(generation, mask)
+                output = self._extract_generation(generation, mask)
                 # remove chunk generated after stopping criteria in batch mode
                 generated_tokens = output[:num_generated_tokens]
                 if len(generated_tokens) < 1:
@@ -738,30 +769,9 @@ class TextEnvironment:
                 if generations.past_key_values[0][0].shape[2] != generations.sequences.shape[1] - 1:
                     raise Exception("Cache should not contain keys and values for last generated token")
                 new_past_key_values.append(generations.past_key_values)
-                new_past_attention_mask = torch.ones_like(generations.sequences)
-                # Don't attend to generated padding or eos tokens
-                new_past_attention_mask[
-                    torch.logical_or(
-                        generations.sequences == self.tokenizer.eos_token_id,
-                        generations.sequences == self.tokenizer.pad_token_id,
-                    )
-                ] = 0
-                new_past_attention_mask[:, : input_attention_mask.shape[1]] = input_attention_mask
-
-                for mask, num_generated_tokens, new_attention_mask, example_input_ids in zip(
-                    padded_inputs["attention_mask"],
-                    stopping_criteria.generated_tokens,
-                    new_past_attention_mask,
-                    batch_new_past_input_ids,
-                ):
-                    extracted_past_input_ids = self.extract_generation(example_input_ids, mask)
-                    extracted_past_attention_mask = self.extract_generation(new_attention_mask, mask)
-                    # Do not attend to invalid tokens that were generated after <call> or <submit> or the last valid generated token, as we move it to the end of the sequence
-                    extracted_past_attention_mask[num_generated_tokens - 1 :] = 0
-                    # move last valid generated token to the end of the sequence to be the start of the next generation
-                    extracted_past_input_ids[-1] = extracted_past_input_ids[num_generated_tokens - 1]
-                    extracted_past_attention_mask[-1] = 1  # attend to the last valid generated token
-
+                batch_new_past_input_ids, new_past_attention_mask = self._create_new_past_inputs(
+                    sequences, padded_inputs["attention_mask"], stopping_criteria.generated_tokens
+                )
                 new_past_attention_masks.append(new_past_attention_mask)
                 new_past_input_ids.append(batch_new_past_input_ids)
 
