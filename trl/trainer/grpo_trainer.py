@@ -328,11 +328,21 @@ class GRPOTrainer(Trainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
-        # Prepare the reward model
+        # Prepare the reward funcs if they are PreTrainedModel
         if self.is_fsdp_enabled:
-            self.reward_model = prepare_fsdp(self.reward_model, self.accelerator)
+            self.reward_funcs = [
+                prepare_fsdp(reward_func, self.accelerator)
+                if isinstance(reward_func, PreTrainedModel)
+                else reward_func
+                for reward_func in self.reward_funcs
+            ]
         else:
-            self.reward_model = self.accelerator.prepare_model(self.reward_model, evaluation_mode=True)
+            self.reward_funcs = [
+                self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+                if isinstance(reward_func, PreTrainedModel)
+                else reward_func
+                for reward_func in self.reward_funcs
+            ]
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
