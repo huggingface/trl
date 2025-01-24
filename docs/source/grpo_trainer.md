@@ -121,7 +121,12 @@ The GRPO Trainer logs the following metrics:
 The [`GRPOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
 
 1. **Input arguments**:
-   - The function must accept two arguments: `prompts` and `completions`.
+   - The function must accept the following as keyword arguments:
+     - `prompts` (contains the prompts),
+     - `completions` (contains the generated completions),
+     - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
+
+     The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
    - Depending on the dataset format, the input will vary:
      - For [standard format](dataset_formats#standard), `prompts` and `completions` will be lists of strings.
      - For [conversational format](dataset_formats#conversational), `prompts` and `completions` will be lists of message dictionaries.
@@ -133,7 +138,7 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
 Below is an example of a reward function for a standard format that rewards longer completions:
 
 ```python
-def reward_func(prompts, completions):
+def reward_func(completions, **kwargs):
     """Reward function that gives higher scores to longer completions."""
     return [float(len(completion)) for completion in completions]
 ```
@@ -143,19 +148,19 @@ You can test it as follows:
 ```python
 >>> prompts = ["The sky is", "The sun is"]
 >>> completions = [" blue.", " in the sky."]
->>> print(reward_func(prompts, completions))
+>>> print(reward_func(prompts=prompts, completions=completions))
 [6.0, 12.0]
 ```
 
 #### Example 2: Reward completions with specific format
 
-Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the reward function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the _format reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
 It is designed for conversational format, where prompts and completions consist of structured messages.
 
 ```python
 import re
 
-def format_reward_func(prompts, completions):
+def format_reward_func(completions, **kwargs):
     """Reward function that checks if the completion has a specific format."""
     pattern = r"^<think>.*?</think><answer>.*?</answer>$"
     completion_contents = [completion[0]["content"] for completion in completions]
@@ -174,9 +179,34 @@ You can test this function as follows:
 ...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
 ...     [{"role": "assistant", "content": "The sum of 3 and 1 is 4, which we multiply by 2 to get 8. So (3 + 1) * 2 = 8."}],
 ... ]
->>> format_reward_func(prompts, completions)
+>>> format_reward_func(prompts=prompts, completions=completions)
 [1.0, 0.0]
->>>
+```
+
+#### Example 3: Reward completions based on a reference
+
+Below is an example of a reward function that checks if the is correct. This example is inspired by the _accuracy reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+This example is designed for [standard format](dataset_formats#standard), where the dataset contains a column named `ground_truth`.
+
+```python
+import re
+
+def reward_func(completions, ground_truth, **kwargs):
+    # Regular expression to capture content inside \boxed{}
+    matches = [re.search(r"\\boxed\{(.*?)\}", completion) for completion in completions]
+    contents = [match.group(1) if match else "" for match in matches]
+    # Reward 1 if the content is the same as the ground truth, 0 otherwise
+    return [1.0 if c == gt else 0.0 for c, gt in zip(contents, ground_truth)]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = ["Problem: Solve the equation $2x + 3 = 7$. Solution:", "Problem: Solve the equation $3x - 5 = 10$."]
+>>> completions = [r" The solution is \boxed{2}.", r" The solution is \boxed{6}."]
+>>> ground_truth = ["2", "5"]
+>>> reward_func(prompts=prompts, completions=completions, ground_truth=ground_truth)
+[1.0, 0.0]
 ```
 
 #### Passing the reward function to the trainer

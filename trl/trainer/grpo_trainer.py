@@ -94,8 +94,9 @@ class GRPOTrainer(Trainer):
                 using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1` and the
                 keyword arguments in `args.model_init_kwargs`.
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
-                - A custom reward function: This should take a list of prompts and completions and return a list of
-                rewards. For more details, see [Using a custom reward function](#using-a-custom-reward-function).
+                - A custom reward function: The function is provided with the prompts and the generated completions,
+                  plus any additional columns in the dataset. It should return a list of rewards. For more details, see
+                  [Using a custom reward function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
@@ -369,7 +370,14 @@ class GRPOTrainer(Trainer):
                 with torch.inference_mode():
                     rewards[i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
             else:
-                rewards[i] = torch.tensor(reward_func(prompts, completions))
+                # Repeat all input columns (but "prompt" and "completion") to match the number of generations
+                reward_kwargs = {key: [] for key in inputs[0].keys() if key not in ["prompt", "completion"]}
+                for key in reward_kwargs:
+                    for example in inputs:
+                        # Repeat each value in the column for `num_generations` times
+                        reward_kwargs[key].extend([example[key]] * self.num_generations)
+                output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
+                rewards[i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
         # Sum the rewards from all reward functions
         rewards = rewards.sum(dim=0)
 

@@ -151,7 +151,7 @@ class GRPOTrainerTester(unittest.TestCase):
         # Test if trainer can handle reward function with standard format
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func(prompts, completions):
+        def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
@@ -186,7 +186,7 @@ class GRPOTrainerTester(unittest.TestCase):
         # Test if trainer can handle reward function with conversational format
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
-        def reward_func(prompts, completions):
+        def reward_func(completions, **kwargs):
             """Reward function that gives higher scores to longer completion content."""
             completion_contents = [completion[0]["content"] for completion in completions]
             return [float(len(content)) for content in completion_contents]
@@ -222,11 +222,11 @@ class GRPOTrainerTester(unittest.TestCase):
         # Test that GRPOTrainer can be instantiated with multiple reward functions
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func1(prompts, completions):
+        def reward_func1(completions, **kwargs):
             """Reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
-        def reward_func2(prompts, completions):
+        def reward_func2(completions, **kwargs):
             """Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
@@ -261,7 +261,7 @@ class GRPOTrainerTester(unittest.TestCase):
         # Test if the trainer can handle a mix of reward functions and reward models
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func(prompts, completions):
+        def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
@@ -277,6 +277,45 @@ class GRPOTrainerTester(unittest.TestCase):
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs=[reward_func, "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"],
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_reward_func_additional_column(self):
+        # Test if trainer can handle reward function that rely on additional columns in the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        # Add a column to the dataset (dummy example, the column could be anything)
+        some_values = list(range(len(dataset)))
+        dataset = dataset.add_column("some_values", some_values)
+
+        def reward_func(completions, some_values, **kwargs):
+            """Reward function that rewards completions with lengths closer to the values in some_values."""
+            return [float(abs(len(completion) - value)) for completion, value in zip(completions, some_values)]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
                 args=training_args,
                 train_dataset=dataset,
             )
