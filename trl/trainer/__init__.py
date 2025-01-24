@@ -62,6 +62,8 @@ _import_structure = {
     "ppo_trainer": ["PPOTrainer"],
     "prm_config": ["PRMConfig"],
     "prm_trainer": ["PRMTrainer"],
+    "prime_config": ["PrimeConfig"],
+    "prime_trainer": ["PrimeTrainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer"],
     "rloo_config": ["RLOOConfig"],
@@ -131,6 +133,8 @@ if TYPE_CHECKING:
     from .orpo_trainer import ORPOTrainer
     from .ppo_config import PPOConfig
     from .ppo_trainer import PPOTrainer
+    from .prime_config import PrimeConfig
+    from .prime_trainer import PrimeTrainer
     from .prm_config import PRMConfig
     from .prm_trainer import PRMTrainer
     from .reward_config import RewardConfig

@@ -80,6 +80,8 @@
       title: PPO
     - local: prm_trainer
       title: PRM
+    - local: prime_trainer
+      title: PRIME
     - local: reward_trainer
       title: Reward
     - local: rloo_trainer
