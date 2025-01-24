@@ -193,9 +193,9 @@ import re
 def reward_func(completions, ground_truth, **kwargs):
     # Regular expression to capture content inside \boxed{}
     matches = [re.search(r"\\boxed\{(.*?)\}", completion) for completion in completions]
-    content = [match.group(1) if match else "" for match in matches]
+    contents = [match.group(1) if match else "" for match in matches]
     # Reward 1 if the content is the same as the ground truth, 0 otherwise
-    return [1.0 if c == gt else 0.0 for c, gt in zip(content, ground_truth)]
+    return [1.0 if c == gt else 0.0 for c, gt in zip(contents, ground_truth)]
 ```
 
 You can test this function as follows:
