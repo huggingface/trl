@@ -127,6 +127,8 @@ def init_world_group(ranks: List[int], local_rank: int, backend: str) -> GroupCo
         use_pynccl=False,
         use_custom_allreduce=False,
         use_tpu_communicator=False,
+        use_hpu_communicator=False,
+        use_xpu_communicator=False,
     )
 
 
