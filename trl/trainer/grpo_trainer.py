@@ -446,8 +446,11 @@ class GRPOTrainer(Trainer):
         inputs = [{"prompt": prompt} for prompt in prompts]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
+        # Repeat each prompt num_generations times
+        prompts_text = [prompt for prompt in prompts_text for _ in range(self.num_generations)]
+
         # Get prompt token IDs
-        g_queries_list = gather_object(prompts_text)  # Now passing text prompts instead of raw prompts
+        g_queries_list = gather_object(prompts_text)
         if self.accelerator.is_main_process:
             # Send model parameters and prompts to vLLM thread
             model_named_parameters = self.accelerator._get_named_parameters(model)
@@ -475,7 +478,11 @@ class GRPOTrainer(Trainer):
 
         # Process prompt inputs
         prompt_inputs = self.processing_class(
-            prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+            prompts_text[: len(prompts)],  # Use original prompts for tokenization
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+            add_special_tokens=False,
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
@@ -484,6 +491,7 @@ class GRPOTrainer(Trainer):
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
+        # Repeat prompts for each generation
         prompt_ids = prompt_ids.repeat_interleave(self.num_generations, dim=0)
         prompt_mask = prompt_mask.repeat_interleave(self.num_generations, dim=0)
         completion_ids = vllm_responses
