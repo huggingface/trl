@@ -25,6 +25,7 @@ from .scripts.grpo import make_parser as make_grpo_parser
 from .scripts.kto import make_parser as make_kto_parser
 from .scripts.sft import make_parser as make_sft_parser
 from .scripts.utils import TrlParser
+from .scripts.vllm_serve import vllm_serve
 
 
 def main():
@@ -40,6 +41,7 @@ def main():
     make_grpo_parser(subparsers)
     make_kto_parser(subparsers)
     make_sft_parser(subparsers)
+    subparsers.add_parser("vllm-serve", help="Start a Flask app to serve the VLLM model")
 
     # Parse the arguments
     args = parser.parse_args()
@@ -86,6 +88,9 @@ def main():
         # Feed the args to the launch command
         args.training_script_args = sys.argv[2:]  # remove "trl" and "sft"
         launch_command(args)  # launch training
+
+    elif args.command == "vllm-serve":
+        vllm_serve()
 
 
 if __name__ == "__main__":
