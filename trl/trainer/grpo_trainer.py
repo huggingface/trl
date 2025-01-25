@@ -528,7 +528,9 @@ class GRPOTrainer(Trainer):
                         # Repeat each value in the column for `num_generations` times
                         reward_kwargs[key].extend([example[key]] * self.num_generations)
                 output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
-                rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=self.accelerator.device)
+                rewards_per_func[:, i] = torch.tensor(
+                    output_reward_func, dtype=torch.float32, device=self.accelerator.device
+                )
 
         # Sum the rewards from all reward functions
         rewards = rewards_per_func.sum(dim=1)
