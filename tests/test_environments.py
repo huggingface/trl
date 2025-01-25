@@ -431,6 +431,21 @@ class TextEnvironmentTester(unittest.TestCase):
         expected_input_ids = torch.tensor([[5], [6]])
         self.assertTrue(torch.all(batched_input_ids == expected_input_ids))
 
+    def test_same_is_none(self):
+        env = TextEnvironment(
+            self.model,
+            self.tokenizer,
+            tools=[DummyTool()],
+            reward_fn=lambda x: torch.tensor(1),
+            prompt="I am a prompt!\n",
+        )
+        self.assertTrue(env._same_is_none("", ""))
+        self.assertTrue(env._same_is_none(None, None))
+        self.assertFalse(env._same_is_none("", None))
+        self.assertFalse(env._same_is_none(None, ""))
+        self.assertTrue(env._same_is_none(None))
+        self.assertTrue(env._same_is_none(""))
+
     def test_extract_generation(self):
         env = TextEnvironment(
             self.model,
@@ -526,8 +541,6 @@ class TextEnvironmentTester(unittest.TestCase):
 
     @parameterized.expand([(True,), (False,)])
     def test_cache_class_support(self, support_cache_class):
-        self.assertEqual(self.model_id, "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-
         generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
         env = TextEnvironment(
             self.model,

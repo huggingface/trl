@@ -416,7 +416,7 @@ class TextEnvironment:
         combines all caches in order to exclude completed histories from further generation
 
         Args:
-            batch_examples (list[bool]): mask indicating for each example, whether it is supposed to remain or not
+            example_mask (list[bool]): mask indicating for each example, whether it is supposed to remain or not
             past_key_values (tuple[tuple[torch.Tensor]]) : Batched list of caches (in legacy format) from the last generation
             past_attention_masks (list[torch.Tensor]): Batched list of attention masks from the last generation
             past_input_ids (list[torch.Tensor]): Batched list of input ids from the last generation
@@ -445,7 +445,6 @@ class TextEnvironment:
 
                 if extracted_keys.shape[2] != extracted_values.shape[2]:
                     raise Exception("Cache format incompatible")
-                # left padding ensures, that the last valid generated token is what the next generated token is conditioned on
                 start_position = max_sequence_length - 1 - extracted_keys.shape[2]
                 new_values = torch.zeros_like(new_keys).to(self.current_device)
                 new_keys[:, :, start_position:, :] = extracted_keys
@@ -486,6 +485,17 @@ class TextEnvironment:
 
         return combined_cache, combined_attention_masks, combined_input_ids
 
+    def _same_is_none(self, *values):
+        """For input validation
+        Args:
+            values: list[object]: A list of values to test for having the same return value for `is None`
+        """
+        expected_is_none = values[0] is None
+        for value in values[1:]:
+            if (value is None) != expected_is_none:
+                return False
+        return True
+
     def generate(
         self,
         histories,
@@ -498,12 +508,15 @@ class TextEnvironment:
         Generate responses for a list of histories.
         Either all of past_key_values, past_attention_masks, past_input_ids,last_active_histories are provided or all are None.
         Args:
-            histories (list[TextHistory]):
+            histories (list[TextHistory]): A complete list of the TextHistories
             past_key_values (Optional[tuple[tuple[torch.Tensor]]]): Batched list of caches in legacy format from the last generation
             past_attention_masks (Optional[list[torch.Tensor]]): Batched list of attention masks from the last generation
             past_input_ids (Optional[list[torch.Tensor]]): Batched list of input ids from the last generation
             last_active_histories (Optional[list[int]]): indices of histories for which generation took place during the last generation turn
         """
+        if not self._same_is_none(past_key_values, past_attention_masks, past_input_ids, last_active_histories):
+            raise Exception("Either all cache related inputs are supposed to be None or all are not None.")
+
         active_histories = [i for i in range(len(histories)) if not histories[i].completed]
         combined_past_key_values, combined_past_attention_masks, combined_past_input_ids = (None, None, None)
 
@@ -583,7 +596,7 @@ class TextEnvironment:
         self, start_index, end_index, combined_past_key_values, combined_attention_masks, combined_input_ids
     ):
         """
-        Extract (batch) cache for current batch
+        Extract (batch) cache, attention_mask and input_ids for current batch
         Args:
             start_index (int): start index of current batch
             end_index (int): end index of current batch (points to first element not in batch)
@@ -626,7 +639,7 @@ class TextEnvironment:
         Args:
             sequences (torch.Tensor): The sequences returned by model.generate(...)
             input_attention_mask (torch.Tensor): The attention mask that was input into model.generate(...)
-            generated_tokens (list[int]): The number of tokens generated for each history in the batch
+            generated_tokens (list[int]): The number of valid tokens generated for each history in the batch
         """
         new_past_attention_mask = torch.ones_like(sequences)
         new_past_attention_mask[:, : input_attention_mask.shape[1]] = input_attention_mask
@@ -664,6 +677,9 @@ class TextEnvironment:
             combined_past_attention_masks (Optional[torch.Tensor]): The combined (unbatched) attention masks from the last generation
             combined_past_input_ids (Optional[torch.Tensor]): The combined (unbatched) input ids from the last generation
         """
+        if not self._same_is_none(combined_past_key_values, combined_past_attention_masks, combined_past_input_ids):
+            raise Exception("Either all cache related inputs are supposed to be None or all are not None.g")
+
         caching_enabled = return_cache or (combined_past_key_values is not None)
         # Ensures, that the next token is never conditioned on a padding token. This should never be a problem, as empty system prompts are not particularly useful and between segments there is always a response token.
         for query in query_tensors:
@@ -738,20 +754,20 @@ class TextEnvironment:
             elif caching_enabled:
                 generation_kwargs["past_key_values"] = past_key_values
 
+            cloned_attention_mask = padded_inputs["attention_mask"].clone()
             generations = extracted_model.generate(**padded_inputs, **generation_kwargs)
 
             if output_logits:
                 logits = generations.logits
             sequences = generations.sequences
             for generation, mask, num_generated_tokens in zip(
-                sequences, padded_inputs["attention_mask"], stopping_criteria.generated_tokens
+                sequences, cloned_attention_mask, stopping_criteria.generated_tokens
             ):
                 output = self._extract_generation(generation, mask)
                 # remove chunk generated after stopping criteria in batch mode
                 generated_tokens = output[:num_generated_tokens]
                 if len(generated_tokens) < 1:
-                    input_length = padded_inputs["input_ids"].shape[0]
-                    raise Exception(f"Generation failed to produce any valid token; input length {input_length}")
+                    raise Exception(f"Generation failed to produce any valid tokens")
 
                 outputs.append(generated_tokens)
 
@@ -760,7 +776,7 @@ class TextEnvironment:
                     raise Exception("Cache should not contain keys and values for last generated token")
                 new_past_key_values.append(generations.past_key_values)
                 new_past_attention_mask = self._create_new_past_attention_mask(
-                    sequences, padded_inputs["attention_mask"], stopping_criteria.generated_tokens
+                    sequences, cloned_attention_mask, stopping_criteria.generated_tokens
                 )
                 new_past_attention_masks.append(new_past_attention_mask)
                 new_past_input_ids.append(sequences.clone())
