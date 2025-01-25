@@ -33,11 +33,12 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
-from ..models import create_reference_model, unwrap_model_for_generation
+from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url, truncate_right
 
@@ -185,6 +186,7 @@ class GRPOTrainer(Trainer):
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
+            model_id = model
             torch_dtype = model_init_kwargs.get("torch_dtype")
             if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
                 pass  # torch_dtype is already a torch.dtype or "auto" or None
@@ -198,6 +200,7 @@ class GRPOTrainer(Trainer):
                 )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         else:
+            model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 raise ValueError(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
@@ -208,7 +211,9 @@ class GRPOTrainer(Trainer):
             model = get_peft_model(model, peft_config)
 
         # Reference model
-        if peft_config is None:
+        if is_deepspeed_zero3_enabled():
+            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+        elif peft_config is None:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
         else:
@@ -348,6 +353,16 @@ class GRPOTrainer(Trainer):
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
+
+        if self.ref_model is not None:
+            if self.is_deepspeed_enabled:
+                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
+        for i, reward_func in enumerate(self.reward_funcs):
+            if isinstance(reward_func, PreTrainedModel):
+                self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
