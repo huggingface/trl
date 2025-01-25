@@ -122,8 +122,11 @@ def vllm_generate(
         if i > 2:
             llmp.load_weights(model_named_parameters)
 
+        # Pass prompt_token_ids directly instead of in a dictionary
         outputs = llm.generate(
-            prompts={"prompt_token_ids": g_queries_list}, sampling_params=generation_config, use_tqdm=False
+            prompts=g_queries_list,  # Changed from {"prompt_token_ids": g_queries_list}
+            sampling_params=generation_config,
+            use_tqdm=False,
         )
         response_token_ids = []
         for output in outputs:
