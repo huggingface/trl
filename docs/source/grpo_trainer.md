@@ -110,6 +110,7 @@ In TRL though, as in the original paper, we only do one update per generation, s
 
 The GRPO Trainer logs the following metrics:
 
+- `completion_length`: The average completion length.
 - `reward/{reward_func_name}`: The reward computed by each reward function.
 - `reward`: The average reward.
 - `reward_std` : The average standard deviation within reward groups.
