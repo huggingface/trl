@@ -449,7 +449,7 @@ class GRPOTrainer(Trainer):
         # Repeat each prompt num_generations times
         prompts_text = [prompt for prompt in prompts_text for _ in range(self.num_generations)]
 
-        # Get prompt token IDs
+        # Get prompt token IDs and ensure all processes have the same number of prompts
         g_queries_list = gather_object(prompts_text)
         if self.accelerator.is_main_process:
             # Send model parameters and prompts to vLLM thread
@@ -468,13 +468,23 @@ class GRPOTrainer(Trainer):
             g_padded_response_ids = torch.tensor(g_padded_response_ids, device=self.accelerator.device)
             vllm_responses = g_padded_response_ids
         else:
+            # For non-main processes, create a tensor of the correct size
+            total_samples = len(prompts) * self.num_generations * self.accelerator.num_processes
             vllm_responses = torch.zeros(
-                (len(prompts) * self.num_generations, self.args.max_completion_length),
+                (total_samples, self.args.max_completion_length),
                 device=self.accelerator.device,
                 dtype=torch.long,
             )
 
+        # Ensure all processes have the same tensor
         broadcast(vllm_responses, 0)
+
+        # Get the slice of responses for this process
+        process_slice = slice(
+            self.accelerator.process_index * len(prompts) * self.num_generations,
+            (self.accelerator.process_index + 1) * len(prompts) * self.num_generations,
+        )
+        vllm_responses = vllm_responses[process_slice]
 
         # Process prompt inputs
         prompt_inputs = self.processing_class(
