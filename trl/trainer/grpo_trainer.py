@@ -122,9 +122,9 @@ def vllm_generate(
         if i > 2:
             llmp.load_weights(model_named_parameters)
 
-        # Pass prompt_token_ids directly instead of in a dictionary
+        # Pass prompt_token_ids directly
         outputs = llm.generate(
-            prompts=g_queries_list,  # Changed from {"prompt_token_ids": g_queries_list}
+            prompts=g_queries_list,
             sampling_params=generation_config,
             use_tqdm=False,
         )
@@ -442,8 +442,12 @@ class GRPOTrainer(Trainer):
     def _generate_vllm(self, model, prompts):
         pad_token_id = self.processing_class.pad_token_id
 
+        # Convert prompts to proper format
+        inputs = [{"prompt": prompt} for prompt in prompts]
+        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+
         # Get prompt token IDs
-        g_queries_list = gather_object(prompts)
+        g_queries_list = gather_object(prompts_text)  # Now passing text prompts instead of raw prompts
         if self.accelerator.is_main_process:
             # Send model parameters and prompts to vLLM thread
             model_named_parameters = self.accelerator._get_named_parameters(model)
@@ -469,9 +473,7 @@ class GRPOTrainer(Trainer):
 
         broadcast(vllm_responses, 0)
 
-        # Create masks and process responses similar to original _generate_vllm
-        inputs = [{"prompt": prompt} for prompt in prompts]
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+        # Process prompt inputs
         prompt_inputs = self.processing_class(
             prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
         )
