@@ -13,13 +13,16 @@
 # limitations under the License.
 
 import os
+import queue
 import textwrap
+import threading
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.utils.data
 import transformers
+from accelerate.utils import broadcast, gather_object
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -42,6 +45,7 @@ from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url, truncate_right
+from .vllm_utils import vllm_single_gpu_patch
 
 
 if is_peft_available():
@@ -78,6 +82,54 @@ def prepare_fsdp(model, accelerator):
         }
         model = FSDP(model, **kwargs)
     return model
+
+
+def vllm_generate(
+    model_name_or_path: str,
+    vllm_device: str,
+    vllm_gpu_memory_utilization: float,
+    vllm_dtype: str,
+    response_ids_Q: queue.Queue,
+    param_prompt_Q: queue.Queue,
+    temperature: float,
+    response_length: int,
+):
+    vllm_single_gpu_patch()
+    generation_config = SamplingParams(
+        temperature=(temperature + 1e-7),
+        top_p=1.0,
+        max_tokens=response_length,
+        include_stop_str_in_output=True,
+    )
+
+    llm = LLM(
+        model=model_name_or_path,
+        revision="main",
+        tokenizer_revision="main",
+        tensor_parallel_size=1,
+        device=vllm_device,
+        dtype=vllm_dtype,
+        gpu_memory_utilization=vllm_gpu_memory_utilization,
+    )
+    llmp = llm.llm_engine.model_executor.driver_worker.model_runner.model
+    i = 0
+    while True:
+        i += 1
+        model_named_parameters, g_queries_list = param_prompt_Q.get()
+        if model_named_parameters is None and g_queries_list is None:
+            break
+
+        if i > 2:
+            llmp.load_weights(model_named_parameters)
+
+        outputs = llm.generate(
+            prompts={"prompt_token_ids": g_queries_list}, sampling_params=generation_config, use_tqdm=False
+        )
+        response_token_ids = []
+        for output in outputs:
+            response_token_ids.append(output.outputs[0].token_ids)
+
+        response_ids_Q.put(response_token_ids)
 
 
 class GRPOTrainer(Trainer):
@@ -267,42 +319,6 @@ class GRPOTrainer(Trainer):
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.use_vllm = args.use_vllm
 
-        if self.use_vllm:
-            if not is_vllm_available():
-                raise ImportError(
-                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
-                )
-            self.generation_config = SamplingParams(
-                n=self.num_generations,  # 2 generations per prompt
-                max_tokens=args.max_completion_length,
-                temperature=args.temperature,
-                top_k=50,
-                top_p=1.0,
-                detokenize=False,  # to avoid vllm to decode (we don't need it)
-            )
-            # vLLM dynamically adjusts the size of the key-value cache based on available GPU memory at instantiation.
-            # A larger cache size improves speed, so we would expect gpu_memory_utilization=1.
-            # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
-            # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
-            # space for them. Setting gpu_memory_utilization to 0.55 seems to work well in practice.
-            self.llm = LLM(
-                model=model.name_or_path,
-                gpu_memory_utilization=0.55,
-                dtype=torch.float32,
-                # When release by vLLM, we would be able to distribute the model on multiple GPUs
-                # See https://github.com/vllm-project/vllm/pull/12071
-                # tensor_parallel_size=torch.cuda.device_count(),
-                # distributed_executor_backend="external_launcher",
-            )
-        else:
-            self.generation_config = GenerationConfig(
-                max_new_tokens=self.max_completion_length,
-                do_sample=True,
-                temperature=args.temperature,
-                num_return_sequences=self.num_generations,
-                pad_token_id=processing_class.pad_token_id,
-            )
         self.beta = args.beta
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
@@ -326,6 +342,48 @@ class GRPOTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        if self.use_vllm:
+            if not is_vllm_available():
+                raise ImportError(
+                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
+                    "`pip install vllm` to use it."
+                )
+
+            if self.accelerator.is_main_process:
+                if args.fp16:
+                    vllm_dtype = torch.float16
+                elif args.bf16:
+                    vllm_dtype = torch.bfloat16
+                else:
+                    vllm_dtype = torch.float32
+                vllm_device = args.vllm_device or f"cuda:{self.accelerator.num_processes}"
+                response_ids_Q = queue.Queue(maxsize=1)
+                param_prompt_Q = queue.Queue(maxsize=1)
+                thread = threading.Thread(
+                    target=vllm_generate,
+                    args=(
+                        model.name_or_path,
+                        vllm_device,
+                        args.vllm_gpu_memory_utilization,
+                        vllm_dtype,
+                        response_ids_Q,
+                        param_prompt_Q,
+                        args.temperature,
+                        args.max_completion_length,
+                    ),
+                )
+                thread.start()
+                self.response_ids_Q = response_ids_Q
+                self.param_prompt_Q = param_prompt_Q
+        else:
+            self.generation_config = GenerationConfig(
+                max_new_tokens=self.max_completion_length,
+                do_sample=True,
+                temperature=args.temperature,
+                num_return_sequences=self.num_generations,
+                pad_token_id=processing_class.pad_token_id,
+            )
 
         # Prepare the ref model
         if self.ref_model is not None:
@@ -379,38 +437,53 @@ class GRPOTrainer(Trainer):
         return inputs
 
     def _generate_vllm(self, model, prompts):
-        eos_token_id = self.processing_class.eos_token_id
         pad_token_id = self.processing_class.pad_token_id
 
-        # Load the latest weights
-        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-        llm_model.load_weights(model.state_dict().items())
+        # Get prompt token IDs
+        g_queries_list = gather_object(prompts)
+        if self.accelerator.is_main_process:
+            # Send model parameters and prompts to vLLM thread
+            model_named_parameters = self.accelerator._get_named_parameters(model)
+            self.param_prompt_Q.put((model_named_parameters.items(), g_queries_list))
 
-        if is_conversational({"prompt": prompts[0]}):
-            outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+            # Get response from vLLM thread
+            g_response_ids = self.response_ids_Q.get()
+
+            # Pad responses
+            DUMMY_PAD_TOKEN = 0
+            g_padded_response_ids = [
+                list(response) + [DUMMY_PAD_TOKEN] * (self.args.max_completion_length - len(response))
+                for response in g_response_ids
+            ]
+            g_padded_response_ids = torch.tensor(g_padded_response_ids, device=self.accelerator.device)
+            vllm_responses = g_padded_response_ids
         else:
-            outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
+            vllm_responses = torch.zeros(
+                (len(prompts) * self.num_generations, self.args.max_completion_length),
+                device=self.accelerator.device,
+                dtype=torch.long,
+            )
 
-        completion_ids = [list(output.outputs[i].token_ids) for i in range(self.num_generations) for output in outputs]
-        prompt_ids = [list(output.prompt_token_ids) for _ in range(self.num_generations) for output in outputs]
+        broadcast(vllm_responses, 0)
 
-        # Create mask and pad the prompt and completion
-        max_prompt_length = max(len(ids) for ids in prompt_ids)
-        prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
-        prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
-        max_tokens = self.generation_config.max_tokens
-        completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
-        completion_ids = [
-            ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
-            for ids in completion_ids
-        ]
-        completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
+        # Create masks and process responses similar to original _generate_vllm
+        inputs = [{"prompt": prompt} for prompt in prompts]
+        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+        prompt_inputs = self.processing_class(
+            prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+        )
+        prompt_inputs = super()._prepare_inputs(prompt_inputs)
+        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
-        # Convert to tensors
-        prompt_ids = torch.tensor(prompt_ids, device=self.accelerator.device)
-        prompt_mask = torch.tensor(prompt_mask, device=self.accelerator.device)
-        completion_ids = torch.tensor(completion_ids, device=self.accelerator.device)
-        completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
+        if self.max_prompt_length is not None:
+            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+
+        prompt_ids = prompt_ids.repeat_interleave(self.num_generations, dim=0)
+        prompt_mask = prompt_mask.repeat_interleave(self.num_generations, dim=0)
+        completion_ids = vllm_responses
+        completion_mask = torch.ones_like(completion_ids)
+        completion_mask[completion_ids == pad_token_id] = 0
 
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 

@@ -106,6 +106,17 @@ class GRPOConfig(TrainingArguments):
             "(`pip install vllm`)."
         },
     )
+    # Add new async vLLM parameters
+    vllm_device: Optional[str] = field(
+        default=None,
+        metadata={"help": "Device to put the vLLM generation on, defaults to 'cuda:{accelerate.num_processes}'"},
+    )
+    vllm_gpu_memory_utilization: float = field(
+        default=0.55,
+        metadata={
+            "help": "The percentage of the GPU's memory for vLLM to reserve, reduce if execution graph takes too much space"
+        },
+    )
 
     # Parameters that control the training
     learning_rate: float = field(
