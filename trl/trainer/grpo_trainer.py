@@ -391,8 +391,8 @@ class GRPOTrainer(Trainer):
         else:
             outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
 
-        completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
-        prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+        completion_ids = [list(output.outputs[i].token_ids) for i in range(self.num_generations) for output in outputs]
+        prompt_ids = [list(output.prompt_token_ids) for _ in range(self.num_generations) for output in outputs]
 
         # Create mask and pad the prompt and completion
         max_prompt_length = max(len(ids) for ids in prompt_ids)
@@ -612,8 +612,7 @@ class GRPOTrainer(Trainer):
             """\
             @article{ramesh2024grpo,
                 title={Group Robust Preference Optimization in Reward-free RLHF},
-                author={Shyam Sundhar Ramesh, Iason Chaimalas, Viraj Mehta, Haitham Bou Ammar, 
-                        Pier Giuseppe Sessa, Yifan Hu, Ilija Bogunovic},
+                author={Shyam Sundhar Ramesh, Iason Chaimalas, Viraj Mehta, Haitham Bou Ammar, Pier Giuseppe Sessa, Yifan Hu, Ilija Bogunovic},
                 year={2024}
             }
             """
