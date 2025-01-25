@@ -50,6 +50,8 @@ class GRPOConfig(TrainingArguments):
             Temperature for sampling. The higher the temperature, the more random the completions.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the generated completion.
+        use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use the VLLM model for generation.
 
         > Parameters that control the training
 
@@ -58,6 +60,7 @@ class GRPOConfig(TrainingArguments):
             [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
+
     """
 
     # Parameters that control the model and reference model
@@ -96,6 +99,10 @@ class GRPOConfig(TrainingArguments):
     max_completion_length: Optional[int] = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
+    )
+    use_vllm: bool = field(
+        default=False,
+        metadata={"help": "Whether to use the VLLM model for generation."},
     )
 
     # Parameters that control the training

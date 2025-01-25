@@ -19,115 +19,98 @@ from flask import Flask, jsonify, request
 from vllm import LLM
 
 
-def vllm_serve():
-    llm = LLM(model="Qwen/Qwen2.5-0.5B")
-
-    # Create Flask app
-    app = Flask(__name__)
-
-    @app.route("/generate", methods=["POST"])
-    def generate():
+class VLLMServer:
+    def __init__(self, model_name=None, host="0.0.0.0", port=5000):
         """
-        Endpoint to generate completions from prompts.
+        Initialize the VLLM server.
 
-        Example:
-        ```python
-        >>> import requests
-        >>> url = "http://127.0.0.1:5000/generate"
-        >>> data = {"prompts": [
-        ...     "The closest planet to the Sun is",
-        ...     "The capital of France is"
-        ... ]}
-        >>> response = requests.post(url, json=data)
-        >>> print(response.json())
-        {'completions': ['Mercury.', 'Paris.']}
-        ```
+        Args:
+            model_name (str): Name of the model to load.
+            host (str): Host address to run the Flask server.
+            port (int): Port to run the Flask server.
         """
+        self.host = host
+        self.port = port
+        self.app = Flask(__name__)  # Initialize Flask app
 
-        try:
-            # Parse input JSON data
-            data = request.get_json()
-            prompts = data["prompts"]  # Expecting a key "inputs" containing a list of inputs
+        self._add_routes()  # Add routes to the app
+        if model_name is not None:
+            self.llm = LLM(model=model_name)
+        else:
+            self.llm = None
 
-            # Perform inference
-            outputs = llm.generate(prompts)
-            completions = [output.outputs[0].text for output in outputs]
+    def _add_routes(self):
+        """Add the Flask routes for the server."""
 
-            return jsonify({"completions": completions})
+        @self.app.route("/load", methods=["POST"])
+        def load():
+            try:
+                data = request.get_json()
+                self.llm = LLM(model=data["model_name"])
+                self.app.logger.info(f"Model {data['model_name']} loaded.")
+                return jsonify({"status": "success", "message": "Model loaded."})
 
-        except Exception as e:
-            return jsonify({"error": str(e)}), 400
+            except Exception as e:
+                self.app.logger.error(f"Error loading model: {str(e)}")
+                return jsonify({"error": str(e)}), 400
 
-    @app.route("/chat", methods=["POST"])
-    def chat():
-        """
-        Endpoint to chat with the model.
+        @self.app.route("/generate", methods=["POST"])
+        def generate():
+            try:
+                # Parse input JSON data
+                data = request.get_json()
+                prompts = data["prompts"]  # Expecting a key "prompts" containing a list of inputs
 
-        Example:
-        ```python
-        >>> import requests
-        >>> url = "http://127.0.0.1:5000/chat"
-        >>> data = {"prompts": [
-        ...     [{"role": "user", "content": "What is the capital of France?"}],
-        ...     [{"role": "user", "content": "What is the capital of Italy?"}]
-        ... ]}
-        >>> response = requests.post(url, json=data)
-        >>> print(response.json())
-        {'completions': ['The capital of France is Paris.', 'The capital of Italy is Rome.']}
-        ```
-        """
-        try:
-            # Parse input JSON data
-            data = request.get_json()
-            prompts = data["prompts"]  # Expecting a key "inputs" containing a list of inputs
+                # Perform inference
+                outputs = self.llm.generate(prompts)
+                completions = [output.outputs[0].text for output in outputs]
 
-            # Perform inference
-            outputs = llm.chat(prompts)
-            completions = [output.outputs[0].text for output in outputs]
+                return jsonify({"completions": completions})
 
-            return jsonify({"completions": completions})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
 
-        except Exception as e:
-            return jsonify({"error": str(e)}), 400
+        @self.app.route("/chat", methods=["POST"])
+        def chat():
+            try:
+                # Parse input JSON data
+                data = request.get_json()
+                prompts = data["prompts"]  # Expecting a key "prompts" containing a list of inputs
 
-    @app.route("/load_weights", methods=["POST"])
-    def load_weights():
-        """
-        Endpoint to dynamically update model weights.
-        Expects a POST request with a serialized state_dict.
+                # Perform inference
+                outputs = self.llm.chat(prompts)
+                completions = [output.outputs[0].text for output in outputs]
 
-        Example:
-        ```python
-        >>> state_dict = model.state_dict()
-        >>> buffer = io.BytesIO()
-        >>> torch.save(state_dict, buffer)
-        >>> buffer.seek(0)
-        >>> url = "http://127.0.0.1:5000/load_weights"
-        >>> response = requests.post(url, data=buffer.read())
-        >>> print(response.json())
-        {'status': 'success', 'message': 'Model weights loaded.'}
-        ```
-        """
-        try:
-            # Parse binary data (weights file sent as bytes)
-            weights_data = request.data
-            buffer = io.BytesIO(weights_data)
+                return jsonify({"completions": completions})
 
-            # Load the state_dict from the buffer
-            state_dict = torch.load(buffer, weights_only=True).items()
+            except Exception as e:
+                return jsonify({"error": str(e)}), 400
 
-            # Update the model's weights
-            llm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
-            llm_model.load_weights(state_dict)
+        @self.app.route("/load_weights", methods=["POST"])
+        def load_weights():
+            try:
+                # Parse binary data (weights file sent as bytes)
+                weights_data = request.data
+                buffer = io.BytesIO(weights_data)
 
-            # Return success response
-            return jsonify({"status": "success", "message": "Model weights loaded."})
+                # Load the state_dict from the buffer
+                state_dict = torch.load(buffer, weights_only=True).items()
 
-        except Exception as e:
-            return jsonify({"status": "error", "message": str(e)}), 400
+                # Update the model's weights
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                llm_model.load_weights(state_dict)
 
-    app.run(host="0.0.0.0", port=5000)  # Run the server on all network interfaces, port 5000
+                return jsonify({"status": "success", "message": "Model weights loaded."})
+
+            except Exception as e:
+                return jsonify({"status": "error", "message": str(e)}), 400
+
+    def run(self):
+        """Run the Flask server."""
+        self.app.run(host=self.host, port=self.port)
 
 
 if __name__ == "__main__":
-    vllm_serve()
+    # Create an instance of the server and run it
+    server = VLLMServer(model_name="Qwen/Qwen2.5-0.5B", host="0.0.0.0", port=5000)
+    server.run()

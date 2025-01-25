@@ -25,7 +25,7 @@ from .scripts.grpo import make_parser as make_grpo_parser
 from .scripts.kto import make_parser as make_kto_parser
 from .scripts.sft import make_parser as make_sft_parser
 from .scripts.utils import TrlParser
-from .scripts.vllm_serve import vllm_serve
+from .scripts.vllm_serve import VLLMServer
 
 
 def main():
@@ -90,7 +90,9 @@ def main():
         launch_command(args)  # launch training
 
     elif args.command == "vllm-serve":
-        vllm_serve()
+        # Create an instance of the server and run it
+        server = VLLMServer()
+        server.run()
 
 
 if __name__ == "__main__":

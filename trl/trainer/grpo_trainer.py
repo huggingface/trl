@@ -14,6 +14,7 @@
 
 import os
 import textwrap
+import time
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 
@@ -38,6 +39,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
+from ..vllm_utils import VLLMClient
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url
 
@@ -288,6 +290,13 @@ class GRPOTrainer(Trainer):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
+        # vLLM client
+        if args.use_vllm:
+            self.vllm_client = VLLMClient()
+            if self.accelerator.is_main_process:
+                self.vllm_client.load(model_id)
+                self._last_loaded_step = -1
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -306,6 +315,18 @@ class GRPOTrainer(Trainer):
             raise ValueError("The GRPOTrainer does not support returning outputs")
 
         prompts = [x["prompt"] for x in inputs]
+
+        if self.accelerator.is_main_process:
+            if self.state.global_step != self._last_loaded_step:
+                self.vllm_client.load_weights(model.state_dict())
+                self._last_loaded_step = self.state.global_step
+
+        # Todo: join the processes here
+
+        before_chat = time.time()
+        self.vllm_client.chat(prompts)
+        print(f"Chat time: {time.time() - before_chat}")
+
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
             prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
@@ -317,8 +338,10 @@ class GRPOTrainer(Trainer):
             prompt_inputs["attention_mask"] = prompt_inputs["attention_mask"][:, -self.max_prompt_length :]
 
         # Generate completions
+        before_generate = time.time()
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
             prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
+        print(f"Generate time: {time.time() - before_generate}")
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 

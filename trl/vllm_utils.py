@@ -32,7 +32,7 @@ class VLLMClient:
 
     Example:
     ```python
-    >>> client = VLLMClient("http://127.0.0.1:5000")
+    >>> client = VLLMClient()
     >>> data = {"prompts": ["The closest planet to the Sun is", "The capital of France is"]}
     >>> response = client.generate(data["prompts"])
     >>> print(response)
@@ -40,9 +40,12 @@ class VLLMClient:
     ```
     """
 
-    def __init__(self, url):
+    def __init__(self, url="http://127.0.0.1:5000"):
         self.url = url
         self.buffer = io.BytesIO()
+
+    def load(self, model_name: str) -> None:
+        requests.post(self.url + "/load", json={"model_name": model_name})
 
     def generate(self, prompts: list[str]) -> dict[str, list[str]]:
         data = {"prompts": prompts}
@@ -57,5 +60,4 @@ class VLLMClient:
     def load_weights(self, state_dict) -> None:
         torch.save(state_dict, self.buffer)
         self.buffer.seek(0)
-        response = requests.post(self.url + "/load_weights", data=self.buffer.read())
-        return response.json()
+        requests.post(self.url + "/load_weights", data=self.buffer.read())
