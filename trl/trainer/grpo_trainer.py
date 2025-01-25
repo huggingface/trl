@@ -14,6 +14,7 @@
 
 import os
 import textwrap
+from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 
 import torch
@@ -255,7 +256,7 @@ class GRPOTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         # Initialize the metrics
-        self._metrics = {"kl": [], "reward": [], "reward_std": []}
+        self._metrics = defaultdict(list)
 
         super().__init__(
             model=model,
@@ -361,7 +362,7 @@ class GRPOTrainer(Trainer):
         # Compute the rewards
         prompts = [prompt for prompt in prompts for _ in range(self.num_generations)]
 
-        rewards = torch.zeros(len(self.reward_funcs), len(prompts), device=device)
+        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
@@ -376,7 +377,7 @@ class GRPOTrainer(Trainer):
                 )
                 reward_inputs = super()._prepare_inputs(reward_inputs)
                 with torch.inference_mode():
-                    rewards[i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+                    rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
             else:
                 # Repeat all input columns (but "prompt" and "completion") to match the number of generations
                 reward_kwargs = {key: [] for key in inputs[0].keys() if key not in ["prompt", "completion"]}
@@ -385,9 +386,10 @@ class GRPOTrainer(Trainer):
                         # Repeat each value in the column for `num_generations` times
                         reward_kwargs[key].extend([example[key]] * self.num_generations)
                 output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
-                rewards[i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+                rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
         # Sum the rewards from all reward functions
-        rewards = rewards.sum(dim=0)
+        rewards = rewards_per_func.sum(dim=1)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -404,6 +406,14 @@ class GRPOTrainer(Trainer):
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
 
         # Log the metrics
+        reward_per_func = self.accelerator.gather_for_metrics(rewards_per_func).mean(0)
+        for i, reward_func in enumerate(self.reward_funcs):
+            if isinstance(reward_func, PreTrainedModel):
+                reward_func_name = reward_func.config._name_or_path.split("/")[-1]
+            else:
+                reward_func_name = reward_func.__name__
+            self._metrics[f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
+
         self._metrics["reward"].append(self.accelerator.gather_for_metrics(rewards).mean().item())
 
         self._metrics["reward_std"].append(self.accelerator.gather_for_metrics(std_grouped_rewards).mean().item())
@@ -414,13 +424,13 @@ class GRPOTrainer(Trainer):
         return loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items() if val}  # average the metrics
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
         logs = {**logs, **metrics}
         if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
             super().log(logs, start_time)
         else:  # transformers<=4.46
             super().log(logs)
-        self._metrics = {key: [] for key in self._metrics}
+        self._metrics.clear()
 
     def create_model_card(
         self,
