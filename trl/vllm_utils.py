@@ -209,6 +209,9 @@ class VLLMClient:
         Args:
             prompts (`list[str]`):
                 List of prompts to generate completions for.
+            sampling_params (`dict`, *optional*, default to `None`):
+                Dictionary of sampling parameters. The keys and values must match the fields of the
+                `vllm.SamplingParams` class.
 
         Returns:
             `list[str]`:
