@@ -335,7 +335,7 @@ class GRPOTrainer(Trainer):
                     self.vllm_client.load_weights(model.state_dict())
                 self._last_loaded_step = self.state.global_step
                 # Wait for the main process to load the weights, to avoid generating completions with the old weights
-                self.accelerator.wait_for_everyone()  
+                self.accelerator.wait_for_everyone()
 
                 # Set up sampling parameters
                 sampling_params = {"n": self.args.num_generations, "temperature": self.args.temperature}
