@@ -64,6 +64,10 @@ class OnlineDPOConfig(TrainingArguments):
             Whether to disable dropout in the model and reference model.
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use the vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
+            improving generation speed. However, disabling this option allows training models that exceed the VRAM
+            capacity of a single GPU, albeit at the cost of slower generation.
     """
 
     learning_rate: float = field(
@@ -114,8 +118,8 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={
             "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
             "the reference model. For the IPO loss (`loss_type='ipo'`), β is the regularization parameter denoted by "
-            "τ in the [paper](https://huggingface.co/papers/2310.12036). If a list of floats is provided then the β is "
-            "selected for each new epoch and the last β is used for the rest of the epochs."
+            "τ in the [paper](https://huggingface.co/papers/2310.12036). If a list of floats is provided then the β "
+            "is selected for each new epoch and the last β is used for the rest of the epochs."
         },
     )
     loss_type: str = field(
@@ -138,6 +142,14 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to use the vLLM for generating completions. Requires vLLM to be installed "
             "(`pip install vllm`)."
+        },
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
+            "generation, improving generation speed. However, disabling this option allows training models that "
+            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation."
         },
     )
 

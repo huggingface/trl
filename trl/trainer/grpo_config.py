@@ -39,13 +39,16 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control the data preprocessing
 
+        remove_unused_columns (`bool`, *optional*, defaults to `False`):
+            Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
+            requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `8`):
             Number of generations per prompt to sample.
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
-        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
 
         > Parameters that control the training
@@ -67,6 +70,15 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
+    # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
+    # additional columns to compute the reward
+    remove_unused_columns: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
+            "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
+        },
+    )
     max_prompt_length: Optional[int] = field(
         default=512,
         metadata={

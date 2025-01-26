@@ -14,6 +14,7 @@
 
 import itertools
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, Union
 
@@ -172,7 +173,10 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 @contextmanager
 def unwrap_model_for_generation(
-    model: Union["DistributedDataParallel", "DeepSpeedEngine"], accelerator: "Accelerator", is_peft_model: bool = False
+    model: Union["DistributedDataParallel", "DeepSpeedEngine"],
+    accelerator: "Accelerator",
+    is_peft_model: bool = False,
+    gather_deepspeed3_params: bool = True,
 ) -> Union["PreTrainedModelWrapper", "DeepSpeedEngine"]:
     """Context manager to unwrap a model for generation.
     For ZeRO-3 models, we gather the weights once to speed up generation.
@@ -181,9 +185,46 @@ def unwrap_model_for_generation(
     if is_peft_model:
         unwrapped_model.pretrained_model.disable_adapter()
     if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
-        with deepspeed.zero.GatheredParameters(model.parameters()):
-            remove_hooks(model)
+        if not gather_deepspeed3_params:
             yield accelerator.unwrap_model(model)
-            add_hooks(model)
+        else:
+            with deepspeed.zero.GatheredParameters(model.parameters()):
+                remove_hooks(model)
+                yield accelerator.unwrap_model(model)
+                add_hooks(model)
     else:
         yield unwrapped_model
+
+
+def prepare_deepspeed(model, accelerator):
+    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+    deepspeed_plugin = accelerator.state.deepspeed_plugin
+    config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
+    stage = config_kwargs["zero_optimization"]["stage"]
+
+    if model is not None:
+        hidden_size = (
+            max(model.config.hidden_sizes)
+            if getattr(model.config, "hidden_sizes", None)
+            else getattr(model.config, "hidden_size", None)
+        )
+        if hidden_size is not None and stage == 3:
+            # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache
+            # @ step 0: expected module 1, but got module 0`
+            # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
+            config_kwargs.update(
+                {
+                    "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
+                    "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
+                    "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
+                }
+            )
+
+    # If ZeRO-3 is used, we shard both the active and reference model.
+    # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO
+    # disabled (stage 0)
+    if stage != 3:
+        config_kwargs["zero_optimization"]["stage"] = 0
+    model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+    model.eval()
+    return model
