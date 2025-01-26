@@ -314,18 +314,6 @@ class GRPOTrainer(Trainer):
             raise ValueError("The GRPOTrainer does not support returning outputs")
 
         prompts = [x["prompt"] for x in inputs]
-
-        if self.accelerator.is_main_process:
-            if self.state.global_step != self._last_loaded_step:
-                self.vllm_client.load_weights(model.state_dict())
-                self._last_loaded_step = self.state.global_step
-
-        # Todo: join the processes here
-
-        # before_chat = time.time()
-        self.vllm_client.chat(prompts)
-        # print(f"Chat time: {time.time() - before_chat}")
-
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
             prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
@@ -336,10 +324,42 @@ class GRPOTrainer(Trainer):
             prompt_inputs["input_ids"] = prompt_inputs["input_ids"][:, -self.max_prompt_length :]
             prompt_inputs["attention_mask"] = prompt_inputs["attention_mask"][:, -self.max_prompt_length :]
 
-        # Generate completions
-        # before_generate = time.time()
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
+        # Generate completions using either vLLM or regular generation
+        if self.args.use_vllm:
+            # Gather all prompts from all processes to the main process
+            all_prompts = self.accelerator.gather(prompts)
+            all_prompt_inputs = self.accelerator.gather(prompt_inputs["input_ids"])
+
+            if self.accelerator.is_main_process:
+                if self.state.global_step != self._last_loaded_step:
+                    self.vllm_client.load_weights(model.state_dict())
+                    self._last_loaded_step = self.state.global_step
+
+                # Get completions from vLLM for all prompts
+                completions_data = self.vllm_client.chat(all_prompts)
+                completions = completions_data["completions"]
+
+                # Convert completions to tensor format
+                completion_inputs = self.processing_class(
+                    completions, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                )
+                completion_ids = completion_inputs["input_ids"]
+                all_prompt_completion_ids = torch.cat([all_prompt_inputs, completion_ids], dim=1)
+
+                # Split the results back according to the original process distribution
+                prompt_completion_ids_list = all_prompt_completion_ids.chunk(self.accelerator.num_processes)
+            else:
+                prompt_completion_ids_list = None
+
+            # Scatter the appropriate chunk back to each process
+            prompt_completion_ids = self.accelerator.scatter(prompt_completion_ids_list)
+        else:
+            # Regular generation path
+            with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                prompt_completion_ids = unwrapped_model.generate(
+                    **prompt_inputs, generation_config=self.generation_config
+                )
+
         # print(f"Generate time: {time.time() - before_generate}")
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
