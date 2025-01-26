@@ -330,7 +330,7 @@ class GRPOTrainer(Trainer):
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 if self.accelerator.is_main_process:
-                    self.vllm_client.load_weights(model.state_dict())
+                    self.vllm_client.load_weights(self.accelerator.unwrap_model(model).state_dict())
                 self._last_loaded_step = self.state.global_step
                 self.accelerator.wait_for_everyone() # Wait for main process to finish loading weights
 
@@ -338,9 +338,10 @@ class GRPOTrainer(Trainer):
             sampling_params = {"n": self.args.num_generations, "temperature": self.args.temperature}
 
             # Get completions from vLLM for all prompts
-            completion_ids = self.vllm_client.generate(
-                prompts=prompts, sampling_params=sampling_params, return_type="tokens"
-            )
+            with self.accelerator.main_process_first():  # Why it doesn't work without this?
+                completion_ids = self.vllm_client.generate(
+                    prompts=prompts, sampling_params=sampling_params, return_type="tokens"
+                )
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_inputs_repeated = torch.repeat_interleave(prompt_inputs["input_ids"], self.num_generations, dim=0)
