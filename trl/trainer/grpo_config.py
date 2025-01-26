@@ -51,7 +51,9 @@ class GRPOConfig(TrainingArguments):
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         use_vllm (`bool`, *optional*, defaults to `False`):
-            Whether to use the VLLM model for generation.
+            Whether to use the vLLM model for generation.
+        vllm_url (`str`, *optional*, defaults to `"http://0.0.0.0:5000"`):
+            URL of the vLLM server.
 
         > Parameters that control the training
 
@@ -102,11 +104,11 @@ class GRPOConfig(TrainingArguments):
     )
     use_vllm: bool = field(
         default=False,
-        metadata={"help": "Whether to use the VLLM model for generation."},
+        metadata={"help": "Whether to use the vLLM model for generation."},
     )
     vllm_url: str = field(
         default="http://127.0.0.1:5000",
-        metadata={"help": "URL of the VLLM server."},
+        metadata={"help": "URL of the vLLM server."},
     )
 
     # Parameters that control the training

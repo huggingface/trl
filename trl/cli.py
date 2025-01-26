@@ -41,7 +41,9 @@ def main():
     make_grpo_parser(subparsers)
     make_kto_parser(subparsers)
     make_sft_parser(subparsers)
-    subparsers.add_parser("vllm-serve", help="Start a Flask app to serve the VLLM model")
+    subparsers.add_parser(
+        "vllm-serve", help="Start a server that exposes a REST API for fast generation with a vLLM model."
+    )
 
     # Parse the arguments
     args = parser.parse_args()
