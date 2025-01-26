@@ -65,7 +65,7 @@ class VLLMServer:
 
     Use the server to generate completions:
     ```shell
-    $ curl -X POST "http://0.0.0.0:5000/generate" -H "Content-Type: application/json" -d '{"prompts": ["The closest planet to the Sun is"]}'
+    $ curl -X POST "http://0.0.0.0:5000/generate" -H "Content-Type: application/json" -d '["The closest planet to the Sun is"]'
     [" ____\nA. Earth\nB. Venus\nC. Mercury\nD."]
     ```
     """
