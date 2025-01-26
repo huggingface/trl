@@ -104,6 +104,10 @@ class GRPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to use the VLLM model for generation."},
     )
+    vllm_url: str = field(
+        default="http://127.0.0.1:5000",
+        metadata={"help": "URL of the VLLM server."},
+    )
 
     # Parameters that control the training
     learning_rate: float = field(

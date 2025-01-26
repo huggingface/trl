@@ -14,7 +14,6 @@
 
 import os
 import textwrap
-import time
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 
@@ -292,7 +291,7 @@ class GRPOTrainer(Trainer):
 
         # vLLM client
         if args.use_vllm:
-            self.vllm_client = VLLMClient()
+            self.vllm_client = VLLMClient(args.vllm_url)
             if self.accelerator.is_main_process:
                 self.vllm_client.load(model_id)
                 self._last_loaded_step = -1
@@ -323,9 +322,9 @@ class GRPOTrainer(Trainer):
 
         # Todo: join the processes here
 
-        before_chat = time.time()
+        # before_chat = time.time()
         self.vllm_client.chat(prompts)
-        print(f"Chat time: {time.time() - before_chat}")
+        # print(f"Chat time: {time.time() - before_chat}")
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
@@ -338,10 +337,10 @@ class GRPOTrainer(Trainer):
             prompt_inputs["attention_mask"] = prompt_inputs["attention_mask"][:, -self.max_prompt_length :]
 
         # Generate completions
-        before_generate = time.time()
+        # before_generate = time.time()
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
             prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
-        print(f"Generate time: {time.time() - before_generate}")
+        # print(f"Generate time: {time.time() - before_generate}")
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
