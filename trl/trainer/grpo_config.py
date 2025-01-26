@@ -48,7 +48,7 @@ class GRPOConfig(TrainingArguments):
             Number of generations per prompt to sample.
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
-        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
 
         > Parameters that control the training
