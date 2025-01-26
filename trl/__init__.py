@@ -101,6 +101,7 @@ _import_structure = {
     ],
     "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
+    "vllm_utils": ["VLLMClient", "VLLMServer"],
 }
 
 try:
@@ -201,6 +202,7 @@ if TYPE_CHECKING:
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
+    from .vllm_utils import VLLMClient, VLLMServer
 
     try:
         if not is_diffusers_available():
