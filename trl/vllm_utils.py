@@ -30,7 +30,7 @@ if is_vllm_available():
 
 
 class VLLMServer:
-    """
+    r"""
     A vLLM server that exposes a REST API for generating completions and chatting with a vLLM model.
 
     Make sure to install the `vllm` and `flask` packages before using this class.Just run the following command:
@@ -44,17 +44,14 @@ class VLLMServer:
     The server provides the following endpoints:
     - `/load`: Load a model (POST). Expects a JSON payload with the model name.
     - `/generate`: Generate completions from prompts (POST). Expects a JSON payload with a list of prompts.
-    - `/chat`: Chat with the model (POST). Expects a JSON payload with a list of conversation turns.
     - `/load_weights`: Load model weights (POST). Allows dynamic weight updates.
 
     Args:
         model_name (`str` or `None`, *optional*, default to `None`):
             Name of the model to load. If not provided, the server starts without a model loaded. Models can
             be loaded later using the `/load` endpoint.
-        host (`str`, *optional*, default to `"0.0.0.0"`):
-            Host address to run the Flask server.
-        port (`int`, *optional*, default to `5000`):
-            Port to run the Flask server.
+        url (`str`, *optional*, default to `"http://0.0.0.0:5000"`):
+            URL of the server. The URL should be in the format `http://<host>:<port>`.
 
     Example:
 
