@@ -135,9 +135,9 @@ class VLLMServer:
 
                 # Process output based on return_type
                 if return_type == "text":
-                    completions = [out.text for out in outputs[0].outputs]
+                    completions = [out.text for completions in outputs for out in completions.outputs]
                 elif return_type == "tokens":
-                    completions = [out.token_ids for out in outputs[0].outputs]
+                    completions = [out.token_ids for completions in outputs for out in completions.outputs]
 
                 return jsonify(completions)
 
