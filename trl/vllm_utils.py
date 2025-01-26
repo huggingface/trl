@@ -14,7 +14,7 @@
 
 import io
 import re
-from typing import Optional
+from typing import Optional, Union
 
 import requests
 import torch
@@ -111,6 +111,7 @@ class VLLMServer:
         def generate():
             if self.llm is None:
                 return jsonify({"error": "No model loaded. Load a model using the /load endpoint."}), 400
+
             try:
                 # Parse input JSON data
                 data = request.get_json()
@@ -118,18 +119,25 @@ class VLLMServer:
                 # Get prompts
                 prompts = data["prompts"]
 
-                # Get sampling params
-                if "sampling_params" in data:
-                    sampling_params = SamplingParams(**data["sampling_params"])
-                else:
-                    sampling_params = None
+                # Get sampling params (optional)
+                sampling_params = SamplingParams(**data["sampling_params"]) if "sampling_params" in data else None
+
+                # Determine return type (default to 'text')
+                return_type = data.get("return_type", "text")
+                if return_type not in {"text", "tokens"}:
+                    return jsonify({"error": f"Invalid return_type '{return_type}'. Must be 'text' or 'tokens'."}), 400
 
                 # Generate completions
                 if is_conversational({"prompt": prompts[0]}):
                     outputs = self.llm.chat(prompts, sampling_params=sampling_params)
                 else:
                     outputs = self.llm.generate(prompts, sampling_params=sampling_params)
-                completions = [out.text for out in outputs[0].outputs]
+
+                # Process output based on return_type
+                if return_type == "text":
+                    completions = [out.text for out in outputs[0].outputs]
+                elif return_type == "tokens":
+                    completions = [out.token_ids for out in outputs[0].outputs]
 
                 return jsonify(completions)
 
@@ -202,7 +210,9 @@ class VLLMClient:
             error = response.json().get("error", "Unknown error")
             raise RuntimeError(f"Failed to load model: {error}")
 
-    def generate(self, prompts: list[str], sampling_params: Optional[dict] = None) -> list[str]:
+    def generate(
+        self, prompts: list[str], sampling_params: Optional[dict] = None, return_type: str = "text"
+    ) -> Union[list[str, list[int]]]:
         """
         Generate completions for a list of prompts.
 
@@ -212,12 +222,14 @@ class VLLMClient:
             sampling_params (`dict`, *optional*, default to `None`):
                 Dictionary of sampling parameters. The keys and values must match the fields of the
                 `vllm.SamplingParams` class.
+            return_type (`str`, *optional*, default to `"text"`):
+                Type of completions to return. Can be either `"text"` or `"tokens"`.
 
         Returns:
             `list[str]`:
                 List of generated completions.
         """
-        inputs = {"prompts": prompts}
+        inputs = {"prompts": prompts, "return_type": return_type}
         if sampling_params is not None:
             inputs["sampling_params"] = sampling_params
         response = requests.post(self.url + "/generate", json=inputs)

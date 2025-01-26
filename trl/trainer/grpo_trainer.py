@@ -40,7 +40,7 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from ..vllm_utils import VLLMClient
 from .grpo_config import GRPOConfig
-from .utils import generate_model_card, get_comet_experiment_url
+from .utils import generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
@@ -313,6 +313,7 @@ class GRPOTrainer(Trainer):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
 
+        device = self.accelerator.device
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
@@ -339,13 +340,12 @@ class GRPOTrainer(Trainer):
                 sampling_params = {"n": self.args.num_generations, "temperature": self.args.temperature}
 
                 # Get completions from vLLM for all prompts
-                completions = self.vllm_client.generate(prompts=all_prompts, sampling_params=sampling_params)
-
-                # Convert completions to tensor format
-                completion_inputs = self.processing_class(
-                    completions, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                completion_ids = self.vllm_client.generate(
+                    prompts=all_prompts, sampling_params=sampling_params, return_type="tokens"
                 )
-                completion_ids = completion_inputs["input_ids"]
+                completion_ids = [torch.tensor(ids) for ids in completion_ids]
+                completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+
                 all_prompt_completion_ids = torch.cat([all_prompt_inputs, completion_ids], dim=1)
 
                 # Split the results back according to the original process distribution
@@ -396,7 +396,6 @@ class GRPOTrainer(Trainer):
 
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
-        device = self.accelerator.device
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
