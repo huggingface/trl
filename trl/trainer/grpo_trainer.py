@@ -710,10 +710,11 @@ class GRPOTrainer(Trainer):
 
         citation = textwrap.dedent(
             """\
-            @article{ramesh2024grpo,
-                title={Group Robust Preference Optimization in Reward-free RLHF},
-                author={Shyam Sundhar Ramesh, Iason Chaimalas, Viraj Mehta, Haitham Bou Ammar, Pier Giuseppe Sessa, Yifan Hu, Ilija Bogunovic},
-                year={2024}
+            @article{zhihong2024deepseekmath,
+                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
+                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
+                year         = 2024,
+                eprint       = {arXiv:2402.03300},
             }
             """
         )
@@ -728,8 +729,8 @@ class GRPOTrainer(Trainer):
             comet_url=get_comet_experiment_url(),
             trainer_name="GRPO",
             trainer_citation=citation,
-            paper_title="Group Robust Preference Optimization in Reward-free RLHF",
-            paper_id="2405.20304",
+            paper_title="DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
+            paper_id="2402.03300",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
