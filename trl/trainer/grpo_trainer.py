@@ -335,9 +335,11 @@ class GRPOTrainer(Trainer):
                     self.vllm_client.load_weights(model.state_dict())
                     self._last_loaded_step = self.state.global_step
 
+                # Set up sampling parameters
+                sampling_params = {"n": self.args.num_generations, "temperature": self.args.temperature}
+
                 # Get completions from vLLM for all prompts
-                completions_data = self.vllm_client.chat(all_prompts)
-                completions = completions_data["completions"]
+                completions = self.vllm_client.generate(prompts=all_prompts, sampling_params=sampling_params)
 
                 # Convert completions to tensor format
                 completion_inputs = self.processing_class(
