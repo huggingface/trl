@@ -16,20 +16,68 @@ import io
 
 import requests
 import torch
-from flask import Flask, jsonify, request
-from vllm import LLM
+
+from .import_utils import is_flask_available, is_vllm_available
+
+
+if is_flask_available():
+    from flask import Flask, jsonify, request
+
+if is_vllm_available():
+    from vllm import LLM
 
 
 class VLLMServer:
-    def __init__(self, model_name=None, host="0.0.0.0", port=5000):
-        """
-        Initialize the VLLM server.
+    """
+    A vLLM server that exposes a REST API for generating completions and chatting with a vLLM model.
 
-        Args:
-            model_name (str): Name of the model to load.
-            host (str): Host address to run the Flask server.
-            port (int): Port to run the Flask server.
-        """
+    Make sure to install the `vllm` and `flask` packages before using this class.Just run the following command:
+
+    ```bash
+    pip install vllm flask
+    # or
+    pip install trl[vllm]
+    ```
+
+    The server provides the following endpoints:
+    - `/load`: Load a model (POST). Expects a JSON payload with the model name.
+    - `/generate`: Generate completions from prompts (POST). Expects a JSON payload with a list of prompts.
+    - `/chat`: Chat with the model (POST). Expects a JSON payload with a list of conversation turns.
+    - `/load_weights`: Load model weights (POST). Allows dynamic weight updates.
+
+    Args:
+        model_name (`str` or `None`, *optional*, default to `None`):
+            Name of the model to load. If not provided, the server starts without a model loaded. Models can
+            be loaded later using the `/load` endpoint.
+        host (`str`, *optional*, default to `"0.0.0.0"`):
+            Host address to run the Flask server.
+        port (`int`, *optional*, default to `5000`):
+            Port to run the Flask server.
+
+    Example:
+
+    Run the server with a model loaded:
+
+    ```python
+    >>> from trl import VLLMServer
+    >>> server = VLLMServer(model_name="Qwen/Qwen2.5-7B-Instruct")
+    >>> server.run()
+    ```
+
+    Use the server to generate completions:
+    ```shell
+    $ curl -X POST "http://0.0.0.0:5000/generate" -H "Content-Type: application/json" -d '{"prompts": ["The closest planet to the Sun is"]}'
+    {"completions":[" ____\nA. Sun\nB. Mercury\nC. Mars\nAnswer:\n\n"]}
+    ```
+    """
+
+    def __init__(self, model_name=None, host: str = "0.0.0.0", port: int = 5000):
+        if not is_flask_available():
+            raise ImportError("vLLM server requires Flask. Please install it with `pip install flask`.")
+
+        if not is_vllm_available():
+            raise ImportError("vLLM server requires the `vllm` package. Please install it with `pip install vllm`.")
+
         self.host = host
         self.port = port
         self.app = Flask(__name__)  # Initialize Flask app
@@ -113,44 +161,84 @@ class VLLMServer:
 
 class VLLMClient:
     """
-    Client for interacting with a vLLM server. A server launched with [`]
+    A Python client for interacting with the vLLM server.
+
+    This client allows you to communicate with a running instance of the [`VLLMServer`] to load models,
+    generate completions, chat with the model, and dynamically load model weights.
 
     Args:
-        url (str): The URL of the VLLM server.
-
-    Run the server with:
-    ```bash
-    trl vllm-serve
-    ```
+        host (`str`, *optional*, default to `"0.0.0.0"`):
+            Host address of the vLLM server.
+        port (`int`, *optional*, default to `5000`):
+            Port of the vLLM server.
 
     Example:
     ```python
+    >>> from trl import VLLMClient
     >>> client = VLLMClient()
-    >>> data = {"prompts": ["The closest planet to the Sun is", "The capital of France is"]}
-    >>> response = client.generate(data["prompts"])
-    >>> print(response)
-    {'completions': [' Mercury.', ' Paris.']}
+    >>> client.load("Qwen/Qwen2.5-7B-Instruct")
+    >>> response = client.generate(prompts=["The capital of France is"])
+    >>> print(response["completions"])
+    [' Paris and the area of France is 643,801 km']
     ```
     """
 
-    def __init__(self, url="http://127.0.0.1:5000"):
-        self.url = url
+    def __init__(self, host: str = "0.0.0.0", port: int = 5000):
+        self.url = f"http://{host}:{port}"
         self.buffer = io.BytesIO()
 
     def load(self, model_name: str) -> None:
+        """
+        Load a model on the server.
+
+        Args:
+            model_name (`str`):
+                Name of the model to load.
+        """
         requests.post(self.url + "/load", json={"model_name": model_name})
 
     def generate(self, prompts: list[str]) -> dict[str, list[str]]:
+        """
+        Generate completions for a list of prompts.
+
+        Args:
+            prompts (`list[str]`):
+                List of prompts to generate completions for.
+
+        Returns:
+            `dict[str, list[str]]`:
+                A dictionary with a key `"completions"` containing the list of generated outputs.
+        """
         data = {"prompts": prompts}
         response = requests.post(self.url + "/generate", json=data)
         return response.json()
 
     def chat(self, prompts: list[list[dict[str, str]]]) -> dict[str, list[str]]:
+        """
+        Chat with the model using a list of conversation turns.
+
+        Args:
+            prompts (`list[list[dict[str, str]]]`):
+                List of conversations. Each conversation should be a list of dictionaries with keys like `"role"`
+                (e.g., `"user"` or `"assistant"`) and `"content"`.
+
+        Returns:
+            `dict[str, list[str]]`:
+                Dictionary with a key `"completions"` containing the list of chat outputs.
+        """
         data = {"prompts": prompts}
         response = requests.post(self.url + "/chat", json=data)
         return response.json()
 
     def load_weights(self, state_dict) -> None:
+        """
+        Dynamically load weights to the model on the server.
+
+        Args:
+            state_dict:
+                PyTorch state dictionary containing the model's weights. The state dictionary must be compatible with
+                the model currently loaded on the server.
+        """
         torch.save(state_dict, self.buffer)
         self.buffer.seek(0)
         requests.post(self.url + "/load_weights", data=self.buffer.read())

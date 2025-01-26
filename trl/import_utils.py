@@ -24,6 +24,7 @@ from transformers.utils.import_utils import _is_package_available
 # Use same as transformers.utils.import_utils
 _deepspeed_available = _is_package_available("deepspeed")
 _diffusers_available = _is_package_available("diffusers")
+_flask_available = _is_package_available("flask")
 _llm_blender_available = _is_package_available("llm_blender")
 _mergekit_available = _is_package_available("mergekit")
 _rich_available = _is_package_available("rich")
@@ -37,6 +38,10 @@ def is_deepspeed_available() -> bool:
 
 def is_diffusers_available() -> bool:
     return _diffusers_available
+
+
+def is_flask_available() -> bool:
+    return _flask_available
 
 
 def is_llm_blender_available() -> bool:
