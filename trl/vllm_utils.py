@@ -98,6 +98,7 @@ class VLLMServer:
         def load():
             try:
                 data = request.get_json()
+                del self.llm  # First delete the existing model, to avoid OOM errors
                 self.llm = LLM(model=data["model_name"])
                 self.app.logger.info(f"Model {data['model_name']} loaded.")
                 return jsonify({"status": "success", "message": "Model loaded."})
@@ -124,7 +125,7 @@ class VLLMServer:
                     sampling_params = None
 
                 # Generate completions
-                if is_conversational({"prompts": prompts[0]}):
+                if is_conversational({"prompt": prompts[0]}):
                     outputs = self.llm.chat(prompts, sampling_params=sampling_params)
                 else:
                     outputs = self.llm.generate(prompts, sampling_params=sampling_params)
