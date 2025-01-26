@@ -189,7 +189,7 @@ class VLLMClient:
             error = response.json().get("error", "Unknown error")
             raise RuntimeError(f"Failed to load model: {error}")
 
-    def generate(self, prompts: list[str]) -> dict[str, list[str]]:
+    def generate(self, prompts: list[str]) -> list[str]:
         """
         Generate completions for a list of prompts.
 
@@ -198,8 +198,8 @@ class VLLMClient:
                 List of prompts to generate completions for.
 
         Returns:
-            `dict[str, list[str]]`:
-                A dictionary with a key `"completions"` containing the list of generated outputs.
+            `list[str]`:
+                List of generated completions.
         """
         response = requests.post(self.url + "/generate", json=prompts)
         if response.status_code != 200:
