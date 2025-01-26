@@ -327,34 +327,26 @@ class GRPOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
-            # Gather all prompts from all processes to the main process
-            all_prompts = self.accelerator.gather(prompts)
-            all_prompt_inputs = self.accelerator.gather(prompt_inputs["input_ids"])
-
+            # First, have main process load weights if needed
             if self.accelerator.is_main_process:
                 if self.state.global_step != self._last_loaded_step:
                     self.vllm_client.load_weights(model.state_dict())
                     self._last_loaded_step = self.state.global_step
 
-                # Set up sampling parameters
-                sampling_params = {"n": self.args.num_generations, "temperature": self.args.temperature}
+            # Wait for main process to finish loading weights
+            self.accelerator.wait_for_everyone()
 
-                # Get completions from vLLM for all prompts
-                completion_ids = self.vllm_client.generate(
-                    prompts=all_prompts, sampling_params=sampling_params, return_type="tokens"
-                )
-                completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-                completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-                all_prompt_inputs = torch.repeat_interleave(all_prompt_inputs, self.num_generations, dim=0)
-                all_prompt_completion_ids = torch.cat([all_prompt_inputs, completion_ids], dim=1)
+            # Set up sampling parameters
+            sampling_params = {"n": self.args.num_generations, "temperature": self.args.temperature}
 
-                # Split the results back according to the original process distribution
-                prompt_completion_ids_list = all_prompt_completion_ids.chunk(self.accelerator.num_processes)
-            else:
-                prompt_completion_ids_list = None
-
-            # Scatter the appropriate chunk back to each process
-            prompt_completion_ids = self.accelerator.scatter(prompt_completion_ids_list)
+            # Get completions from vLLM for all prompts
+            completion_ids = self.vllm_client.generate(
+                prompts=prompts, sampling_params=sampling_params, return_type="tokens"
+            )
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            prompt_inputs_repeated = torch.repeat_interleave(prompt_inputs["input_ids"], self.num_generations, dim=0)
+            prompt_completion_ids = torch.cat([prompt_inputs_repeated, completion_ids], dim=1)
         else:
             # Regular generation path
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
