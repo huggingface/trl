@@ -343,9 +343,9 @@ class GRPOTrainer(Trainer):
                 completion_ids = self.vllm_client.generate(
                     prompts=all_prompts, sampling_params=sampling_params, return_type="tokens"
                 )
-                completion_ids = [torch.tensor(ids) for ids in completion_ids]
+                completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
                 completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-
+                all_prompt_inputs = torch.repeat_interleave(all_prompt_inputs, self.num_generations, dim=0)
                 all_prompt_completion_ids = torch.cat([all_prompt_inputs, completion_ids], dim=1)
 
                 # Split the results back according to the original process distribution
