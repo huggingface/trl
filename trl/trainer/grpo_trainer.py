@@ -137,6 +137,8 @@ class GRPOTrainer(Trainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
+    _tag_names = ["trl", "grpo"]
+
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
@@ -277,6 +279,9 @@ class GRPOTrainer(Trainer):
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
 
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
