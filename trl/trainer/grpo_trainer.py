@@ -294,7 +294,7 @@ class GRPOTrainer(Trainer):
             self.vllm_client = VLLMClient(args.vllm_url)
             if self.accelerator.is_main_process:
                 self.vllm_client.load(model_id)
-                self._last_loaded_step = -1
+            self._last_loaded_step = -1
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -328,13 +328,11 @@ class GRPOTrainer(Trainer):
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
             # First, have main process load weights if needed
-            if self.accelerator.is_main_process:
-                if self.state.global_step != self._last_loaded_step:
+            if self.state.global_step != self._last_loaded_step:
+                if self.accelerator.is_main_process:
                     self.vllm_client.load_weights(model.state_dict())
-                    self._last_loaded_step = self.state.global_step
-
-            # Wait for main process to finish loading weights
-            self.accelerator.wait_for_everyone()
+                self._last_loaded_step = self.state.global_step
+                self.accelerator.wait_for_everyone() # Wait for main process to finish loading weights
 
             # Set up sampling parameters
             sampling_params = {"n": self.args.num_generations, "temperature": self.args.temperature}
