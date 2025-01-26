@@ -17,5 +17,5 @@ from trl import VLLMServer
 
 if __name__ == "__main__":
     # Create an instance of the server and run it
-    server = VLLMServer(model_name="Qwen/Qwen2.5-0.5B", host="0.0.0.0", port=5000)
+    server = VLLMServer(model_name="Qwen/Qwen2.5-0.5B")
     server.run()

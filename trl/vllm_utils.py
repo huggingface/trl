@@ -14,6 +14,7 @@
 
 import io
 import re
+from typing import Optional
 
 import requests
 import torch
@@ -26,7 +27,7 @@ if is_flask_available():
     from flask import Flask, jsonify, request
 
 if is_vllm_available():
-    from vllm import LLM
+    from vllm import LLM, SamplingParams
 
 
 class VLLMServer:
@@ -65,7 +66,8 @@ class VLLMServer:
 
     Use the server to generate completions:
     ```shell
-    $ curl -X POST "http://0.0.0.0:5000/generate" -H "Content-Type: application/json" -d '["The closest planet to the Sun is"]'
+    $ curl -X POST "http://0.0.0.0:5000/load" -H "Content-Type: application/json" -d '{"model_name": "Qwen/Qwen2.5-7B-Instruct"}'
+    $ curl -X POST "http://0.0.0.0:5000/generate" -H "Content-Type: application/json" -d '{"prompts": ["The closest planet to the Sun is"]}'
     [" ____\nA. Earth\nB. Venus\nC. Mercury\nD."]
     ```
     """
@@ -111,12 +113,23 @@ class VLLMServer:
                 return jsonify({"error": "No model loaded. Load a model using the /load endpoint."}), 400
             try:
                 # Parse input JSON data
-                messages_or_texts = request.get_json()
-                if is_conversational({"messages": messages_or_texts[0]}):
-                    outputs = self.llm.chat(messages_or_texts)
+                data = request.get_json()
+
+                # Get prompts
+                prompts = data["prompts"]
+
+                # Get sampling params
+                if "sampling_params" in data:
+                    sampling_params = SamplingParams(**data["sampling_params"])
                 else:
-                    outputs = self.llm.generate(messages_or_texts)
-                completions = [output.outputs[0].text for output in outputs]
+                    sampling_params = None
+
+                # Generate completions
+                if is_conversational({"prompts": prompts[0]}):
+                    outputs = self.llm.chat(prompts, sampling_params=sampling_params)
+                else:
+                    outputs = self.llm.generate(prompts, sampling_params=sampling_params)
+                completions = [out.text for out in outputs[0].outputs]
 
                 return jsonify(completions)
 
@@ -189,7 +202,7 @@ class VLLMClient:
             error = response.json().get("error", "Unknown error")
             raise RuntimeError(f"Failed to load model: {error}")
 
-    def generate(self, prompts: list[str]) -> list[str]:
+    def generate(self, prompts: list[str], sampling_params: Optional[dict] = None) -> list[str]:
         """
         Generate completions for a list of prompts.
 
@@ -201,7 +214,10 @@ class VLLMClient:
             `list[str]`:
                 List of generated completions.
         """
-        response = requests.post(self.url + "/generate", json=prompts)
+        inputs = {"prompts": prompts}
+        if sampling_params is not None:
+            inputs["sampling_params"] = sampling_params
+        response = requests.post(self.url + "/generate", json=inputs)
         if response.status_code != 200:
             error = response.json().get("error", "Unknown error")
             raise RuntimeError(f"Failed to generate completions: {error}")
