@@ -531,6 +531,8 @@ class TextEnvironmentTester(unittest.TestCase):
             outputs_uncached, _, _, _, _, all_logits_uncached = env._generate_batched(
                 model_inputs2_full, batch_size=2, output_logits=True
             )
+            self.assertEqual(len(all_logits_uncached), 3)
+            self.assertEqual(len(all_logits_cached), 3)
             for cached, uncached, logits_cached, logits_uncached in zip(
                 outputs_cached, outputs_uncached, all_logits_cached, all_logits_uncached
             ):
@@ -643,6 +645,8 @@ class TextEnvironmentTester(unittest.TestCase):
             outputs_uncached, _, _, _, _, all_logits_uncached = env._generate_batched(
                 model_inputs2_full, batch_size=2, output_logits=True
             )
+            self.assertEqual(len(all_logits_uncached), 3)
+            self.assertEqual(len(all_logits_cached), 3)
             for cached, uncached, logits_cached, logits_uncached in zip(
                 outputs_cached, outputs_uncached, all_logits_cached, all_logits_uncached
             ):
@@ -670,9 +674,8 @@ class TextEnvironmentTester(unittest.TestCase):
 
         for history in histories:
             self.assertEqual(len(history.logits), 1)
-            for logit_segment in history.logits:
-                self.assertEqual(len(logit_segment), 4)
-                self.assertEqual(logit_segment.shape[-1], self.model.config.vocab_size)
+            self.assertEqual(len(history.logits[0]), 4)
+            self.assertEqual(history.logits[0].shape[-1], self.model.config.vocab_size)
 
 
 if __name__ == "__main__":

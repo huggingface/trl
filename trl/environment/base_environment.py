@@ -445,7 +445,9 @@ class TextEnvironment:
 
                 if extracted_keys.shape[2] != extracted_values.shape[2]:
                     raise Exception("Cache format incompatible")
-                start_position = max_sequence_length - 1 - extracted_keys.shape[2]
+                if extracted_keys.shape[2] > max_sequence_length - 1:
+                    raise Exception("Cache sequence length is too large")
+                start_position = max(max_sequence_length - 1 - extracted_keys.shape[2], 0)
                 new_values = torch.zeros_like(new_keys).to(self.current_device)
                 new_keys[:, :, start_position:, :] = extracted_keys
                 new_values[:, :, start_position:, :] = extracted_values
@@ -459,6 +461,8 @@ class TextEnvironment:
                         torch.concat([other_new_values, new_values], dim=0),
                     )
                 example_mask_offset += num_examples
+            if example_mask_offset != len(example_mask):
+                raise Exception("example_mask size and cache size are different")
             combined_cache.append(combined_layer)
         combined_cache = tuple(combined_cache)
 
@@ -480,9 +484,14 @@ class TextEnvironment:
             padded_input_ids[:, start_position:] = input_ids
             padded_past_input_ids.append(padded_input_ids)
 
-        combined_attention_masks = torch.concat(padded_attentions_masks, dim=0)[example_mask]
-        combined_input_ids = torch.concat(padded_past_input_ids, dim=0)[example_mask]
-
+        combined_attention_masks = torch.concat(padded_attentions_masks, dim=0)
+        if combined_attention_masks.shape[0] != len(example_mask):
+            raise Exception("example_mask and attention_masks have varying example counts")
+        combined_attention_masks = combined_attention_masks[example_mask]
+        combined_input_ids = torch.concat(padded_past_input_ids, dim=0)
+        if combined_input_ids.shape[0] != len(example_mask):
+            raise Exception("example_mask and input ids have varying example counts")
+        combined_input_ids = combined_input_ids[example_mask]
         return combined_cache, combined_attention_masks, combined_input_ids
 
     def _same_is_none(self, *values):
