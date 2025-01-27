@@ -39,7 +39,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .grpo_config import GRPOConfig
-from .utils import generate_model_card, get_comet_experiment_url
+from .utils import generate_model_card, get_comet_experiment_url, compute_logps_with_prompt_cache
 
 
 if is_peft_available():
@@ -327,30 +327,36 @@ class GRPOTrainer(Trainer):
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Get the per-token log probabilities for the completions for the model and the reference model
-        def get_per_token_logps(model, input_ids):
-            logits = model(input_ids).logits  # (B, L, V)
-            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-            input_ids = input_ids[:, 1:]  # (B, L-1), exclude the first input ID since we don't have logits for it
-            # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
-            per_token_logps = []
-            for logits_row, input_ids_row in zip(logits, input_ids):
-                log_probs = logits_row.log_softmax(dim=-1)
-                token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
-                per_token_logps.append(token_log_prob)
-            return torch.stack(per_token_logps)
+        # Expand the original prompt_inputs to match B*G (shape was [B, ...], we want [B*G, ...])
+        for k in prompt_inputs:            
+            prompt_inputs[k] = prompt_inputs[k].repeat_interleave(self.num_generations, dim=0)
 
-        per_token_logps = get_per_token_logps(model, prompt_completion_ids)
-        # Get rid of the prompt (-1 because of the shift done in get_per_token_logps)
-        per_token_logps = per_token_logps[:, prompt_length - 1 :]
 
-        with torch.inference_mode():
-            if self.ref_model is not None:
-                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids)
-            else:
-                with self.accelerator.unwrap_model(model).disable_adapter():
-                    ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids)
-        ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1 :]
+        # Current policy logprobs:
+        per_token_logps = compute_logps_with_prompt_cache(
+            model=self.accelerator.unwrap_model(model),
+            prompt_inputs=prompt_inputs,
+            completion_ids=completion_ids,
+            requires_grad_for_completion=True
+        )
+
+        # Reference model logprobs (no grad):
+        if self.ref_model is not None:
+            ref_per_token_logps = compute_logps_with_prompt_cache(
+                model=self.ref_model,
+                prompt_inputs=prompt_inputs,
+                completion_ids=completion_ids,
+                requires_grad_for_completion=False
+            )
+        else:
+            # Alternatively, if you're toggling adapters:
+            with self.accelerator.unwrap_model(model).disable_adapter():
+                ref_per_token_logps = compute_logps_with_prompt_cache(
+                    model=model,
+                    prompt_inputs=prompt_inputs,
+                    completion_ids=completion_ids,
+                    requires_grad_for_completion=False
+                )
 
         # Compute the KL divergence between the model and the reference model
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
