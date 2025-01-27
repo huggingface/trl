@@ -42,7 +42,7 @@ class GenerateRequest(BaseModel):
 
 class VLLMServer:
     r"""
-    A vLLM server that exposes a REST API for generating completions and chatting with a vLLM model.
+    A vLLM server that exposes a REST API for generating completions from a model.
 
     Make sure to install the `vllm` and `fastapi` packages before using this class. Just run the following command:
 
