@@ -18,28 +18,36 @@ from typing import Optional, Union
 
 import requests
 import torch
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from .data_utils import is_conversational
-from .import_utils import is_flask_available, is_vllm_available
+from .import_utils import is_vllm_available
 
-
-if is_flask_available():
-    from flask import Flask, jsonify, request
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+
+
+class ModelLoadRequest(BaseModel):
+    model_name: str
+
+
+class GenerateRequest(BaseModel):
+    prompts: list[str]
+    sampling_params: Optional[dict] = None
+    return_type: Optional[str] = "text"
 
 
 class VLLMServer:
     r"""
     A vLLM server that exposes a REST API for generating completions and chatting with a vLLM model.
 
-    Make sure to install the `vllm` and `flask` packages before using this class.Just run the following command:
+    Make sure to install the `vllm` and `fastapi` packages before using this class. Just run the following command:
 
     ```bash
-    pip install vllm flask
-    # or
-    pip install trl[vllm]
+    pip install vllm fastapi uvicorn
     ```
 
     The server provides the following endpoints:
@@ -72,9 +80,6 @@ class VLLMServer:
     """
 
     def __init__(self, model_name=None, url: str = "http://0.0.0.0:5000"):
-        if not is_flask_available():
-            raise ImportError("vLLM server requires Flask. Please install it with `pip install flask`.")
-
         if not is_vllm_available():
             raise ImportError("vLLM server requires the `vllm` package. Please install it with `pip install vllm`.")
 
@@ -83,91 +88,74 @@ class VLLMServer:
             raise ValueError(f"Invalid URL format: {url}")
 
         self.host, self.port = match.groups()
-        self.app = Flask(__name__)  # Initialize Flask app
+        self.llm = LLM(model=model_name) if model_name else None
+        self.app = FastAPI()
+        self._add_routes(self.app)  # Add r
 
-        self._add_routes()  # Add routes to the app
-        if model_name is not None:
-            self.llm = LLM(model=model_name)
-        else:
-            self.llm = None
+    def _add_routes(self, app):
+        """Add the routes for the server."""
 
-    def _add_routes(self):
-        """Add the Flask routes for the server."""
-
-        @self.app.route("/load", methods=["POST"])
-        def load():
+        @app.post("/load")
+        async def load(request: ModelLoadRequest):
             try:
-                data = request.get_json()
-                del self.llm  # First delete the existing model, to avoid OOM errors
-                self.llm = LLM(model=data["model_name"])
-                self.app.logger.info(f"Model {data['model_name']} loaded.")
-                return jsonify({"status": "success", "message": "Model loaded."})
-
+                self.llm = LLM(model=request.model_name)
+                return {"status": "success", "message": f"Model {request.model_name} loaded."}
             except Exception as e:
-                self.app.logger.error(f"Error loading model: {str(e)}")
-                return jsonify({"error": str(e)}), 400
+                raise HTTPException(status_code=400, detail=f"Error loading model: {str(e)}")
 
-        @self.app.route("/generate", methods=["POST"])
-        def generate():
+        @app.post("/generate")
+        async def generate(request: GenerateRequest):
             if self.llm is None:
-                return jsonify({"error": "No model loaded. Load a model using the /load endpoint."}), 400
+                raise HTTPException(status_code=400, detail="No model loaded. Load a model using the /load endpoint.")
 
             try:
-                # Parse input JSON data
-                data = request.get_json()
+                prompts = request.prompts
+                sampling_params = SamplingParams(**request.sampling_params) if request.sampling_params else None
 
-                # Get prompts
-                prompts = data["prompts"]
-
-                # Get sampling params (optional)
-                sampling_params = SamplingParams(**data["sampling_params"]) if "sampling_params" in data else None
-
-                # Determine return type (default to 'text')
-                return_type = data.get("return_type", "text")
+                return_type = request.return_type
                 if return_type not in {"text", "tokens"}:
-                    return jsonify({"error": f"Invalid return_type '{return_type}'. Must be 'text' or 'tokens'."}), 400
+                    raise HTTPException(
+                        status_code=400, detail=f"Invalid return_type '{return_type}'. Must be 'text' or 'tokens'."
+                    )
 
-                # Generate completions
                 if is_conversational({"prompt": prompts[0]}):
                     outputs = self.llm.chat(prompts, sampling_params=sampling_params)
                 else:
                     outputs = self.llm.generate(prompts, sampling_params=sampling_params)
 
-                # Process output based on return_type
                 if return_type == "text":
                     completions = [out.text for completions in outputs for out in completions.outputs]
                 elif return_type == "tokens":
                     completions = [out.token_ids for completions in outputs for out in completions.outputs]
 
-                return jsonify(completions)
+                return JSONResponse(content=completions)
 
             except Exception as e:
-                return jsonify({"error": str(e)}), 400
+                raise HTTPException(status_code=400, detail=f"Error generating completions: {str(e)}")
 
-        @self.app.route("/load_weights", methods=["POST"])
-        def load_weights():
+        @app.post("/load_weights")
+        async def load_weights(request: Request):
             if self.llm is None:
-                return jsonify({"error": "No model loaded. Load a model using the /load endpoint."}), 400
+                raise HTTPException(status_code=400, detail="No model loaded. Load a model using the /load endpoint.")
+
             try:
-                # Parse binary data (weights file sent as bytes)
-                weights_data = request.data
+                weights_data = await request.body()
                 buffer = io.BytesIO(weights_data)
 
-                # Load the state_dict from the buffer
                 state_dict = torch.load(buffer, weights_only=True).items()
 
-                # Update the model's weights
                 llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                 llm_model.load_weights(state_dict)
 
-                return jsonify({"status": "success", "message": "Model weights loaded."})
+                return {"status": "success", "message": "Model weights loaded."}
 
             except Exception as e:
-                return jsonify({"status": "error", "message": str(e)}), 400
+                raise HTTPException(status_code=400, detail=f"Error loading weights: {str(e)}")
 
     def run(self):
-        """Run the Flask server."""
-        self.app.run(host=self.host, port=self.port)
+        import uvicorn
+
+        uvicorn.run(self.app, host=self.host, port=int(self.port))
 
 
 class VLLMClient:
@@ -207,7 +195,7 @@ class VLLMClient:
         """
         response = requests.post(self.url + "/load", json={"model_name": model_name})
         if response.status_code != 200:
-            error = response.json().get("error", "Unknown error")
+            error = response.json().get("detail", "Unknown error")
             raise RuntimeError(f"Failed to load model: {error}")
 
     def generate(
@@ -234,7 +222,7 @@ class VLLMClient:
             inputs["sampling_params"] = sampling_params
         response = requests.post(self.url + "/generate", json=inputs)
         if response.status_code != 200:
-            error = response.json().get("error", "Unknown error")
+            error = response.json().get("detail", "Unknown error")
             raise RuntimeError(f"Failed to generate completions: {error}")
         return response.json()
 
@@ -251,6 +239,6 @@ class VLLMClient:
         self.buffer.seek(0)
         response = requests.post(self.url + "/load_weights", data=self.buffer.read())
         if response.status_code != 200:
-            error = response.json().get("error", "Unknown error")
+            error = response.json().get("detail", "Unknown error")
             raise RuntimeError(f"Failed to load weights: {error}")
         return response.json()
