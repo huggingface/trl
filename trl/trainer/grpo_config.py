@@ -58,6 +58,11 @@ class GRPOConfig(TrainingArguments):
             [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
+
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
+            improving generation speed. However, disabling this option allows training models that exceed the VRAM
+            capacity of a single GPU, albeit at the cost of slower generation.
     """
 
     # Parameters that control the model and reference model
@@ -109,4 +114,12 @@ class GRPOConfig(TrainingArguments):
     beta: float = field(
         default=0.04,
         metadata={"help": "KL coefficient."},
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
+            "generation, improving generation speed. However, disabling this option allows training models that "
+            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation."
+        },
     )
