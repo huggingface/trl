@@ -845,7 +845,8 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int
+        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int,
+        is_encoder_decoder: bool = False, label_pad_token_id: int = -100,
     ) -> dict[str, torch.LongTensor]:
         """
         Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
