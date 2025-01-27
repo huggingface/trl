@@ -353,7 +353,6 @@ class GRPOTrainer(Trainer):
                     **prompt_inputs, generation_config=self.generation_config
                 )
 
-        # print(f"Generate time: {time.time() - before_generate}")
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
