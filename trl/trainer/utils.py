@@ -1647,3 +1647,76 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
         return mask
     else:
         return mask, *tensors
+
+def compute_logps_with_prompt_cache(
+    model: torch.nn.Module,
+    prompt_inputs: dict,
+    completion_ids: torch.LongTensor,
+    requires_grad_for_completion: bool = True,
+):
+    """
+    1) Forward pass on the prompt with torch.inference_mode() to get `past_key_values`.
+    2) Forward pass (with or without grad) on the completion tokens using that cache.
+    3) Compute per-token log probabilities for the completion.
+
+    Args:
+      model (nn.Module): A causal LM (transformers.AutoModelForCausalLM) or similar.
+      prompt_inputs (dict): The dict of prompt tensors, e.g. {"input_ids", "attention_mask", ...}.
+      completion_ids (torch.LongTensor): Shape [B, completion_len].
+      requires_grad_for_completion (bool): Whether to enable gradient for the completion pass.
+
+    Returns:
+      per_token_logps (torch.FloatTensor): shape [B, completion_len],
+        where per_token_logps[b, t] is the logprob of completion_ids[b, t]
+        given all preceding tokens in the prompt + the partial completion up to t-1.
+    """
+
+    # 1) No-grad forward pass over prompt
+    with torch.inference_mode():
+        prompt_out = model(**prompt_inputs, use_cache=True)
+        # shape of prompt_out.logits is [B, prompt_len, vocab_size]
+        # shape of prompt_out.past_key_values is a tuple (one per layer) with shape reflecting batch=B.
+
+    # 2) Forward the new completion tokens.
+    # Optionally enable grads on the completion pass if `requires_grad_for_completion=True`.
+    if requires_grad_for_completion:
+        completion_out = model(
+            input_ids=completion_ids,
+            past_key_values=prompt_out.past_key_values,
+            use_cache=False  # you can set True or False depending on if you need caching beyond this
+        )
+    else:
+        # For a reference model or purely inference pass, do it all in inference_mode
+        with torch.inference_mode():
+            completion_out = model(
+                input_ids=completion_ids,
+                past_key_values=prompt_out.past_key_values,
+                use_cache=False
+            )
+
+    # shape of completion_out.logits is [B, completion_len, vocab_size]
+    logits = completion_out.logits
+
+    # 3) Compute per-token log probabilities
+    # Typically, we shift logits by 1 to align with the "label" tokens we’re predicting.
+    # i.e., the logit at time t predicts completion_ids[:, t].
+    # So the logit dimension is (seq_len - 1) for the tokens that actually got predicted.
+    #
+    # If you want logprobs for *all* tokens including the very first one, you can pad or shift as desired.
+    # Commonly, we exclude the last logit because there's no "next token" for it, but
+    # it depends on how you handle your loss/advantages. We'll do the standard shift here.
+
+    # Exclude the final logit (nothing to predict after the last token)
+    logits = logits[:, :-1, :]  # shape [B, completion_len - 1, vocab_size]
+    
+    # We actually need the "last" logit from prompt_out because that corresponds to the first token in completion_ids
+    logits = torch.cat([prompt_out.logits[:, -1:, :], logits], dim=1)
+
+    # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
+    per_token_logps = []
+    for logits_row, input_ids_row in zip(logits, completion_ids):
+        log_probs = logits_row.log_softmax(dim=-1)
+        token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
+        per_token_logps.append(token_log_prob)
+    
+    return torch.stack(per_token_logps)
