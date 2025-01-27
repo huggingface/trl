@@ -108,7 +108,7 @@ class VLLMServer:
                 return jsonify({"error": str(e)}), 400
 
         @self.app.route("/generate", methods=["POST"])
-        def generate():
+        async def generate():
             if self.llm is None:
                 return jsonify({"error": "No model loaded. Load a model using the /load endpoint."}), 400
 
@@ -129,9 +129,9 @@ class VLLMServer:
 
                 # Generate completions
                 if is_conversational({"prompt": prompts[0]}):
-                    outputs = self.llm.chat(prompts, sampling_params=sampling_params)
+                    outputs = await self.llm.chat(prompts, sampling_params=sampling_params)
                 else:
-                    outputs = self.llm.generate(prompts, sampling_params=sampling_params)
+                    outputs = await self.llm.generate(prompts, sampling_params=sampling_params)
 
                 # Process output based on return_type
                 if return_type == "text":
