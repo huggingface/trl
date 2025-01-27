@@ -1672,22 +1672,19 @@ def compute_logps_with_prompt_cache(
     """
 
     # 1) No-grad forward pass over prompt
-    with torch.inference_mode():
+    with torch.no_grad():
         prompt_out = model(**prompt_inputs, use_cache=True)
-        # shape of prompt_out.logits is [B, prompt_len, vocab_size]
-        # shape of prompt_out.past_key_values is a tuple (one per layer) with shape reflecting batch=B.
 
-    # 2) Forward the new completion tokens.
-    # Optionally enable grads on the completion pass if `requires_grad_for_completion=True`.
+    # 2) Forward the new completion tokens
     if requires_grad_for_completion:
         completion_out = model(
             input_ids=completion_ids,
             past_key_values=prompt_out.past_key_values,
-            use_cache=False  # you can set True or False depending on if you need caching beyond this
+            use_cache=False
         )
     else:
-        # For a reference model or purely inference pass, do it all in inference_mode
-        with torch.inference_mode():
+        # For a reference model, do it all in no_grad
+        with torch.no_grad():
             completion_out = model(
                 input_ids=completion_ids,
                 past_key_values=prompt_out.past_key_values,
@@ -1698,18 +1695,10 @@ def compute_logps_with_prompt_cache(
     logits = completion_out.logits
 
     # 3) Compute per-token log probabilities
-    # Typically, we shift logits by 1 to align with the "label" tokens we’re predicting.
-    # i.e., the logit at time t predicts completion_ids[:, t].
-    # So the logit dimension is (seq_len - 1) for the tokens that actually got predicted.
-    #
-    # If you want logprobs for *all* tokens including the very first one, you can pad or shift as desired.
-    # Commonly, we exclude the last logit because there's no "next token" for it, but
-    # it depends on how you handle your loss/advantages. We'll do the standard shift here.
-
     # Exclude the final logit (nothing to predict after the last token)
     logits = logits[:, :-1, :]  # shape [B, completion_len - 1, vocab_size]
     
-    # We actually need the "last" logit from prompt_out because that corresponds to the first token in completion_ids
+    # We actually do need the "last" logit from prompt_out because that corresponds to the first token in completion_ids
     logits = torch.cat([prompt_out.logits[:, -1:, :], logits], dim=1)
 
     # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
