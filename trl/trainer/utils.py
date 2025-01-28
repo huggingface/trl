@@ -1655,23 +1655,24 @@ def compute_logps_with_prompt_cache(
     requires_grad_for_completion: bool = True,
 ):
     """
+    The method will compute the log probabilities of the completion tokens by using the prompt cache.
     1) Forward pass on the prompt with torch.no_grad() to get `past_key_values`.
     2) Forward pass (with or without grad) on the completion tokens using that cache.
     3) Compute per-token log probabilities for the completion.
 
     Args:
-      model (nn.Module): A causal LM (transformers.AutoModelForCausalLM) or similar.
-      prompt_inputs (dict): The dict of prompt tensors, e.g. {"input_ids", "attention_mask", ...}.
-      completion_ids (torch.LongTensor): Shape [B, completion_len].
-      requires_grad_for_completion (bool): Whether to enable gradient for the completion pass.
+        model (nn.Module): A causal LM (transformers.AutoModelForCausalLM) or similar.
+        prompt_inputs (dict): The dict of prompt tensors, e.g. {"input_ids", "attention_mask", ...}.
+        completion_ids (torch.LongTensor): Shape [B*G, completion_len].
+        requires_grad_for_completion (bool): Whether to enable gradient for the completion pass.
 
     Returns:
-      per_token_logps (torch.FloatTensor): shape [B, completion_len],
-        where per_token_logps[b, t] is the logprob of completion_ids[b, t]
+        per_token_logps (torch.FloatTensor): shape [B*G, completion_len],
+        where per_token_logps[i, t] is the logprob of ith completion's t-th completion token,
         given all preceding tokens in the prompt + the partial completion up to t-1.
     """
     
-    # 1) No-grad forward pass over prompt
+    # Forward pass over prompt tokens (no grad)
     with torch.no_grad():
         prompt_out = model(**prompt_inputs, use_cache=True)
         
@@ -1698,7 +1699,7 @@ def compute_logps_with_prompt_cache(
     # Interleave the past key values for the G times
     prompt_out.past_key_values.batch_repeat_interleave(G)
     
-    # 2) Forward the new completion tokens
+    # Forward pass over completion tokens (with or without grad)
     if requires_grad_for_completion:
         completion_out = model(
             input_ids=completion_ids,
@@ -1713,17 +1714,17 @@ def compute_logps_with_prompt_cache(
                 use_cache=False,
             )
 
-    # 3) Process completion logits efficiently
+    # Get rid of the last logits of the completion
     logits = completion_out.logits[:, :-1, :]  # [B, completion_len - 1, vocab_size]
     
-    # 4) Convert to log probabilities and gather relevant tokens in one operation
+    # Convert completions logits to logprobs
     completion_token_logps = torch.gather(
         logits.log_softmax(dim=-1),
         dim=-1,
         index=completion_ids[:, 1:].unsqueeze(-1)
     ).squeeze(-1)
     
-    # 5) Combine first token logps with the rest
+    # Concat with the first_completion_token_logps
     per_token_logps = torch.cat([first_completion_token_logps, completion_token_logps], dim=1)
     
     return per_token_logps

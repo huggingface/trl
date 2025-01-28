@@ -327,7 +327,7 @@ class GRPOTrainer(Trainer):
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Current policy logprobs:
+        # Current policy logprobs (with grad)
         per_token_logps = compute_logps_with_prompt_cache(
             model=self.accelerator.unwrap_model(model),
             prompt_inputs=prompt_inputs,
@@ -335,7 +335,7 @@ class GRPOTrainer(Trainer):
             requires_grad_for_completion=True
         )
 
-        # Reference model logprobs (no grad):
+        # Reference model logprobs (no grad)
         if self.ref_model is not None:
             ref_per_token_logps = compute_logps_with_prompt_cache(
                 model=self.ref_model,
@@ -344,10 +344,9 @@ class GRPOTrainer(Trainer):
                 requires_grad_for_completion=False
             )
         else:
-            # Alternatively, if you're toggling adapters:
             with self.accelerator.unwrap_model(model).disable_adapter():
                 ref_per_token_logps = compute_logps_with_prompt_cache(
-                    model=model,
+                    model=model,    
                     prompt_inputs=prompt_inputs,
                     completion_ids=completion_ids,
                     requires_grad_for_completion=False
