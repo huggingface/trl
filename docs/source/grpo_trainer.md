@@ -76,7 +76,7 @@ training_args = GRPOConfig(
     vllm_gpu_memory_utilization=0.7,
 )
 ```
-and train the model as usual on the remaining GPUs via `--num_processes = number GPU allocated -1` e.g. for 2 GPUs:
+and train the model as usual on the remaining GPUs via `--num_processes = <number GPUs allocated -1>` e.g. for 2 GPUs:
 ```bash
 accelerate launch --num_processes=1 train_grpo.py
 ```
