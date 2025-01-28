@@ -327,11 +327,6 @@ class GRPOTrainer(Trainer):
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Expand the original prompt_inputs to match B*G (shape was [B, ...], we want [B*G, ...])
-        for k in prompt_inputs:            
-            prompt_inputs[k] = prompt_inputs[k].repeat_interleave(self.num_generations, dim=0)
-
-
         # Current policy logprobs:
         per_token_logps = compute_logps_with_prompt_cache(
             model=self.accelerator.unwrap_model(model),

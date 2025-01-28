@@ -1678,6 +1678,13 @@ def compute_logps_with_prompt_cache(
         # Only keep the last prompt logit, immediately convert to log probabilities
         prompt_last_logps = prompt_out.logits[:, -1:, :].log_softmax(dim=-1)
         
+        # Get the batch size and number of generations
+        B = prompt_inputs["input_ids"].size(0)
+        G = completion_ids.size(0) // B
+
+        # Interleave the last log probs for G times
+        prompt_last_logps = prompt_last_logps.repeat_interleave(G, dim=0)
+
         # Gather the these log probs as they relates to the first completion token
         first_completion_token_logps = torch.gather(
             prompt_last_logps,
@@ -1688,6 +1695,9 @@ def compute_logps_with_prompt_cache(
         # Free memory explicitly
         del prompt_last_logps
 
+    # Interleave the past key values for the G times
+    prompt_out.past_key_values.batch_repeat_interleave(G)
+    
     # 2) Forward the new completion tokens
     if requires_grad_for_completion:
         completion_out = model(
@@ -1706,14 +1716,14 @@ def compute_logps_with_prompt_cache(
     # 3) Process completion logits efficiently
     logits = completion_out.logits[:, :-1, :]  # [B, completion_len - 1, vocab_size]
     
-    # Convert to log probabilities and gather relevant tokens in one operation
+    # 4) Convert to log probabilities and gather relevant tokens in one operation
     completion_token_logps = torch.gather(
         logits.log_softmax(dim=-1),
         dim=-1,
         index=completion_ids[:, 1:].unsqueeze(-1)
     ).squeeze(-1)
     
-    # Combine first token logps with the rest
+    # 5) Combine first token logps with the rest
     per_token_logps = torch.cat([first_completion_token_logps, completion_token_logps], dim=1)
     
     return per_token_logps
