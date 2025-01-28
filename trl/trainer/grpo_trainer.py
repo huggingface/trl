@@ -283,7 +283,7 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
-            if self.accelerator.is_main_process:  # for demo, run only in the main process
+            if self.accelerator.is_main_process: 
                 with patch("torch.distributed.get_world_size", return_value=1):
                     self.llm = LLM(
                         model=model.name_or_path,
