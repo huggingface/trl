@@ -158,8 +158,8 @@ class GRPOConfig(TrainingArguments):
     per_device_train_batch_size: float = field(
         default=1,
         metadata={
-            "help": "Number of prompts sampled per device for training. The actual batch passed into the model will be "
-            "this value multiplied by `num_generations`."
+            "help": "Number of prompts sampled per device for training. The actual batch passed into the model will "
+            "be this value multiplied by `num_generations`."
         },
     )
     # Consequently, the gradient accumulation steps are increased to keep the effective batch size the same.
