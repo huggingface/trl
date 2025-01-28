@@ -64,15 +64,21 @@ Distributed across 8 GPUs, the training takes approximately 1 day.
 
 ### vLLM based training
 
-To use [vLLM](https://github.com/vllm-project/vllm) based training, set the `use_vllm` flag to `True` in the `GRPOConfig` class. You can also set the `vllm_device` and `vllm_gpu_memory_utilization` arguments to specify the device and GPU memory utilization for the VLLM server.
+To use [vLLM](https://github.com/vllm-project/vllm) based training, set the `use_vllm` flag to `True` in the `GRPOConfig` class. You can also set the `vllm_device` and `vllm_gpu_memory_utilization` arguments to specify the device and GPU memory utilization for the VLLM server. 
+
+The strategy here is to train on a number of gpus, and use a dedicated GPU for vllm generation while training on the rest. Thus for the 2 GPU example, you would set `vllm_device` to `cuda:1` and `vllm_gpu_memory_utilization` to `0.7`:
 
 ```python
 training_args = GRPOConfig(
     ...,
     use_vllm=True,
-    vllm_device="auto",
+    vllm_device="cuda:1",
     vllm_gpu_memory_utilization=0.7,
 )
+```
+and train the model as usual on the remaining GPUs via `--num_processes = number GPU allocated -1` e.g. for 2 GPUs:
+```bash
+accelerate launch --num_processes=1 train_grpo.py
 ```
 
 Make sure to install the `vllm` library via `pip install vllm` or `pip install "trl[vllm]"`.
