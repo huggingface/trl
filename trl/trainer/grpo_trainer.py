@@ -14,6 +14,7 @@
 
 import os
 import textwrap
+from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 
 import torch
@@ -32,10 +33,11 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
-from ..models import create_reference_model, unwrap_model_for_generation
+from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url
 
@@ -94,8 +96,9 @@ class GRPOTrainer(Trainer):
                 using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1` and the
                 keyword arguments in `args.model_init_kwargs`.
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
-                - A custom reward function: This should take a list of prompts and completions and return a list of
-                rewards. For more details, see [Using a custom reward function](#using-a-custom-reward-function).
+                - A custom reward function: The function is provided with the prompts and the generated completions,
+                  plus any additional columns in the dataset. It should return a list of rewards. For more details, see
+                  [Using a custom reward function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
@@ -134,6 +137,8 @@ class GRPOTrainer(Trainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
+    _tag_names = ["trl", "grpo"]
+
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
@@ -157,6 +162,7 @@ class GRPOTrainer(Trainer):
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
+            model_id = model
             torch_dtype = model_init_kwargs.get("torch_dtype")
             if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
                 pass  # torch_dtype is already a torch.dtype or "auto" or None
@@ -168,8 +174,13 @@ class GRPOTrainer(Trainer):
                     "Invalid `torch_dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
+            # Disable caching if gradient checkpointing is enabled (not supported)
+            model_init_kwargs["use_cache"] = (
+                False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
+            )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         else:
+            model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 raise ValueError(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
@@ -180,7 +191,9 @@ class GRPOTrainer(Trainer):
             model = get_peft_model(model, peft_config)
 
         # Reference model
-        if peft_config is None:
+        if is_deepspeed_zero3_enabled():
+            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+        elif peft_config is None:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
         else:
@@ -249,7 +262,7 @@ class GRPOTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         # Initialize the metrics
-        self._metrics = {"kl": [], "reward": [], "reward_std": []}
+        self._metrics = defaultdict(list)
 
         super().__init__(
             model=model,
@@ -262,8 +275,19 @@ class GRPOTrainer(Trainer):
             optimizers=optimizers,
         )
 
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
+
         if self.ref_model is not None:
-            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+            if self.is_deepspeed_enabled:
+                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
@@ -347,7 +371,7 @@ class GRPOTrainer(Trainer):
         # Compute the rewards
         prompts = [prompt for prompt in prompts for _ in range(self.num_generations)]
 
-        rewards = torch.zeros(len(self.reward_funcs), len(prompts), device=device)
+        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
@@ -362,11 +386,19 @@ class GRPOTrainer(Trainer):
                 )
                 reward_inputs = super()._prepare_inputs(reward_inputs)
                 with torch.inference_mode():
-                    rewards[i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+                    rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
             else:
-                rewards[i] = torch.tensor(reward_func(prompts, completions))
+                # Repeat all input columns (but "prompt" and "completion") to match the number of generations
+                reward_kwargs = {key: [] for key in inputs[0].keys() if key not in ["prompt", "completion"]}
+                for key in reward_kwargs:
+                    for example in inputs:
+                        # Repeat each value in the column for `num_generations` times
+                        reward_kwargs[key].extend([example[key]] * self.num_generations)
+                output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
+                rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
         # Sum the rewards from all reward functions
-        rewards = rewards.sum(dim=0)
+        rewards = rewards_per_func.sum(dim=1)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -383,6 +415,17 @@ class GRPOTrainer(Trainer):
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
 
         # Log the metrics
+        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
+        self._metrics["completion_length"].append(completion_length)
+
+        reward_per_func = self.accelerator.gather_for_metrics(rewards_per_func).mean(0)
+        for i, reward_func in enumerate(self.reward_funcs):
+            if isinstance(reward_func, PreTrainedModel):
+                reward_func_name = reward_func.config._name_or_path.split("/")[-1]
+            else:
+                reward_func_name = reward_func.__name__
+            self._metrics[f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
+
         self._metrics["reward"].append(self.accelerator.gather_for_metrics(rewards).mean().item())
 
         self._metrics["reward_std"].append(self.accelerator.gather_for_metrics(std_grouped_rewards).mean().item())
@@ -399,7 +442,7 @@ class GRPOTrainer(Trainer):
             super().log(logs, start_time)
         else:  # transformers<=4.46
             super().log(logs)
-        self._metrics = {key: [] for key in self._metrics}
+        self._metrics.clear()
 
     def create_model_card(
         self,
