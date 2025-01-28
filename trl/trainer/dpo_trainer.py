@@ -887,9 +887,10 @@ class DPOTrainer(Trainer):
         """
         output = {}
 
-        #NOTES
+        #Notes Above
         max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
 
+        # Handle Chosen and Rejected responses
         for k in batch:
             #concat the chosen response; make sure to NOT overwrite the chosen
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
@@ -929,7 +930,7 @@ class DPOTrainer(Trainer):
 
         # To make sure prompt, the input_ids are the same for both the chosen and rejected responses
         if is_encoder_decoder:
-            output["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2, 1)
+            output["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2, 1) #repeat the prompt input_ids
             output["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2, 1)
 
         return output
