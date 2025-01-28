@@ -68,7 +68,8 @@ class GRPOTrainer(Trainer):
 
     trainer = GRPOTrainer(
         model="Qwen/Qwen2-0.5B-Instruct",
-        reward_funcs="weqweasdas/RM-Gemma-2B",
+        reward_funcs=["weqweasdas/RM-Gemma-2B", custom_reward_func],
+        reward_weights=[2, 1],
         train_dataset=dataset,
     )
 
@@ -88,7 +89,6 @@ class GRPOTrainer(Trainer):
         reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
-
             - A single reward function, such as:
                 - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
                 path to a *directory* containing model weights saved using
@@ -101,6 +101,9 @@ class GRPOTrainer(Trainer):
                   [Using a custom reward function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
+        reward_weights (`list[Union[float, int]]`, *optional*, defaults to `None`):
+            Weights for each reward function. Must match the number of reward functions. Can be integers or floats 
+            (e.g., [1, 2] or [0.5, 1.5]). If None, all rewards are weighted equally with weight 1.0.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -143,6 +146,7 @@ class GRPOTrainer(Trainer):
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
+        reward_weights: Optional[list[Union[float, int]]] = None,
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
@@ -214,6 +218,14 @@ class GRPOTrainer(Trainer):
                     reward_func, num_labels=1, **model_init_kwargs
                 )
         self.reward_funcs = reward_funcs
+
+        # Reward weights
+        if reward_weights is not None:
+            if len(reward_weights) != len(reward_funcs):
+                raise ValueError("Number of reward weights must match number of reward functions.")
+            self.reward_weights = torch.tensor(reward_weights, dtype=torch.float32)
+        else:
+            self.reward_weights = torch.ones(len(reward_funcs), dtype=torch.float32)
 
         # Reward processing class
         if reward_processing_classes is None:
@@ -397,8 +409,8 @@ class GRPOTrainer(Trainer):
                 output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
-        # Sum the rewards from all reward functions
-        rewards = rewards_per_func.sum(dim=1)
+        # Apply weights to each reward function's output and sum
+        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)

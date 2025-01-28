@@ -187,7 +187,7 @@ You can test this function as follows:
 
 #### Example 3: Reward completions based on a reference
 
-Below is an example of a reward function that checks if the is correct. This example is inspired by the _accuracy reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+Below is an example of a reward function that checks if the completion is correct. This example is inspired by the _accuracy reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
 This example is designed for [standard format](dataset_formats#standard), where the dataset contains a column named `ground_truth`.
 
 ```python
@@ -235,7 +235,17 @@ trainer = GRPOTrainer(
 )
 ```
 
-and the reward will be computed as the sum of the rewards from each function.
+and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    reward_funcs=[reward_func1, reward_func2],
+    reward_weights=[1, 2]
+    ...,
+)
+```
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
