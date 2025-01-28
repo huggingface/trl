@@ -41,9 +41,11 @@ def main():
     make_grpo_parser(subparsers)
     make_kto_parser(subparsers)
     make_sft_parser(subparsers)
-    subparsers.add_parser(
+    vllm_serve = subparsers.add_parser(
         "vllm-serve", help="Start a server that exposes a REST API for fast generation with a vLLM model."
     )
+    vllm_serve.add_argument("--model_name", type=str, default=None, help="Model to use")
+    vllm_serve.add_argument("--url", type=str, default="http://localhost:8000", help="URL to run the server on")
 
     # Parse the arguments
     args = parser.parse_args()
@@ -93,7 +95,7 @@ def main():
 
     elif args.command == "vllm-serve":
         # Create an instance of the server and run it
-        server = VLLMServer()
+        server = VLLMServer(model_name=args.model_name, url=args.url)
         server.run()
 
 
