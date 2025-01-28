@@ -333,6 +333,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_torch_accelerator
     def test_training_vllm(self):
         """Test that training works with vLLM for generation."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
