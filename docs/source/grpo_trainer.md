@@ -24,6 +24,7 @@ This example demonstrates how to train a model using the GRPO method. We use the
 ></iframe>
 
 Below is the script to train the model. We use PEFT to reduce the memory requirements.
+Note that the actual train batch size is `num_generations * per_device_train_batch_size`; adjusting these values can help prevent OOM errors, as GRPO generates `num_generations` completions for each batch prompt.
 
 ```python
 # train_grpo.py
@@ -40,6 +41,8 @@ training_args = GRPOConfig(
     logging_steps=10,
     gradient_accumulation_steps=16,
     max_completion_length=128,
+    num_generations=8,
+    per_device_train_batch_size=8,
 )
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
