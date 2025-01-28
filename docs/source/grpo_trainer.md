@@ -68,13 +68,13 @@ To use [vLLM](https://github.com/vllm-project/vllm) based training, set the `use
 
 The strategy here is to use a dedicated GPU for generation powered by vLLM, while using the remainder for training.
 
->[!IMPORTANT] 
-> For example, if you have two GPUs available, first set `vllm_device` to `cuda:1` and `vllm_gpu_memory_utilization` to an appropriate value, e.g. `0.7`:
+>[!IMPORTANT] q
+> For example, if you have two GPUs available, first set `vllm_device` to `auto` and `vllm_gpu_memory_utilization` to an appropriate value, e.g. `0.7`:
 ```python
 training_args = GRPOConfig(
     ...,
     use_vllm=True,
-    vllm_device="cuda:1",
+    vllm_device="auto",
     vllm_gpu_memory_utilization=0.7,
 )
 ```
@@ -82,6 +82,7 @@ and launch the training script as usual on the remaining GPUs via `--multi_gpu -
 ```bash
 accelerate launch --num_processes=1 train_grpo.py
 ```
+which will launch the vLLM server on the GPU with the id `num_processes` (i.e. 1).
 
 Make sure to install the `vllm` library via `pip install vllm` or `pip install "trl[vllm]"`.
 
