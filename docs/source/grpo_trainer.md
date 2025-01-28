@@ -28,27 +28,21 @@ Below is the script to train the model. We use PEFT to reduce the memory require
 ```python
 # train_grpo.py
 from datasets import load_dataset
-from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
-# Load the dataset
 dataset = load_dataset("trl-lib/tldr", split="train")
 
-training_args = GRPOConfig(
-    output_dir="Qwen2-0.5B-GRPO",
-    learning_rate=1e-5,
-    logging_steps=10,
-    gradient_accumulation_steps=16,
-    max_completion_length=128,
-)
+# Define the reward function, which rewards completions that are close to 20 characters
+def reward_len(completions, **kwargs):
+    return [abs(20 - len(completion)) for completion in completions]
+
+training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO", logging_steps=10)
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs="weqweasdas/RM-Gemma-2B",
+    reward_funcs=reward_len,
     args=training_args,
     train_dataset=dataset,
-    peft_config=LoraConfig(task_type="CAUSAL_LM"),
 )
-
 trainer.train()
 ```
 
