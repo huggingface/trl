@@ -24,7 +24,7 @@ This example demonstrates how to train a model using the GRPO method. We use the
 ></iframe>
 
 Below is the script to train the model. We use PEFT to reduce the memory requirements.
-Note that the actual train batch size is `num_generations * per_device_train_batch_size`; adjusting these values can help prevent OOM errors, as GRPO generates `num_generations` completions for each batch prompt.
+Note that the actual train batch size is `num_generations * per_device_train_batch_size * gradient_accumulation_steps`. Additionally, the input tensor for the forward pass has a size of `num_generations * per_device_train_batch_size`. Since GRPO generates `num_generations` completions for each batch prompt, adjusting these values appropriately can help prevent OOM errors.
 
 ```python
 # train_grpo.py
