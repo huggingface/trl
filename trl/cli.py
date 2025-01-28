@@ -45,7 +45,7 @@ def main():
         "vllm-serve", help="Start a server that exposes a REST API for fast generation with a vLLM model."
     )
     vllm_serve.add_argument("--model_name", type=str, default=None, help="Model to use")
-    vllm_serve.add_argument("--url", type=str, default="http://localhost:8000", help="URL to run the server on")
+    vllm_serve.add_argument("--url", type=str, default="http://0.0.0.0:5000", help="URL to run the server on")
 
     # Parse the arguments
     args = parser.parse_args()
