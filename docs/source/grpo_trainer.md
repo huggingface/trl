@@ -14,7 +14,7 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) as the base model and the [RM-Gemma-2B model](https://huggingface.co/weqweasdas/RM-Gemma-2B) as the reward model. We use the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ingored!). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) as the base model. We use the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ingored!). You can view the data in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
@@ -23,7 +23,7 @@ This example demonstrates how to train a model using the GRPO method. We use the
   height="560px"
 ></iframe>
 
-Below is the script to train the model. We use PEFT to reduce the memory requirements.
+Below is the script to train the model.
 
 ```python
 # train_grpo.py
@@ -55,30 +55,6 @@ accelerate launch train_grpo.py
 Distributed across 8 GPUs, the training takes approximately 1 day.
 
 ![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/grpo_curves.png)
-
-### vLLM based training
-
-To use [vLLM](https://github.com/vllm-project/vllm) based training, set the `use_vllm` flag to `True` in the [`GRPOConfig`] class. You can also set the `vllm_device` and `vllm_gpu_memory_utilization` arguments to specify the device and GPU memory utilization for the vLLM server. 
-
-The strategy here is to use a dedicated GPU for generation powered by vLLM, while using the remainder for training.
-
->[!IMPORTANT] q
-> For example, if you have two GPUs available, first set `vllm_device` to `auto` and `vllm_gpu_memory_utilization` to an appropriate value, e.g. `0.7`:
-```python
-training_args = GRPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_device="auto",
-    vllm_gpu_memory_utilization=0.7,
-)
-```
-and launch the training script as usual on the remaining GPUs via `--multi_gpu --num_processes = <number GPUs allocated -1>` e.g. for 2 GPUs:
-```bash
-accelerate launch --num_processes=1 train_grpo.py
-```
-which will launch the vLLM server on the GPU with the id `num_processes` (i.e. 1).
-
-Make sure to install the `vllm` library via `pip install vllm` or `pip install "trl[vllm]"`.
 
 ## Looking deeper into the GRPO method
 
@@ -135,6 +111,18 @@ The GRPO Trainer logs the following metrics:
 - `kl` : The average KL divergence between the model and the reference model calculated on completions.
 
 ## Customization
+
+## Speed up training with vLLM-powered generation  
+
+Generation is often a speed bottleneck in online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, pass `use_vllm=True` in the training arguments.  
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_vllm=True)
+```  
+
+For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).  
 
 ### Using a custom reward function
 
