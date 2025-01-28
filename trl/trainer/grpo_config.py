@@ -108,8 +108,8 @@ class GRPOConfig(TrainingArguments):
     )
     # Add new async vLLM parameters
     vllm_device: Optional[str] = field(
-        default=None,
-        metadata={"help": "Device to put the vLLM generation on, defaults to 'cuda:{accelerate.num_processes}'"},
+        default="auto",
+        metadata={"help": "Device to put the vLLM generation on, defaults to 'auto'"},
     )
     vllm_gpu_memory_utilization: float = field(
         default=0.55,

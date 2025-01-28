@@ -286,7 +286,9 @@ class GRPOTrainer(Trainer):
             if self.accelerator.is_main_process:  # for demo, run only in the main process
                 with patch("torch.distributed.get_world_size", return_value=1):
                     self.llm = LLM(
-                        model=model.name_or_path, device=f"cuda:{self.args.vllm_device}", gpu_memory_utilization=0.7
+                        model=model.name_or_path,
+                        device=self.args.vllm_device,
+                        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
                     )
                 self.sampling_params = SamplingParams(
                     n=self.num_generations,
