@@ -320,7 +320,8 @@ class GRPOTrainer(Trainer):
                     temperature=args.temperature,
                     max_tokens=self.max_completion_length,
                 )
-                self._last_loaded_step = 0  # tag to avoid useless loading during grad checkpointing
+
+            self._last_loaded_step = 0  # tag to avoid useless loading during grad checkpointing
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
@@ -385,28 +386,31 @@ class GRPOTrainer(Trainer):
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
             # First, have main process load weights if needed
-            if self.accelerator.is_main_process:
-                if self.state.global_step != self._last_loaded_step:
+            if self.state.global_step != self._last_loaded_step:
+                state_dict = self.accelerator.get_state_dict(model)
+                if self.accelerator.is_main_process:
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                    with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                        llm_model.load_weights(unwrapped_model.state_dict().items())
+                    llm_model.load_weights(state_dict.items())
                 self._last_loaded_step = self.state.global_step
+
+            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
-            # Get completions from vLLM for all prompts
             if self.accelerator.is_main_process:
                 outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
                 completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
             else:
                 completion_ids = [None] * len(all_prompts_text) * self.num_generations
 
+            # Broadcast the completions from the main process to all processes, ensuring each process receives its
+            # corresponding slice.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
-
-            # Get the slice of responses for this process
             process_slice = slice(
                 self.accelerator.process_index * len(prompts) * self.num_generations,
                 (self.accelerator.process_index + 1) * len(prompts) * self.num_generations,
             )
             completion_ids = completion_ids[process_slice]
+
+            # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_inputs_repeated = torch.repeat_interleave(prompt_inputs["input_ids"], self.num_generations, dim=0)
