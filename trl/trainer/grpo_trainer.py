@@ -14,6 +14,7 @@
 
 import os
 import textwrap
+import warnings
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 from unittest.mock import patch
@@ -284,13 +285,36 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.accelerator.is_main_process:
-                with patch("torch.distributed.get_world_size", return_value=1):
-                    with patch("vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=1):
-                        self.llm = LLM(
-                            model=model.name_or_path,
-                            device=self.args.vllm_device,
-                            gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
-                        )
+                vllm_device = self.args.vllm_device
+                if vllm_device == "auto":
+                    vllm_device = self.accelerator.num_processes  # take the next GPU idx
+                # Check that the requested device is available
+                if vllm_device >= torch.cuda.device_count():
+                    raise ValueError(
+                        f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
+                        "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
+                        "value lower than the number of GPUs available on your machine—typically, reducing it by one "
+                        "is sufficient."
+                    )
+                # Check that the requested device is not also used for training
+                if vllm_device != self.accelerator.num_processes:
+                    warnings.warn(
+                        f"The requested device {vllm_device} is also used for training. This may lead to unexpected "
+                        "behavior. It is recommended to use a dedicated device for vLLM."
+                    )
+                # vLLM is not compatible with accelerate. So we've to patch it to make sure we can (1) place the vLLM
+                # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
+                # setting (profiling_patch).
+                world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
+                profiling_patch = patch(
+                    "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
+                )
+                with world_size_patch, profiling_patch:
+                    self.llm = LLM(
+                        model=model.name_or_path,
+                        device=vllm_device,
+                        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                    )
                 self.sampling_params = SamplingParams(
                     n=self.num_generations,
                     temperature=args.temperature,
