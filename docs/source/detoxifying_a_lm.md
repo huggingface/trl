@@ -45,7 +45,7 @@ When doing PPO, it is very important to design the problem efficiently so that t
 
 ### Pre-processing the dataset
 
-The dataset consist of prompts and their continuations, and each of them has an associated `toxicity` score.
+The dataset consists of prompts and their continuations, and each of them has an associated `toxicity` score.
 
 A `prompt` example:
 ```
@@ -109,7 +109,7 @@ ref_model = create_reference_model(model, num_shared_layers=6)
 trainer = PPOTrainer(..., ref_model=ref_model)
 ```
 
-In the example above this means that the model have the 4 first layers frozen (i.e. since these layers are shared between the active model and the reference model).
+In the example above this means that the model has the 4 first layers frozen (i.e. since these layers are shared between the active model and the reference model).
 
 - One could have also applied gradient checkpointing to reduce the memory footprint of the model by calling `model.pretrained_model.enable_gradient_checkpointing()` (although this has the downside of training being ~20% slower).
 
@@ -176,7 +176,7 @@ The evaluation script can be found [here](https://github.com/huggingface/trl/blo
 
 The results are quite promising, as we can see that the models are able to reduce the toxicity score of the generated text by an interesting margin. The gap is clear for `gpt-neo-2B` model but we less so for the `gpt-j-6B` model. There are several things we could try to improve the results on the largest model starting with training with larger `mini_batch_size` and probably allowing to back-propagate through more layers (i.e. use less shared layers).
 
-To sum up, in addition to human feedback this could be a useful additional signal when training large language models to ensure there outputs are less toxic as well as useful.
+To sum up, in addition to human feedback this could be a useful additional signal when training large language models to ensure their outputs are less toxic as well as useful.
 
 ### Limitations
 

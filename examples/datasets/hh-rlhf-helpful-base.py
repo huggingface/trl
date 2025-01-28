@@ -110,7 +110,7 @@ The HH-RLHF-Helpful-Base dataset is a processed version of [Anthropic's HH-RLHF]
 - **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
 
 Columns:
-- `"pompt"`: The user query.
+- `"prompt"`: The user query.
 - `"chosen"`: A response deemed helpful by human evaluators.
 - `"rejected"`: A response considered less helpful or unhelpful.
 
