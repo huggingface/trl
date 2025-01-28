@@ -52,6 +52,10 @@ class GRPOConfig(TrainingArguments):
             Maximum length of the generated completion.
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
+        vllm_device (`str`, *optional*, defaults to `"auto"`):
+            Device to put the vLLM generation on, defaults to `"auto"`.
+        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.55`):
+            The percentage of the GPU's memory for vLLM to reserve, reduce if execution graph takes too much space.
 
         > Parameters that control the training
 
