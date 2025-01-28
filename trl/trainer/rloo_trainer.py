@@ -572,7 +572,7 @@ class RLOOTrainer(Trainer):
         processing_class = self.processing_class
         generation_config = GenerationConfig(
             max_new_tokens=self.args.response_length,
-            temperature=(0.01 + 1e-7),
+            temperature=(self.args.temperature + 1e-7),
             top_k=0.0,
             top_p=1.0,
             do_sample=True,
