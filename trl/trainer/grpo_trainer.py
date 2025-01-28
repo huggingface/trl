@@ -21,7 +21,7 @@ from unittest.mock import patch
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import gather_object
+from accelerate.utils import broadcast_object_list, gather_object
 from datasets import Dataset, IterableDataset
 from packaging import version
 from transformers import (
@@ -355,14 +355,25 @@ class GRPOTrainer(Trainer):
             # First, have main process load weights if needed
             if self.accelerator.is_main_process:
                 if self.state.global_step != self._last_loaded_step:
-                    # Load state dict here
-                    ...
+                    llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                    llm_model.load_weights(model.state_dict().items())
                 self._last_loaded_step = self.state.global_step
             all_prompts_text = gather_object(prompts_text)
             # Get completions from vLLM for all prompts
             if self.accelerator.is_main_process:
-                outputs = self.llm.chat(all_prompts_text, sampling_params=self.sampling_params)
-            completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
+                outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params)
+                completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
+            else:
+                completion_ids = [None] * len(all_prompts_text) * self.num_generations
+
+            completion_ids = broadcast_object_list(completion_ids, from_process=0)
+
+            # Get the slice of responses for this process
+            process_slice = slice(
+                self.accelerator.process_index * len(prompts) * self.num_generations,
+                (self.accelerator.process_index + 1) * len(prompts) * self.num_generations,
+            )
+            completion_ids = completion_ids[process_slice]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_inputs_repeated = torch.repeat_interleave(prompt_inputs["input_ids"], self.num_generations, dim=0)
