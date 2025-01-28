@@ -388,7 +388,8 @@ class GRPOTrainer(Trainer):
             if self.accelerator.is_main_process:
                 if self.state.global_step != self._last_loaded_step:
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                    llm_model.load_weights(self.accelerator.unwrap_model(model).state_dict().items())
+                    with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                        llm_model.load_weights(unwrapped_model.state_dict().items())
                 self._last_loaded_step = self.state.global_step
             all_prompts_text = gather_object(prompts_text)
             # Get completions from vLLM for all prompts
