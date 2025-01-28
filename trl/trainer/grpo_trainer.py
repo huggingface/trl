@@ -285,11 +285,12 @@ class GRPOTrainer(Trainer):
 
             if self.accelerator.is_main_process:
                 with patch("torch.distributed.get_world_size", return_value=1):
-                    self.llm = LLM(
-                        model=model.name_or_path,
-                        device=self.args.vllm_device,
-                        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
-                    )
+                    with patch("vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=1):
+                        self.llm = LLM(
+                            model=model.name_or_path,
+                            device=self.args.vllm_device,
+                            gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                        )
                 self.sampling_params = SamplingParams(
                     n=self.num_generations,
                     temperature=args.temperature,
