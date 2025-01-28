@@ -62,7 +62,7 @@ embedding_model = Accelerator().prepare_model(self.embedding_model)
 embedding_func = partial(embed_prompt, model=embedding_model)
 ```
 
-Set `prompt_sample_size` to defined how many prompts are selected to train the UDM classifier and start the training with the provided embedding function:
+Set `prompt_sample_size` to define how many prompts are selected to train the UDM classifier and start the training with the provided embedding function:
 
 ```py
 training_args = BCOConfig(
