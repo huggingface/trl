@@ -1128,7 +1128,12 @@ class DPOTrainer(Trainer):
         """
         num_examples = batch["prompt_input_ids"].shape[0]
 
-        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
+        concatenated_batch = self.concatenated_inputs(
+            batch,
+            is_encoder_decoder=self.is_encoder_decoder,
+            label_pad_token_id=self.label_pad_token_id,
+            padding_value=self.padding_value,
+        )
 
         model_kwargs = {}
         if self.aux_loss_enabled:
