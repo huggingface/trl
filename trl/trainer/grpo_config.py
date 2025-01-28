@@ -153,8 +153,9 @@ class GRPOConfig(TrainingArguments):
             "`transformers.TrainingArguments`."
         },
     )
-    # Per device train batch size is overwritten from the parent class, because in GRPO GRPO generates multiple
-    # completions per prompt, which increases the memory requirements.
+    # GRPO generates multiple completions per prompt, increasing memory usage.
+    # To accommodate this, the per-device train batch size is decreased (overiden from the parent class),
+    # and the number gradient accumulation steps is increased to maintain the effective batch size.
     per_device_train_batch_size: float = field(
         default=1,
         metadata={
@@ -162,7 +163,6 @@ class GRPOConfig(TrainingArguments):
             "be this value multiplied by `num_generations`."
         },
     )
-    # Consequently, the gradient accumulation steps are increased to keep the effective batch size the same.
     gradient_accumulation_steps: float = field(
         default=8,
         metadata={
