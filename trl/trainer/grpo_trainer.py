@@ -387,7 +387,8 @@ class GRPOTrainer(Trainer):
         if self.args.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
-                state_dict = self.accelerator.get_state_dict(model)
+                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                    state_dict = unwrapped_model.state_dict()
                 if self.accelerator.is_main_process:
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                     llm_model.load_weights(state_dict.items())
