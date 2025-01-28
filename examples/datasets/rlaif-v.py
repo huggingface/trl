@@ -77,7 +77,7 @@ The RLAIF-V dataset is a processed version of the [openbmb/RLAIF-V-Dataset](http
 - **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
 
 Columns:
-- `"pompt"`: The task related to the image.
+- `"prompt"`: The task related to the image.
 - `"images"`: The image.
 - `"chosen"`: The preferred answer.
 - `"rejected"`: An alternative answer that was not preferred.

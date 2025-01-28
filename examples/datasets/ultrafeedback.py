@@ -112,7 +112,7 @@ The UltraFeedback GPT-3.5-Turbo Helpfulness dataset contains processed user-assi
 - **Type**: [Unpaired preference](https://huggingface.co/docs/trl/main/dataset_formats#unpaired-preference)
 
 Column:
-- `"pompt"`: The input question or instruction provided to the model.
+- `"prompt"`: The input question or instruction provided to the model.
 - `"completion"`: The model's response to the prompt.
 - `"label"`: A binary value indicating whether the response is sufficiently helpful.
 
