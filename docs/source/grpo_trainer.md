@@ -62,9 +62,9 @@ Distributed across 8 GPUs, the training takes approximately 1 day.
 
 ![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/grpo_curves.png)
 
-### VLLM based training
+### vLLM based training
 
-To use VLLM based training, set the `use_vllm` flag to `True` in the `GRPOConfig` class. You can also set the `vllm_device` and `vllm_gpu_memory_utilization` arguments to specify the device and GPU memory utilization for the VLLM server.
+To use [vLLM](https://github.com/vllm-project/vllm) based training, set the `use_vllm` flag to `True` in the `GRPOConfig` class. You can also set the `vllm_device` and `vllm_gpu_memory_utilization` arguments to specify the device and GPU memory utilization for the VLLM server.
 
 ```python
 training_args = GRPOConfig(
@@ -74,6 +74,8 @@ training_args = GRPOConfig(
     vllm_gpu_memory_utilization=0.7,
 )
 ```
+
+Make sure to install the `vllm` library via `pip install vllm` or `pip install "trl[vllm]"`.
 
 ## Looking deeper into the GRPO method
 
