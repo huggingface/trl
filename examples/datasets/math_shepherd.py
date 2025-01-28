@@ -141,7 +141,7 @@ The Math-Shepherd dataset is a processed version of [Math-Shepherd dataset](peiy
 - **Type**: [Stepwise supervision](https://huggingface.co/docs/trl/main/dataset_formats#stepwise-supervision)
 
 Columns:
-- `"pompt"`: The problem statement.
+- `"prompt"`: The problem statement.
 - `"completions"`: A list of reasoning steps generated to solve the problem.
 - `"labels"`: A list of booleans or floats indicating the correctness of each corresponding reasoning step.
 

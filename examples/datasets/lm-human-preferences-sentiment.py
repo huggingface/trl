@@ -77,7 +77,7 @@ The LM-Human-Preferences-Sentiment dataset is a processed subset of [OpenAI's LM
 - **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
 
 Columns:
-- `"pompt"`: The text sample.
+- `"prompt"`: The text sample.
 - `"chosen"`: A version of the text that conveys the desired sentiment.
 - `"rejected"`: A version of the text that does not convey the desired sentiment.
 
