@@ -314,7 +314,6 @@ class GRPOTrainer(Trainer):
             raise ValueError("The GRPOTrainer does not support returning outputs")
 
         device = self.accelerator.device
-        prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
             prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
@@ -340,8 +339,9 @@ class GRPOTrainer(Trainer):
 
             # Get completions from vLLM for all prompts
             with self.accelerator.main_process_first():  # Why it doesn't work without this?
+                print(f"\n\n===prompts====\n{prompts_text}\n======\n\n")
                 completion_ids = self.vllm_client.generate(
-                    prompts=prompts, sampling_params=sampling_params, return_type="tokens"
+                    prompts=prompts_text, sampling_params=sampling_params, return_type="tokens"
                 )
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
