@@ -330,7 +330,8 @@ class GRPOTrainer(Trainer):
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 if self.accelerator.is_main_process:
-                    self.vllm_client.load_weights(self.accelerator.unwrap_model(model).state_dict())
+                    state_dict = self.accelerator.get_state_dict(model)
+                    self.vllm_client.load_weights(state_dict)
                 self._last_loaded_step = self.state.global_step
                 self.accelerator.wait_for_everyone() # Wait for main process to finish loading weights
 
