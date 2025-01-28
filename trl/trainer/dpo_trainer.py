@@ -845,12 +845,13 @@ class DPOTrainer(Trainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int,
-        is_encoder_decoder: bool = False, label_pad_token_id: int = -100,
+        batch: dict[str, Union[list, torch.LongTensor]],
+        padding_value: int,
+        label_pad_token_id: int, #trl internals = -100
+        is_encoder_decoder: bool = False, 
     ) -> dict[str, torch.LongTensor]:
         """
-        Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
-        and completion sequences.
+        Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor.
 
         Args:
             batch (`dict[str, Union[list, torch.LongTensor]]`):
@@ -864,10 +865,14 @@ class DPOTrainer(Trainer):
 
             padding_value (`int`):
                 The padding value to use for the concatenated completion sequences (`chosen_input_ids` and
-                `rejected_input_ids`).
+                `rejected_input_ids`).   
+            
+            is_encoder_decoder (`bool`, optional): Whether the model is an encoder-decoder model.
+
+            label_pad_token_id (`int`, optional): The label pad token id, default = -100
 
         Returns:
-            `dict[str, torch.LongTensor]`: A dictionary containing:
+            `dict[str, torch.LongTensor]`: A dictionary containing the concatenated inputs under the key concatenated_input_ids:
 
                 - `"prompt_input_ids"`: Concatenated prompt input IDs of shape `(2 * batch_size, prompt_length)`.
                 - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs of shape `(2 * batch_size, max_completion_length)`.
@@ -878,128 +883,54 @@ class DPOTrainer(Trainer):
 
         Notes:
             The completion input IDs and attention masks are padded to the maximum completion length of the chosen
-            or rejected sequences.
+            or rejected sequences (max_length).
         """
         output = {}
 
-        # For the prompt, the input_ids are the same for both the chosen and rejected responses
-        output["prompt_input_ids"] = torch.cat([batch["prompt_input_ids"], batch["prompt_input_ids"]], dim=0)
-        output["prompt_attention_mask"] = torch.cat(
-            [batch["prompt_attention_mask"], batch["prompt_attention_mask"]], dim=0
-        )
-        if "pixel_values" in batch:
-            output["pixel_values"] = torch.cat([batch["pixel_values"], batch["pixel_values"]], dim=0)
-
-        if "pixel_attention_mask" in batch:
-            output["pixel_attention_mask"] = torch.cat(
-                [batch["pixel_attention_mask"], batch["pixel_attention_mask"]], dim=0
-            )
-        if "image_sizes" in batch:
-            output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
-
-        # Concatenate the chosen and rejected completions
-        max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
-        output["completion_input_ids"] = torch.cat(
-            (
-                pad_to_length(batch["chosen_input_ids"], max_completion_length, pad_value=padding_value),
-                pad_to_length(batch["rejected_input_ids"], max_completion_length, pad_value=padding_value),
-            ),
-        )
-        output["completion_attention_mask"] = torch.cat(
-            (
-                pad_to_length(batch["chosen_attention_mask"], max_completion_length, pad_value=0),
-                pad_to_length(batch["rejected_attention_mask"], max_completion_length, pad_value=0),
-            ),
-        )
-
-        return output
-    
-    @staticmethod
-    def concatenated_inputs(
-        batch: dict[str, Union[list, torch.LongTensor]], 
-        padding_value: int, 
-        is_encoder_decoder: bool = False, 
-        label_pad_token_id: int = -100, 
-        device: Optional[torch.device] = None
-    ) -> dict[str, torch.LongTensor]:
-        """
-        Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
-        and completion sequences.
-
-        Args:
-            batch (`dict[str, Union[list, torch.LongTensor]]`):
-                A batch of input data. The batch must contain the following keys:
-
-                - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input IDs.
-                - `"chosen_input_ids"`: Tensor of shape `(batch_size, chosen_length)` representing the chosen completion input IDs.
-                - `"rejected_input_ids"`: Tensor of shape `(batch_size, rejected_length)` representing the rejected completion input IDs.
-                - `"prompt_pixel_values"` (optional): Tensor for pixel values, if available.
-                - `"prompt_pixel_attention_mask"` (optional): Tensor for pixel attention masks, if available.
-
-            padding_value (`int`):
-                The padding value to use for the concatenated completion sequences (`chosen_input_ids` and
-                `rejected_input_ids`).
-
-            is_encoder_decoder (`bool`, optional): Whether the model is an encoder-decoder model.
-            label_pad_token_id (`int`, optional): The label pad token id.
-            device (`Optional[torch.device]`, optional): The device for the concatenated inputs.
-
-        Returns:
-            `dict[str, torch.LongTensor]`: A dictionary containing:
-
-                - `"prompt_input_ids"`: Concatenated prompt input IDs of shape `(2 * batch_size, prompt_length)`.
-                - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs of shape `(2 * batch_size, max_completion_length)`.
-                - `"prompt_attention_mask"`: Concatenated prompt attention masks of shape `(2 * batch_size, prompt_length)`.
-                - `"completion_attention_mask"`: Concatenated chosen and rejected attention masks of shape `(2 * batch_size, max_completion_length)`.
-                - `"pixel_values"` (optional): Concatenated pixel values if `"prompt_pixel_values"` are present.
-                - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if `"prompt_pixel_attention_mask"` are present.
-        """
-        output = {}
-
-        # Handle prompt keys
-        for k in batch:
-            if k.startswith("prompt"):
-                concatenated_key = k.replace("prompt", "concatenated")
-                output[concatenated_key] = torch.cat([batch[k], batch[k]], dim=0)
-
+        #NOTES
         max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
 
-        # Handle chosen and rejected keys
         for k in batch:
+            #concat the chosen response; make sure to NOT overwrite the chosen
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
-                if "labels" in k or is_encoder_decoder:
+                if is_encoder_decoder:
+                    #trl internal label_pad_token_id= -100 
                     pad_value = label_pad_token_id
                 elif k.endswith("_input_ids"):
                     pad_value = padding_value
                 elif k.endswith("_attention_mask"):
                     pad_value = 0
-                concatenated_key = k.replace("chosen", "concatenated")
-                output[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
+                #Make sure NOT to overwrite the chosen 
+                new_concatenated_key = k.replace("chosen", "concatenated")
+                output[new_concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
+
+            #concat the rejected response;    
             elif k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
-                if "labels" in k or is_encoder_decoder:
+                if is_encoder_decoder:
                     pad_value = label_pad_token_id
                 elif k.endswith("_input_ids"):
                     pad_value = padding_value
                 elif k.endswith("_attention_mask"):
                     pad_value = 0
-                concatenated_key = k.replace("rejected", "concatenated")
-                output[concatenated_key] = torch.cat(
+                new_concatenated_key = k.replace("rejected", "concatenated")
+                output[new_concatenated_key] = torch.cat(
                     (
-                        output[concatenated_key],
+                        output[new_concatenated_key],
                         pad_to_length(batch[k], max_length, pad_value=pad_value),
                     ),
                     dim=0,
-                ).to(device=device)
+                )
 
         # Handle pixel keys
         for k in batch:
-            if k.startswith("pixel"):
-                concatenated_key = k.replace("prompt", "concatenated")
-                output[concatenated_key] = torch.cat([batch[k], batch[k]], dim=0)
+            if k.startswith("pixel") or k == "image_sizes":
+                new_concatenated_key = k.replace("prompt", "concatenated")
+                output[new_concatenated_key] = torch.cat([batch[k], batch[k]], dim=0)
 
+        # To make sure prompt, the input_ids are the same for both the chosen and rejected responses
         if is_encoder_decoder:
-            output["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2, 1).to(device=device)
-            output["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2, 1).to(device=device)
+            output["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2, 1)
+            output["concatenated_attention_mask"] = batch["prompt_attention_mask"].repeat(2, 1)
 
         return output
 
