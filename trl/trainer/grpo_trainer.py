@@ -339,7 +339,6 @@ class GRPOTrainer(Trainer):
 
             # Get completions from vLLM for all prompts
             with self.accelerator.main_process_first():  # Why it doesn't work without this?
-                print(f"\n\n===prompts====\n{prompts_text}\n======\n\n")
                 completion_ids = self.vllm_client.generate(
                     prompts=prompts_text, sampling_params=sampling_params, return_type="tokens"
                 )
