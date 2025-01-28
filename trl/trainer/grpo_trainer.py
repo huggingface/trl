@@ -398,7 +398,7 @@ class GRPOTrainer(Trainer):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
         # Compute the rewards
-        prompts = [prompt for prompt in prompts_text for _ in range(self.num_generations)]
+        prompts = [prompt for prompt in prompts for _ in range(self.num_generations)]
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
         for i, (reward_func, reward_processing_class) in enumerate(
