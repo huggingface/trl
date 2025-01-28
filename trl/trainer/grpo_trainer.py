@@ -286,7 +286,7 @@ class GRPOTrainer(Trainer):
             if self.accelerator.is_main_process:  # for demo, run only in the main process
                 with patch("torch.distributed.get_world_size", return_value=1):
                     self.llm = LLM(
-                        model="Qwen/Qwen2.5-7B", device=f"cuda:{self.args.vllm_device}", gpu_memory_utilization=0.5
+                        model=model.name_or_path, device=f"cuda:{self.args.vllm_device}", gpu_memory_utilization=0.7
                     )
                 self.sampling_params = SamplingParams(
                     n=self.num_generations,
@@ -356,12 +356,12 @@ class GRPOTrainer(Trainer):
             if self.accelerator.is_main_process:
                 if self.state.global_step != self._last_loaded_step:
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                    llm_model.load_weights(model.state_dict().items())
+                    llm_model.load_weights(self.accelerator.unwrap_model(model).state_dict().items())
                 self._last_loaded_step = self.state.global_step
             all_prompts_text = gather_object(prompts_text)
             # Get completions from vLLM for all prompts
             if self.accelerator.is_main_process:
-                outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params)
+                outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
                 completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
             else:
                 completion_ids = [None] * len(all_prompts_text) * self.num_generations
