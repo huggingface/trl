@@ -96,12 +96,12 @@ class VLLMServer:
         """Add the routes for the server."""
 
         @app.post("/load")
-        async def load(request: ModelLoadRequest):
+        def load(request: ModelLoadRequest):
             try:
                 self.llm = LLM(model=request.model_name)
                 return {"status": "success", "message": f"Model {request.model_name} loaded."}
             except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Error loading model: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Error loading model: {str(e)}") from e
 
         @app.post("/generate")
         async def generate(request: GenerateRequest):
@@ -119,9 +119,9 @@ class VLLMServer:
                     )
 
                 if is_conversational({"prompt": prompts[0]}):
-                    outputs = self.llm.chat(prompts, sampling_params=sampling_params)
+                    outputs = await self.llm.chat(prompts, sampling_params=sampling_params)
                 else:
-                    outputs = self.llm.generate(prompts, sampling_params=sampling_params)
+                    outputs = await self.llm.generate(prompts, sampling_params=sampling_params)
 
                 if return_type == "text":
                     completions = [out.text for completions in outputs for out in completions.outputs]
@@ -131,7 +131,7 @@ class VLLMServer:
                 return JSONResponse(content=completions)
 
             except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Error generating completions: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Error generating completions: {str(e)}") from e
 
         @app.post("/load_weights")
         async def load_weights(request: Request):
@@ -150,7 +150,7 @@ class VLLMServer:
                 return {"status": "success", "message": "Model weights loaded."}
 
             except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Error loading weights: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Error loading weights: {str(e)}") from e
 
     def run(self):
         import uvicorn

@@ -332,7 +332,7 @@ class GRPOTrainer(Trainer):
                 if self.accelerator.is_main_process:
                     self.vllm_client.load_weights(self.accelerator.unwrap_model(model).state_dict())
                 self._last_loaded_step = self.state.global_step
-                self.accelerator.wait_for_everyone() # Wait for main process to finish loading weights
+                self.accelerator.wait_for_everyone()  # Wait for main process to finish loading weights
 
             # Set up sampling parameters
             sampling_params = {"n": self.args.num_generations, "temperature": self.args.temperature}
