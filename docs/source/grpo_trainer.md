@@ -14,7 +14,7 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) as the base model and the [RM-Gemma-2B model](https://huggingface.co/weqweasdas/RM-Gemma-2B) as the reward model. We use the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ingored!). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ingored!). You can view the data in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
@@ -23,32 +23,26 @@ This example demonstrates how to train a model using the GRPO method. We use the
   height="560px"
 ></iframe>
 
-Below is the script to train the model. We use PEFT to reduce the memory requirements.
+Below is the script to train the model.
 
 ```python
 # train_grpo.py
 from datasets import load_dataset
-from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
-# Load the dataset
 dataset = load_dataset("trl-lib/tldr", split="train")
 
-training_args = GRPOConfig(
-    output_dir="Qwen2-0.5B-GRPO",
-    learning_rate=1e-5,
-    logging_steps=10,
-    gradient_accumulation_steps=16,
-    max_completion_length=128,
-)
+# Define the reward function, which rewards completions that are close to 20 characters
+def reward_len(completions, **kwargs):
+    return [abs(20 - len(completion)) for completion in completions]
+
+training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO", logging_steps=10)
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs="weqweasdas/RM-Gemma-2B",
+    reward_funcs=reward_len,
     args=training_args,
     train_dataset=dataset,
-    peft_config=LoraConfig(task_type="CAUSAL_LM"),
 )
-
 trainer.train()
 ```
 
@@ -117,6 +111,18 @@ The GRPO Trainer logs the following metrics:
 - `kl` : The average KL divergence between the model and the reference model calculated on completions.
 
 ## Customization
+
+## Speed up training with vLLM-powered generation  
+
+Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, pass `use_vllm=True` in the training arguments.  
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_vllm=True)
+```  
+
+For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).  
 
 ### Using a custom reward function
 
