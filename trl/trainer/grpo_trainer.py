@@ -426,6 +426,7 @@ class GRPOTrainer(Trainer):
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
+        # Get the per-token log probabilities for the completions for the model and the reference model
         def get_per_token_logps(model, input_ids, num_logits_to_keep):
             # We add 1 to `num_logits_to_keep` because the last logits of the completion is later excluded
             logits = model(input_ids, num_logits_to_keep=num_logits_to_keep + 1).logits  # (B, L, V)
