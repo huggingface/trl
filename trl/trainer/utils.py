@@ -1679,7 +1679,8 @@ def compute_logps_with_prompt_cache(
     C = completion_ids.size(1)
 
     # Forward pass over prompt tokens
-    prompt_out = model(**prompt_inputs, use_cache=True, num_logits_to_keep=1)
+    with torch.no_grad():
+        prompt_out = model(**prompt_inputs, use_cache=True, num_logits_to_keep=1)
 
     # Only keep the last prompt logit, immediately convert to log probabilities and expand to B*G
     prompt_last_logps = prompt_out.logits.log_softmax(dim=-1).repeat_interleave(G, dim=0)
