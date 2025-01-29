@@ -82,7 +82,7 @@ The LM-Human-Preferences-Descriptiveness dataset is a processed subset of [OpenA
 - **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
 
 Columns:
-- `"pompt"`: The text sample.
+- `"prompt"`: The text sample.
 - `"chosen"`: A version of the text with enhanced descriptiveness.
 - `"rejected"`: A version of the text with less descriptiveness.
 
