@@ -154,7 +154,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     # GRPO generates multiple completions per prompt, increasing memory usage.
-    # To accommodate this, the per-device train batch size is decreased (overiden from the parent class),
+    # To accommodate this, the per-device train batch size is decreased (overriden from the parent class),
     # and the number gradient accumulation steps is increased to maintain the effective batch size.
     per_device_train_batch_size: int = field(
         default=1,
