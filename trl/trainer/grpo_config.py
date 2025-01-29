@@ -71,10 +71,10 @@ class GRPOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        per_device_train_batch_size (`float`, *optional*, defaults to `1`):
+        per_device_train_batch_size (`int`, *optional*, defaults to `1`):
             Number of prompts sampled per device for training. The actual batch passed into the model will be this
             value multiplied by `num_generations`.
-        gradient_accumulation_steps (`float`, *optional*, defaults to `8`):
+        gradient_accumulation_steps (`int`, *optional*, defaults to `8`):
             Number of updates steps to accumulate the gradients for, before performing a backward/update pass.
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
@@ -156,14 +156,14 @@ class GRPOConfig(TrainingArguments):
     # GRPO generates multiple completions per prompt, increasing memory usage.
     # To accommodate this, the per-device train batch size is decreased (overiden from the parent class),
     # and the number gradient accumulation steps is increased to maintain the effective batch size.
-    per_device_train_batch_size: float = field(
+    per_device_train_batch_size: int = field(
         default=1,
         metadata={
             "help": "Number of prompts sampled per device for training. The actual batch passed into the model will "
             "be this value multiplied by `num_generations`."
         },
     )
-    gradient_accumulation_steps: float = field(
+    gradient_accumulation_steps: int = field(
         default=8,
         metadata={
             "help": "Number of updates steps to accumulate the gradients for, before performing a backward/update "
