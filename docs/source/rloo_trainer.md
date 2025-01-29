@@ -2,7 +2,7 @@
 
 [![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
 
-TRL supports training LLMs with REINFORCE Leave-One-Out (RLOO). The idea is that instead of using a value function, RLOO generates K completions for each prompt. For each completion, RLOO uses the mean scores from the other K-1 completions as a baseline to calculate the advantage. RLOO also models the entire completion as a single action, where as PPO models each token as an action. Note that REINFORCE / A2C is a special case of PPO, when the number of PPO epochs is 1 and the number of mini-batches is 1, which is how we implement RLOO in TRL.
+TRL supports training LLMs with REINFORCE Leave-One-Out (RLOO). The idea is that instead of using a value function, RLOO generates K completions for each prompt. For each completion, RLOO uses the mean scores from the other K-1 completions as a baseline to calculate the advantage. RLOO also models the entire completion as a single action, whereas PPO models each token as an action. Note that REINFORCE / A2C is a special case of PPO, when the number of PPO epochs is 1 and the number of mini-batches is 1, which is how we implement RLOO in TRL.
 
 References:
 - [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740)
@@ -58,7 +58,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 ## Cookbook
 
 * Debugging TIP: `objective/rlhf_reward`: this is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
-* Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try undertand why this is happening and try to fix it.
+* Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try understand why this is happening and try to fix it.
 * Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
 * Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
 * Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which subtracts a static scalar penalty from the score of completions that do not end with an EOS token. This can help the model learn to generate more coherent completions.
@@ -90,7 +90,7 @@ In the logs the sampled generations look like
 │ intensely.                      │                                 │          │
 │                                 │                                 │          │
 │ Problem, I recently started to  │                                 │          │
-│ have feelings for an other      │                                 │          │
+│ have feelings for another      │                                 │          │
 │ person (a friend). This person  │                                 │          │
 │ has had a boyfriend for now 3   │                                 │          │
 │ years, and has absolutely no    │                                 │          │
@@ -128,7 +128,7 @@ In the logs the sampled generations look like
 │ about 8:30 in the morning, and  │                                 │          │
 │ she was exercising. She turned  │                                 │          │
 │ the TV up extra loud to hear it │                                 │          │
-│ over her excercycle, and woke   │                                 │          │
+│ over her exercycle, and woke   │                                 │          │
 │ me up. I went in there asking   │                                 │          │
 │ for her to turn it down. She    │                                 │          │
 │ said she didn't have to; I      │                                 │          │
@@ -155,7 +155,7 @@ In the logs the sampled generations look like
 │                                 │                                 │          │
 │ If you hate Gangnam Style for   │                                 │          │
 │ being overplayed, you will see  │                                 │          │
-│ why I chose that particular     │                                 │          │
+│ why I choose that particular     │                                 │          │
 │ song. I personally don't mind   │                                 │          │
 │ it. But here's the thing about  │                                 │          │
 │ my bass; it vibrates the walls, │                                 │          │
