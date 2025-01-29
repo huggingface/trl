@@ -1672,54 +1672,42 @@ def compute_logps_with_prompt_cache(
         given all preceding tokens in the prompt + the partial completion up to t-1.
     """
     
-    # Forward pass over prompt tokens (no grad)
-    with torch.no_grad():
-        prompt_out = model(**prompt_inputs, use_cache=True)
-        
-        # Only keep the last prompt logit, immediately convert to log probabilities
-        prompt_last_logps = prompt_out.logits[:, -1:, :].log_softmax(dim=-1)
-        
-        # Get the batch size and number of generations
-        B = prompt_inputs["input_ids"].size(0)
-        G = completion_ids.size(0) // B
+    # Forward pass over prompt tokens
+    prompt_out = model(**prompt_inputs, use_cache=True, num_logits_to_keep=1)
+    
+    # Only keep the last prompt logit, immediately convert to log probabilities
+    prompt_last_logps = prompt_out.logits.log_softmax(dim=-1)
+    
+    # Get the batch size (B), number of completions (G), and completion length (C)
+    B = prompt_inputs["input_ids"].size(0)
+    G = completion_ids.size(0) // B
+    C = completion_ids.size(1)
 
-        # Interleave the last log probs for G times
-        prompt_last_logps = prompt_last_logps.repeat_interleave(G, dim=0)
+    # Interleave the last log probs for G times
+    prompt_last_logps = prompt_last_logps.repeat_interleave(G, dim=0)
 
-        # Gather the these log probs as they relates to the first completion token
-        first_completion_token_logps = torch.gather(
-            prompt_last_logps,
-            dim=-1,
-            index=completion_ids[:, :1].unsqueeze(-1)
-        ).squeeze(-1)
-        
-        # Free memory explicitly
-        del prompt_last_logps
+    # Gather the these log probs as they relates to the first completion token
+    first_completion_token_logps = torch.gather(
+        prompt_last_logps,
+        dim=-1,
+        index=completion_ids[:, :1].unsqueeze(-1)
+    ).squeeze(-1)
 
     # Interleave the past key values for the G times
     prompt_out.past_key_values.batch_repeat_interleave(G)
     
     # Forward pass over completion tokens (with or without grad)
-    if requires_grad_for_completion:
+    with torch.set_grad_enabled(requires_grad_for_completion):
         completion_out = model(
             input_ids=completion_ids,
             past_key_values=prompt_out.past_key_values,
+            logits_to_keep=C-1,  # keep all but the last logit
             use_cache=False,
         )
-    else:
-        with torch.no_grad():
-            completion_out = model(
-                input_ids=completion_ids,
-                past_key_values=prompt_out.past_key_values,
-                use_cache=False,
-            )
 
-    # Get rid of the last logits of the completion
-    logits = completion_out.logits[:, :-1, :]  # [B, completion_len - 1, vocab_size]
-    
     # Convert completions logits to logprobs
     completion_token_logps = torch.gather(
-        logits.log_softmax(dim=-1),
+        completion_out.logits.log_softmax(dim=-1),
         dim=-1,
         index=completion_ids[:, 1:].unsqueeze(-1)
     ).squeeze(-1)
