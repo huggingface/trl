@@ -302,7 +302,7 @@ class GRPOTrainer(Trainer):
                         f"The requested device {vllm_device} is also used for training. This may lead to unexpected "
                         "behavior. It is recommended to use a dedicated device for vLLM."
                     )
-                # vLLM is not compatible with accelerate. So we've to patch it to make sure we can (1) place the vLLM
+                # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) place the vLLM
                 # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
                 # setting (profiling_patch).
                 world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
