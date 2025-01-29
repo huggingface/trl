@@ -447,7 +447,9 @@ class TextEnvironment:
                     raise Exception("Cache format incompatible")
                 if extracted_keys.shape[2] > max_sequence_length - 1:
                     raise Exception("Cache sequence length is too large")
-                start_position = max(max_sequence_length - 1 - extracted_keys.shape[2], 0)
+                start_position = max_sequence_length - 1 - extracted_keys.shape[2]
+                if start_position < 0:
+                    raise Exception("start position incorrect")
                 new_values = torch.zeros_like(new_keys).to(self.current_device)
                 new_keys[:, :, start_position:, :] = extracted_keys
                 new_values[:, :, start_position:, :] = extracted_values
@@ -472,6 +474,8 @@ class TextEnvironment:
             if attention_mask.shape[1] != input_ids.shape[1]:
                 raise Exception("Cache format incompatible")
             start_position = max_sequence_length - attention_mask.shape[1]
+            if start_position < 0:
+                raise Exception("start position incorrect")
             padded_attention_mask = torch.zeros(
                 (attention_mask.shape[0], max_sequence_length), dtype=attention_mask.dtype
             ).to(self.current_device)
