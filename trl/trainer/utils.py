@@ -1648,6 +1648,7 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
     else:
         return mask, *tensors
 
+
 def compute_logps_with_prompt_cache(
     model: torch.nn.Module,
     prompt_inputs: dict,
@@ -1671,45 +1672,41 @@ def compute_logps_with_prompt_cache(
         where per_token_logps[i, t] is the logprob of ith completion's t-th completion token,
         given all preceding tokens in the prompt + the partial completion up to t-1.
     """
-    
+
     # Get the batch size (B), number of completions (G), and completion length (C)
     B = prompt_inputs["input_ids"].size(0)
     G = completion_ids.size(0) // B
     C = completion_ids.size(1)
-    
+
     # Forward pass over prompt tokens
     prompt_out = model(**prompt_inputs, use_cache=True, num_logits_to_keep=1)
-    
+
     # Only keep the last prompt logit, immediately convert to log probabilities and expand to B*G
     prompt_last_logps = prompt_out.logits.log_softmax(dim=-1).repeat_interleave(G, dim=0)
-    
+
     # Gather the these log probs as they relates to the first completion token
     first_completion_token_logps = torch.gather(
-        prompt_last_logps,
-        dim=-1,
-        index=completion_ids[:, :1].unsqueeze(-1)
+        prompt_last_logps, dim=-1, index=completion_ids[:, :1].unsqueeze(-1)
     ).squeeze(-1)
 
     # Interleave the past key values for the G times
     prompt_out.past_key_values.batch_repeat_interleave(G)
-    
+
     # Forward pass over completion tokens (with or without grad)
     with torch.set_grad_enabled(requires_grad_for_completion):
         completion_out = model(
             input_ids=completion_ids,
             past_key_values=prompt_out.past_key_values,
-            logits_to_keep=C-1,  # keep all but the last logit
+            logits_to_keep=C - 1,  # keep all but the last logit
             use_cache=False,
         )
 
     # Convert completions logits to logprobs
     completion_token_logps = torch.gather(
-        completion_out.logits.log_softmax(dim=-1),
-        dim=-1,
-        index=completion_ids[:, 1:].unsqueeze(-1)
+        completion_out.logits.log_softmax(dim=-1), dim=-1, index=completion_ids[:, 1:].unsqueeze(-1)
     ).squeeze(-1)
-    
+
     # Concat with the first_completion_token_logps
     per_token_logps = torch.cat([first_completion_token_logps, completion_token_logps], dim=1)
-    
+
     return per_token_logps

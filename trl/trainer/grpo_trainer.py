@@ -43,7 +43,7 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .grpo_config import GRPOConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad, compute_logps_with_prompt_cache
+from .utils import compute_logps_with_prompt_cache, generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
@@ -430,7 +430,7 @@ class GRPOTrainer(Trainer):
             model=self.accelerator.unwrap_model(model),
             prompt_inputs=prompt_inputs,
             completion_ids=completion_ids,
-            requires_grad_for_completion=True
+            requires_grad_for_completion=True,
         )
 
         # Reference model logprobs (no grad)
@@ -439,17 +439,16 @@ class GRPOTrainer(Trainer):
                 model=self.ref_model,
                 prompt_inputs=prompt_inputs,
                 completion_ids=completion_ids,
-                requires_grad_for_completion=False
+                requires_grad_for_completion=False,
             )
         else:
             with self.accelerator.unwrap_model(model).disable_adapter():
                 ref_per_token_logps = compute_logps_with_prompt_cache(
-                    model=model,    
+                    model=model,
                     prompt_inputs=prompt_inputs,
                     completion_ids=completion_ids,
-                    requires_grad_for_completion=False
+                    requires_grad_for_completion=False,
                 )
-
 
         # Compute the KL divergence between the model and the reference model
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
