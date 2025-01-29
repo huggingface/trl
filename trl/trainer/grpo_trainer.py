@@ -427,7 +427,7 @@ class GRPOTrainer(Trainer):
 
         # Current policy logprobs (with grad)
         per_token_logps = compute_logps_with_prompt_cache(
-            model=self.accelerator.unwrap_model(model),
+            model=model,
             prompt_inputs=prompt_inputs,
             completion_ids=completion_ids,
             requires_grad_for_completion=True,
