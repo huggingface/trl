@@ -71,14 +71,15 @@ class DPOConfig(TrainingArguments):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Padding value to use for labels.
-        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to usewhen the prompt is too long, either `keep_end` or `keep_start`.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the full sequence (prompt + completion).
+        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
+            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            `"keep_start"`.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether forward passes are performed without padding by flattening all sequences in the batch
             into a single continuous sequence. This approach requires associating a `position_ids` vector to track
@@ -219,13 +220,6 @@ class DPOConfig(TrainingArguments):
         default=-100,
         metadata={"help": "Padding value to use for labels."},
     )
-    truncation_mode: str = field(
-        default="keep_end",
-        metadata={
-            "help": "Truncation mode to use when the prompt is too long.",
-            "choices": ["keep_end", "keep_start"],
-        },
-    )
     max_prompt_length: Optional[int] = field(
         default=512,
         metadata={"help": "Maximum length of the prompt."},
@@ -237,6 +231,14 @@ class DPOConfig(TrainingArguments):
     max_length: Optional[int] = field(
         default=1024,
         metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
+    )
+    truncation_mode: str = field(
+        default="keep_end",
+        metadata={
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
+            "and `'keep_start'`.",
+            "choices": ["keep_end", "keep_start"],
+        },
     )
     padding_free: bool = field(
         default=False,

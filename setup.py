@@ -21,7 +21,7 @@ Note:
 
 Simple check list for release from AllenNLP repo: https://github.com/allenai/allennlp/blob/master/setup.py
 
-To create the package for pypi.
+To create the package for PyPI.
 
 0. Prerequisites:
    - Dependencies:
@@ -50,7 +50,7 @@ To create the package for pypi.
    For the sources, run: "python setup.py sdist"
    You should now have a /dist directory with both .whl and .tar.gz source versions.
 
-5. Check that everything looks correct by uploading the package to the pypi test server:
+5. Check that everything looks correct by uploading the package to the PyPI test server:
 
    twine upload dist/* -r pypitest --repository-url=https://test.pypi.org/legacy/
 
@@ -59,7 +59,7 @@ To create the package for pypi.
    pip install -U tqdm
    pip install -i https://testpypi.python.org/pypi evaluate
 
-6. Upload the final version to actual pypi:
+6. Upload the final version to actual PyPI:
    twine upload dist/* -r pypi
 
 7. Fill release notes in the tag in github once everything is looking hunky-dory.
