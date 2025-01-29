@@ -77,7 +77,7 @@ The UltraFeedback - Prompts dataset is a processed version of the [UltraFeedback
 - **Type**: [Prompt-only](https://huggingface.co/docs/trl/main/dataset_formats#prompt-only)
 
 Column:
-- `"pompt"`: The input question or instruction provided to the model.
+- `"prompt"`: The input question or instruction provided to the model.
 
 ## Generation script
 
