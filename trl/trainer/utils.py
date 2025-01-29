@@ -1672,20 +1672,17 @@ def compute_logps_with_prompt_cache(
         given all preceding tokens in the prompt + the partial completion up to t-1.
     """
     
-    # Forward pass over prompt tokens
-    prompt_out = model(**prompt_inputs, use_cache=True, num_logits_to_keep=1)
-    
-    # Only keep the last prompt logit, immediately convert to log probabilities
-    prompt_last_logps = prompt_out.logits.log_softmax(dim=-1)
-    
     # Get the batch size (B), number of completions (G), and completion length (C)
     B = prompt_inputs["input_ids"].size(0)
     G = completion_ids.size(0) // B
     C = completion_ids.size(1)
-
-    # Interleave the last log probs for G times
-    prompt_last_logps = prompt_last_logps.repeat_interleave(G, dim=0)
-
+    
+    # Forward pass over prompt tokens
+    prompt_out = model(**prompt_inputs, use_cache=True, num_logits_to_keep=1)
+    
+    # Only keep the last prompt logit, immediately convert to log probabilities and expand to B*G
+    prompt_last_logps = prompt_out.logits.log_softmax(dim=-1).repeat_interleave(G, dim=0)
+    
     # Gather the these log probs as they relates to the first completion token
     first_completion_token_logps = torch.gather(
         prompt_last_logps,
