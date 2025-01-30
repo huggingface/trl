@@ -103,8 +103,9 @@ class DPOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        loss_weights (`dict`, *optional*, defaults to `{"sigmoid": 1.0}`):
-            Use to weight a combination of losses.
+        loss_weights (`dict[str, float]` or `None`, *optional*, defaults to `None`):
+            Use to weight a combination of losses. The keys must be in `loss_type`. By default (if not specified in the dict),
+            the weight for a loss in loss_type is 1.0.
         loss_type (`str` or `list`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
@@ -284,8 +285,11 @@ class DPOConfig(TrainingArguments):
             "`transformers.TrainingArguments`."
         },
     )
-    loss_weights: Optional[Dict[str, float]] = field(
-        default_factory=lambda: ["your_values"]
+    loss_weights: Optional[dict[str, float]] = field(
+        default=None,
+        metadata={
+            "help": "Use to weight a combination of losses"
+        }
     )
     loss_type: List[str] | str = field(
         default="sigmoid",
