@@ -67,6 +67,6 @@ best_of_n.generate(query_tensors, device=device)
 
 ```
 
-Furthermore, at the time of initialization you can set the seed to control repeatability of the generation process and the number of samples to generate for each query
+Furthermore, at the time of initialization you can set the seed to control the repeatability of the generation process and the number of samples to generate for each query
 
 
