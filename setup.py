@@ -123,7 +123,7 @@ setup(
     package_data={
         "trl": ["templates/*.md"],
     },
-    packages=find_packages(exclude={"tests", "tests.slow"}),
+    packages=find_packages(exclude={"tests", "tests.slow", "trl.templates"}),
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
     python_requires=">=3.9",
