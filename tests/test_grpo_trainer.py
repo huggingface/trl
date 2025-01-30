@@ -371,7 +371,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
-                vllm_device="cpu",  # so that it works with only one GPU
+                vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
