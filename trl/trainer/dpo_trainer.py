@@ -1094,7 +1094,7 @@ class DPOTrainer(Trainer):
             losses = logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
 
         elif loss_type == "sft":
-            losses = -chosen_logps.mean() # Cross entropy loss b/w the completion and the chosen completion
+            losses = -chosen_logps.mean()  # Cross entropy loss b/w the completion and the chosen completion
 
         else:
             raise ValueError(
@@ -1310,10 +1310,14 @@ class DPOTrainer(Trainer):
         for curr_loss_type in self.loss_type:
             # Compute loss with current loss type
             curr_losses, curr_chosen_rewards, curr_rejected_rewards = self.dpo_loss(
-                curr_loss_type, model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
+                curr_loss_type,
+                model_output["chosen_logps"],
+                model_output["rejected_logps"],
+                ref_chosen_logps,
+                ref_rejected_logps,
             )
             curr_loss_weight = getattr(self.loss_weights, curr_loss_type, 1.0)
-            
+
             # Weigth the losses
             losses = losses + curr_losses * curr_loss_weight
             chosen_rewards = chosen_rewards + curr_chosen_rewards * curr_loss_weight
