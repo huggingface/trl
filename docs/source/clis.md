@@ -110,7 +110,7 @@ What is the best programming language?
 <strong><span style="color: blue;">&lt;Qwen/Qwen1.5-0.5B-Chat&gt;:</span></strong>
 There isn't a "best" programming language, as everyone has different style preferences, needs, and preferences. However, some people commonly use   
 languages like Python, Java, C++, and JavaScript, which are popular among developers for a variety of reasons, including readability, flexibility,  
-and scalability. Ultimately, it depends on personal preferences, needs, and goals.
+and scalability. Ultimately, it depends on personal preference, needs, and goals.
 </code></pre>
 
 Note that the chat interface relies on the tokenizer's [chat template](https://huggingface.co/docs/transformers/chat_templating) to format the inputs for the model. Make sure your tokenizer has a chat template defined.
