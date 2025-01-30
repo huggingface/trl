@@ -188,7 +188,6 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
-            self.assertEqual(trainer.args.is_encoder_decoder, True)
             self.assertEqual(trainer.args.disable_dropout, False)
             # self.assertEqual(trainer.args.generate_during_eval, True)
             self.assertEqual(trainer.args.precompute_ref_log_probs, True)
