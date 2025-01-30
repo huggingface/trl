@@ -90,7 +90,7 @@ In the logs the sampled generations look like
 │ intensely.                      │                                 │          │
 │                                 │                                 │          │
 │ Problem, I recently started to  │                                 │          │
-│ have feelings for another      │                                 │          │
+│ have feelings for an other      │                                 │          │
 │ person (a friend). This person  │                                 │          │
 │ has had a boyfriend for now 3   │                                 │          │
 │ years, and has absolutely no    │                                 │          │
@@ -128,7 +128,7 @@ In the logs the sampled generations look like
 │ about 8:30 in the morning, and  │                                 │          │
 │ she was exercising. She turned  │                                 │          │
 │ the TV up extra loud to hear it │                                 │          │
-│ over her exercycle, and woke   │                                 │          │
+│ over her excercycle, and woke   │                                 │          │
 │ me up. I went in there asking   │                                 │          │
 │ for her to turn it down. She    │                                 │          │
 │ said she didn't have to; I      │                                 │          │
@@ -155,7 +155,7 @@ In the logs the sampled generations look like
 │                                 │                                 │          │
 │ If you hate Gangnam Style for   │                                 │          │
 │ being overplayed, you will see  │                                 │          │
-│ why I choose that particular     │                                 │          │
+│ why I chose that particular     │                                 │          │
 │ song. I personally don't mind   │                                 │          │
 │ it. But here's the thing about  │                                 │          │
 │ my bass; it vibrates the walls, │                                 │          │
