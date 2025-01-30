@@ -60,7 +60,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 train_dataset=dataset,
                 sync_ref_model=True,
                 ref_model_mixup_alpha=0.5,
-                ref_model_sync_steps=1,
+                ref_model_sync_steps=2,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
