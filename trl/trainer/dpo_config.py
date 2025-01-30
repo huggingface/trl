@@ -15,7 +15,7 @@
 import warnings
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Union, List, Dict
+from typing import Any, Callable, Optional, Union
 
 from transformers import TrainingArguments
 
@@ -103,9 +103,6 @@ class DPOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        loss_weights (`dict[str, float]` or `None`, *optional*, defaults to `None`):
-            Use to weight a combination of losses. The keys must be in `loss_type`. By default (if not specified in the dict),
-            the weight for a loss in loss_type is 1.0.
         loss_type (`str` or `list`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
@@ -123,6 +120,9 @@ class DPOConfig(TrainingArguments):
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
 
+        loss_weights (`dict[str, float]` or `None`, *optional*, defaults to `None`):
+            Use to weight a combination of losses. The keys must be in `loss_type`. By default (if not specified in the dict),
+            the weight for a loss in loss_type is 1.0.
         beta (`float`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -285,13 +285,7 @@ class DPOConfig(TrainingArguments):
             "`transformers.TrainingArguments`."
         },
     )
-    loss_weights: Optional[dict[str, float]] = field(
-        default=None,
-        metadata={
-            "help": "Use to weight a combination of losses"
-        }
-    )
-    loss_type: List[str] | str = field(
+    loss_type: list[str] = field(
         default="sigmoid",
         metadata={
             "help": "Type of loss to use.",
@@ -311,6 +305,9 @@ class DPOConfig(TrainingArguments):
                 "apo_down",
             ],
         },
+    )
+    loss_weights: Optional[dict[str, float]] = field(
+        default=None, metadata={"help": "Use to weight a combination of losses"}
     )
     beta: float = field(
         default=0.1,
@@ -408,4 +405,7 @@ class DPOConfig(TrainingArguments):
                 "automatically determines if the model is an encoder-decoder, so you can safely remove it."
             )
 
-        return super().__post_init__()
+        super().__post_init__()
+
+        if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:
+            self.loss_type = self.loss_type[0]
