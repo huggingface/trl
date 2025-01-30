@@ -42,6 +42,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
+from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url, pad
 
@@ -207,6 +208,8 @@ class GRPOTrainer(Trainer):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
             self.ref_model = None
+        if args.sync_ref_model:
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         # Processing class
         if processing_class is None:
