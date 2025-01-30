@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional, Union
@@ -385,18 +384,3 @@ class DPOConfig(TrainingArguments):
             "Comet during evaluation."
         },
     )
-
-    # Deprecated parameters
-    is_encoder_decoder: Optional[bool] = field(
-        default=None,
-        metadata={"help": "Deprecated. This argument is not used anymore."},
-    )
-
-    def __post_init__(self):
-        if self.is_encoder_decoder is not None:
-            warnings.warn(
-                "The `is_encoder_decoder` parameter is deprecated will be removed in version 0.15. The trainer now "
-                "automatically determines if the model is an encoder-decoder, so you can safely remove it."
-            )
-
-        return super().__post_init__()
