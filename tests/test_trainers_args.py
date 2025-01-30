@@ -153,7 +153,6 @@ class TrainerArgTester(unittest.TestCase):
                 max_length=256,
                 max_prompt_length=64,
                 max_completion_length=64,
-                is_encoder_decoder=True,
                 disable_dropout=False,
                 # generate_during_eval=True, # ignore this one, it requires wandb
                 precompute_ref_log_probs=True,
