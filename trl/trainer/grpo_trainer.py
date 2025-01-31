@@ -252,6 +252,7 @@ class GRPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.use_vllm = args.use_vllm
+        self.gradient_checkpointing = args.gradient_checkpointing
 
         self.beta = args.beta
 
@@ -425,30 +426,59 @@ class GRPOTrainer(Trainer):
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Current policy logprobs (with grad)
-        per_token_logps = compute_logps_with_prompt_cache(
-            model=model,
-            prompt_inputs=prompt_inputs,
-            completion_ids=completion_ids,
-            requires_grad_for_completion=True,
-        )
+        if self.gradient_checkpointing:
+            # Get the per-token log probabilities for the completions for the model and the reference model
+            def get_per_token_logps(model, input_ids, num_logits_to_keep):
+                # We add 1 to `num_logits_to_keep` because the last logits of the sequence is later excluded
+                logits = model(input_ids, num_logits_to_keep=num_logits_to_keep + 1).logits  # (B, L, V)
+                logits = logits[
+                    :, :-1, :
+                ]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
-        # Reference model logprobs (no grad)
-        if self.ref_model is not None:
-            ref_per_token_logps = compute_logps_with_prompt_cache(
-                model=self.ref_model,
+                # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
+                per_token_logps = []
+                for logits_row, input_ids_row in zip(logits, input_ids[:, -num_logits_to_keep:]):
+                    log_probs = logits_row.log_softmax(dim=-1)
+                    token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
+                    per_token_logps.append(token_log_prob)
+                return torch.stack(per_token_logps)
+
+            num_logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+            per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
+
+            with torch.inference_mode():
+                if self.ref_model is not None:
+                    ref_per_token_logps = get_per_token_logps(
+                        self.ref_model, prompt_completion_ids, num_logits_to_keep
+                    )
+                else:
+                    with self.accelerator.unwrap_model(model).disable_adapter():
+                        ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
+        else:
+            # Current policy logprobs (with grad)
+            per_token_logps = compute_logps_with_prompt_cache(
+                model=model,
                 prompt_inputs=prompt_inputs,
                 completion_ids=completion_ids,
-                requires_grad_for_completion=False,
+                requires_grad_for_completion=True,
             )
-        else:
-            with self.accelerator.unwrap_model(model).disable_adapter():
+
+            # Reference model logprobs (no grad)
+            if self.ref_model is not None:
                 ref_per_token_logps = compute_logps_with_prompt_cache(
-                    model=model,
+                    model=self.ref_model,
                     prompt_inputs=prompt_inputs,
                     completion_ids=completion_ids,
                     requires_grad_for_completion=False,
                 )
+            else:
+                with self.accelerator.unwrap_model(model).disable_adapter():
+                    ref_per_token_logps = compute_logps_with_prompt_cache(
+                        model=model,
+                        prompt_inputs=prompt_inputs,
+                        completion_ids=completion_ids,
+                        requires_grad_for_completion=False,
+                    )
 
         # Compute the KL divergence between the model and the reference model
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
