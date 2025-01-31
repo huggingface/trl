@@ -147,7 +147,7 @@ from trl import GRPOConfig, GRPOTrainer
 
 dataset = load_dataset("trl-lib/tldr", split="train")
 
-# Define the reward function, which rewards completions that are close to 20 characters
+# Dummy reward function: rewards completions that are close to 20 characters
 def reward_len(completions, **kwargs):
     return [abs(20 - len(completion)) for completion in completions]
 
