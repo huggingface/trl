@@ -139,7 +139,7 @@ trainer.train()
 
 ### `GRPOTrainer`
 
-`GRPOTrainer` implements a [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models]([https://huggingface.co/papers/2402.14740](https://huggingface.co/papers/2402.03300)) for reinforcement learning. Group Relative Policy Optimization (GRPO) is more performant than PPO and was used to train [Deepseek AI's R1](https://huggingface.co/deepseek-ai/DeepSeek-R1).
+`GRPOTrainer` implements the [Group Relative Policy Optimization (GRPO) algorithm](https://huggingface.co/papers/2402.03300) that is more memory-efficient than PPO and was used to train [Deepseek AI's R1](https://huggingface.co/deepseek-ai/DeepSeek-R1).
 
 ```python
 from datasets import load_dataset
