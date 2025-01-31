@@ -395,7 +395,7 @@ class DPOTrainer(Trainer):
         self.max_length = args.max_length
         self.truncation_mode = args.truncation_mode
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
-        self.use_num_logits_to_keep = args.use_num_logits_to_keep
+        self.use_logits_to_keep = args.use_logits_to_keep
 
         if args.padding_free:
             if model.config._attn_implementation != "flash_attention_2":
@@ -1167,14 +1167,14 @@ class DPOTrainer(Trainer):
                         "'keep_start']."
                     )
 
-            if self.use_num_logits_to_keep:
-                # Compute num_logits_to_keep based on loss_mask pattern:
+            if self.use_logits_to_keep:
+                # Compute logits_to_keep based on loss_mask pattern:
                 # [[0, 0, 0, x, x, x, x],
                 #  [0, 0, 0, x, x, x, 0]]
                 #         ^ start computing logits from here ([:, -(7-3+1):])
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
-                num_logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1  # +1 for the first label
-                model_kwargs["num_logits_to_keep"] = num_logits_to_keep
+                logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1  # +1 for the first label
+                model_kwargs["logits_to_keep"] = logits_to_keep
 
             if self.padding_free:
                 # Flatten the input_ids, position_ids, and loss_mask
@@ -1194,15 +1194,15 @@ class DPOTrainer(Trainer):
             labels = torch.roll(input_ids, shifts=-1, dims=1)
             loss_mask = torch.roll(loss_mask, shifts=-1, dims=1).bool()
 
-            if self.use_num_logits_to_keep:
+            if self.use_logits_to_keep:
                 # Align labels with logits
                 # logits:    -,  -, [x2, x3, x4, x5, x6]
                 #                     ^ --------- ^       after logits[:, :-1, :]
                 # labels:   [y0, y1, y2, y3, y4, y5, y6]
-                #                         ^ --------- ^   with num_logits_to_keep=4, [:, -4:]
+                #                         ^ --------- ^   with logits_to_keep=4, [:, -4:]
                 # loss_mask: [0,  0,  0,  1,  1,  1,  1]
-                labels = labels[:, -num_logits_to_keep:]
-                loss_mask = loss_mask[:, -num_logits_to_keep:]
+                labels = labels[:, -logits_to_keep:]
+                loss_mask = loss_mask[:, -logits_to_keep:]
 
         if logits.shape[:2] != labels.shape[:2]:
             # for llava, the returned logits include the image tokens (placed before the text tokens)
