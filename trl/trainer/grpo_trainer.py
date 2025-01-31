@@ -428,8 +428,12 @@ class GRPOTrainer(Trainer):
 
         # Get the per-token log probabilities for the completions for the model and the reference model
         def get_per_token_logps(model, input_ids, num_logits_to_keep):
-            # We add 1 to `num_logits_to_keep` because the last logits of the sequence is later excluded
-            logits = model(input_ids, num_logits_to_keep=num_logits_to_keep + 1).logits  # (B, L, V)
+            attention_mask = input_ids != self.processing_class.pad_token_id
+            logits = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                num_logits_to_keep=num_logits_to_keep + 1
+            ).logits  # (B, L, V)
             logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
             # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
