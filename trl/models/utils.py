@@ -190,8 +190,7 @@ def unwrap_model_for_generation(
             can be more memory-efficient but may lead to slower generation times.
 
     Yields:
-        Union[PreTrainedModelWrapper, DeepSpeedEngine]:
-            The unwrapped model, ready for generation tasks.
+        Unwrapped model.
 
     Example:
     ```python
