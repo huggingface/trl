@@ -438,7 +438,7 @@ class GRPOTrainer(Trainer):
         completion_sequence_indices = torch.arange(completion_is_eos.size(1), device=device).expand(
             completion_is_eos.size(0), -1
         )
-        completion_mask = (completion_sequence_indices <= completion_is_eos.unsqueeze(1)).long()  # (B*G, C)
+        completion_mask = (completion_sequence_indices <= completion_eos_idx.unsqueeze(1)).long()  # (B*G, C)
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(
