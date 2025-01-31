@@ -429,25 +429,19 @@ class GRPOTrainer(Trainer):
 
         # Mask everything after the first EOS token in completion_ids
         completion_is_eos = completion_ids == self.processing_class.eos_token_id
-        completion_eos_idx = torch.full(
-            (completion_is_eos.size(0),), completion_is_eos.size(1), dtype=torch.long, device=device
-        )
-        completion_eos_idx[completion_is_eos.any(dim=1)] = completion_is_eos.int().argmax(dim=1)[
-            completion_is_eos.any(dim=1)
-        ]
-        completion_sequence_indices = torch.arange(completion_is_eos.size(1), device=device).expand(
-            completion_is_eos.size(0), -1
-        )
+        b_times_g, completion_length = completion_is_eos.size(0), completion_is_eos.size(1)
+        completion_eos_idx = torch.full((b_times_g,), completion_length, dtype=torch.long, device=device)
+        completion_eos_rows = completion_is_eos.any(dim=1)
+        completion_eos_idx[completion_eos_rows] = completion_is_eos.int().argmax(dim=1)[completion_eos_rows]
+        completion_sequence_indices = torch.arange(completion_length, device=device).expand(b_times_g, -1)
         completion_mask = (completion_sequence_indices <= completion_eos_idx.unsqueeze(1)).long()  # (B*G, C)
 
         # Concatenate prompt_mask with completion_mask for logit computation
-        prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(
-            self.num_generations, dim=0
-        )  # (B, P) -> (B*G, P)
+        prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
         attention_mask = torch.cat([prompt_mask_repeated, completion_mask], dim=1)  # (B*G, P+C)
 
         # Get the per-token log probabilities for the completions for the model and the reference model
-        def get_per_token_logps(model, input_ids, num_logits_to_keep):
+        def get_per_token_logps(model, input_ids, attention_mask, num_logits_to_keep):
             # We add 1 to `num_logits_to_keep` because the last logits of the sequence is later excluded
             logits = model(
                 input_ids=input_ids, attention_mask=attention_mask, num_logits_to_keep=num_logits_to_keep + 1
@@ -463,14 +457,18 @@ class GRPOTrainer(Trainer):
             return torch.stack(per_token_logps)
 
         num_logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
+        per_token_logps = get_per_token_logps(model, prompt_completion_ids, attention_mask, num_logits_to_keep)
 
         with torch.inference_mode():
             if self.ref_model is not None:
-                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids, num_logits_to_keep)
+                ref_per_token_logps = get_per_token_logps(
+                    self.ref_model, prompt_completion_ids, attention_mask, num_logits_to_keep
+                )
             else:
                 with self.accelerator.unwrap_model(model).disable_adapter():
-                    ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
+                    ref_per_token_logps = get_per_token_logps(
+                        model, prompt_completion_ids, attention_mask, num_logits_to_keep
+                    )
 
         # Compute the KL divergence between the model and the reference model
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
