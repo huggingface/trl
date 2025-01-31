@@ -427,14 +427,12 @@ class GRPOTrainer(Trainer):
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Mask everything after the first EOS token in completion_ids
-        completion_is_eos = completion_ids == self.processing_class.eos_token_id
-        b_times_g, completion_length = completion_is_eos.size(0), completion_is_eos.size(1)
-        completion_eos_idx = torch.full((b_times_g,), completion_length, dtype=torch.long, device=device)
-        completion_eos_rows = completion_is_eos.any(dim=1)
-        completion_eos_idx[completion_eos_rows] = completion_is_eos.int().argmax(dim=1)[completion_eos_rows]
-        completion_sequence_indices = torch.arange(completion_length, device=device).expand(b_times_g, -1)
-        completion_mask = (completion_sequence_indices <= completion_eos_idx.unsqueeze(1)).long()  # (B*G, C)
+        # Mask everything after the first EOS token
+        is_eos = completion_ids == self.processing_class.eos_token_id
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
