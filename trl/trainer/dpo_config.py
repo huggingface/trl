@@ -393,11 +393,12 @@ class DPOConfig(TrainingArguments):
     )
 
     def __post_init__(self):
-        return super().__post_init__()
+        super().__post_init__()
 
         if self.use_num_logits_to_keep:
             warnings.warn(
-                "`use_num_logits_to_keep` is deprecated. Use `use_logits_to_keep` instead.",
+                "`use_num_logits_to_keep` is deprecated and will be remove in version 0.17.0. Use "
+                "`use_logits_to_keep` instead.",
                 DeprecationWarning,
             )
             self.use_logits_to_keep = self.use_num_logits_to_keep
