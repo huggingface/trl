@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import os
 import textwrap
 import warnings
 from collections import defaultdict
+from contextlib import contextmanager
 from typing import Any, Callable, Optional, Union
 from unittest.mock import patch
 
@@ -47,7 +49,7 @@ from .utils import generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
-    from peft import PeftConfig, get_peft_model
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
@@ -321,7 +323,7 @@ class GRPOTrainer(Trainer):
                     max_tokens=self.max_completion_length,
                 )
 
-            self._last_loaded_step = 0  # tag to avoid useless loading during grad checkpointing
+            self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
@@ -388,7 +390,11 @@ class GRPOTrainer(Trainer):
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                    state_dict = unwrapped_model.state_dict()
+                    if isinstance(unwrapped_model, PeftModel):
+                        unwrapped_model = copy.deepcopy(unwrapped_model)
+                        unwrapped_model.merge_and_unload()
+                        state_dict = unwrapped_model.state_dict()
+
                 if self.accelerator.is_main_process:
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                     llm_model.load_weights(state_dict.items())
@@ -444,11 +450,11 @@ class GRPOTrainer(Trainer):
         per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
 
         with torch.inference_mode():
-            if self.ref_model is not None:
-                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids, num_logits_to_keep)
-            else:
-                with self.accelerator.unwrap_model(model).disable_adapter():
+            if isinstance(model, PeftModel):
+                with model.disable_adapter():
                     ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
+            else:
+                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids, num_logits_to_keep)
 
         # Compute the KL divergence between the model and the reference model
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
