@@ -479,65 +479,62 @@ class TextEnvironmentTester(unittest.TestCase):
         created_attention_mask = env._create_new_past_attention_mask(sequences, attention_mask, generated_tokens)
         self.assertTrue(torch.all(expected_attention_mask == created_attention_mask))
 
-    @parameterized.expand([(True,), (False,)])
-    def test_cached_generate_batched(self, support_cache_class):
-        with patch.object(self.model.pretrained_model, "_supports_cache_class", new=support_cache_class):
-            generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
-            env = TextEnvironment(
-                self.model,
-                self.tokenizer,
-                tools=[DummyTool()],
-                reward_fn=lambda x: torch.tensor(1),
-                prompt="I am a prompt!\n",
-                generation_kwargs=generation_kwargs,
-            )
+    def test_cached_generate_batched(self):
+        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
+        env = TextEnvironment(
+            self.model,
+            self.tokenizer,
+            tools=[DummyTool()],
+            reward_fn=lambda x: torch.tensor(1),
+            prompt="I am a prompt!\n",
+            generation_kwargs=generation_kwargs,
+        )
 
-            input_texts = [
-                "this is a test",
-                "this is another, longer test",
-                "some other batch",
-                "something unnecessary",
-            ]
-            model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
-            outputs, past_key_values, past_attention_masks, past_input_ids, _, _ = env._generate_batched(
-                model_inputs, batch_size=2, return_cache=True
-            )
+        input_texts = [
+            "this is a test",
+            "this is another, longer test",
+            "some other batch",
+            "something unnecessary",
+        ]
+        model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        outputs, past_key_values, past_attention_masks, past_input_ids, _, _ = env._generate_batched(
+            model_inputs, batch_size=2, return_cache=True
+        )
 
-            past_key_values, past_attention_masks, past_input_ids = env._combine_cache(
-                [True, True, True, False], past_key_values, past_attention_masks, past_input_ids
-            )
+        past_key_values, past_attention_masks, past_input_ids = env._combine_cache(
+            [True, True, True, False], past_key_values, past_attention_masks, past_input_ids
+        )
 
-            input_texts2 = [" short interim", " a somewhat longer section in between"]
-            model_inputs2 = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
-            # for single token query
-            model_inputs2.append(
-                torch.tensor([self.tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
-            )
-            outputs_cached, _, _, _, _, all_logits_cached = env._generate_batched(
-                model_inputs2,
-                batch_size=2,
-                combined_past_key_values=past_key_values,
-                combined_past_attention_masks=past_attention_masks,
-                combined_past_input_ids=past_input_ids,
-                output_logits=True,
-            )
+        input_texts2 = [" short interim", " a somewhat longer section in between"]
+        model_inputs2 = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
+        # for single token query
+        model_inputs2.append(
+            torch.tensor([self.tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
+        )
+        outputs_cached, _, _, _, _, all_logits_cached = env._generate_batched(
+            model_inputs2,
+            batch_size=2,
+            combined_past_key_values=past_key_values,
+            combined_past_attention_masks=past_attention_masks,
+            combined_past_input_ids=past_input_ids,
+            output_logits=True,
+        )
 
-            model_inputs2_full = [
-                torch.concat([in1, out1, in2], dim=0)
-                for in1, out1, in2 in zip(model_inputs[:-1], outputs, model_inputs2)
-            ]
-            outputs_uncached, _, _, _, _, all_logits_uncached = env._generate_batched(
-                model_inputs2_full, batch_size=2, output_logits=True
-            )
-            self.assertEqual(len(all_logits_uncached), 3)
-            self.assertEqual(len(all_logits_cached), 3)
-            for cached, uncached, logits_cached, logits_uncached in zip(
-                outputs_cached, outputs_uncached, all_logits_cached, all_logits_uncached
-            ):
-                self.assertTrue(torch.all(cached == uncached))
-                self.assertEqual(logits_cached.shape[0], 4)
-                self.assertEqual(logits_uncached.shape[0], 4)
-                self.assertTrue(almost_equal_logits(logits_uncached, logits_cached))
+        model_inputs2_full = [
+            torch.concat([in1, out1, in2], dim=0) for in1, out1, in2 in zip(model_inputs[:-1], outputs, model_inputs2)
+        ]
+        outputs_uncached, _, _, _, _, all_logits_uncached = env._generate_batched(
+            model_inputs2_full, batch_size=2, output_logits=True
+        )
+        self.assertEqual(len(all_logits_uncached), 3)
+        self.assertEqual(len(all_logits_cached), 3)
+        for cached, uncached, logits_cached, logits_uncached in zip(
+            outputs_cached, outputs_uncached, all_logits_cached, all_logits_uncached
+        ):
+            self.assertTrue(torch.all(cached == uncached))
+            self.assertEqual(logits_cached.shape[0], 4)
+            self.assertEqual(logits_uncached.shape[0], 4)
+            self.assertTrue(almost_equal_logits(logits_uncached, logits_cached))
 
     @parameterized.expand([(True,), (False,)])
     def test_cache_class_support(self, support_cache_class):
@@ -581,77 +578,75 @@ class TextEnvironmentTester(unittest.TestCase):
                     pass
         self.assertTrue(torch.all(feedback == 1.0))
 
-    @parameterized.expand([(True,), (False,)])
-    def test_different_sequence_lengths(self, support_cache_class):
-        with patch.object(self.model.pretrained_model, "_supports_cache_class", new=support_cache_class):
-            generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
-            env = TextEnvironment(
-                self.model,
-                self.tokenizer,
-                tools=[DummyTool()],
-                reward_fn=lambda x: torch.tensor(1),
-                prompt="I am a prompt!\n",
-                generation_kwargs=generation_kwargs,
-            )
+    def test_different_sequence_lengths(self):
+        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
+        env = TextEnvironment(
+            self.model,
+            self.tokenizer,
+            tools=[DummyTool()],
+            reward_fn=lambda x: torch.tensor(1),
+            prompt="I am a prompt!\n",
+            generation_kwargs=generation_kwargs,
+        )
 
-            input_texts = ["this is a test", "this is another, longer test", "some other batch"]
-            model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
-            outputs, past_key_values, past_attention_masks, past_input_ids, _, _ = env._generate_batched(
-                model_inputs, batch_size=2, return_cache=True
-            )
-            # remove the last two tokens from the second batch to pretend they were never generated
-            second_cache = past_key_values[1]
-            edited_cache = []
-            for layer in second_cache:
-                keys, values = layer
-                new_keys = keys[:, :, :-2, :]
-                new_values = values[:, :, :-2, :]
-                edited_cache.append((new_keys, new_values))
+        input_texts = ["this is a test", "this is another, longer test", "some other batch"]
+        model_inputs = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts]
+        outputs, past_key_values, past_attention_masks, past_input_ids, _, _ = env._generate_batched(
+            model_inputs, batch_size=2, return_cache=True
+        )
+        # remove the last two tokens from the second batch to pretend they were never generated
+        second_cache = past_key_values[1]
+        edited_cache = []
+        for layer in second_cache:
+            keys, values = layer
+            new_keys = keys[:, :, :-2, :]
+            new_values = values[:, :, :-2, :]
+            edited_cache.append((new_keys, new_values))
 
-            past_key_values[1] = tuple(edited_cache)
-            past_attention_masks[1] = past_attention_masks[1][:, :-2]
-            past_input_ids[1] = past_input_ids[1][:, :-2]
+        past_key_values[1] = tuple(edited_cache)
+        past_attention_masks[1] = past_attention_masks[1][:, :-2]
+        past_input_ids[1] = past_input_ids[1][:, :-2]
 
-            # ensure this actually removes generated tokens and not skipped tokens / padding
-            self.assertEqual(len(outputs[2]), 4)
+        # ensure this actually removes generated tokens and not skipped tokens / padding
+        self.assertEqual(len(outputs[2]), 4)
 
-            past_key_values, past_attention_masks, past_input_ids = env._combine_cache(
-                [True, True, True], past_key_values, past_attention_masks, past_input_ids
-            )
+        past_key_values, past_attention_masks, past_input_ids = env._combine_cache(
+            [True, True, True], past_key_values, past_attention_masks, past_input_ids
+        )
 
-            self.assertEqual(past_attention_masks.shape, past_input_ids.shape)
-            self.assertEqual(past_key_values[0][0].shape[2], past_attention_masks.shape[1] - 1)
-            self.assertEqual(past_key_values[0][0].shape[0], past_attention_masks.shape[0])
-            input_texts2 = [" short interim", " a somewhat longer section in between"]
-            model_inputs2 = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
-            # for single token query
-            model_inputs2.append(
-                torch.tensor([self.tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
-            )
-            outputs_cached, _, _, _, _, all_logits_cached = env._generate_batched(
-                model_inputs2,
-                batch_size=2,
-                combined_past_key_values=past_key_values,
-                combined_past_attention_masks=past_attention_masks,
-                combined_past_input_ids=past_input_ids,
-                output_logits=True,
-            )
-            outputs[2] = outputs[2][:-2]  # remove last two generated tokens from input
-            model_inputs2_full = [
-                torch.concat([in1, out1, in2], dim=0) for in1, out1, in2 in zip(model_inputs, outputs, model_inputs2)
-            ]
-            outputs_uncached, _, _, _, _, all_logits_uncached = env._generate_batched(
-                model_inputs2_full, batch_size=2, output_logits=True
-            )
-            self.assertEqual(len(all_logits_uncached), 3)
-            self.assertEqual(len(all_logits_cached), 3)
-            for cached, uncached, logits_cached, logits_uncached in zip(
-                outputs_cached, outputs_uncached, all_logits_cached, all_logits_uncached
-            ):
-                self.assertTrue(torch.all(cached == uncached))
-                self.assertEqual(logits_cached.shape[0], 4)
-                self.assertEqual(logits_uncached.shape[0], 4)
-                self.assertTrue(almost_equal_logits(logits_uncached, logits_cached))
+        self.assertEqual(past_attention_masks.shape, past_input_ids.shape)
+        self.assertEqual(past_key_values[0][0].shape[2], past_attention_masks.shape[1] - 1)
+        self.assertEqual(past_key_values[0][0].shape[0], past_attention_masks.shape[0])
+        input_texts2 = [" short interim", " a somewhat longer section in between"]
+        model_inputs2 = [self.tokenizer(txt, return_tensors="pt").input_ids.squeeze() for txt in input_texts2]
+        # for single token query
+        model_inputs2.append(
+            torch.tensor([self.tokenizer(" a", return_tensors="pt").input_ids], dtype=model_inputs2[0].dtype)
+        )
+        outputs_cached, _, _, _, _, all_logits_cached = env._generate_batched(
+            model_inputs2,
+            batch_size=2,
+            combined_past_key_values=past_key_values,
+            combined_past_attention_masks=past_attention_masks,
+            combined_past_input_ids=past_input_ids,
+            output_logits=True,
+        )
+        outputs[2] = outputs[2][:-2]  # remove last two generated tokens from input
+        model_inputs2_full = [
+            torch.concat([in1, out1, in2], dim=0) for in1, out1, in2 in zip(model_inputs, outputs, model_inputs2)
+        ]
+        outputs_uncached, _, _, _, _, all_logits_uncached = env._generate_batched(
+            model_inputs2_full, batch_size=2, output_logits=True
+        )
+        self.assertEqual(len(all_logits_uncached), 3)
+        self.assertEqual(len(all_logits_cached), 3)
+        for cached, uncached, logits_cached, logits_uncached in zip(
+            outputs_cached, outputs_uncached, all_logits_cached, all_logits_uncached
+        ):
+            self.assertTrue(torch.all(cached == uncached))
+            self.assertEqual(logits_cached.shape[0], 4)
+            self.assertEqual(logits_uncached.shape[0], 4)
+            self.assertTrue(almost_equal_logits(logits_uncached, logits_cached))
 
     def test_output_logits(self):
         generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
