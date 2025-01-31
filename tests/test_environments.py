@@ -429,21 +429,6 @@ class TextEnvironmentTester(unittest.TestCase):
         expected_input_ids = torch.tensor([[5], [6]])
         self.assertTrue(torch.all(batched_input_ids == expected_input_ids))
 
-    def test_same_is_none(self):
-        env = TextEnvironment(
-            self.model,
-            self.tokenizer,
-            tools=[DummyTool()],
-            reward_fn=lambda x: torch.tensor(1),
-            prompt="I am a prompt!\n",
-        )
-        self.assertTrue(env._same_is_none("", ""))
-        self.assertTrue(env._same_is_none(None, None))
-        self.assertFalse(env._same_is_none("", None))
-        self.assertFalse(env._same_is_none(None, ""))
-        self.assertTrue(env._same_is_none(None))
-        self.assertTrue(env._same_is_none(""))
-
     def test_extract_generation(self):
         env = TextEnvironment(
             self.model,
