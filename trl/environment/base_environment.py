@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import re
 import copy
 
+import re
 from typing import Optional
 
 import torch
 from accelerate.utils import extract_model_from_parallel
-from transformers import StoppingCriteria, StoppingCriteriaList, DynamicCache
+from transformers import DynamicCache, StoppingCriteria, StoppingCriteriaList
 
 from ..import_utils import is_rich_available
 
@@ -780,7 +780,7 @@ class TextEnvironment:
                 # remove chunk generated after stopping criteria in batch mode
                 generated_tokens = output[:num_generated_tokens]
                 if len(generated_tokens) < 1:
-                    raise Exception(f"Generation failed to produce any valid tokens")
+                    raise Exception("Generation failed to produce any valid tokens")
 
                 outputs.append(generated_tokens)
 

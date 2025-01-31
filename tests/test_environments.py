@@ -14,9 +14,9 @@
 
 import unittest
 from unittest.mock import patch
-from parameterized import parameterized
 
 import torch
+from parameterized import parameterized
 from transformers import AutoTokenizer, Cache
 
 from trl import AutoModelForCausalLMWithValueHead, TextEnvironment, TextHistory
@@ -559,7 +559,7 @@ class TextEnvironmentTester(unittest.TestCase):
                         combined_past_input_ids=past_input_ids,
                         output_logits=True,
                     )
-                except:
+                except Exception:
                     pass
         self.assertTrue(torch.all(feedback == 1.0))
 
