@@ -1698,13 +1698,13 @@ def compute_logps_with_prompt_cache(
         completion_out = model(
             input_ids=completion_ids,
             past_key_values=prompt_out.past_key_values,
-            logits_to_keep=slice(-C, -1),
+            logits_to_keep=C,  # We'll get rid of the last one later
             use_cache=False,
         )
 
     # Convert completions logits to logprobs
     completion_token_logps = torch.gather(
-        completion_out.logits.log_softmax(dim=-1), dim=-1, index=completion_ids[:, 1:].unsqueeze(-1)
+        completion_out.logits[:,-C:-1, :].log_softmax(dim=-1), dim=-1, index=completion_ids[:, 1:].unsqueeze(-1)
     ).squeeze(-1)
 
     # Concat with the first_completion_token_logps
