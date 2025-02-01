@@ -65,6 +65,10 @@ class GRPOConfig(TrainingArguments):
             device dedicated to generation powered by vLLM. Higher values will increase the KV cache size and thus
             improve the model's throughput. However, if the value is too high, it may cause out-of-memory (OOM) errors
             during initialization.
+        vllm_max_model_len (`int` or `None`, *optional*, defaults to `None`):
+            If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
+            `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
+            context size, which might be much larger than the KV cache, leading to inefficiencies.
 
         > Parameters that control the training
 
@@ -142,6 +146,14 @@ class GRPOConfig(TrainingArguments):
             "cache on the device dedicated to generation powered by vLLM. Higher values will increase the KV cache "
             "size and thus improve the model's throughput. However, if the value is too high, it may cause "
             "out-of-memory (OOM) errors during initialization."
+        },
+    )
+    vllm_max_model_len: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced"
+            "`vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model"
+            "context size, which might be much larger than the KV cache, leading to inefficiencies."
         },
     )
 
