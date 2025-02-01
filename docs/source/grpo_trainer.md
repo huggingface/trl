@@ -66,11 +66,11 @@ GRPO is an online learning algorithm, meaning it improves iteratively by using t
 
 ### Generating completions
 
-At each training step, we sample a batch of prompts and generate a set of  \\( G \\) completions for each prompt (denoted as  \\( o_i \\)).
+At each training step, we sample a batch of prompts and generate a set of  $G$ completions for each prompt (denoted as $o_i$).
 
 ### Computing the advantage
 
-For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:  
+For each of the $G$ sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:  
 
 $$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$  
 
@@ -80,26 +80,27 @@ This approach gives the method its name: **Group Relative Policy Optimization (G
 
 KL divergence is estimated using the approximator introduced by [Schulman et al. (2020)](http://joschu.net/blog/kl-approx.html). The approximator is defined as follows:
 
-$$\mathbb{D}_{\text{KL}}\left[\pi_\theta \|\pi_{\text{ref}}\right] = \frac{\pi_{\text{ref}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} - \log \frac{\pi_{\text{ref}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} - 1,
-$$
+```math
+\mathbb{D}_{\text{KL}}\left[\pi_\theta \|\pi_{\text{ref}}\right] = \frac{\pi_{\text{ref}}(o_{i,t} \mid q, o_{i,\lt t})}{\pi_\theta(o_{i,t} \mid q, o_{i,\lt t})} - \log \frac{\pi_{\text{ref}}(o_{i,t} \mid q, o_{i,\lt t})}{\pi_\theta(o_{i,t} \mid q, o_{i,\lt t})} - 1,
+```
 
 ### Computing the loss
 
 The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:  
 
-$$
+```math
 \mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
-$$
+```
 
 where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.  
 
 In the original paper, this formulation is generalized to account for multiple updates after each generation by leveraging the **clipped surrogate objective**:  
 
-$$
+```math
 \mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
-$$
+```
 
-where  \\(\text{clip}(\cdot, 1 - \epsilon, 1 + \epsilon) \\) ensures that updates do not deviate excessively from the reference policy by bounding the policy ratio between  \\( 1 - \epsilon \\) and  \\( 1 + \epsilon \\).
+where  $\text{clip}(\cdot, 1 - \epsilon, 1 + \epsilon)$ ensures that updates do not deviate excessively from the reference policy by bounding the policy ratio between  $1 - \epsilon$ and  $1 + \epsilon$.
 In TRL though, as in the original paper, we only do one update per generation, so we can simplify the loss to the first form.
 
 ## Logged metrics
@@ -203,7 +204,7 @@ import re
 
 def reward_func(completions, ground_truth, **kwargs):
     # Regular expression to capture content inside \boxed{}
-    matches = [re.search(r"\\boxed\{(.*?)\}", completion) for completion in completions]
+    matches = [re.search(r"\boxed\{(.*?)\}", completion) for completion in completions]
     contents = [match.group(1) if match else "" for match in matches]
     # Reward 1 if the content is the same as the ground truth, 0 otherwise
     return [1.0 if c == gt else 0.0 for c, gt in zip(contents, ground_truth)]
