@@ -1683,7 +1683,7 @@ def compute_logps_with_prompt_cache(
         prompt_out = model(**prompt_inputs, use_cache=True, logits_to_keep=1)
 
     # Only keep the last prompt logit, immediately convert to log probabilities and expand to B*G
-    prompt_last_logps = prompt_out.logits.log_softmax(dim=-1).repeat_interleave(G, dim=0)
+    prompt_last_logps = prompt_out.logits[:, -1:].log_softmax(dim=-1).repeat_interleave(G, dim=0)
 
     # Gather the these log probs as they relates to the first completion token
     first_completion_token_logps = torch.gather(
