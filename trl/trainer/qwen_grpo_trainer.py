@@ -33,6 +33,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Qwen2_5_VLForConditionalGeneration,
+    Qwen2_5_VLProcessor,
     Trainer,
     TrainerCallback,
     is_wandb_available,
@@ -40,7 +41,7 @@ from transformers import (
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .grpo_config import GRPOConfig
@@ -151,10 +152,11 @@ class QwenGRPOTrainer(Trainer):
         self,
         model: Qwen2_5_VLForConditionalGeneration,
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
+        processing_class: PreTrainedTokenizerBase,
+        tokenize_and_inject_images: Callable,
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[PreTrainedTokenizerBase] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
@@ -190,6 +192,8 @@ class QwenGRPOTrainer(Trainer):
 
         # Reference model
         if is_deepspeed_zero3_enabled():
+            # TODO: this won't work because Qwen2_5_VLForConditionalGeneration is not a causal language model
+            print("You're using DeepSpeed ZeRO-3 with Qwen2_5_VL. This is probably not supported yet.")
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif peft_config is None:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
@@ -200,8 +204,8 @@ class QwenGRPOTrainer(Trainer):
             self.ref_model = None
 
         # Processing class
-        if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+        if not isinstance(processing_class, Qwen2_5_VLProcessor):
+            raise ValueError("`processing_class` must be a `Qwen2_5_VLProcessor` object.")
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -257,6 +261,9 @@ class QwenGRPOTrainer(Trainer):
         # Initialize the metrics
         self._metrics = defaultdict(list)
 
+        # function for tokenizing and handling images for self.compute_loss
+        self.tokenize_and_inject_images = tokenize_and_inject_images
+
         super().__init__(
             model=model,
             args=args,
@@ -269,6 +276,7 @@ class QwenGRPOTrainer(Trainer):
         )
 
         if self.use_vllm:
+            print("You are using VLLM for inference. This probably won't work as I haven't adjusted it to host a VLM")
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
@@ -324,7 +332,7 @@ class QwenGRPOTrainer(Trainer):
                 do_sample=True,
                 temperature=args.temperature,
                 num_return_sequences=self.num_generations,
-                pad_token_id=processing_class.pad_token_id,
+                pad_token_id=processing_class.tokenizer.pad_token_id,
             )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
@@ -363,19 +371,19 @@ class QwenGRPOTrainer(Trainer):
             raise ValueError("The GRPOTrainer does not support returning outputs")
 
         device = self.accelerator.device
-        prompts = [x["prompt"] for x in inputs]
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-        prompt_inputs = self.processing_class(
-            prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        )
+        prompt_inputs, prompts = self.tokenize_and_inject_images(inputs=inputs, processing_class=self.processing_class)
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
 
         if self.max_prompt_length is not None:
+            original_length = prompt_inputs["input_ids"].size(1)
+            if original_length > self.max_prompt_length:
+                print(f"Truncating prompt from {original_length} to {self.max_prompt_length} tokens")
             prompt_inputs["input_ids"] = prompt_inputs["input_ids"][:, -self.max_prompt_length :]
             prompt_inputs["attention_mask"] = prompt_inputs["attention_mask"][:, -self.max_prompt_length :]
 
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
+            print("You are using vLLM for inference. This probably won't work as I fixed this yet to work with VLM")
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
@@ -419,9 +427,13 @@ class QwenGRPOTrainer(Trainer):
 
         # Get the per-token log probabilities for the completions for the model and the reference model
         def get_per_token_logps(model, input_ids, logits_to_keep):
-            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-            logits = model(input_ids, logits_to_keep=logits_to_keep + 1).logits  # (B, L, V)
-            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            # NOTE: I had to do major surgery here to make this work. See
+            # https://github.com/huggingface/trl/blob/main/trl/trainer/grpo_trainer.py#L430 for the
+            # original implementation.
+
+            logits = model(input_ids).logits  # Expected shape: [B, L, V]
+            logits = logits[:, :-1, :]  # Shape becomes [B, L-1, V] - drop extra last token's logits.
+            logits = logits[:, -logits_to_keep:, :]  # Select the last `logits_to_keep` tokens.
 
             # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
             per_token_logps = []
@@ -445,7 +457,7 @@ class QwenGRPOTrainer(Trainer):
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
 
         # Mask everything after the first EOS token
-        is_eos = completion_ids == self.processing_class.eos_token_id
+        is_eos = completion_ids == self.processing_class.tokenizer.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -464,6 +476,9 @@ class QwenGRPOTrainer(Trainer):
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
             if isinstance(reward_func, PreTrainedModel):
+                print(
+                    "using pretrained model as reward fn, this is unexpected as Im passing in functions as reward fns"
+                )
                 if is_conversational(inputs[0]):
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                     texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
@@ -482,6 +497,7 @@ class QwenGRPOTrainer(Trainer):
                     for example in inputs:
                         # Repeat each value in the column for `num_generations` times
                         reward_kwargs[key].extend([example[key]] * self.num_generations)
+
                 output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
