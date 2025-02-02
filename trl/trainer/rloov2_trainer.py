@@ -27,12 +27,12 @@ from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
     AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
     EvalPrediction,
     FeatureExtractionMixin,
+    GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
@@ -44,22 +44,17 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, logging
 
+from ..data_utils import apply_chat_template, is_conversational
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
-from ..import_utils import is_vllm_available
-from ..models import create_reference_model, unwrap_model_for_generation
-from .judges import BasePairwiseJudge
+from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .rloov2_config import RLOOv2Config
 from .utils import empty_cache, get_reward, truncate_right
 
 
 # from .utils import DPODataCollatorWithPadding
-# from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 
 if is_peft_available():
     from peft import get_peft_model
-
-if is_vllm_available():
-    pass
 
 if is_apex_available():
     from apex import amp
@@ -142,8 +137,7 @@ class RLOOv2Trainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        judge: Optional[BasePairwiseJudge] = None,
+        reward_model: Union[str, PreTrainedModel],
         args: Optional[RLOOv2Config] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
@@ -151,7 +145,7 @@ class RLOOv2Trainer(Trainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
-        reward_processing_classes: Optional[PreTrainedTokenizerBase] = None,
+        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         peft_config: Optional[dict] = None,
         formatting_func: Optional[Callable] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
@@ -161,8 +155,8 @@ class RLOOv2Trainer(Trainer):
     ) -> None:
         # Models
         # Trained model
-        model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
+            model_init_kwargs = args.model_init_kwargs or {}
             model_id = model
             torch_dtype = model_init_kwargs.get("torch_dtype")
             if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
@@ -206,36 +200,7 @@ class RLOOv2Trainer(Trainer):
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
-        # Reward functions
-        if not isinstance(reward_funcs, list):
-            reward_funcs = [reward_funcs]
-        for i, reward_func in enumerate(reward_funcs):
-            if isinstance(reward_func, str):
-                reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
-                    reward_func, num_labels=1, **model_init_kwargs
-                )
-        self.reward_funcs = reward_funcs
-
-        # Reward processing class
-        if reward_processing_classes is None:
-            reward_processing_classes = [None] * len(reward_funcs)
-        elif not isinstance(reward_processing_classes, list):
-            reward_processing_classes = [reward_processing_classes]
-        else:
-            if len(reward_processing_classes) != len(reward_funcs):
-                raise ValueError("The number of reward processing classes must match the number of reward functions.")
-
-        for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
-            if isinstance(reward_func, PreTrainedModel):
-                if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
-                if reward_processing_class.pad_token_id is None:
-                    reward_processing_class.pad_token = reward_processing_class.eos_token
-                # The reward model computes the reward for the latest non-padded token in the input sequence.
-                # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
-                reward_processing_classes[i] = reward_processing_class
-        self.reward_processing_classes = reward_processing_classes
+        self.reward_model = reward_model
 
         # Preprocess and format dataset
         if formatting_func is None:
@@ -252,7 +217,7 @@ class RLOOv2Trainer(Trainer):
                 train_dataset = self._prepare_dataset(
                     train_dataset,
                     processing_class,
-                    reward_processing_classes,
+                    reward_processing_class,
                     args.dataset_text_field,
                     formatting_func,
                     remove_unused_columns=args.remove_unused_columns if args is not None else True,
@@ -266,7 +231,7 @@ class RLOOv2Trainer(Trainer):
                     _eval_datasets[_eval_dataset_name] = self._prepare_dataset(
                         _eval_dataset,
                         processing_class,
-                        reward_processing_classes,
+                        reward_processing_class,
                         args.dataset_text_field,
                         formatting_func,
                         remove_unused_columns=args.remove_unused_columns if args is not None else True,
@@ -299,13 +264,39 @@ class RLOOv2Trainer(Trainer):
             "policy/ratio": [],
             "policy/ratio_var": [],
         }
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             self.stats["objective/rlhf_reward"] = []
             self.stats["objective/scores"] = []
 
         self.batch_index = 0
         self.batch_indices_to_sample = []
         self.prompt_completion_batches = []
+
+        self.generation_config = GenerationConfig(
+            max_new_tokens=args.max_completion_length,
+            do_sample=True,
+            temperature=args.temperature,
+            num_return_sequences=args.num_generations,
+            pad_token_id=processing_class.pad_token_id,
+        )
+
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
+
+        # Add tags to the model
+        self.model.add_model_tags(self._tag_names)
+
+        if self.ref_model is not None:
+            if self.is_deepspeed_enabled:
+                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
+        for i, reward_func in enumerate(self.reward_funcs):
+            if isinstance(reward_func, PreTrainedModel):
+                self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
     def _prepare_dataset(
         self,
@@ -361,10 +352,22 @@ class RLOOv2Trainer(Trainer):
         add_special_tokens=True,
         remove_unused_columns=True,
     ):
+        # is_conversational only works for a single example
+        # so figure out if its conversational before calling a batched .map
+        # if formatting_func is not None:
+        is_convo = is_conversational(dataset[0])
+
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
+            if formatting_func is not None:
+                texts = formatting_func(element)
+            elif is_convo:
+                texts = apply_chat_template(element, tokenizer=processing_class)["prompt"]
+            else:
+                texts = element[dataset_text_field]
+
             outputs = processing_class(
-                element[dataset_text_field] if formatting_func is None else formatting_func(element),
+                texts,
                 add_special_tokens=add_special_tokens,
                 padding=False,
                 return_length=False,
@@ -403,7 +406,7 @@ class RLOOv2Trainer(Trainer):
         tokenized_dataset = dataset.map(tokenize, **map_kwargs)
 
         if reward_processing_class is not None:
-            raise NotImplementedError("TODO")
+            raise NotImplementedError("Doesn't yet support reward processing class")
 
         return tokenized_dataset
 
@@ -420,26 +423,6 @@ class RLOOv2Trainer(Trainer):
         else:
             reward_pad_token_id = self.reward_processing_class.pad_token_id
             raise NotImplementedError("separate reward tokenizer todo")
-            # device = prompt_completion_ids.device
-
-            # completion_ids = prompt_completion_ids[:, context_length:]
-            # completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-
-            # if is_conversational({"prompt": prompts[0]}):
-            # examples = [{"prompt": p, "completion": c} for p, c in zip(prompts, completions)]
-            # examples = [apply_chat_template(example, self.reward_processing_class) for example in examples]
-            # prompts = [example["prompt"] for example in examples]
-            # completions = [example["completion"] for example in examples]
-
-            # Tokenize the prompts
-
-            # Tokenize the completions
-            # reward_completions_ids = self.reward_processing_class(
-            #     completions, padding=True, return_tensors="pt", padding_side="right"
-            # )["input_ids"].to(device)
-
-            # Concatenate the prompts and completions and get the reward
-            # reward_prompt_completion_ids = torch.cat((reward_prompt_ids, reward_completions_ids), dim=1)
 
         with torch.inference_mode():
             _, scores, _ = get_reward(
@@ -597,6 +580,7 @@ class RLOOv2Trainer(Trainer):
                 completion_ids, completion_mask = truncate_right(
                     completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
                 )
+                # TODO multiple generations per prompt
                 prompt_completion_ids = torch.cat((inputs["input_ids"], completion_ids), dim=1)
                 prompt_completion_mask = torch.cat((inputs["attention_mask"], completion_mask), dim=1)
 

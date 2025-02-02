@@ -135,13 +135,13 @@ if __name__ == "__main__":
 
     trainer = RLOOv2Trainer(
         model=model,
-        reward_model=reward_model,
+        reward_funcs=reward_model,
         judge=judge,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        reward_processing_class=reward_tokenizer,
+        reward_processing_classes=reward_tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
