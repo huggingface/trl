@@ -16,8 +16,8 @@ If you want to log with tensorboard, add the kwarg `project_kwargs={"logging_dir
 Here's a brief explanation for the logged metrics provided in the data:
 
 Key metrics to monitor. We want to maximize the reward, maintain a low KL divergence, and maximize entropy:
-1. `env/reward_mean`: The average reward obtained from the environment. Alias `ppo/mean_scores`, which is sed to specifically monitor the reward model.
-1. `env/reward_std`: The standard deviation of the reward obtained from the environment. Alias ``ppo/std_scores`, which is sed to specifically monitor the reward model.
+1. `env/reward_mean`: The average reward obtained from the environment. Alias `ppo/mean_scores`, which is used to specifically monitor the reward model.
+1. `env/reward_std`: The standard deviation of the reward obtained from the environment. Alias ``ppo/std_scores`, which is used to specifically monitor the reward model.
 1. `env/reward_dist`: The histogram distribution of the reward obtained from the environment.
 1. `objective/kl`: The mean Kullback-Leibler (KL) divergence between the old and new policies. It measures how much the new policy deviates from the old policy. The KL divergence is used to compute the KL penalty in the objective function.
 1. `objective/kl_dist`: The histogram distribution of the `objective/kl`.
