@@ -202,8 +202,7 @@ class RewardTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
             training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
-
-            with self.assertWarns(UserWarning):
+            with self.assertWarns(UserWarning, msg="You passed target_modules="):
                 _ = RewardTrainer(
                     model=self.model,
                     args=training_args,
