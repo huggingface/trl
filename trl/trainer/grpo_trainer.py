@@ -285,9 +285,11 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.accelerator.is_main_process:
-                vllm_device = self.args.vllm_device
+                vllm_init_kwargs = self.args.vllm_init_kwargs
+                vllm_device = vllm_init_kwargs.get("device")
                 if vllm_device == "auto":
                     vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
+                    vllm_init_kwargs["device"] = vllm_device
                 # Check that the requested device is available
                 if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
                     raise ValueError(
@@ -312,9 +314,7 @@ class GRPOTrainer(Trainer):
                 with world_size_patch, profiling_patch:
                     self.llm = LLM(
                         model=model.name_or_path,
-                        device=vllm_device,
-                        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
-                        max_model_len=self.args.vllm_max_model_len,
+                        **vllm_init_kwargs
                     )
                 self.sampling_params = SamplingParams(
                     n=self.num_generations,

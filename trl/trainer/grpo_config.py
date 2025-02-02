@@ -131,29 +131,25 @@ class GRPOConfig(TrainingArguments):
             "(`pip install vllm`)."
         },
     )
+    vllm_init_kwargs: Optional[dict] = field(
+        default_factory=lambda: {
+            "device": "auto",
+            "gpu_memory_utilization": 0.9,
+        },
+        metadata={
+            "help": "Keyword arguments for `vllm.LLM.__init__` when `use_vllm` is true"
+        },
+    ) 
     vllm_device: Optional[str] = field(
         default="auto",
         metadata={
-            "help": "Device where vLLM generation will run, e.g. 'cuda:1'. If set to 'auto' (default), the system "
-            "will automatically select the next available GPU after the last one used for training. This assumes "
-            "that training has not already occupied all available GPUs."
+            "help": "Deprecated. Set `device` in `vllm_init_kwargs` instead."
         },
     )
     vllm_gpu_memory_utilization: float = field(
         default=0.9,
         metadata={
-            "help": "Ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV "
-            "cache on the device dedicated to generation powered by vLLM. Higher values will increase the KV cache "
-            "size and thus improve the model's throughput. However, if the value is too high, it may cause "
-            "out-of-memory (OOM) errors during initialization."
-        },
-    )
-    vllm_max_model_len: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced"
-            "`vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model"
-            "context size, which might be much larger than the KV cache, leading to inefficiencies."
+            "help": "Deprecated. Set `gpu_memory_utilization` in `vllm_init_kwargs` instead." 
         },
     )
 
@@ -186,3 +182,20 @@ class GRPOConfig(TrainingArguments):
         default=0.04,
         metadata={"help": "KL coefficient."},
     )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.vllm_device:
+            warnings.warn(
+                "`vllm_device` is deprecated. Set `device` in `vllm_init_kwargs` instead.",
+                DeprecationWarning,
+            )
+            self.vllm_init_kwargs["device"] = self.vllm_device
+
+        if self.vllm_gpu_memory_utilization:
+            warnings.warn(
+                "`vllm_gpu_memory_utilization` is deprecated. Set `gpu_memory_utilization` in `vllm_init_kwargs` instead.",
+                DeprecationWarning,
+            )
+            self.vllm_init_kwargs["gpu_memory_utilization"] = self.vllm_gpu_memory_utilization
