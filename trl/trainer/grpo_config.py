@@ -144,7 +144,14 @@ class GRPOConfig(TrainingArguments):
             "out-of-memory (OOM) errors during initialization."
         },
     )
-
+    
+    vllm_dtype: Optional[str] = field(
+        default="auto",
+        metadata={
+            "help": "Data type to use for vLLM generation. If set to 'auto', the data type will be automatically "
+        },
+    )
+    
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,

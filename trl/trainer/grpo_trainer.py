@@ -314,6 +314,7 @@ class GRPOTrainer(Trainer):
                         model=model.name_or_path,
                         device=vllm_device,
                         gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                        dtype=self.args.vllm_dtype,
                     )
                 self.sampling_params = SamplingParams(
                     n=self.num_generations,
