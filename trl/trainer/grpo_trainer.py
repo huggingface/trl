@@ -428,6 +428,7 @@ class GRPOTrainer(Trainer):
                     **prompt_inputs, generation_config=self.generation_config
                 )
             model.train()
+        logger.info("Finishing generation")
 
         # Compute prompt length and extract completion ids
         prompt_length = prompt_inputs["input_ids"].size(1)
@@ -546,6 +547,8 @@ class GRPOTrainer(Trainer):
 
         mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+
+        logger.info("Finishing loss")
 
         return loss
 
