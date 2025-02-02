@@ -189,6 +189,29 @@ class RewardTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
 
+    @require_peft
+    def test_all_linear_user_warning(self):
+        peft_config = LoraConfig(
+            task_type=TaskType.SEQ_CLS,
+            inference_mode=False,
+            r=8,
+            lora_alpha=32,
+            lora_dropout=0.1,
+            target_modules="all-linear",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+
+            with self.assertWarns(UserWarning):
+                _ = RewardTrainer(
+                    model=self.model,
+                    args=training_args,
+                    processing_class=self.tokenizer,
+                    train_dataset=dummy_dataset,
+                    peft_config=peft_config,
+                )
+
     def test_margin(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset_dict = {
