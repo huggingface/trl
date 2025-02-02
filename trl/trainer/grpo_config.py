@@ -56,19 +56,8 @@ class GRPOConfig(TrainingArguments):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept unused for
             training, as vLLM will require one for generation. vLLM must be installed (`pip install vllm`).
-        vllm_device (`str`, *optional*, defaults to `"auto"`):
-            Device where vLLM generation will run, e.g. `"cuda:1"`. If set to `"auto"` (default), the system will
-            automatically select the next available GPU after the last one used for training. This assumes that
-            training has not already occupied all available GPUs.
-        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
-            Ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV cache on the
-            device dedicated to generation powered by vLLM. Higher values will increase the KV cache size and thus
-            improve the model's throughput. However, if the value is too high, it may cause out-of-memory (OOM) errors
-            during initialization.
-        vllm_max_model_len (`int` or `None`, *optional*, defaults to `None`):
-            If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
-            `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
-            context size, which might be much larger than the KV cache, leading to inefficiencies.
+        vllm_init_kwargs (`dict`, *optional*, defaults to {"device": "auto", "gpu_memory_utilization": 0.9})
+            "Keyword arguments for `vllm.LLM.__init__` when `use_vllm` is true"
 
         > Parameters that control the training
 
