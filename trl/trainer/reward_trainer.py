@@ -25,6 +25,7 @@ import torch.nn as nn
 from accelerate import PartialState
 from accelerate.utils import gather_object
 from datasets import Dataset
+from peft.utils import INCLUDE_LINEAR_LAYERS_SHORTHAND
 from transformers import (
     BaseImageProcessor,
     DataCollator,
@@ -159,6 +160,19 @@ class RewardTrainer(Trainer):
 
                     model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
 
+                # Warn if the user passes "all-linear" for the target_modules
+                target_modules = (
+                    peft_config.get("target_modules", None)
+                    if isinstance(peft_config, dict)
+                    else peft_config.target_modules
+                )
+                if target_modules == INCLUDE_LINEAR_LAYERS_SHORTHAND:
+                    warnings.warn(
+                        f"You passed target_modules='{INCLUDE_LINEAR_LAYERS_SHORTHAND}' in the peft_config."
+                        " This will result in all linear layers except the output layer being adapted. "
+                        " This will negatively impact the performance of the reward model as the newly initialized output layer will not be adapted or trained.",
+                        UserWarning,
+                    )
                 model = get_peft_model(model, peft_config)
 
         # Disable dropout in the model
