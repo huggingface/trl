@@ -251,6 +251,7 @@ class GRPOTrainer(Trainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.cliprange = args.cliprange # cliprange for the policy
         self.use_vllm = args.use_vllm
 
         self.beta = args.beta
@@ -507,8 +508,11 @@ class GRPOTrainer(Trainer):
         advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
 
         # x - x.detach() allows for preserving gradients from x
-        per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
-        per_token_loss = -(per_token_loss - self.beta * per_token_kl)
+        per_token_loss1 = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
+        per_token_loss2 = torch.clamp(torch.exp(per_token_logps - per_token_logps.detach()), 1 - self.cliprange, 1 + self.cliprange) * advantages.unsqueeze(1)
+        per_token_loss_min = torch.min(per_token_loss1, per_token_loss2,dim=-1) 
+        per_token_loss = -(per_token_loss_min - self.beta * per_token_kl)
+        
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
 
         # Log the metrics

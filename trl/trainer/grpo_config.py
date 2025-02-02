@@ -109,6 +109,12 @@ class GRPOConfig(TrainingArguments):
         default=8,
         metadata={"help": "Number of generations to sample."},
     )
+    
+    cliprange: float = field(
+        default=0.2,
+        metadata={"help": "Clip range."},
+    )
+    
     temperature: Optional[float] = field(
         default=0.9,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
@@ -144,7 +150,7 @@ class GRPOConfig(TrainingArguments):
             "out-of-memory (OOM) errors during initialization."
         },
     )
-
+    
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,
