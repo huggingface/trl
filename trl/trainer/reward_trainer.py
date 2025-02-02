@@ -168,9 +168,9 @@ class RewardTrainer(Trainer):
                 )
                 if target_modules == INCLUDE_LINEAR_LAYERS_SHORTHAND:
                     warnings.warn(
-                        f"You passed target_modules='{INCLUDE_LINEAR_LAYERS_SHORTHAND}' in the peft_config."
-                        " This will result in all linear layers except the output layer being adapted. "
-                        " This will negatively impact the performance of the reward model as the newly initialized output layer will not be adapted or trained.",
+                        f"You passed target_modules='{INCLUDE_LINEAR_LAYERS_SHORTHAND}' in the peft_config. "
+                        "This will result in all linear layers except the output layer being adapted. "
+                        "This could negatively impact the performance of the reward model as the output layer (used for scoring of chosen and rejected completions) will not be adapted or trained.",
                         UserWarning,
                     )
                 model = get_peft_model(model, peft_config)
