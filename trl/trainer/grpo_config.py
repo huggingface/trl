@@ -131,13 +131,13 @@ class GRPOConfig(TrainingArguments):
         },
     ) 
     vllm_device: Optional[str] = field(
-        default="auto",
+        default=None,
         metadata={
             "help": "Deprecated. Set `device` in `vllm_init_kwargs` instead."
         },
     )
-    vllm_gpu_memory_utilization: float = field(
-        default=0.9,
+    vllm_gpu_memory_utilization: Optional[float] = field(
+        default=None,
         metadata={
             "help": "Deprecated. Set `gpu_memory_utilization` in `vllm_init_kwargs` instead." 
         },
