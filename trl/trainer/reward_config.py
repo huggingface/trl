@@ -46,7 +46,7 @@ class RewardConfig(TrainingArguments):
     max_length: Optional[int] = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the sequences (prompt + completion) in the batch. This argument is required if "
+            "help": "Maximum length of the sequences (prompt + completion) in the batch, filters out entries that exceed the limit.This argument is required if "
             "you want to use the default data collator."
         },
     )
