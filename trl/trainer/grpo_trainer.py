@@ -92,9 +92,6 @@ class GRPOTrainer(Trainer):
               loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
               in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
         reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
@@ -111,6 +108,9 @@ class GRPOTrainer(Trainer):
                   [Using a custom reward function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
+        ref_model (`PreTrainedModelWrapper`):
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
+            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -152,8 +152,8 @@ class GRPOTrainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
+        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
