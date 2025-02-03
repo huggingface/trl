@@ -47,7 +47,7 @@ from .utils import generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
-    from peft import PeftConfig, get_peft_model
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
@@ -206,6 +206,8 @@ class GRPOTrainer(Trainer):
             self.ref_model = ref_model
         elif is_deepspeed_zero3_enabled():
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+        elif is_peft_available() and isinstance(model, PeftModel):
+            self.ref_model = None
         elif peft_config is None:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
