@@ -105,7 +105,7 @@ class DPOConfig(TrainingArguments):
             [`~transformers.TrainingArguments`].
         loss_type (`str` or `list`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
-
+                - `"sft"`: cross entropy loss for next token prediction
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
                 - `"hinge"`: hinge loss on the normalized likelihood from the [SLiC](https://huggingface.co/papers/2305.10425) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
@@ -119,7 +119,7 @@ class DPOConfig(TrainingArguments):
                 - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
-
+            When a list is provided the loss is the weighted sum (provided by loss_weights) of all of them.
         loss_weights (`dict[str, float]` or `None`, *optional*, defaults to `None`):
             Use to weight a combination of losses. The keys must be in `loss_type`. By default (if not specified in the dict),
             the weight for a loss in loss_type is 1.0.
