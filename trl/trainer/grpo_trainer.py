@@ -426,35 +426,9 @@ class GRPOTrainer(Trainer):
                     **prompt_inputs, generation_config=self.generation_config
                 )
 
+        # Compute prompt length and extract completion ids
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
-
-        # Get the per-token log probabilities for the completions for the model and the reference model
-        def get_per_token_logps(model, input_ids, num_logits_to_keep):
-            # We add 1 to `num_logits_to_keep` because the last logits of the sequence is later excluded
-            logits = model(input_ids, num_logits_to_keep=num_logits_to_keep + 1).logits  # (B, L, V)
-            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-
-            # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
-            per_token_logps = []
-            for logits_row, input_ids_row in zip(logits, input_ids[:, -num_logits_to_keep:]):
-                log_probs = logits_row.log_softmax(dim=-1)
-                token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
-                per_token_logps.append(token_log_prob)
-            return torch.stack(per_token_logps)
-
-        num_logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
-
-        with torch.inference_mode():
-            if self.ref_model is not None:
-                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids, num_logits_to_keep)
-            else:
-                with self.accelerator.unwrap_model(model).disable_adapter():
-                    ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
-
-        # Compute the KL divergence between the model and the reference model
-        per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
 
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
@@ -462,6 +436,43 @@ class GRPOTrainer(Trainer):
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # Concatenate prompt_mask with completion_mask for logit computation
+        prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
+        attention_mask = torch.cat([prompt_mask_repeated, completion_mask], dim=1)  # (B*G, P+C)
+
+        # Get the per-token log probabilities for the completions for the model and the reference model
+        def get_per_token_logps(model, input_ids, attention_mask, logits_to_keep):
+            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+            logits = model(
+                input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1
+            ).logits  # (B, L, V)
+            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+
+            # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
+            per_token_logps = []
+            for logits_row, input_ids_row in zip(logits, input_ids[:, -logits_to_keep:]):
+                log_probs = logits_row.log_softmax(dim=-1)
+                token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
+                per_token_logps.append(token_log_prob)
+            return torch.stack(per_token_logps)
+
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        per_token_logps = get_per_token_logps(model, prompt_completion_ids, attention_mask, logits_to_keep)
+
+        with torch.inference_mode():
+            if self.ref_model is not None:
+                ref_per_token_logps = get_per_token_logps(
+                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                )
+            else:
+                with self.accelerator.unwrap_model(model).disable_adapter():
+                    ref_per_token_logps = get_per_token_logps(
+                        model, prompt_completion_ids, attention_mask, logits_to_keep
+                    )
+
+        # Compute the KL divergence between the model and the reference model
+        per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
 
         # Decode the generated completions
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -535,8 +546,21 @@ class GRPOTrainer(Trainer):
 
         return loss
 
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            loss = loss.mean().detach()
+        return loss, None, None
+
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        if next(iter(logs.keys())).startswith("eval_"):
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
         logs = {**logs, **metrics}
         if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
             super().log(logs, start_time)
