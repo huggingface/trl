@@ -153,7 +153,7 @@ class GRPOTrainer(Trainer):
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
+        ref_model: Optional[Union[PreTrainedModel, torch.nn.Module, str]] = None,
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
