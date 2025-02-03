@@ -442,7 +442,7 @@ class GRPOTrainer(Trainer):
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
-        prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
+        prompt_mask_repeated = prompt_inputs["attention_mask"].to(device).repeat_interleave(self.num_generations, dim=0)
         attention_mask = torch.cat([prompt_mask_repeated, completion_mask], dim=1)  # (B*G, P+C)
 
         # Get the per-token log probabilities for the completions for the model and the reference model
