@@ -198,15 +198,20 @@ class GRPOTrainer(Trainer):
                     "This argument can only be used when the `model` argument is a string."
                 )
 
+        self.is_peft_model = False
+        if is_peft_available() and isinstance(model, PeftModel):
+            self.is_peft_model = True
+
         if peft_config is not None:
             model = get_peft_model(model, peft_config)
+            self.is_peft_model = True
 
         # Reference model
         if ref_model:
             self.ref_model = ref_model
         elif is_deepspeed_zero3_enabled():
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
-        elif is_peft_available() and isinstance(model, PeftModel):
+        elif self.is_peft_model:
             self.ref_model = None
         elif peft_config is None:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
@@ -395,7 +400,7 @@ class GRPOTrainer(Trainer):
         if self.args.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
-                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                with unwrap_model_for_generation(model, self.accelerator, is_peft_model=self.is_peft_model) as unwrapped_model:
                     state_dict = unwrapped_model.state_dict()
                 if self.accelerator.is_main_process:
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
