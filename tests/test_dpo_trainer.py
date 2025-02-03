@@ -1070,7 +1070,7 @@ class DPOTrainerTester(unittest.TestCase):
             )
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
-    def test_dpo_trainer_use_num_logits_to_keep(self):
+    def test_dpo_trainer_use_logits_to_keep(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -1087,7 +1087,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
-                use_num_logits_to_keep=True,
+                use_logits_to_keep=True,
                 rpo_alpha=0.5,
                 report_to="none",
             )
@@ -1104,7 +1104,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-            training_args.use_num_logits_to_keep = False
+            training_args.use_logits_to_keep = False
             trainer2 = DPOTrainer(
                 model=model,
                 ref_model=None,
