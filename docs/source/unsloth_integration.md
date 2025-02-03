@@ -2,33 +2,86 @@
 
 Unsloth is a lightweight library designed to accelerate and optimize the training of large language models (LLMs) while reducing memory usage. This guide provides step-by-step instructions for integrating Unsloth into your existing workflows.
 
-## Table of Contents
-- [Installation](#installation)
-- [Basic Usage](#basic-usage)
-- [Advanced Configuration](#advanced-configuration)
-- [Benchmarks](#benchmarks)
-- [Troubleshooting](#troubleshooting)
-- [Resources](#resources)
+---
+
+## Installation Instructions
+
+### Stable Releases
+For stable releases, use the following command:
+```bash
+pip install unsloth
+```
+
+### Recommended Installation
+For most installations, we recommend using:
+```bash
+pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+```
 
 ---
 
-## Installation
+## System Requirements
 
-1. **Prerequisites**:
-   - Python 3.8+
-   - PyTorch 2.0+
-   - NVIDIA GPU with FP16 support (recommended)
+- **Operating System**: Works on Linux and Windows via WSL.
+- **GPU Support**: Supports NVIDIA GPUs since 2018+. Minimum CUDA Capability 7.0 (V100, T4, Titan V, RTX 20, 30, 40x, A100, H100, L40, etc.). Check your GPU! GTX 1070, 1080 works, but is slow.
+- **Dependencies**: Your device must have `xformers`, `torch`, `BitsandBytes`, and `triton` support.
+- **Disk Space**: Ensure you have sufficient disk space to train and save your model.
 
-2. **Install Unsloth**:
-   ```bash
-   pip install "unsloth[colab] @ git+https://github.com/unslothai/unsloth.git"
-   ```
+**Note**: Unsloth only works if you have an NVIDIA GPU.
 
-3. **Install Optional Dependencies**:
-   ```bash
-   pip install flash-attn==2.5.8 trl==0.8.6 accelerate==0.27.2
-   ```
+---
 
+## Fine-tuning VRAM Requirements
+
+How much GPU memory do you need for LLM fine-tuning using Unsloth?  
+Check the table below for VRAM requirements sorted by model parameters and fine-tuning method.  
+- **QLoRA** uses 4-bit precision.  
+- **LoRA** uses 16-bit precision.
+
+| Model Parameters | QLoRA (4-bit) VRAM | LoRA (16-bit) VRAM |
+|------------------|-------------------|--------------------|
+| 3B               | 2 GB              | 7 GB               |
+| 7B               | 4.5 GB            | 16 GB              |
+| 8B               | 5 GB              | 19 GB              |
+| 9B               | 5.5 GB            | 21 GB              |
+| 11B              | 6.5 GB            | 26 GB              |
+| 14B              | 8.5 GB            | 33 GB              |
+| 27B              | 16 GB             | 64 GB              |
+| 32B              | 19 GB             | 76 GB              |
+| 40B              | 24 GB             | 96 GB              |
+| 70B              | 41 GB             | 164 GB             |
+| 81B              | 48 GB             | 192 GB             |
+| 405B             | 237 GB            | 950 GB             |
+
+## Training Setup
+```python
+from transformers import TrainingArguments
+from trl import SFTTrainer  # Fixed trainer import 
+
+# Proper initialization sequence
+training_args = TrainingArguments(
+    output_dir="./output",
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,
+    optim="adamw_8bit",
+    learning_rate=2e-5,
+    fp16=not torch.cuda.is_bf16_supported(),
+    bf16=torch.cuda.is_bf16_supported(),
+    max_grad_norm=0.3,
+    warmup_ratio=0.1,
+    lr_scheduler_type="cosine",
+)
+
+# Initialize proper trainer 
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+    args=training_args,
+    dataset_text_field="text",
+    max_seq_length=2048,
+    tokenizer=tokenizer,
+)
+```
 ---
 
 ## Basic Usage
@@ -73,7 +126,7 @@ trainer = TrainingArguments(
 )
 
 # Start training
-model.train()
+trainer_stats = trainer.train()
 ```
 
 ---
@@ -134,11 +187,11 @@ training_args = TrainingArguments(
 ```bash
 pip install --upgrade "unsloth[colab] @ git+https://github.com/unslothai/unsloth.git"
 ```
+If you face any issues during installation or updating, please check the official website for guidance:  
+[Unsloth Installation Guide](https://docs.unsloth.ai/get-started/installing-+-updating)
 
 ---
 
 ## Resources
 - [Official Documentation](https://github.com/unslothai/unsloth)
 - [Example Notebooks](https://github.com/unslothai/unsloth/tree/main/examples)
-- [Research Paper](https://arxiv.org/abs/2403.19547)
-- [Discord Community](https://discord.gg/wwUeB8PXtK)
