@@ -57,7 +57,8 @@ class GRPOConfig(TrainingArguments):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept unused for
             training, as vLLM will require one for generation. vLLM must be installed (`pip install vllm`).
-        vllm_init_kwargs (`dict`, *optional*, defaults to {"device": "auto", "gpu_memory_utilization": 0.9})
+        vllm_init_kwargs (`dict`, *optional*, defaults to
+            {"device": "auto", "gpu_memory_utilization": 0.9, "enable_prefix_caching": True})
             "Keyword arguments for `vllm.LLM.__init__` when `use_vllm` is true"
 
         > Parameters that control the training
