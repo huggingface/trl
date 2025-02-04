@@ -152,7 +152,7 @@ class GRPOConfig(TrainingArguments):
             "help": "Deprecated. Set `gpu_memory_utilization` in `vllm_init_kwargs` instead." 
         },
     )
-    
+
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,
