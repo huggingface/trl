@@ -13,7 +13,7 @@ Currently supported CLIs are:
 
 #### Other commands
 
-- `trl chat`: quickly spin up a LLM fine-tuned for chatting
+- `trl chat`: quickly spin up an LLM fine-tuned for chatting
 - `trl env`: get the system information
 
 ## Fine-tuning with the CLI

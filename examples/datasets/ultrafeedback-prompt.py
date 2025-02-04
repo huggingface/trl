@@ -81,7 +81,7 @@ Column:
 
 ## Generation script
 
-The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/ultafeedback-prompt.py).
+The script used to generate this dataset can be found [here](https://github.com/huggingface/trl/blob/main/examples/datasets/ultrafeedback-prompt.py).
 """)
 
 if __name__ == "__main__":

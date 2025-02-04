@@ -14,7 +14,7 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ingored!). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ignored!). You can view the data in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
@@ -24,6 +24,8 @@ This example demonstrates how to train a model using the GRPO method. We train a
 ></iframe>
 
 Below is the script to train the model.
+Note that the input tensor for the forward pass has a size of `num_generations * per_device_train_batch_size` because GRPO generates `num_generations` completions for each prompt in the batch. Adjusting these values appropriately can help prevent OOM errors.
+Consequently, the effective train batch size is `num_generations * per_device_train_batch_size * gradient_accumulation_steps`.
 
 ```python
 # train_grpo.py
