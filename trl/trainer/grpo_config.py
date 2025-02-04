@@ -67,8 +67,7 @@ class GRPOConfig(TrainingArguments):
             during initialization.
         vllm_dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for vLLM generation. If set to `"auto"`, the data type will be automatically determined 
-            based on the model configuration. Supported values are `"auto"`, `"float16"`, `"bfloat16"`, and `"float32"`.
-            Supported by vLLM.
+            based on the model configuration. Find the supported values in the vLLM documentation.
 
         > Parameters that control the training
 
@@ -153,6 +152,7 @@ class GRPOConfig(TrainingArguments):
         default="auto",
         metadata={
             "help": "Data type to use for vLLM generation. If set to 'auto', the data type will be automatically "
+            "determined based on the model configuration. Find the supported values in the vLLM documentation."
         },
     )
     
