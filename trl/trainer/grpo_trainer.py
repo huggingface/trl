@@ -287,8 +287,7 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.accelerator.is_main_process:
-                vllm_init_kwargs = self.args.vllm_init_kwargs
-                vllm_device = vllm_init_kwargs.get("device")
+                vllm_device = self.args.vllm_device
                 if vllm_device == "auto":
                     vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
                     vllm_init_kwargs["device"] = vllm_device
@@ -316,7 +315,14 @@ class GRPOTrainer(Trainer):
                 with world_size_patch, profiling_patch:
                     self.llm = LLM(
                         model=model.name_or_path,
-                        **vllm_init_kwargs
+                        device=vllm_device,
+                        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                        dtype=self.args.vllm_dtype,
+                        # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
+                        # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
+                        # This is particularly useful here because we generate completions from the same prompts.
+                        enable_prefix_caching=True,
+                        max_model_len=self.args.vllm_max_model_len,
                     )
                 self.sampling_params = SamplingParams(
                     n=self.num_generations,
