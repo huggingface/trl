@@ -1655,7 +1655,7 @@ def compute_logps_with_prompt_cache(
     completion_ids: torch.LongTensor,
     mini_batch_size: int,
     requires_grad_for_completion: bool = True,
-):
+) -> torch.FloatTensor:
     """
     The method will compute the log probabilities of the completion tokens by using the prompt cache.
     1) Forward pass on the prompt with torch.no_grad() to get `past_key_values`.
@@ -1680,10 +1680,13 @@ def compute_logps_with_prompt_cache(
     G = completion_ids.size(0) // B
     C = completion_ids.size(1)
 
-    # If mini_batch_size unspecified, defaults to entire batch
-    mini_batch_size = completion_ids.size(0) if mini_batch_size == 0 else mini_batch_size
+    # If the user did not specify a mini_batch_size, use the full batch size (B*G)
+    if mini_batch_size <= 0:
+        mini_batch_size = completion_ids.size(0)
 
-    # Forward pass over prompt tokens
+    # Forward pass over prompt tokens to get 2 things with torch.no_grad:
+    # 1) `past_key_values`` (KV cache)
+    # 2) `prompt_last_logps` (the logprobs of the first completion token prediction)
     with torch.no_grad():
         prompt_out = model(**prompt_inputs, use_cache=True, logits_to_keep=1)
 
@@ -1695,31 +1698,38 @@ def compute_logps_with_prompt_cache(
         prompt_last_logps, dim=-1, index=completion_ids[:, :1].unsqueeze(-1)
     ).squeeze(-1)
 
-    # Interleave the past key values for the G times
-    prompt_out.past_key_values.batch_repeat_interleave(G)
+    # Expand the KV Cache `G` times to match the dimension of completion_ids (B -> B*G) and split into mini-batches
+    repeated_kv_cache = prompt_out.past_key_values  # a DynamicCache
+    repeated_kv_cache.batch_repeat_interleave(G)
+    mini_batch_kv_caches = repeated_kv_cache.batch_split(full_batch_size=B * G, split_size=mini_batch_size)
 
-    # Forward pass over completion tokens (with or without grad)
-    # TODO: we can shrink the peak memory further here by using mini_batch here as well, but the Past KV is hard to slice
+    # Process completion tokens in mini-batches
+    completion_token_logps = []
     with torch.set_grad_enabled(requires_grad_for_completion):
-        completion_logits = model(
-            input_ids=completion_ids,
-            past_key_values=prompt_out.past_key_values,
-            logits_to_keep=C,  # We'll get rid of the last one later
-            use_cache=False,
-        ).logits[:, -C:-1, :]  # (B*G, C-1, vocab_size) last logit is discarded
+        for batch_idx, mini_batch_kv_cache in enumerate(mini_batch_kv_caches):
+            start_idx = batch_idx * mini_batch_size
+            end_idx = start_idx + mini_batch_size
+            mini_batch_ids = completion_ids[start_idx:end_idx]  # (mini_batch_size, C)
 
-    per_token_logps = []
+            mini_batch_log_probs = (
+                model(
+                    input_ids=mini_batch_ids,
+                    past_key_values=mini_batch_kv_cache,
+                    logits_to_keep=C,
+                    use_cache=False,
+                )
+                .logits[:, -C:-1, :]
+                .log_softmax(dim=-1)
+            )  # (mini_batch_size, C-1, vocab_size)
 
-    # Use the mini_batch_size to get the per_token_logps for completion tokens
-    for i in range(0, completion_logits.size(0), mini_batch_size):
-        log_probs = completion_logits[i : i + mini_batch_size, :, :].log_softmax(dim=-1)  # (B_mini, C-1, vocab_size)
-        token_index = completion_ids[i : i + mini_batch_size, 1:].unsqueeze(-1)  # (B_mini, C-1, 1)
-        token_log_prob = torch.gather(log_probs, dim=-1, index=token_index).squeeze(-1)  # (B_mini, C-1)
-        del log_probs
-        per_token_logps.append(token_log_prob)
-    per_token_logps = torch.cat(per_token_logps, dim=0)
+            # Get the corresponding completion token ids and gather the logits for completion_ids w/ idx >= 1
+            mini_batch_token_index = mini_batch_ids[:, 1:].unsqueeze(-1)  # (mini_batch_size, C-1, 1)
+            mini_batch_token_log_prob = torch.gather(
+                mini_batch_log_probs, dim=-1, index=mini_batch_token_index
+            ).squeeze(-1)
+            del mini_batch_log_probs
+            completion_token_logps.append(mini_batch_token_log_prob)
 
-    # Concat with the first_completion_token_logps
-    per_token_logps = torch.cat([first_completion_token_logps, per_token_logps], dim=1)  # (B_mini, C)
-
-    return per_token_logps
+    # Combine results
+    all_completion_token_logps = torch.cat(completion_token_logps, dim=0)
+    return torch.cat([first_completion_token_logps, all_completion_token_logps], dim=1)
