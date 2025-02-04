@@ -57,8 +57,12 @@ class GRPOConfig(TrainingArguments):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept unused for
             training, as vLLM will require one for generation. vLLM must be installed (`pip install vllm`).
-        vllm_init_kwargs (`dict`, *optional*, defaults to
-            {"device": "auto", "gpu_memory_utilization": 0.9, "enable_prefix_caching": True})
+        vllm_init_kwargs (`dict`, *optional*, defaults to {
+                "device": "auto",
+                "gpu_memory_utilization": 0.9,
+                "enable_prefix_caching": True,
+                "dtype": "auto"
+            })
             "Keyword arguments for `vllm.LLM.__init__` when `use_vllm` is true"
 
         > Parameters that control the training
@@ -130,6 +134,7 @@ class GRPOConfig(TrainingArguments):
             # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
             # This is particularly useful here because we generate completions from the same prompts.
             "enable_prefix_caching": True,
+            "dtype": "auto"
         },
         metadata={
             "help": "Keyword arguments for `vllm.LLM.__init__` when `use_vllm` is true"
@@ -147,7 +152,7 @@ class GRPOConfig(TrainingArguments):
             "help": "Deprecated. Set `gpu_memory_utilization` in `vllm_init_kwargs` instead." 
         },
     )
-
+    
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,
