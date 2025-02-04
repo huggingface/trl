@@ -291,7 +291,6 @@ class GRPOTrainer(Trainer):
                 vllm_device = self.args.vllm_device
                 if vllm_device == "auto":
                     vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
-                    vllm_init_kwargs["device"] = vllm_device
                 # Check that the requested device is available
                 if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
                     raise ValueError(
