@@ -58,7 +58,7 @@ class DPOConfig(TrainingArguments):
             this flag to `True`.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
-        use_num_logits_to_keep (`bool`, *optional*, defaults to `False`):
+        use_logits_to_keep (`bool`, *optional*, defaults to `False`):
             If `True`, only a specified number of logits are computed in the forward pass. This can be useful for
             saving memory and speeding up training by not computing the logits for all tokens, especially in
             scenarios when working with very long prompts where labels are ignored (-100).
@@ -198,7 +198,7 @@ class DPOConfig(TrainingArguments):
         default=True,
         metadata={"help": "Whether to disable dropout in the model and reference model."},
     )
-    use_num_logits_to_keep: bool = field(
+    use_logits_to_keep: bool = field(
         default=False,
         metadata={
             "help": "If `True`, only a specified number of logits are computed in the forward pass. This can be "
@@ -387,16 +387,18 @@ class DPOConfig(TrainingArguments):
     )
 
     # Deprecated parameters
-    is_encoder_decoder: Optional[bool] = field(
-        default=None,
-        metadata={"help": "Deprecated. This argument is not used anymore."},
+    use_num_logits_to_keep: bool = field(
+        default=False,
+        metadata={"help": "Deprecated. Use `use_logits_to_keep` instead."},
     )
 
     def __post_init__(self):
-        if self.is_encoder_decoder is not None:
-            warnings.warn(
-                "The `is_encoder_decoder` parameter is deprecated will be removed in version 0.15. The trainer now "
-                "automatically determines if the model is an encoder-decoder, so you can safely remove it."
-            )
+        super().__post_init__()
 
-        return super().__post_init__()
+        if self.use_num_logits_to_keep:
+            warnings.warn(
+                "`use_num_logits_to_keep` is deprecated and will be remove in version 0.17.0. Use "
+                "`use_logits_to_keep` instead.",
+                DeprecationWarning,
+            )
+            self.use_logits_to_keep = self.use_num_logits_to_keep

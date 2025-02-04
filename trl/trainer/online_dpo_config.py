@@ -63,7 +63,7 @@ class OnlineDPOConfig(TrainingArguments):
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         use_vllm (`bool`, *optional*, defaults to `False`):
-            Whether to use the vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
+            Whether to use vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -140,7 +140,7 @@ class OnlineDPOConfig(TrainingArguments):
     use_vllm: bool = field(
         default=False,
         metadata={
-            "help": "Whether to use the vLLM for generating completions. Requires vLLM to be installed "
+            "help": "Whether to use vLLM for generating completions. Requires vLLM to be installed "
             "(`pip install vllm`)."
         },
     )
