@@ -65,6 +65,9 @@ class GRPOConfig(TrainingArguments):
             device dedicated to generation powered by vLLM. Higher values will increase the KV cache size and thus
             improve the model's throughput. However, if the value is too high, it may cause out-of-memory (OOM) errors
             during initialization.
+        vllm_dtype (`str`, *optional*, defaults to `"auto"`):
+            Data type to use for vLLM generation. If set to `"auto"`, the data type will be automatically determined
+            based on the model configuration. Find the supported values in the vLLM documentation.
 
         > Parameters that control the training
 
@@ -142,6 +145,14 @@ class GRPOConfig(TrainingArguments):
             "cache on the device dedicated to generation powered by vLLM. Higher values will increase the KV cache "
             "size and thus improve the model's throughput. However, if the value is too high, it may cause "
             "out-of-memory (OOM) errors during initialization."
+        },
+    )
+
+    vllm_dtype: Optional[str] = field(
+        default="auto",
+        metadata={
+            "help": "Data type to use for vLLM generation. If set to 'auto', the data type will be automatically "
+            "determined based on the model configuration. Find the supported values in the vLLM documentation."
         },
     )
 
