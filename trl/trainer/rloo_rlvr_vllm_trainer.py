@@ -27,7 +27,6 @@ from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
     AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
@@ -46,13 +45,15 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, logging
 
 from ..data_utils import apply_chat_template, is_conversational
+from ..import_utils import is_vllm_available
 from ..extras.dataset_formatting import get_formatting_func_from_dataset
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .rloov2_config import RLOOv2Config
 from .utils import empty_cache, get_reward, truncate_right
 
 
-# from .utils import DPODataCollatorWithPadding
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
 
 if is_peft_available():
     from peft import get_peft_model
@@ -62,9 +63,7 @@ if is_apex_available():
 
 logger = logging.get_logger(__name__)
 
-# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
-# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
-RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+RewardCallable = Callable[[list, list], list[float]]
 
 
 class RLOOv2Trainer(Trainer):
@@ -81,7 +80,7 @@ class RLOOv2Trainer(Trainer):
               loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
               in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
+        reward_funcs (`Union[RewardCallable, list[RewardCallable]]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
 
@@ -112,14 +111,7 @@ class RLOOv2Trainer(Trainer):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`].
         reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
-            Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
-
-            - A single processing class: Used when `reward_funcs` contains only one reward function.
-            - A list of processing classes: Must match the order and length of the reward functions in `reward_funcs`.
-            If set to `None`, or if an element of the list corresponding to a [`~transformers.PreTrainedModel`] is
-            `None`, the tokenizer for the model is automatically loaded using [`~transformers.AutoTokenizer.from_pretrained`].
-            For elements in `reward_funcs` that are custom reward functions (not [`~transformers.PreTrainedModel`]),
-            the corresponding entries in `reward_processing_classes` are ignored.
+            Processing classes corresponding to the reward functions specified in `reward_funcs`. Must be None.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks
             detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -138,7 +130,7 @@ class RLOOv2Trainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_funcs: Union[RewardFunc, list[RewardFunc]],
+        reward_funcs: Union[RewardCallable, list[RewardCallable]],
         args: Optional[RLOOv2Config] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
@@ -202,44 +194,8 @@ class RLOOv2Trainer(Trainer):
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
         # Reward functions
-        if not isinstance(reward_funcs, list):
-            reward_funcs = [reward_funcs]
-        for i, reward_func in enumerate(reward_funcs):
-            if isinstance(reward_func, str):
-                reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
-                    reward_func, num_labels=1, **model_init_kwargs
-                )
-        self.reward_funcs = reward_funcs
-
-        # Reward processing class
-        if reward_processing_classes is None:
-            reward_processing_classes = [None] * len(reward_funcs)
-        elif not isinstance(reward_processing_classes, list):
-            reward_processing_classes = [reward_processing_classes]
-        else:
-            if len(reward_processing_classes) != len(reward_funcs):
-                raise ValueError("The number of reward processing classes must match the number of reward functions.")
-
-        for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
-            if isinstance(reward_func, PreTrainedModel):
-                if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
-                if reward_processing_class.pad_token_id is None:
-                    reward_processing_class.pad_token = reward_processing_class.eos_token
-                # The reward model computes the reward for the latest non-padded token in the input sequence.
-                # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
-                reward_processing_classes[i] = reward_processing_class
-        self.reward_processing_classes = reward_processing_classes
-
-        # Preprocess and format dataset
-        if formatting_func is None:
-            # check if dataset has ChatML format or instruction format and is supported
-            # if not stays None
-            formatting_func = get_formatting_func_from_dataset(train_dataset, processing_class)
-            # if a template is detected, we don't need to add special tokens again
-            if formatting_func is not None:
-                args.dataset_kwargs["add_special_tokens"] = False
+        self.reward_funcs = reward_funcs if isinstance(reward_funcs, list) else [reward_funcs]
+        assert reward_processing_classes is None
 
         # Pre-process the datasets only once per node. The remaining processes will use the cache.
         with PartialState().local_main_process_first():
@@ -247,7 +203,6 @@ class RLOOv2Trainer(Trainer):
                 train_dataset = self._prepare_dataset(
                     train_dataset,
                     processing_class,
-                    reward_processing_classes,
                     args.dataset_text_field,
                     formatting_func,
                     remove_unused_columns=args.remove_unused_columns if args is not None else True,
@@ -261,7 +216,6 @@ class RLOOv2Trainer(Trainer):
                     _eval_datasets[_eval_dataset_name] = self._prepare_dataset(
                         _eval_dataset,
                         processing_class,
-                        reward_processing_classes,
                         args.dataset_text_field,
                         formatting_func,
                         remove_unused_columns=args.remove_unused_columns if args is not None else True,
@@ -302,64 +256,64 @@ class RLOOv2Trainer(Trainer):
         self.batch_indices_to_sample = []
         self.prompt_completion_batches = []
 
-        # if self.use_vllm:
-        #     if not is_vllm_available():
-        #         raise ImportError(
-        #             "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-        #             "`pip install vllm` to use it."
-        #         )
-        #
-        #     if self.accelerator.is_main_process:
-        #         vllm_device = self.args.vllm_device
-        #         if vllm_device == "auto":
-        #             vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
-        #         # Check that the requested device is available
-        #         if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
-        #             raise ValueError(
-        #                 f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
-        #                 "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
-        #                 "value lower than the number of GPUs available on your machine—typically, reducing it by one "
-        #                 f"is sufficient. In your case: `--num_processes {torch.cuda.device_count() - 1}`."
-        #             )
-        #         # Check that the requested device is not also used for training
-        #         if vllm_device in {f"cuda:{idx}" for idx in range(self.accelerator.num_processes)}:
-        #             warnings.warn(
-        #                 f"The requested device {vllm_device} is also used for training. This may lead to unexpected "
-        #                 "behavior. It is recommended to use a dedicated device for vLLM."
-        #             )
-        #         # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) place the vLLM
-        #         # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
-        #         # setting (profiling_patch).
-        #         world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
-        #         profiling_patch = patch(
-        #             "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
-        #         )
-        #         with world_size_patch, profiling_patch:
-        #             self.llm = LLM(
-        #                 model=model.name_or_path,
-        #                 device=vllm_device,
-        #                 gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
-        #             )
-        #         self.sampling_params = SamplingParams(
-        #             n=self.num_generations,
-        #             temperature=args.temperature,
-        #             max_tokens=self.max_completion_length,
-        #         )
-        #
-        #     self._last_loaded_step = 0  # tag to avoid useless loading during grad checkpointing
-        #
-        #     # When using vLLM, the main process is responsible for loading the model weights. This can cause process
-        #     # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
-        #     # synchronize all processes after vLLM has been fully initialized.
-        #     self.accelerator.wait_for_everyone()
-        # else:
-        self.generation_config = GenerationConfig(
-            max_new_tokens=args.max_completion_length,
-            do_sample=True,
-            temperature=args.temperature,
-            num_return_sequences=args.num_generations,
-            pad_token_id=processing_class.pad_token_id,
-        )
+        if self.use_vllm:
+            if not is_vllm_available():
+                raise ImportError(
+                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
+                    "`pip install vllm` to use it."
+                )
+
+            if self.accelerator.is_main_process:
+                vllm_device = self.args.vllm_device
+                if vllm_device == "auto":
+                    vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
+                # Check that the requested device is available
+                if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
+                    raise ValueError(
+                        f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
+                        "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
+                        "value lower than the number of GPUs available on your machine—typically, reducing it by one "
+                        f"is sufficient. In your case: `--num_processes {torch.cuda.device_count() - 1}`."
+                    )
+                # Check that the requested device is not also used for training
+                if vllm_device in {f"cuda:{idx}" for idx in range(self.accelerator.num_processes)}:
+                    warnings.warn(
+                        f"The requested device {vllm_device} is also used for training. This may lead to unexpected "
+                        "behavior. It is recommended to use a dedicated device for vLLM."
+                    )
+                # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) place the vLLM
+                # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
+                # setting (profiling_patch).
+                world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
+                profiling_patch = patch(
+                    "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
+                )
+                with world_size_patch, profiling_patch:
+                    self.llm = LLM(
+                        model=model.name_or_path,
+                        device=vllm_device,
+                        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                    )
+                self.sampling_params = SamplingParams(
+                    n=self.num_generations,
+                    temperature=args.temperature,
+                    max_tokens=self.max_completion_length,
+                )
+
+            self._last_loaded_step = 0  # tag to avoid useless loading during grad checkpointing
+
+            # When using vLLM, the main process is responsible for loading the model weights. This can cause process
+            # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
+            # synchronize all processes after vLLM has been fully initialized.
+            self.accelerator.wait_for_everyone()
+        else:
+            self.generation_config = GenerationConfig(
+                max_new_tokens=args.max_completion_length,
+                do_sample=True,
+                temperature=args.temperature,
+                num_return_sequences=args.num_generations,
+                pad_token_id=processing_class.pad_token_id,
+            )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -375,15 +329,10 @@ class RLOOv2Trainer(Trainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
-        for i, reward_func in enumerate(self.reward_funcs):
-            if isinstance(reward_func, PreTrainedModel):
-                self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
-
     def _prepare_dataset(
         self,
         dataset,
         processing_class,
-        reward_processing_classes,
         dataset_text_field: str,
         formatting_func: Optional[Callable],
         remove_unused_columns=False,
@@ -396,70 +345,38 @@ class RLOOv2Trainer(Trainer):
         if skip_prepare_dataset:
             return dataset
 
-        # If the dataset is already preprocessed (tokenized), return as-is. Only works if dataset is
-        # a datasets.Dataset or datasets.IterableDataset -- not for torch Dataset
-        column_names = (
-            dataset.column_names if isinstance(dataset, (datasets.Dataset, datasets.IterableDataset)) else None
-        )
-        if column_names and "input_ids" in column_names:
+        # Preprocess and format dataset
+        if formatting_func is None:
+            # check if dataset has ChatML format or instruction format and is supported
+            # if not stays None
+            formatting_func = get_formatting_func_from_dataset(train_dataset, processing_class)
+            # if a template is detected, we don't need to add special tokens again
             if formatting_func is not None:
-                warnings.warn(
-                    "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
-                    "valid formatting function. Therefore `formatting_func` will be ignored. Either remove the "
-                    "`formatting_func` or pass a dataset that is not already processed.",
-                    UserWarning,
-                )
+                args.dataset_kwargs["add_special_tokens"] = False
 
-            def formatting_func(x):
-                return x["input_ids"]
-
-        return self._preprocess_dataset(
-            processing_class,
-            reward_processing_classes,
-            dataset,
-            dataset_text_field,
-            formatting_func,
-            add_special_tokens,
-            remove_unused_columns,
-        )
-
-    def _preprocess_dataset(
-        self,
-        processing_class,
-        reward_processing_classes,
-        dataset,
-        dataset_text_field: str,
-        formatting_func: Optional[Callable] = None,
-        add_special_tokens=True,
-        remove_unused_columns=True,
-    ):
-        # is_conversational only works for a single example
-        # so figure out if its conversational before calling a batched .map
-        # if formatting_func is not None:
-        is_convo = is_conversational(dataset[0])
-
-        # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
-        def tokenize(element):
-            if formatting_func is not None:
-                texts = formatting_func(element)
-            elif is_convo:
-                texts = apply_chat_template(element, tokenizer=processing_class)["prompt"]
-            else:
-                texts = element[dataset_text_field]
-
-            outputs = processing_class(
-                texts,
-                add_special_tokens=add_special_tokens,
-                padding=False,
-                return_length=False,
+        if formatting_func is not None and not isinstance(formatting_func(dataset[0]), list):
+            raise ValueError(
+                "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
             )
 
-            if formatting_func is not None and not isinstance(formatting_func(element), list):
-                raise ValueError(
-                    "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
-                )
+        # is_conversational only works for a single example
+        # so figure out if its conversational before calling a batched .map
+        is_convo = is_conversational(dataset[0])
 
-            return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
+        def format_and_extract_solution(element):
+            if formatting_func is not None:
+                prompt_text = formatting_func(element)
+                prompt_messages = element["prompt"] if is_convo else None
+            elif is_convo:
+                prompt_text = apply_chat_template(element, tokenizer=processing_class)["prompt"]
+                prompt_messages = element["prompt"]
+            else:
+                prompt_text = element[dataset_text_field]
+                prompt_messages = None
+
+            # TODO extract solution
+
+            return {"prompt_text": prompt_text, "prompt_messages": prompt_messages}
 
         signature_columns = ["input_ids", "labels", "attention_mask"]
 
@@ -485,9 +402,6 @@ class RLOOv2Trainer(Trainer):
         # if isinstance(dataset, datasets.Dataset):
         #     map_kwargs["num_proc"] = self.dataset_num_proc  # this arg is not available for IterableDataset
         tokenized_dataset = dataset.map(tokenize, **map_kwargs)
-
-        if any(proc_class is not None for proc_class in reward_processing_classes):
-            raise NotImplementedError("Don't yet support reward processing classes")
 
         return tokenized_dataset
 
