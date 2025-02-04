@@ -16,15 +16,18 @@ import dataclasses
 import inspect
 import os
 import warnings
+from collections import defaultdict
 from typing import Callable, Optional, Union
 
 import datasets
 import torch
 import torch.nn as nn
+import transformers
 from accelerate.state import PartialState
 from datasets import Dataset
 from datasets.arrow_writer import SchemaInferenceError
 from datasets.builder import DatasetGenerationError
+from packaging import version
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -305,6 +308,9 @@ class SFTTrainer(Trainer):
                 UserWarning,
             )
 
+        # Initialize the metrics
+        self._metrics = defaultdict(list)
+
         super().__init__(
             model=model,
             args=args,
@@ -562,10 +568,21 @@ class SFTTrainer(Trainer):
             shift_labels = inputs["labels"][..., 1:].contiguous()
             accuracy = compute_token_accuracy(shift_logits, shift_labels)
 
-            # Log based on whether we're training or evaluating
-            if model.training:
-                self.log({"train_mean_token_accuracy": self.accelerator.gather_for_metrics(accuracy)})
-            else:
-                self.log({"eval_mean_token_accuracy": self.accelerator.gather_for_metrics(accuracy)})
+            self._metrics["mean_token_accuracy"].append(self.accelerator.gather_for_metrics(accuracy))
 
         return (loss, outputs) if return_outputs else loss
+
+    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        if next(iter(logs.keys())).startswith("eval_"):
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs = {**logs, **metrics}
+        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+            super().log(logs, start_time)
+        else:  # transformers<=4.46
+            super().log(logs)
+        self._metrics.clear()
