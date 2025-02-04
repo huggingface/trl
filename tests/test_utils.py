@@ -30,6 +30,7 @@ from trl.trainer.utils import (
     flush_left,
     generate_model_card,
     get_peft_config,
+    is_token_in_vocab,
     pad,
 )
 
@@ -451,3 +452,15 @@ class TestFlushLeft(unittest.TestCase):
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
 
         self.assertTrue(torch.equal(new_mask, expected_mask))
+
+
+class TestIsTokenInVocab(unittest.TestCase):
+    def setUp(self):
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+
+    def test_token_in_vocab(self):
+        for token in ["<|im_start|>", "\n", "\n\n", "a"]:
+            self.assertTrue(is_token_in_vocab(self.tokenizer, token))
+
+    def test_token_not_in_vocab(self):
+        self.assertFalse(is_token_in_vocab(self.tokenizer, "<step_token>"))

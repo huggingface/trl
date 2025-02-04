@@ -1647,3 +1647,22 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
         return mask
     else:
         return mask, *tensors
+
+
+def is_token_in_vocab(tokenizer: PreTrainedTokenizerBase, token: str) -> bool:
+    # Use repr() to handle special characters, and remove the extra quotes
+    # Try direct vocab check
+    if token in tokenizer.get_vocab():
+        return True
+
+    # Try escaped representation, use repr() to handle special characters, and remove the extra quotes
+    escaped = repr(token)[1:-1]
+    if escaped in tokenizer.get_vocab():
+        return True
+
+    # Check if token gets encoded to a single ID
+    try:
+        token_ids = tokenizer.encode(token, add_special_tokens=False)
+        return len(token_ids) == 1
+    except Exception:
+        return False

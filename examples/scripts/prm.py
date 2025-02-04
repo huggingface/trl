@@ -58,6 +58,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.trainer.utils import is_token_in_vocab
 
 
 if __name__ == "__main__":
@@ -88,6 +89,16 @@ if __name__ == "__main__":
     )
     # Align padding tokens between tokenizer and model
     model.config.pad_token_id = tokenizer.pad_token_id
+
+    # Check if the step separator is in the vocabulary, if it's not, add it
+    if not is_token_in_vocab(tokenizer, training_args.step_token):
+        tokenizer.add_special_tokens({"additional_special_tokens": [training_args.step_separator]})
+        model.resize_token_embeddings(
+            len(tokenizer),
+            pad_to_multiple_of=(
+                training_args.resize_to_multiple_of if training_args.resize_to_multiple_of is not None else None
+            ),
+        )
 
     if model_config.use_peft and model_config.lora_task_type != "TOKEN_CLS":
         warnings.warn(
