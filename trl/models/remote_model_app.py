@@ -22,7 +22,8 @@ import argparse
 from trl import ModelConfig
 """
 Usage 
-python trl/models/remote_model_app.py --model_name deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --port 8000 
+python trl/models/remote_model_app.py --model_name deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+
 """
 
 app = FastAPI()
