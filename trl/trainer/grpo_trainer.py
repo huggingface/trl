@@ -23,8 +23,10 @@ import torch
 import torch.utils.data
 import transformers
 from accelerate.utils import broadcast_object_list, gather_object
+from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
+from torch import nn
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -402,7 +404,10 @@ class GRPOTrainer(Trainer):
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                    state_dict = unwrapped_model.state_dict()
+                    if is_compiled_module(unwrapped_model):
+                        state_dict = unwrapped_model._orig_mod.state_dict()
+                    else:
+                        state_dict = unwrapped_model.state_dict()
                 if self.accelerator.is_main_process:
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                     llm_model.load_weights(state_dict.items())
@@ -479,7 +484,7 @@ class GRPOTrainer(Trainer):
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
-            if isinstance(reward_func, PreTrainedModel):
+            if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
                 if is_conversational(inputs[0]):
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                     texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
@@ -516,7 +521,7 @@ class GRPOTrainer(Trainer):
         # Log the metrics
         reward_per_func = self.accelerator.gather_for_metrics(rewards_per_func).mean(0)
         for i, reward_func in enumerate(self.reward_funcs):
-            if isinstance(reward_func, PreTrainedModel):
+            if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
                 reward_func_name = reward_func.config._name_or_path.split("/")[-1]
             else:
                 reward_func_name = reward_func.__name__
