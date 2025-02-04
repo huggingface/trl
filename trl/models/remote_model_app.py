@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from transformers import AutoModelForCausalLM
 
-from trl import ModelConfig
+from trl import ModelConfig, TrlParser
 
 
 """
@@ -86,8 +86,6 @@ def init_model(model_config: ModelConfig):
 
 
 if __name__ == "__main__":
-    from trl import ModelConfig, TrlParser
-
     parser = TrlParser(ModelConfig)
     model_args = parser.parse_args_and_config()[0]
     init_model(model_args)
