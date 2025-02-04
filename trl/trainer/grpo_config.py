@@ -79,10 +79,10 @@ class GRPOConfig(TrainingArguments):
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
         logit_computation_mini_batch_size (`int`, *optional*, defaults to `0`):
-            Number of rows of the logit tensor to process at a time. 0 means no mini-batching, which is the default.
-            This it not compatible with gradient checkpointing. Using a low value will reduce memory usage with tradeoff
-            of slower computation. However, since the speed bottleneck is in the generation step, it is recommended to
-            utilize this argument especially dealing with larger LLMs.
+            Number of rows of the completion logit tensors to process at a time. 0 means no mini-batching, which is the
+            default. Using a low value will reduce memory usage with tradeoff of slower computation. However, since the
+            training speed bottleneck occurs in the generation step, it is recommended to utilize this argument, especially
+            when dealing with larger LLMs."
     """
 
     # Parameters that control the model and reference model
@@ -184,7 +184,7 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Number of rows of the completion logit tensors to process at a time. 0 means no mini-batching, "
             "which is the default. Using a low value will reduce memory usage with tradeoff of slower computation. "
-            "However, since the speed bottleneck is in the generation step, it is recommended to utilize this argument, "
-            "especially when dealing with larger LLMs. This it not compatible with gradient checkpointing."
+            "However, since the training speed bottleneck occurs in the generation step, it is recommended to utilize "
+            "this argument, especially when dealing with larger LLMs."
         },
     )
