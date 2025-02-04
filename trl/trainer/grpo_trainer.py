@@ -458,11 +458,14 @@ class GRPOTrainer(Trainer):
                     with self.accelerator.unwrap_model(model).disable_adapter():
                         ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
         else:
+            mini_batch_size = self.args.logit_computation_mini_batch_size
+
             # Current policy logprobs (with grad)
             per_token_logps = compute_logps_with_prompt_cache(
                 model=model,
                 prompt_inputs=prompt_inputs,
                 completion_ids=completion_ids,
+                mini_batch_size=mini_batch_size,
                 requires_grad_for_completion=True,
             )
 
@@ -472,6 +475,7 @@ class GRPOTrainer(Trainer):
                     model=self.ref_model,
                     prompt_inputs=prompt_inputs,
                     completion_ids=completion_ids,
+                    mini_batch_size=mini_batch_size,
                     requires_grad_for_completion=False,
                 )
             else:
@@ -480,6 +484,7 @@ class GRPOTrainer(Trainer):
                         model=model,
                         prompt_inputs=prompt_inputs,
                         completion_ids=completion_ids,
+                        mini_batch_size=mini_batch_size,
                         requires_grad_for_completion=False,
                     )
 

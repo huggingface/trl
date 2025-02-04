@@ -1653,6 +1653,7 @@ def compute_logps_with_prompt_cache(
     model: torch.nn.Module,
     prompt_inputs: dict,
     completion_ids: torch.LongTensor,
+    mini_batch_size: int,
     requires_grad_for_completion: bool = True,
 ):
     """
@@ -1662,13 +1663,14 @@ def compute_logps_with_prompt_cache(
     3) Compute per-token log probabilities for the completion.
 
     Args:
-        model (nn.Module): A causal LM (transformers.AutoModelForCausalLM) or similar.
-        prompt_inputs (dict): The dict of prompt tensors, e.g. {"input_ids", "attention_mask", ...}.
-        completion_ids (torch.LongTensor): Shape [B*G, completion_len].
-        requires_grad_for_completion (bool): Whether to enable gradient for the completion pass.
+        model (`nn.Module`): A causal LM (transformers.AutoModelForCausalLM) or similar.
+        prompt_inputs (`dict`): The dict of prompt tensors, e.g. {"input_ids", "attention_mask", ...}.
+        completion_ids (`torch.LongTensor`): Shape [B*G, completion_len].
+        mini_batch_size (`int`): The number of completion rows to process at once.
+        requires_grad_for_completion (`bool`): Whether to enable gradient for the completion pass.
 
     Returns:
-        per_token_logps (torch.FloatTensor): shape [B*G, completion_len],
+        per_token_logps (`torch.FloatTensor`): shape [B*G, completion_len],
         where per_token_logps[i, t] is the logprob of ith completion's t-th completion token,
         given all preceding tokens in the prompt + the partial completion up to t-1.
     """
@@ -1677,6 +1679,9 @@ def compute_logps_with_prompt_cache(
     B = prompt_inputs["input_ids"].size(0)
     G = completion_ids.size(0) // B
     C = completion_ids.size(1)
+
+    # If mini_batch_size unspecified, defaults to entire batch
+    mini_batch_size = completion_ids.size(0) if mini_batch_size == 0 else mini_batch_size
 
     # Forward pass over prompt tokens
     with torch.no_grad():
@@ -1694,20 +1699,27 @@ def compute_logps_with_prompt_cache(
     prompt_out.past_key_values.batch_repeat_interleave(G)
 
     # Forward pass over completion tokens (with or without grad)
+    # TODO: we can shrink the peak memory further here by using mini_batch here as well, but the Past KV is hard to slice
     with torch.set_grad_enabled(requires_grad_for_completion):
-        completion_out = model(
+        completion_logits = model(
             input_ids=completion_ids,
             past_key_values=prompt_out.past_key_values,
             logits_to_keep=C,  # We'll get rid of the last one later
             use_cache=False,
-        )
+        ).logits[:, -C:-1, :]  # (B*G, C-1, vocab_size) last logit is discarded
 
-    # Convert completions logits to logprobs
-    completion_token_logps = torch.gather(
-        completion_out.logits[:,-C:-1, :].log_softmax(dim=-1), dim=-1, index=completion_ids[:, 1:].unsqueeze(-1)
-    ).squeeze(-1)
+    per_token_logps = []
+
+    # Use the mini_batch_size to get the per_token_logps for completion tokens
+    for i in range(0, completion_logits.size(0), mini_batch_size):
+        log_probs = completion_logits[i : i + mini_batch_size, :, :].log_softmax(dim=-1)  # (B_mini, C-1, vocab_size)
+        token_index = completion_ids[i : i + mini_batch_size, 1:].unsqueeze(-1)  # (B_mini, C-1, 1)
+        token_log_prob = torch.gather(log_probs, dim=-1, index=token_index).squeeze(-1)  # (B_mini, C-1)
+        del log_probs
+        per_token_logps.append(token_log_prob)
+    per_token_logps = torch.cat(per_token_logps, dim=0)
 
     # Concat with the first_completion_token_logps
-    per_token_logps = torch.cat([first_completion_token_logps, completion_token_logps], dim=1)
+    per_token_logps = torch.cat([first_completion_token_logps, per_token_logps], dim=1)  # (B_mini, C)
 
     return per_token_logps

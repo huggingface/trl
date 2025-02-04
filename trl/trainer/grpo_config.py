@@ -78,6 +78,11 @@ class GRPOConfig(TrainingArguments):
             Number of updates steps to accumulate the gradients for, before performing a backward/update pass.
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
+        logit_computation_mini_batch_size (`int`, *optional*, defaults to `0`):
+            Number of rows of the logit tensor to process at a time. 0 means no mini-batching, which is the default.
+            This it not compatible with gradient checkpointing. Using a low value will reduce memory usage with tradeoff
+            of slower computation. However, since the speed bottleneck is in the generation step, it is recommended to
+            utilize this argument especially dealing with larger LLMs.
     """
 
     # Parameters that control the model and reference model
@@ -173,4 +178,13 @@ class GRPOConfig(TrainingArguments):
     beta: float = field(
         default=0.04,
         metadata={"help": "KL coefficient."},
+    )
+    logit_computation_mini_batch_size: int = field(
+        default=0,
+        metadata={
+            "help": "Number of rows of the completion logit tensors to process at a time. 0 means no mini-batching, "
+            "which is the default. Using a low value will reduce memory usage with tradeoff of slower computation. "
+            "However, since the speed bottleneck is in the generation step, it is recommended to utilize this argument, "
+            "especially when dealing with larger LLMs. This it not compatible with gradient checkpointing."
+        },
     )
