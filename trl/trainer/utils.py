@@ -993,9 +993,15 @@ class OnPolicyConfig(TrainingArguments):
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
         stop_token (`str` or `None`, *optional*, defaults to `None`):
-            Stop token.
+            Specifies the stop token to use for text generation. This parameter is mutually exclusive with
+            `stop_token_id`.
+
+            - `None`: No stop token is applied, unless `stop_token_id` is specified.
+            - `'eos'`: Uses the tokenizer's `eos_token`.
+
         stop_token_id (`int` or `None`, *optional*, defaults to `None`):
-            Truncation token id.
+            Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
+            unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
@@ -1054,11 +1060,17 @@ class OnPolicyConfig(TrainingArguments):
     )
     stop_token: Optional[Literal["eos"]] = field(
         default=None,
-        metadata={"help": "Stop token."},
+        metadata={
+            "help": "Specifies the stop token to use for text generation. This parameter is mutually exclusive with "
+            "`stop_token_id`."
+        },
     )
     stop_token_id: Optional[int] = field(
         default=None,
-        metadata={"help": "Truncation token id."},
+        metadata={
+            "help": "Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is "
+            "applied, unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`."
+        },
     )
     temperature: float = field(
         default=0.7,

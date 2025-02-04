@@ -21,7 +21,7 @@ Note:
 
 Simple check list for release from AllenNLP repo: https://github.com/allenai/allennlp/blob/master/setup.py
 
-To create the package for pypi.
+To create the package for PyPI.
 
 0. Prerequisites:
    - Dependencies:
@@ -50,7 +50,7 @@ To create the package for pypi.
    For the sources, run: "python setup.py sdist"
    You should now have a /dist directory with both .whl and .tar.gz source versions.
 
-5. Check that everything looks correct by uploading the package to the pypi test server:
+5. Check that everything looks correct by uploading the package to the PyPI test server:
 
    twine upload dist/* -r pypitest --repository-url=https://test.pypi.org/legacy/
 
@@ -59,7 +59,7 @@ To create the package for pypi.
    pip install -U tqdm
    pip install -i https://testpypi.python.org/pypi evaluate
 
-6. Upload the final version to actual pypi:
+6. Upload the final version to actual PyPI:
    twine upload dist/* -r pypi
 
 7. Fill release notes in the tag in github once everything is looking hunky-dory.
@@ -71,7 +71,7 @@ To create the package for pypi.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.14.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.15.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "accelerate>=0.34.0",
@@ -123,7 +123,7 @@ setup(
     package_data={
         "trl": ["templates/*.md"],
     },
-    packages=find_packages(exclude={"tests", "tests.slow"}),
+    packages=find_packages(exclude={"tests", "tests.slow", "trl.templates"}),
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
     python_requires=">=3.9",

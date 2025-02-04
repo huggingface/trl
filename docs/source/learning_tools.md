@@ -220,9 +220,9 @@ def solution():
     result = money_left
     return result
 print(solution())
-<call>72<response>
+<call>8<response>
 
-Result = 72 <submit>
+Result = 8 <submit>
 
 Q: """
 ```
