@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import tempfile
 import unittest
 
@@ -391,6 +392,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")  # compiling seems to be broken on Windows
     def test_training_torch_compile(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
