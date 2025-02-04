@@ -1712,15 +1712,16 @@ def compute_logps_with_prompt_cache(
         mini_batch_ids = completion_ids[start_idx:end_idx]  # (mini_batch_size, C)
 
         with torch.set_grad_enabled(requires_grad_for_completion):
-            mini_batch_logits = model(
-                input_ids=mini_batch_ids,
-                past_key_values=mini_batch_kv_cache,
-                logits_to_keep=C,
-                use_cache=False,
-            ).logits[:, -C:-1, :]
-
-        mini_batch_log_probs = mini_batch_logits.log_softmax(dim=-1)
-        del mini_batch_logits
+            mini_batch_log_probs = (
+                model(
+                    input_ids=mini_batch_ids,
+                    past_key_values=mini_batch_kv_cache,
+                    logits_to_keep=C,
+                    use_cache=False,
+                )
+                .logits[:, -C:-1, :]
+                .log_softmax(dim=-1)
+            )
 
         # Get the corresponding completion token ids and gather the logits for completion_ids w/ idx >= 1
         mini_batch_index = mini_batch_ids[:, 1:].unsqueeze(-1)  # (mini_batch_size, C-1, 1)
