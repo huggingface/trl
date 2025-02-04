@@ -361,10 +361,14 @@ class TextEnvironmentTester(unittest.TestCase):
                 (torch.tensor([[[[5]]]]), torch.tensor([[[[6]]]])),
                 (torch.tensor([[[[11]]]]), torch.tensor([[[[12]]]])),
             ),
+            (
+                (torch.tensor([[[[21]]]]), torch.tensor([[[[22]]]])),
+                (torch.tensor([[[[23]]]]), torch.tensor([[[[24]]]])),
+            ),
         ]
-        attention_masks = [torch.tensor([[-1, 1, 7], [1, 0, 8]]), torch.tensor([[2, 4]])]
-        input_ids = [torch.tensor([[1, 4, 7], [2, 5, 8]]), torch.tensor([[3, 6]])]
-        example_mask = [True, False, True]
+        attention_masks = [torch.tensor([[-1, 1, 7], [1, 0, 8]]), torch.tensor([[2, 4]]), torch.tensor([[9, 10]])]
+        input_ids = [torch.tensor([[1, 4, 7], [2, 5, 8]]), torch.tensor([[3, 6]]), torch.tensor([[11, 12]])]
+        example_mask = [True, False, True, False]
 
         expected_cache = (
             (torch.tensor([[[[1], [13]]], [[[0], [5]]]]), torch.tensor([[[[3], [15]]], [[[0], [6]]]])),
