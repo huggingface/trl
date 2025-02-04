@@ -566,9 +566,15 @@ class SFTTrainer(Trainer):
         if "labels" in inputs:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
-            accuracy = compute_token_accuracy(shift_logits, shift_labels)
 
-            self._metrics["mean_token_accuracy"].append(self.accelerator.gather_for_metrics(accuracy))
+            # Gather logits and labels from all GPUs first
+            shift_logits = self.accelerator.gather_for_metrics(shift_logits)
+            shift_labels = self.accelerator.gather_for_metrics(shift_labels)
+
+            # Then compute accuracy on the gathered tensors
+            if self.accelerator.is_main_process:
+                accuracy = compute_token_accuracy(shift_logits, shift_labels)
+                self._metrics["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
 
