@@ -78,6 +78,9 @@ class GRPOConfig(TrainingArguments):
             Number of updates steps to accumulate the gradients for, before performing a backward/update pass.
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
+        
+        > Parameters that control remote models
+        ref_model_url: str
     """
 
     # Parameters that control the model and reference model
@@ -174,3 +177,5 @@ class GRPOConfig(TrainingArguments):
         default=0.04,
         metadata={"help": "KL coefficient."},
     )
+
+    ref_model_url: Optional[str] = field(default=None, metadata={"help": "URL of the reference model, if you are using a TRL RemoteModel"})

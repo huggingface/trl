@@ -41,7 +41,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
-from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
+from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation, RemoteModel
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url, pad
 
@@ -198,15 +198,21 @@ class GRPOTrainer(Trainer):
             model = get_peft_model(model, peft_config)
 
         # Reference model
-        if is_deepspeed_zero3_enabled():
-            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
-        elif peft_config is None:
-            # If PEFT configuration is not provided, create a reference model based on the initial model.
-            self.ref_model = create_reference_model(model)
+        if args.ref_model_url is None:
+            if is_deepspeed_zero3_enabled():
+                self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+            elif peft_config is None:
+                # If PEFT configuration is not provided, create a reference model based on the initial model.
+                self.ref_model = create_reference_model(model)
+            else:
+                # If PEFT is used, the reference model is not needed since the adapter can be disabled
+                # to revert to the initial model.
+                self.ref_model = None
         else:
-            # If PEFT is used, the reference model is not needed since the adapter can be disabled
-            # to revert to the initial model.
-            self.ref_model = None
+            if peft_config is not None:
+                raise ValueError("You cannot use PEFT and a remote model at the same time")
+            
+            self.ref_model = RemoteModel(args.ref_model_url)
 
         # Processing class
         if processing_class is None:
@@ -348,7 +354,7 @@ class GRPOTrainer(Trainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
-        if self.ref_model is not None:
+        if self.ref_model is not None and not isinstance(self.ref_model, RemoteModel):
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
             else:
