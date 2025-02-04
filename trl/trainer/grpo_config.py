@@ -81,6 +81,19 @@ class GRPOConfig(TrainingArguments):
             Number of updates steps to accumulate the gradients for, before performing a backward/update pass.
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
+        sync_ref_model (`bool`, *optional*, defaults to `False`):
+            Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
+            the `ref_model_mixup_alpha` parameter. This synchronization originites from the
+            [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.9`):
+            α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
+            between the current policy and the previous reference policy during updates. The reference policy is
+            updated according to the equation: `π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you
+            must set `sync_ref_model=True`.
+        ref_model_sync_steps (`int`, *optional*, defaults to `64`):
+            τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
+            frequently the current policy is synchronized with the reference policy. To use this parameter, you must
+            set `sync_ref_model=True`.
     """
 
     # Parameters that control the model and reference model
@@ -183,4 +196,26 @@ class GRPOConfig(TrainingArguments):
     beta: float = field(
         default=0.04,
         metadata={"help": "KL coefficient."},
+    )
+    sync_ref_model: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to synchronize the reference model with the active model every `ref_model_sync_steps` "
+            "steps, using the `ref_model_mixup_alpha` parameter."
+        },
+    )
+    ref_model_mixup_alpha: float = field(
+        default=0.9,
+        metadata={
+            "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
+            "previous reference policy during updates. The reference policy is updated according to the equation: "
+            "`π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+    ref_model_sync_steps: int = field(
+        default=64,
+        metadata={
+            "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
+            "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
+        },
     )
