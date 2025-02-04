@@ -407,7 +407,9 @@ class GRPOTrainer(Trainer):
         if self.args.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
-                with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+                with unwrap_model_for_generation(
+                    self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                ) as unwrapped_model:
                     if is_compiled_module(unwrapped_model):
                         state_dict = unwrapped_model._orig_mod.state_dict()
                     else:
