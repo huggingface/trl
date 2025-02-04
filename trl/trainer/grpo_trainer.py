@@ -19,6 +19,7 @@ from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 from unittest.mock import patch
 
+import time
 import torch
 import torch.utils.data
 import transformers
@@ -385,6 +386,7 @@ class GRPOTrainer(Trainer):
             prompt_inputs["attention_mask"] = prompt_inputs["attention_mask"][:, -self.max_prompt_length :]
 
         # Generate completions using either vLLM or regular generation
+        start_time = time.perf_counter()
         if self.args.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
@@ -424,6 +426,10 @@ class GRPOTrainer(Trainer):
                     **prompt_inputs, generation_config=self.generation_config
                 )
 
+        end_time = time.perf_counter()
+        if self.accelerator.is_main_process:
+            print(f"Generation took {end_time - start_time:0.4f} seconds")
+
         # Compute prompt length and extract completion ids
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
@@ -439,6 +445,7 @@ class GRPOTrainer(Trainer):
         mini_batch_size = self.args.logit_computation_mini_batch_size
 
         # If gradient checkpointing is used, fall back to original implementation
+        start_time = time.perf_counter()
         if self.gradient_checkpointing:
             # Concatenate prompt_mask with completion_mask for logit computation
             prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
@@ -523,6 +530,10 @@ class GRPOTrainer(Trainer):
                         mini_batch_size=mini_batch_size,
                         requires_grad_for_completion=False,
                     )
+
+        end_time = time.perf_counter()
+        if self.accelerator.is_main_process:
+            print(f"Logits computation took {end_time - start_time:0.4f} seconds")
 
         # Compute the KL divergence between the model and the reference model
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
