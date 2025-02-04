@@ -47,7 +47,7 @@ class RewardConfig(TrainingArguments):
         default=1024,
         metadata={
             "help": "Maximum length of the sequences (prompt + completion) in the batch, filters out entries that "
-            "exceed the limit.This argument is required if you want to use the default data collator."
+            "exceed the limit. This argument is required if you want to use the default data collator."
         },
     )
     disable_dropout: bool = field(
