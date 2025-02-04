@@ -50,6 +50,10 @@ class GRPOConfig(TrainingArguments):
             Temperature for sampling. The higher the temperature, the more random the completions.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
+            improving generation speed. However, disabling this option allows training models that exceed the VRAM
+            capacity of a single GPU, albeit at the cost of slower generation.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -81,11 +85,6 @@ class GRPOConfig(TrainingArguments):
             Number of updates steps to accumulate the gradients for, before performing a backward/update pass.
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
-
-        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
-            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
-            improving generation speed. However, disabling this option allows training models that exceed the VRAM
-            capacity of a single GPU, albeit at the cost of slower generation.
     """
 
     # Parameters that control the model and reference model
@@ -124,6 +123,14 @@ class GRPOConfig(TrainingArguments):
     max_completion_length: Optional[int] = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
+            "generation, improving generation speed. However, disabling this option allows training models that "
+            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation."
+        },
     )
 
     # Parameters that control generation acceleration powered by vLLM
@@ -188,12 +195,4 @@ class GRPOConfig(TrainingArguments):
     beta: float = field(
         default=0.04,
         metadata={"help": "KL coefficient."},
-    )
-    ds3_gather_for_generation: bool = field(
-        default=True,
-        metadata={
-            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
-            "generation, improving generation speed. However, disabling this option allows training models that "
-            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation."
-        },
     )
