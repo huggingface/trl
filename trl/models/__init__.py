@@ -40,8 +40,8 @@ else:
 if TYPE_CHECKING:
     from .modeling_base import GeometricMixtureWrapper, PreTrainedModelWrapper, create_reference_model
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
-    from .utils import SUPPORTED_ARCHITECTURES, prepare_deepspeed, setup_chat_format, unwrap_model_for_generation
     from .remote_models import RemoteModel
+    from .utils import SUPPORTED_ARCHITECTURES, prepare_deepspeed, setup_chat_format, unwrap_model_for_generation
 
     try:
         if not is_diffusers_available():

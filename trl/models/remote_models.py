@@ -11,20 +11,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import torch
 import requests
+import torch
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-class RemoteModel():
+
+class RemoteModel:
     def __init__(self, remote_model_url):
-        self.remote_model_url = remote_model_url    
+        self.remote_model_url = remote_model_url
         # Check if the remote server is healthy
         health_check_url = f"{self.remote_model_url}/health"
         response = requests.get(health_check_url)
         if response.status_code != 200:
             raise Exception(f"Server health check failed: {response.text}")
-        
-    def __call__(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, logits_to_keep: int) -> CausalLMOutputWithPast:
+
+    def __call__(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, logits_to_keep: int
+    ) -> CausalLMOutputWithPast:
         """
         Sends a request to the remote server to perform a forward pass.
 
@@ -45,7 +48,7 @@ class RemoteModel():
         request_body = {
             "input_ids": input_ids_list,
             "attention_mask": attention_mask_list,
-            "logits_to_keep": logits_to_keep
+            "logits_to_keep": logits_to_keep,
         }
 
         # Send the POST request to the server
@@ -62,19 +65,5 @@ class RemoteModel():
 
         # Convert the logits back to a tensor
         logits = torch.tensor(logits_list).to(device)
-        
+
         return CausalLMOutputWithPast(logits=logits)
-    
-if __name__ == "__main__":
-    import argparse
-    # Parse command line arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--url", type=str, required=True)
-    args = parser.parse_args()
-    remote_model = RemoteModel(args.url)
-    print(remote_model.remote_model_url)
-    input_ids = torch.Tensor([[1, 2, 3]])
-    attention_mask = torch.Tensor([[1, 1, 1]])
-    logits_to_keep = 1
-    print(remote_model(input_ids, attention_mask, logits_to_keep))
-    

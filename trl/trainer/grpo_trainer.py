@@ -41,7 +41,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
-from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation, RemoteModel
+from ..models import RemoteModel, create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url, pad
 
@@ -211,7 +211,7 @@ class GRPOTrainer(Trainer):
         else:
             if peft_config is not None:
                 raise ValueError("You cannot use PEFT and a remote model at the same time")
-            
+
             self.ref_model = RemoteModel(args.ref_model_url)
 
         # Processing class
