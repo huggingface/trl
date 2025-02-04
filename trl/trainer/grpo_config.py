@@ -125,6 +125,10 @@ class GRPOConfig(TrainingArguments):
         default_factory=lambda: {
             "device": "auto",
             "gpu_memory_utilization": 0.9,
+            # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
+            # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
+            # This is particularly useful here because we generate completions from the same prompts.
+            "enable_prefix_caching": True,
         },
         metadata={
             "help": "Keyword arguments for `vllm.LLM.__init__` when `use_vllm` is true"
