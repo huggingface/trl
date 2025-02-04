@@ -519,7 +519,8 @@ class GRPOTrainer(Trainer):
                 token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
                 per_token_logps.append(token_log_prob)
             return torch.stack(per_token_logps)
-
+        
+        # Compute prompt length and extract completion ids
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         per_token_logps = get_per_token_logps(model, prompt_completion_ids, attention_mask, logits_to_keep)
 
