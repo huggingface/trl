@@ -423,43 +423,79 @@ class GRPOTrainer(Trainer):
                 prompt_completion_ids = unwrapped_model.generate(
                     **prompt_inputs, generation_config=self.generation_config
                 )
+
+        # Compute prompt length and extract completion ids
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
+        # Mask everything after the first EOS token
+        is_eos = completion_ids == self.processing_class.eos_token_id
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # Get the logit computation mini-batch size from the config
+        mini_batch_size = self.args.logit_computation_mini_batch_size
+
+        # If gradient checkpointing is used, fall back to original implementation
         if self.gradient_checkpointing:
+            # Concatenate prompt_mask with completion_mask for logit computation
+            prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
+            attention_mask = torch.cat([prompt_mask_repeated, completion_mask], dim=1)  # (B*G, P+C)
+
             # Get the per-token log probabilities for the completions for the model and the reference model
-            def get_per_token_logps(model, input_ids, num_logits_to_keep):
-                # We add 1 to `num_logits_to_keep` because the last logits of the sequence is later excluded
-                attention_mask = (input_ids != self.processing_class.pad_token_id).long()
-                logits = model(
-                    input_ids=input_ids, attention_mask=attention_mask, num_logits_to_keep=num_logits_to_keep + 1
-                ).logits  # (B, L, V)
-                logits = logits[
-                    :, :-1, :
-                ]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-
-                # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
+            def get_per_token_logps(model, input_ids, attention_mask, logits_to_keep, mini_batch_size):
+                mini_batch_size = input_ids.size(0) if mini_batch_size == 0 else mini_batch_size
                 per_token_logps = []
-                for logits_row, input_ids_row in zip(logits, input_ids[:, -num_logits_to_keep:]):
-                    log_probs = logits_row.log_softmax(dim=-1)
-                    token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
+                for i in range(0, input_ids.size(0), mini_batch_size):
+                    mini_batch_input_ids = input_ids[i : i + mini_batch_size, :]  # (B_mini, P+C)
+                    mini_batch_attention_mask = attention_mask[i : i + mini_batch_size, :]  # (B_mini, P+C)
+                    log_probs = (
+                        model(
+                            input_ids=mini_batch_input_ids,
+                            attention_mask=mini_batch_attention_mask,
+                            logits_to_keep=logits_to_keep + 1,
+                        )
+                        .logits[:, -logits_to_keep - 1 : -1]
+                        .log_softmax(dim=-1)
+                    )  # (B_mini, P+C, Vocab_size)
+                    token_index = mini_batch_input_ids[:, -logits_to_keep:].unsqueeze(-1)  # (B_mini, P+C, 1)
+                    token_log_prob = torch.gather(log_probs, dim=-1, index=token_index).squeeze(-1)
+                    del log_probs
                     per_token_logps.append(token_log_prob)
-                return torch.stack(per_token_logps)
+                return torch.cat(per_token_logps, dim=0)
 
-            num_logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-            per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
+            logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+            per_token_logps = get_per_token_logps(
+                model=model,
+                input_ids=prompt_completion_ids,
+                attention_mask=attention_mask,
+                logits_to_keep=logits_to_keep,
+                mini_batch_size=mini_batch_size,
+            )
 
             with torch.inference_mode():
                 if self.ref_model is not None:
                     ref_per_token_logps = get_per_token_logps(
-                        self.ref_model, prompt_completion_ids, num_logits_to_keep
+                        model=self.ref_model,
+                        input_ids=prompt_completion_ids,
+                        attention_mask=attention_mask,
+                        logits_to_keep=logits_to_keep,
+                        mini_batch_size=mini_batch_size,
                     )
                 else:
                     with self.accelerator.unwrap_model(model).disable_adapter():
-                        ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids, num_logits_to_keep)
-        else:
-            mini_batch_size = self.args.logit_computation_mini_batch_size
+                        ref_per_token_logps = get_per_token_logps(
+                            model=model,
+                            input_ids=prompt_completion_ids,
+                            attention_mask=attention_mask,
+                            logits_to_keep=logits_to_keep,
+                            mini_batch_size=mini_batch_size,
+                        )
 
+        # If gradient checkpointing is not used, we can compute the prompt once and re-use the cache to greatly reduce VRAM usage
+        else:
             # Current policy logprobs (with grad)
             per_token_logps = compute_logps_with_prompt_cache(
                 model=model,
@@ -486,53 +522,6 @@ class GRPOTrainer(Trainer):
                         completion_ids=completion_ids,
                         mini_batch_size=mini_batch_size,
                         requires_grad_for_completion=False,
-                    )
-
-        # Compute the KL divergence between the model and the reference model
-        per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-
-        # Mask everything after the first EOS token
-        is_eos = completion_ids == self.processing_class.eos_token_id
-        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
-        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-
-        # Concatenate prompt_mask with completion_mask for logit computation
-        prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
-        attention_mask = torch.cat([prompt_mask_repeated, completion_mask], dim=1)  # (B*G, P+C)
-
-        # Get the per-token log probabilities for the completions for the model and the reference model
-        def get_per_token_logps(model, input_ids, attention_mask, logits_to_keep):
-            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-            logits = model(
-                input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1
-            ).logits  # (B, L, V)
-            logits = logits[
-                :, -logits_to_keep - 1 : -1, :
-            ]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-
-            # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
-            per_token_logps = []
-            for logits_row, input_ids_row in zip(logits, input_ids[:, -logits_to_keep:]):
-                log_probs = logits_row.log_softmax(dim=-1)
-                token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
-                per_token_logps.append(token_log_prob)
-            return torch.stack(per_token_logps)
-        
-        # Compute prompt length and extract completion ids
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        per_token_logps = get_per_token_logps(model, prompt_completion_ids, attention_mask, logits_to_keep)
-
-        with torch.inference_mode():
-            if self.ref_model is not None:
-                ref_per_token_logps = get_per_token_logps(
-                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
-                )
-            else:
-                with self.accelerator.unwrap_model(model).disable_adapter():
-                    ref_per_token_logps = get_per_token_logps(
-                        model, prompt_completion_ids, attention_mask, logits_to_keep
                     )
 
         # Compute the KL divergence between the model and the reference model
