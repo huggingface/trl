@@ -508,7 +508,9 @@ class GRPOTrainer(Trainer):
             logits = model(
                 input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1
             ).logits  # (B, L, V)
-            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            logits = logits[
+                :, -logits_to_keep - 1 : -1, :
+            ]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
             # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
             per_token_logps = []
