@@ -100,7 +100,7 @@ class GRPOConfig(TrainingArguments):
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
 
-        > Parameters taht control the logging
+        > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log the completions during training.
