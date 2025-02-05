@@ -541,10 +541,16 @@ class GRPOTrainer(Trainer):
             self.accelerator.is_main_process
             and self.log_completions
             and self.state.global_step % self.args.logging_steps == 0
+            and "wandb" in self.args.report_to
         ):
-            for prompt, completion, reward in zip(prompts, completions, rewards):
-                text = f"---\n\033[31m{prompt}\033[34m{completion}\033[0m\n--- \033[32mReward: {reward}\033[0m ---"
-                self.accelerator.print(text)
+            import pandas as pd
+
+            import wandb
+
+            df = pd.DataFrame({"Prompt": prompts, "Completion": completions, "Reward": rewards.tolist()})
+
+            if wandb.run is not None:
+                wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
             "prompt_ids": prompt_ids,
