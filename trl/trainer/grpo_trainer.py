@@ -389,7 +389,7 @@ class GRPOTrainer(Trainer):
         # Compute the log probabilities for the input tokens.
         token_logits = logits.gather(dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
         # use a loop to reduce memory peak
-        logsumexp_values = torch.stack([torch.logsumexp(l, dim=-1) for l in logits])
+        logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
         token_log_probs = token_logits - logsumexp_values  # log_softmax = logits - log(sum(exp(logits)))
         return token_log_probs
 
