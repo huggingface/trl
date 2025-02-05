@@ -380,16 +380,14 @@ class GRPOTrainer(Trainer):
             input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1
         ).logits  # (B, L, V)
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+        input_ids = input_ids[:, -logits_to_keep:]
 
         # Compute the log probabilities for the input tokens.
-        # Use a loop to reduce memory peak; only compute logprobs for the input tokens to reduce memory peak
-        per_token_logps = []
-        for logits_row, input_ids_row in zip(logits[:, -logits_to_keep:], input_ids[:, -logits_to_keep:]):
-            token_logits = logits_row.gather(dim=-1, index=input_ids_row.unsqueeze(-1)).squeeze(-1)
-            # log_softmax = logits - log(sum(exp(logits)))
-            token_log_prob = token_logits - torch.logsumexp(logits_row, dim=-1)
-            per_token_logps.append(token_log_prob)
-        return torch.stack(per_token_logps)
+        token_logits = torch.gather(logits, dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+        # use a loop to reduce memory peak
+        logsumexp_values = torch.stack([torch.logsumexp(l, dim=-1) for l in logits])
+        token_log_probs = token_logits - logsumexp_values  # log_softmax = logits - log(sum(exp(logits)))
+        return token_log_probs
 
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
