@@ -24,8 +24,6 @@ This example demonstrates how to train a model using the GRPO method. We train a
 ></iframe>
 
 Below is the script to train the model.
-Note that the input tensor for the forward pass has a size of `num_generations * per_device_train_batch_size` because GRPO generates `num_generations` completions for each prompt in the batch. Adjusting these values appropriately can help prevent OOM errors.
-Consequently, the effective train batch size is `num_generations * per_device_train_batch_size * gradient_accumulation_steps`.
 
 ```python
 # train_grpo.py
