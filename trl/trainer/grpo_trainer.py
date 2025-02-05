@@ -100,6 +100,15 @@ def broadcast_and_slice_dict(accelerator: Accelerator, tensor_dict: dict[str, Te
     """
     Broadcasts a dictionary of tensors from one process to all processes and slices the tensors based on the process
     index.
+
+    ```
+       Process 0            Process 0        Process 1
+    [[ 1,  2,  3],   ->    [[1, 2, 3],     [[ 7,  8,  9],
+     [ 4,  5,  6],          [4, 5, 6]]      [10, 11, 12]]
+     [ 7,  8,  9],
+     [10, 11, 12]]
+    }
+    ```
     """
 
     is_from = accelerator.local_process_index == from_process
