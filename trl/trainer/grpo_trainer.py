@@ -446,7 +446,35 @@ class GRPOTrainer(Trainer):
 
         # If gradient checkpointing is used, fall back to original implementation
         start_time = time.perf_counter()
-        if self.gradient_checkpointing:
+        if self.args.use_prompt_cache and not self.gradient_checkpointing:
+            # Current policy logprobs (with grad)
+            per_token_logps = compute_logps_with_prompt_cache(
+                model=model,
+                prompt_inputs=prompt_inputs,
+                completion_ids=completion_ids,
+                mini_batch_size=mini_batch_size,
+                requires_grad_for_completion=True,
+            )
+
+            # Reference model logprobs (no grad)
+            if self.ref_model is not None:
+                ref_per_token_logps = compute_logps_with_prompt_cache(
+                    model=self.ref_model,
+                    prompt_inputs=prompt_inputs,
+                    completion_ids=completion_ids,
+                    mini_batch_size=mini_batch_size,
+                    requires_grad_for_completion=False,
+                )
+            else:
+                with self.accelerator.unwrap_model(model).disable_adapter():
+                    ref_per_token_logps = compute_logps_with_prompt_cache(
+                        model=model,
+                        prompt_inputs=prompt_inputs,
+                        completion_ids=completion_ids,
+                        mini_batch_size=mini_batch_size,
+                        requires_grad_for_completion=False,
+                    )
+        else:
             # Concatenate prompt_mask with completion_mask for logit computation
             prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
             attention_mask = torch.cat([prompt_mask_repeated, completion_mask], dim=1)  # (B*G, P+C)
@@ -500,37 +528,6 @@ class GRPOTrainer(Trainer):
                             logits_to_keep=logits_to_keep,
                             mini_batch_size=mini_batch_size,
                         )
-
-        # If gradient checkpointing is not used, we can compute the prompt once and re-use the cache to greatly reduce VRAM usage
-        else:
-            # Current policy logprobs (with grad)
-            per_token_logps = compute_logps_with_prompt_cache(
-                model=model,
-                prompt_inputs=prompt_inputs,
-                completion_ids=completion_ids,
-                mini_batch_size=mini_batch_size,
-                requires_grad_for_completion=True,
-            )
-
-            # Reference model logprobs (no grad)
-            if self.ref_model is not None:
-                ref_per_token_logps = compute_logps_with_prompt_cache(
-                    model=self.ref_model,
-                    prompt_inputs=prompt_inputs,
-                    completion_ids=completion_ids,
-                    mini_batch_size=mini_batch_size,
-                    requires_grad_for_completion=False,
-                )
-            else:
-                with self.accelerator.unwrap_model(model).disable_adapter():
-                    ref_per_token_logps = compute_logps_with_prompt_cache(
-                        model=model,
-                        prompt_inputs=prompt_inputs,
-                        completion_ids=completion_ids,
-                        mini_batch_size=mini_batch_size,
-                        requires_grad_for_completion=False,
-                    )
-
         end_time = time.perf_counter()
         if self.accelerator.is_main_process:
             print(f"Logits computation took {end_time - start_time:0.4f} seconds")

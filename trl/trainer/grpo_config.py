@@ -78,6 +78,8 @@ class GRPOConfig(TrainingArguments):
             Number of updates steps to accumulate the gradients for, before performing a backward/update pass.
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
+        use_prompt_cache (`bool`, *optional*, defaults to `False`):
+            Whether to use prompt cache for training. If set to `True`, the prompt cache will be used to reduce memory usage.
         logit_computation_mini_batch_size (`int`, *optional*, defaults to `0`):
             Number of rows of the completion logit tensors to process at a time. 0 means no mini-batching, which is the
             default. Using a low value will reduce memory usage with tradeoff of slower computation. However, since the
@@ -178,6 +180,13 @@ class GRPOConfig(TrainingArguments):
     beta: float = field(
         default=0.04,
         metadata={"help": "KL coefficient."},
+    )
+    use_prompt_cache: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use prompt cache for training. If set to `True`, the prompt cache will be used to "
+            "reduce memory usage."
+        },
     )
     logit_computation_mini_batch_size: int = field(
         default=0,
