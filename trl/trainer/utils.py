@@ -1688,7 +1688,7 @@ def compute_logps_with_prompt_cache(
     # 1) `past_key_values`` (KV cache)
     # 2) `prompt_last_logps` (the logprobs of the first completion token prediction)
     with torch.no_grad():
-        prompt_out = model(**prompt_inputs, use_cache=True, logits_to_keep=1)
+        prompt_out = model(**prompt_inputs, use_cache=True, num_logits_to_keep=1)
 
     # Only keep the last prompt logit, immediately convert to log probabilities and expand to B*G
     prompt_last_logps = prompt_out.logits[:, -1:].log_softmax(dim=-1).repeat_interleave(G, dim=0)
@@ -1716,7 +1716,7 @@ def compute_logps_with_prompt_cache(
                 model(
                     input_ids=mini_batch_ids,
                     past_key_values=mini_batch_kv_cache,
-                    logits_to_keep=C,
+                    num_logits_to_keep=C,
                     use_cache=False,
                 )
                 .logits[:, -C:-1, :]
