@@ -96,7 +96,9 @@ class RepeatRandomSampler(Sampler):
         return self.num_samples * self.repeat_count
 
 
-def broadcast_and_slice_dict(accelerator: Accelerator, tensor_dict: dict[str, Tensor], from_process: int = 0):
+def broadcast_and_slice_dict(
+    accelerator: Accelerator, tensor_dict: Union[dict[str, Tensor], None], from_process: int = 0
+) -> dict[str, Tensor]:
     """
     Broadcasts a dictionary of tensors from one process to all processes and slices the tensors based on the process
     index.
