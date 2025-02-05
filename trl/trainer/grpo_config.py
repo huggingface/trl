@@ -45,8 +45,8 @@ class GRPOConfig(TrainingArguments):
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `8`):
-            Number of generations per prompt to sample. It must be evenly divisible by the effective batch size
-            (`num_processes` * `per_device_train_batch_size`).
+            Number of generations per prompt to sample. The global batch size (num_processes * per_device_batch_size)
+            must be divisible by this value.
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
@@ -125,8 +125,8 @@ class GRPOConfig(TrainingArguments):
     num_generations: Optional[int] = field(
         default=8,
         metadata={
-            "help": "Number of generations to sample. It must be evenly divisible by the effective batch size "
-            "(num_processes * per_device_train_batch_size)."
+            "help": "Number of generations to sample. The global batch size (num_processes * per_device_batch_size) "
+            "must be divisible by this value."
         },
     )
     temperature: Optional[float] = field(
