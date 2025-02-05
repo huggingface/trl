@@ -300,6 +300,7 @@ class GRPOTrainer(Trainer):
 
         # Initialize the metrics
         self._metrics = defaultdict(list)
+        self.log_completions = args.log_completions
 
         super().__init__(
             model=model,
@@ -595,6 +596,15 @@ class GRPOTrainer(Trainer):
 
         self._metrics["reward"].append(rewards.mean().item())
         self._metrics["reward_std"].append(std_grouped_rewards.mean().item())
+
+        if (
+            self.accelerator.is_main_process
+            and self.log_completions
+            and self.state.global_step % self.args.logging_steps == 0
+        ):
+            for prompt, completion, reward in zip(prompts, completions, rewards):
+                text = f"---\n\033[31m{prompt}\033[34m{completion}\033[0m\n--- \033[32mReward: {reward}\033[0m ---"
+                self.accelerator.print(text)
 
         return {
             "prompt_ids": prompt_ids,
