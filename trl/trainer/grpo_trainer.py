@@ -382,7 +382,7 @@ class GRPOTrainer(Trainer):
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
         # Compute the log probabilities for the input tokens.
-        # Use a loop to reduce memory peak; only compute logprobs for the input tokens to reduce memory peak;
+        # Use a loop to reduce memory peak; only compute logprobs for the input tokens to reduce memory peak
         per_token_logps = []
         for logits_row, input_ids_row in zip(logits, input_ids[:, -logits_to_keep:]):
             token_logits = logits_row.gather(dim=-1, index=input_ids_row.unsqueeze(-1)).squeeze(-1)
