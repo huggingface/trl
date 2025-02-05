@@ -455,6 +455,7 @@ class GRPOTrainer(Trainer):
         if self._signature_columns is None:
             self._signature_columns = ["prompt"]
 
+    # We need a custom sampler that samples the same prompt multiple times
     def _get_train_sampler(self) -> Sampler:
         return RepeatRandomSampler(self.train_dataset, self.num_generations)
 
