@@ -443,10 +443,8 @@ class GRPOTrainer(Trainer):
 
         # Get the logit computation mini-batch size from the config
         mini_batch_size = self.args.logit_computation_mini_batch_size
-
-        # If gradient checkpointing is used, fall back to original implementation
         start_time = time.perf_counter()
-        if self.args.use_prompt_cache and not self.gradient_checkpointing:
+        if not self.gradient_checkpointing:
             # Current policy logprobs (with grad)
             per_token_logps = compute_logps_with_prompt_cache(
                 model=model,
@@ -474,6 +472,7 @@ class GRPOTrainer(Trainer):
                         mini_batch_size=mini_batch_size,
                         requires_grad_for_completion=False,
                     )
+        # If gradient checkpointing is used, fall back to original implementation
         else:
             # Concatenate prompt_mask with completion_mask for logit computation
             prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
