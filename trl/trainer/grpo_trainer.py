@@ -379,15 +379,15 @@ class GRPOTrainer(Trainer):
         logits = model(
             input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1
         ).logits  # (B, L, V)
-
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
-        # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
+        # Compute the log probabilities for the input tokens.
+        # Use a loop to reduce memory peak; only compute logprobs for the input tokens to reduce memory peak;
         per_token_logps = []
-        for logits_row, input_ids_row in zip(logits[:, -logits_to_keep:], input_ids[:, -logits_to_keep:]):
+        for logits_row, input_ids_row in zip(logits, input_ids[:, -logits_to_keep:]):
             token_logits = logits_row.gather(dim=-1, index=input_ids_row.unsqueeze(-1)).squeeze(-1)
-            lse = torch.logsumexp(logits_row, dim=-1)  # compute log_softmax denominator
-            token_log_prob = token_logits - lse  # log_softmax = logits - log(sum(exp(logits)))
+            # log_softmax = logits - log(sum(exp(logits)))
+            token_log_prob = token_logits - torch.logsumexp(logits_row, dim=-1)
             per_token_logps.append(token_log_prob)
         return torch.stack(per_token_logps)
 
