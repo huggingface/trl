@@ -382,9 +382,9 @@ class GRPOTrainer(Trainer):
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
         input_ids = input_ids[:, -logits_to_keep:]
-        logits = logits[  # ensure logits are correct size across transformers versions; https://github.com/huggingface/trl/issues/2770
-            :, -logits_to_keep:
-        ]
+        # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves. 
+        # See https://github.com/huggingface/trl/issues/2770
+        logits = logits[:, -logits_to_keep:]
 
         # Compute the log probabilities for the input tokens.
         token_logits = logits.gather(dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
