@@ -322,6 +322,7 @@ class GRPOTrainer(Trainer):
                         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
                         # This is particularly useful here because we generate completions from the same prompts.
                         enable_prefix_caching=True,
+                        max_model_len=self.args.vllm_max_model_len,
                     )
                 self.sampling_params = SamplingParams(
                     n=self.num_generations,
