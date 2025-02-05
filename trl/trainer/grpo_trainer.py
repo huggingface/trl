@@ -379,7 +379,9 @@ class GRPOTrainer(Trainer):
         logits = model(
             input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1
         ).logits  # (B, L, V)
-        logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+        logits = logits[  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            :, -(logits_to_keep + 1) : -1, :
+        ]
         shifted_input_ids = input_ids[:, -logits_to_keep:]
         # log_softmax for only the relevant token_ids; requires O(B*L-1) additional memory instead of O(B*L-1*V)
         token_logits = logits.gather(dim=-1, index=shifted_input_ids.unsqueeze(-1)).squeeze(-1)
