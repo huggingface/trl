@@ -364,11 +364,8 @@ class GRPOTrainer(Trainer):
 
         # Check if the per_device_train_batch_size * num processes can be divided by the number of generations
         if args.per_device_train_batch_size * self.accelerator.num_processes % self.num_generations != 0:
-            possible_values = [
-                i
-                for i in range(2, self.accelerator.num_processes * args.per_device_train_batch_size + 1)
-                if (self.accelerator.num_processes * args.per_device_train_batch_size) % i == 0
-            ]
+            global_batch_size = args.per_device_train_batch_size * self.accelerator.num_processes
+            possible_values = [i for i in range(2, global_batch_size + 1) if (global_batch_size) % i == 0]
             raise ValueError(
                 f"The global batch size ({self.accelerator.num_processes} x {args.per_device_train_batch_size}) "
                 f"must be evenly divisible by the number of generations per prompt ({self.num_generations})."
