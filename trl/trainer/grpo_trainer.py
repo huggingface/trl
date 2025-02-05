@@ -604,6 +604,9 @@ class GRPOTrainer(Trainer):
         mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
+        torch.cuda.empty_cache()
+        del mean_kl, prompt_inputs, per_token_loss, per_token_logps, ref_per_token_logps
+
         return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
