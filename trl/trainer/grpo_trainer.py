@@ -380,10 +380,14 @@ class GRPOTrainer(Trainer):
             input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1
         ).logits  # (B, L, V)
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+
         input_ids = input_ids[:, -logits_to_keep:]
+        logits = logits[  # ensure logits are correct size across transformers versions; https://github.com/huggingface/trl/issues/2770
+            :, -logits_to_keep:
+        ]
 
         # Compute the log probabilities for the input tokens.
-        token_logits = torch.gather(logits, dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+        token_logits = logits.gather(dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
         # use a loop to reduce memory peak
         logsumexp_values = torch.stack([torch.logsumexp(l, dim=-1) for l in logits])
         token_log_probs = token_logits - logsumexp_values  # log_softmax = logits - log(sum(exp(logits)))
