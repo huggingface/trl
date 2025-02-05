@@ -467,6 +467,9 @@ class GRPOTrainer(Trainer):
     def _get_train_sampler(self) -> Sampler:
         return RepeatRandomSampler(self.train_dataset, self.num_generations)
 
+    def _get_eval_sampler(self, eval_dataset) -> Sampler:
+        return RepeatRandomSampler(eval_dataset, self.num_generations)
+
     # Get the per-token log probabilities for the completions for the model and the reference model
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
         # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
