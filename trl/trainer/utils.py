@@ -1730,6 +1730,8 @@ def compute_logps_with_prompt_cache(
 
         completion_token_logps.append(mini_batch_token_log_prob)
 
+    del repeated_kv_cache, mini_batch_kv_caches, completion_token_logps   
+
     # Combine results
     all_completion_token_logps = torch.cat(completion_token_logps, dim=0)
     return torch.cat([first_completion_token_logps, all_completion_token_logps], dim=1)
