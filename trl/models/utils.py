@@ -137,8 +137,6 @@ def setup_chat_format(
 
 def remove_hooks(model: "DeepSpeedEngine") -> None:
     """Removes the optimizer hooks from a DeepSpeed ZeRO-3 model."""
-    if not hasattr(model, "optimizer"):  # before the first training step, the model has no optimizer
-        return
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
         optimizer_offload = model.optimizer.parameter_offload
     elif model.optimizer is not None:
@@ -166,8 +164,6 @@ def iter_params(module, recurse=False):
 
 def add_hooks(model: "DeepSpeedEngine") -> None:
     """Adds the optimizer hooks from a DeepSpeed ZeRO-3 model."""
-    if not hasattr(model, "optimizer"):  # before the first training step, the model has no optimizer
-        return
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
         optimizer_offload = model.optimizer.parameter_offload
     elif model.optimizer is not None:
