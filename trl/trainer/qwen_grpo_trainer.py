@@ -16,6 +16,7 @@ import os
 import textwrap
 import warnings
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 from unittest.mock import patch
 
@@ -61,6 +62,12 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+
+@dataclass
+class ToolDefinition:
+    """Basic metadata that the trainer needs to know about the tools."""
+    stop_string: str
+    call_tool: Callable[[torch.Tensor], torch.Tensor]
 
 class QwenGRPOTrainer(Trainer):
     """
@@ -161,6 +168,7 @@ class QwenGRPOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        tool_defn: Optional[ToolDefinition] = None,
     ):
         # Args
         if args is None:
@@ -216,6 +224,8 @@ class QwenGRPOTrainer(Trainer):
                     reward_func, num_labels=1, **model_init_kwargs
                 )
         self.reward_funcs = reward_funcs
+
+        self.tool_defn = tool_defn
 
         # Reward processing class
         if reward_processing_classes is None:
@@ -327,12 +337,19 @@ class QwenGRPOTrainer(Trainer):
             # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
         else:
+            # No vLLM, so we use the regular generation config
+
+            stop_strings = None
+            if self.tool_defn:
+                stop_strings = [self.tool_defn.stop_string]
+
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
                 do_sample=True,
                 temperature=args.temperature,
                 num_return_sequences=self.num_generations,
                 pad_token_id=processing_class.tokenizer.pad_token_id,
+                stop_strings=stop_strings,
             )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
@@ -365,6 +382,29 @@ class QwenGRPOTrainer(Trainer):
     # Since we preprocess the data in `compute_loss`, we need to override this method to skip this step.
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         return inputs
+
+    def _generate_completions_with_tools(self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Iterates between generation and tool calling.
+
+        Note this is currently only called from the non-vLLM path
+        """
+
+        # Loop until tool isn't called.
+        out = []
+        while True:
+            prompt_completion_ids = model.generate(
+                **prompt_inputs, generation_config=self.generation_config
+            )
+            out.append(prompt_completion_ids)
+            if self.tool_defn:
+                # Check if the stop string is in the completions
+                import pdb; pdb.set_trace()
+                if self.tool_defn.stop_string in prompt_completion_ids:
+                    # Call the tool.
+                    tool_response = self.tool_defn.call_tool(prompt_completion_ids)
+                    out.append(tool_response)
+                    # TODO: Feed the tool response back into the model.
+        return torch.cat(out, dim=0)
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
@@ -416,11 +456,9 @@ class QwenGRPOTrainer(Trainer):
             prompt_inputs_repeated = torch.repeat_interleave(prompt_inputs["input_ids"], self.num_generations, dim=0)
             prompt_completion_ids = torch.cat([prompt_inputs_repeated, completion_ids], dim=1)
         else:
-            # Regular generation path
+            # Regular generation path (not using vLLM)
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                prompt_completion_ids = unwrapped_model.generate(
-                    **prompt_inputs, generation_config=self.generation_config
-                )
+                prompt_completion_ids = self._generate_completions(unwrapped_model, prompt_inputs)
 
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
