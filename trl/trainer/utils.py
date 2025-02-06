@@ -51,6 +51,7 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
+from ..import_utils import is_vllm_available
 from ..trainer.model_config import ModelConfig
 
 
@@ -59,6 +60,9 @@ if is_comet_available():
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
+
+if is_vllm_available():
+    from vllm import SamplingParams
 
 
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
@@ -1647,3 +1651,28 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
         return mask
     else:
         return mask, *tensors
+
+def hf_generation_config_to_vllm_sampling_params(
+    generate_config: GenerationConfig,
+) -> SamplingParams:
+    """
+    This method takes a GenerationConfig object, used by HuggingFace transformers to generate text from an LLM,
+    and converts it to the closest equivalent SamplingParams object used by vLLM to do text generation. Used for
+    vLLM-based generation during logging callbacks.
+
+    Args:
+        generate_config (GenerationConfig): HuggingFace GenerationConfig; see https://huggingface.co/docs/transformers/en/main_classes/text_generation#transformers.GenerationConfig
+            for full parameter list.
+
+    Returns:
+        SamplingParams: vLLM sampling parameters; see https://docs.vllm.ai/en/latest/api/inference_params.html for full parameter list.
+    """
+    return SamplingParams(
+        n=generate_config.num_return_sequences,
+        best_of=generate_config.num_return_sequences,
+        repetition_penalty=generate_config.repetition_penalty,
+        temperature=0. if generate_config.do_sample else generate_config.temperature,
+        top_p=generate_config.top_p,
+        top_k=generate_config.top_k,
+        max_tokens=generate_config.max_new_tokens,
+    )
