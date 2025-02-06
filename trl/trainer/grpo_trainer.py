@@ -290,7 +290,30 @@ class GRPOTrainer(Trainer):
             if self.accelerator.is_main_process:
                 vllm_device = self.args.vllm_device
                 if vllm_device == "auto":
-                    vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
+                    # Default to next available GPU after training processes
+                    vllm_device = f"cuda:{self.accelerator.num_processes}"
+
+                # Parse multiple GPUs if specified
+                if "cuda:" in vllm_device:
+                    try:
+                        gpu_ids = [int(idx) for idx in vllm_device.split(":")[1].split(",")]
+                    except ValueError:
+                        raise ValueError(f"Invalid vLLM device format: {vllm_device}. Use 'cuda:x,y,z' or 'auto'")
+
+                    # Verify GPU availability
+                    available_gpus = list(range(torch.cuda.device_count()))
+                    unavailable_gpus = [idx for idx in gpu_ids if idx not in available_gpus]
+                    if unavailable_gpus:
+                        raise ValueError(
+                            f"Requested GPUs {unavailable_gpus} not available. "
+                            f"Available GPUs: {available_gpus}"
+                        )
+
+                    tensor_parallel_size = len(gpu_ids)
+                    vllm_device = "cuda"
+                else:
+                    tensor_parallel_size = 1
+
                 # Check that the requested device is available
                 if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
                     raise ValueError(
@@ -316,6 +339,7 @@ class GRPOTrainer(Trainer):
                     self.llm = LLM(
                         model=model.name_or_path,
                         device=vllm_device,
+                        tensor_parallel_size=tensor_parallel_size,
                         gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
                         dtype=self.args.vllm_dtype,
                         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
