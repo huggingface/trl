@@ -552,7 +552,8 @@ class GRPOTrainer(Trainer):
                 output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
-        # Gather the reward per function: this part is crucial, because the rewards are normalized per group
+        # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
+        # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
 
         # Sum the rewards from all reward functions
