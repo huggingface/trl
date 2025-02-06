@@ -36,7 +36,7 @@ dataset = load_dataset("trl-lib/tldr", split="train")
 
 # Define the reward function, which rewards completions that are close to 20 characters
 def reward_len(completions, **kwargs):
-    return [abs(20 - len(completion)) for completion in completions]
+    return [-abs(20 - len(completion)) for completion in completions]
 
 training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO", logging_steps=10)
 trainer = GRPOTrainer(
