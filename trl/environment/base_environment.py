@@ -39,10 +39,8 @@ class StringStoppingCriteria(StoppingCriteria):
     def __call__(self, input_ids, scores, **kwargs):
         """Returns true if all generated sequences contain any of the stop strings or terminated early."""
         if self.first_call:
-            self.generated_tokens = [0 for _ in range(input_ids.shape[0])]
             self.start_length = input_ids.shape[-1] - 1
             self.first_call = False
-            self.last_done = [False for _ in range(input_ids.shape[0])]
         decoded_generations = self.tokenizer.batch_decode(input_ids[:, self.start_length :])
         done = []
 
@@ -53,10 +51,6 @@ class StringStoppingCriteria(StoppingCriteria):
             )
             done.append(sequence_complete)
             # we still consider the last generated token to be valid
-            if not self.last_done[i]:
-                self.generated_tokens[i] += 1
-
-        self.last_done = done
 
         if all(done):
             self.first_call = True
@@ -666,6 +660,33 @@ class TextEnvironment:
             extracted_past_attention_mask[num_generated_tokens:] = 0
         return new_past_attention_mask
 
+
+    def _generated_tokens(self, input_ids, sequences, stop_strings):
+        """
+        Get the amount of newly generated token
+        Args:
+            input_ids (torch.Tensor): The inputs to the generation
+            sequences (torch.Tensor): The sequences returned by model.generate(...)
+            stop_strings (list[string]): The stop strings to look for"""
+
+        generated_tokens = []
+        start = input_ids.shape[1]
+        max_gen_tokens = sequences.shape[1] - start
+        for j, sequence in enumerate(sequences):
+            generated_tokens.append(0)
+            for i in range(max_gen_tokens + 1):
+                decoded_generation = self.tokenizer.decode(sequence[start : start + i])
+                sequence_complete = (
+                    any(stop_string in decoded_generation for stop_string in stop_strings)
+                    or self.tokenizer.eos_token_id in sequence[start : start + i]
+                )
+                generated_tokens[j] = i
+                if sequence_complete:
+                    break
+
+        return generated_tokens
+
+
     # TODO make batch_size changeable
     def _generate_batched(
         self,
@@ -733,7 +754,8 @@ class TextEnvironment:
                 pad_to_multiple_of=pad_to_multiple_of,
                 return_tensors="pt",
             ).to(self.current_device)
-            stopping_criteria = StringStoppingCriteria([self.call_token, self.submit_token], self.tokenizer)
+            stop_strings = [self.call_token, self.submit_token]
+            stopping_criteria = StringStoppingCriteria(stop_strings, self.tokenizer)
 
             generation_kwargs = copy.deepcopy(self.generation_kwargs)
 
@@ -759,25 +781,22 @@ class TextEnvironment:
             extracted_model = extract_model_from_parallel(self.model)
             if caching_enabled and extracted_model.pretrained_model._supports_cache_class:
                 generation_kwargs["past_key_values"] = (
-                    DynamicCache().from_legacy_cache(past_key_values)
-                    if past_key_values is not None
-                    else DynamicCache()
+                    DynamicCache().from_legacy_cache(past_key_values) if past_key_values is not None else DynamicCache()
                 )
             elif caching_enabled:
                 generation_kwargs["past_key_values"] = past_key_values
 
             cloned_attention_mask = padded_inputs["attention_mask"].clone()
             generations = extracted_model.generate(**padded_inputs, **generation_kwargs)
+            num_generated_tokens = self._generated_tokens(padded_inputs["input_ids"], generations.sequences, stop_strings)
 
             if output_logits:
                 logits = generations.logits
             sequences = generations.sequences
-            for generation, mask, num_generated_tokens in zip(
-                sequences, cloned_attention_mask, stopping_criteria.generated_tokens
-            ):
+            for generation, mask, num_tokens in zip(sequences, cloned_attention_mask, num_generated_tokens):
                 output = self._extract_generation(generation, mask)
                 # remove chunk generated after stopping criteria in batch mode
-                generated_tokens = output[:num_generated_tokens]
+                generated_tokens = output[:num_tokens]
                 if len(generated_tokens) < 1:
                     raise Exception("Generation failed to produce any valid tokens")
 
@@ -788,14 +807,14 @@ class TextEnvironment:
                     raise Exception("Cache should not contain keys and values for last generated token")
                 new_past_key_values.append(generations.past_key_values)
                 new_past_attention_mask = self._create_new_past_attention_mask(
-                    sequences, cloned_attention_mask, stopping_criteria.generated_tokens
+                    sequences, cloned_attention_mask, num_generated_tokens
                 )
                 new_past_attention_masks.append(new_past_attention_mask)
                 new_past_input_ids.append(sequences.clone())
 
             if output_logits:
-                for i, num_generated_tokens in enumerate(stopping_criteria.generated_tokens):
-                    relevant_logits = [batched_logits[i] for batched_logits in logits[:num_generated_tokens]]
+                for i, num_tokens in enumerate(num_generated_tokens):
+                    relevant_logits = [batched_logits[i] for batched_logits in logits[:num_tokens]]
                     all_logits.append(torch.stack(relevant_logits, dim=0).detach().clone())
 
         self.tokenizer.padding_side = padding_side_default

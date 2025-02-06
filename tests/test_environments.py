@@ -86,14 +86,10 @@ class StoppingCriteriaTester(unittest.TestCase):
         while not is_stopped and i < 100:
             # the first token is assumed to be the original input
             is_stopped = stopping_criteria(encoded["input_ids"][:, : i + 2], None)
-            self.assertEqual(
-                stopping_criteria.generated_tokens, [min(end_position, i + 1) for end_position in end_positions]
-            )
             i += 1
 
         self.assertTrue(is_stopped)
         self.assertEqual(i, max(*end_positions))
-        self.assertEqual(end_positions, stopping_criteria.generated_tokens)
 
 
 class TextHistoryTest(unittest.TestCase):
@@ -658,6 +654,43 @@ class TextEnvironmentTester(unittest.TestCase):
             self.assertEqual(len(history.logits), 1)
             self.assertEqual(len(history.logits[0]), 4)
             self.assertEqual(history.logits[0].shape[-1], self.model.config.vocab_size)
+
+    def test_generated_tokens(self):
+        generation_kwargs = {"do_sample": False, "max_new_tokens": 4, "pad_token_id": self.tokenizer.eos_token_id}
+        env = TextEnvironment(
+            self.model,
+            self.tokenizer,
+            tools=[DummyTool()],
+            reward_fn=lambda x: torch.tensor([1, 2, 3]),
+            prompt="I am a prompt\n",
+            generation_kwargs=generation_kwargs,
+            use_cache=False,
+            save_logits=True,
+            max_turns=1,
+        )
+        long_text = "This is supposed to be the longest text here for testing purposes"
+        encoded = self.tokenizer(
+            [
+                "Lorem ipsum stop dolor sit amet",
+                "input ienddolor sit amet, consectetur adipiscing",
+                "token",
+                long_text,
+            ],
+            return_tensors="pt",
+            padding=True,
+            padding_side="right",
+        )
+        end_positions = []
+        end_positions.append(encoded.char_to_token(batch_or_char_index=0, char_index=15))
+        end_positions.append(encoded.char_to_token(batch_or_char_index=1, char_index=9))
+        end_index = encoded.char_to_token(batch_or_char_index=2, char_index=4)
+        encoded["input_ids"][2][end_index + 1] = self.tokenizer.eos_token_id
+        end_positions.append(end_index + 1)
+        end_positions.append(encoded.char_to_token(batch_or_char_index=3, char_index=len(long_text) - 1))
+        num_generated_tokens = env._generated_tokens(
+            encoded["input_ids"][:, :1], encoded["input_ids"], ["stop", "end"]
+        )
+        self.assertEqual(num_generated_tokens, end_positions)
 
 
 if __name__ == "__main__":
