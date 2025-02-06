@@ -34,7 +34,9 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Qwen2_5_VLForConditionalGeneration,
+    Qwen2VLForConditionalGeneration,
     Qwen2_5_VLProcessor,
+    Qwen2VLProcessor,
     Trainer,
     TrainerCallback,
     is_wandb_available,
@@ -172,9 +174,9 @@ class QwenGRPOTrainer(Trainer):
         # Models
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
-        if not isinstance(model, Qwen2_5_VLForConditionalGeneration):
+        if not isinstance(model, Qwen2_5_VLForConditionalGeneration) and not isinstance(model, Qwen2VLForConditionalGeneration):
             raise ValueError(
-                "QwenGRPOTrainer does not support loading from a model ID. Please pass `model` as a `PreTrainedModel` object."
+                "QwenGRPOTrainer only support passing a Qwen2_5_VLForConditionalGeneration or Qwen2VLForConditionalGeneration object as the `model` argument."
             )
         else:
             model_id = model.config._name_or_path
@@ -205,8 +207,8 @@ class QwenGRPOTrainer(Trainer):
             self.ref_model = None
 
         # Processing class
-        if not isinstance(processing_class, Qwen2_5_VLProcessor):
-            raise ValueError("`processing_class` must be a `Qwen2_5_VLProcessor` object.")
+        if not isinstance(processing_class, Qwen2_5_VLProcessor) and not isinstance(processing_class, Qwen2VLProcessor):
+            raise ValueError("`processing_class` must be a `Qwen2_5_VLProcessor` or `Qwen2VLProcessor` object.")
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -502,7 +504,7 @@ class QwenGRPOTrainer(Trainer):
                 print(
                     "using pretrained model as reward fn, this is unexpected as Im passing in functions as reward fns"
                 )
-                if is_conversational(inputs[0]):
+                if is_conversational(inputs[0]):    
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                     texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
                 else:
