@@ -111,7 +111,6 @@ class SingleConversationWithTools:
     def _add_response_to_prompt_inputs(self, prompt_inputs: dict[str, torch.Tensor], response: torch.Tensor) -> dict[str, torch.Tensor]:
         """Add the response to the prompt inputs."""
         if VERBOSE:
-            import pdb; pdb.set_trace()
             addition_str = self.processing_class.decode(response[0])
             print(f"Adding response: {addition_str}")
         prompt_inputs["input_ids"] = torch.cat([prompt_inputs["input_ids"], response], dim=1)
@@ -500,7 +499,6 @@ class QwenGRPOTrainer(Trainer):
                 break
 
         response_ids = conv.get_response()
-        import pdb; pdb.set_trace()
         if VERBOSE:
             print(f"\n\n\nDONE!")
             print(f"Text of the response: {self.processing_class.decode(response_ids[0,:])}")
