@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+VERBOSE = True
+
 import os
 import textwrap
 import warnings
@@ -108,6 +110,10 @@ class SingleConversationWithTools:
 
     def _add_response_to_prompt_inputs(self, prompt_inputs: dict[str, torch.Tensor], response: torch.Tensor) -> dict[str, torch.Tensor]:
         """Add the response to the prompt inputs."""
+        if VERBOSE:
+            import pdb; pdb.set_trace()
+            addition_str = self.processing_class.decode(response[0])
+            print(f"Adding response: {addition_str}")
         prompt_inputs["input_ids"] = torch.cat([prompt_inputs["input_ids"], response], dim=1)
         ones = torch.ones_like(response, device=response.device)
         prompt_inputs["attention_mask"] = torch.cat([prompt_inputs["attention_mask"], ones], dim=1)
@@ -116,6 +122,7 @@ class SingleConversationWithTools:
 
     def get_response(self) -> torch.Tensor:
         """Returns the response as a tensor."""
+        # String together all the response tensors on their long dimension.
         return torch.cat(self.response, dim=1)
 
 class QwenGRPOTrainer(Trainer):
@@ -462,7 +469,7 @@ class QwenGRPOTrainer(Trainer):
         return final
 
     def _generate_single_completion_with_tools(
-        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]
+        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor], max_steps: int = 10
     ) -> torch.Tensor:
         """Iterates between generation and tool calling.
 
@@ -476,17 +483,28 @@ class QwenGRPOTrainer(Trainer):
         (Note that 46*44 is 2024).
         """
         conv = SingleConversationWithTools(prompt_inputs, self.tool_defn, self.processing_class)
-        # Loop until tool isn't called.
-        while True:
+        # Loop until tool isn't called, of we max out
+        for step in range(max_steps):
+            if VERBOSE:
+                print(f"\n\n\nGenerating completion with tool call.  Step {step}.  Shapes of inputs:")
+                for key, val in prompt_inputs.items():
+                    print(f"{key}: {val.shape}")
+                print(f"Text of the prompt: {self.processing_class.decode(prompt_inputs['input_ids'][0])}")
             prompt_completion_ids = self._generate_completions(model, prompt_inputs, num_generations=1)
-            # prompt_completion_ids is a tensor of shape (1, L)
-            # Because we only generated one completion.
-            # L is 875 here.  It's just token ids, nothing else.
-            tool_used = conv.process_response(prompt_completion_ids)
-            if not tool_used:
+            # prompt_completion_ids is a tensor of shape (1, L) Because we only generated one completion.
+            # Note that L includes both the prompt and the response.
+            # We only want to process the response, so we'll strip the prompt.
+            ids_to_process = prompt_completion_ids[:, len(prompt_inputs["input_ids"][0]):]
+            tool_was_used = conv.process_response(ids_to_process)
+            if not tool_was_used:
                 break
 
-        return conv.get_response()
+        response_ids = conv.get_response()
+        import pdb; pdb.set_trace()
+        if VERBOSE:
+            print(f"\n\n\nDONE!")
+            print(f"Text of the response: {self.processing_class.decode(response_ids[0,:])}")
+        return response_ids
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
