@@ -23,8 +23,10 @@ import torch
 import torch.utils.data
 import transformers
 from accelerate.utils import broadcast_object_list, gather_object
+from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
+from torch import nn
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -42,6 +44,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
+from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url, pad
 
@@ -314,10 +317,12 @@ class GRPOTrainer(Trainer):
                         model=model.name_or_path,
                         device=vllm_device,
                         gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                        dtype=self.args.vllm_dtype,
                         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
                         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
                         # This is particularly useful here because we generate completions from the same prompts.
                         enable_prefix_caching=True,
+                        max_model_len=self.args.vllm_max_model_len,
                     )
                 self.sampling_params = SamplingParams(
                     n=self.num_generations,
@@ -354,6 +359,9 @@ class GRPOTrainer(Trainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
+        if args.sync_ref_model:
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
@@ -374,13 +382,17 @@ class GRPOTrainer(Trainer):
         ).logits  # (B, L, V)
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
-        # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
-        per_token_logps = []
-        for logits_row, input_ids_row in zip(logits, input_ids[:, -logits_to_keep:]):
-            log_probs = logits_row.log_softmax(dim=-1)
-            token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
-            per_token_logps.append(token_log_prob)
-        return torch.stack(per_token_logps)
+        input_ids = input_ids[:, -logits_to_keep:]
+        # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
+        # See https://github.com/huggingface/trl/issues/2770
+        logits = logits[:, -logits_to_keep:]
+
+        # Compute the log probabilities for the input tokens.
+        token_logits = logits.gather(dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+        # use a loop to reduce memory peak
+        logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
+        token_log_probs = token_logits - logsumexp_values  # log_softmax = logits - log(sum(exp(logits)))
+        return token_log_probs
 
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
@@ -400,8 +412,13 @@ class GRPOTrainer(Trainer):
         if self.args.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
-                with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                    state_dict = unwrapped_model.state_dict()
+                with unwrap_model_for_generation(
+                    self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                ) as unwrapped_model:
+                    if is_compiled_module(unwrapped_model):
+                        state_dict = unwrapped_model._orig_mod.state_dict()
+                    else:
+                        state_dict = unwrapped_model.state_dict()
                 if self.accelerator.is_main_process:
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                     llm_model.load_weights(state_dict.items())
@@ -478,7 +495,7 @@ class GRPOTrainer(Trainer):
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
-            if isinstance(reward_func, PreTrainedModel):
+            if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
                 if is_conversational(inputs[0]):
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                     texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
@@ -515,7 +532,7 @@ class GRPOTrainer(Trainer):
         # Log the metrics
         reward_per_func = self.accelerator.gather_for_metrics(rewards_per_func).mean(0)
         for i, reward_func in enumerate(self.reward_funcs):
-            if isinstance(reward_func, PreTrainedModel):
+            if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
                 reward_func_name = reward_func.config._name_or_path.split("/")[-1]
             else:
                 reward_func_name = reward_func.__name__
