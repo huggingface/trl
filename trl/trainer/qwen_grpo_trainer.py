@@ -389,9 +389,11 @@ class QwenGRPOTrainer(Trainer):
         return inputs
 
     def _generate_completions(
-        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]
+        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor], num_generations: int | None = None
     ) -> torch.Tensor:
-        """Generate completions using the model."""
+        """Generate completion(s) using the model."""
+        if num_generations is not None:
+            self.generation_config.num_return_sequences = num_generations
         prompt_completion_ids = model.generate(
                 **prompt_inputs,
                 generation_config=self.generation_config,
@@ -402,10 +404,26 @@ class QwenGRPOTrainer(Trainer):
     def _add_response_to_prompt_inputs(self, prompt_inputs: dict[str, torch.Tensor], response: torch.Tensor) -> dict[str, torch.Tensor]:
         """Add the response to the prompt inputs."""
         prompt_inputs["input_ids"] = torch.cat([prompt_inputs["input_ids"], response], dim=1)
-        prompt_inputs["attention_mask"] = torch.cat([prompt_inputs["attention_mask"], torch.ones_like(tool_response)], dim=1)
+        prompt_inputs["attention_mask"] = torch.cat([prompt_inputs["attention_mask"], torch.ones_like(response)], dim=1)
         return prompt_inputs
 
     def _generate_completions_with_tools(
+        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        """Generate the full set of completions with tools, and stitch them together.
+        """
+        out = []
+        for _ in range(self.num_generations):
+            out.append(self._generate_single_completion_with_tools(model, prompt_inputs))
+        # Now we have a ragged list of tensors. We need to pad them to the same length.
+        max_length = max(completion.size(1) for completion in out)
+        for i in range(len(out)):
+            padding = torch.zeros(1, max_length - out[i].size(1), dtype=torch.long, device=out[i].device)
+            out[i] = torch.cat([out[i], padding], dim=1)
+        final = torch.cat(out, dim=0)
+        return final
+
+    def _generate_single_completion_with_tools(
         self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]
     ) -> torch.Tensor:
         """Iterates between generation and tool calling.
@@ -422,9 +440,9 @@ class QwenGRPOTrainer(Trainer):
         out = []
         # Loop until tool isn't called.
         while True:
-            prompt_completion_ids = self._generate_completions(model, prompt_inputs)
-            # prompt_completion_ids is a tensor of shape (B, L)
-            # Where B is (3) for the number of generations.
+            prompt_completion_ids = self._generate_completions(model, prompt_inputs, num_generations=1)
+            # prompt_completion_ids is a tensor of shape (1, L)
+            # Because we only generated one completion.
             # L is 875 here.  It's just token ids, nothing else.
             out.append(prompt_completion_ids)
             # Check if the stop string is in the completions
@@ -439,7 +457,7 @@ class QwenGRPOTrainer(Trainer):
             else:
                 # No tool call, so we're done.
                 break
-        all_out = torch.cat(out, dim=0)
+        all_out = torch.cat(out, dim=1)  # dim=1 means the token sequence gets longer.
         return all_out
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
