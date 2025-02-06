@@ -69,6 +69,10 @@ class ToolDefinition:
     stop_string: str
     call_tool: Callable[[torch.Tensor], torch.Tensor]
 
+    def completion_has_tool_call(self, completion_str: str) -> bool:
+        """Check if the completion has a tool call."""
+        return self.stop_string in completion_str
+
 
 class QwenGRPOTrainer(Trainer):
     """
@@ -384,27 +388,59 @@ class QwenGRPOTrainer(Trainer):
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         return inputs
 
-    def _generate_completions_with_tools(self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]) -> torch.Tensor:
+    def _generate_completions(
+        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        """Generate completions using the model."""
+        prompt_completion_ids = model.generate(
+                **prompt_inputs,
+                generation_config=self.generation_config,
+                tokenizer=self.processing_class.tokenizer,
+        )
+        return prompt_completion_ids
+
+    def _add_response_to_prompt_inputs(self, prompt_inputs: dict[str, torch.Tensor], response: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Add the response to the prompt inputs."""
+        prompt_inputs["input_ids"] = torch.cat([prompt_inputs["input_ids"], response], dim=1)
+        prompt_inputs["attention_mask"] = torch.cat([prompt_inputs["attention_mask"], torch.ones_like(tool_response)], dim=1)
+        return prompt_inputs
+
+    def _generate_completions_with_tools(
+        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
         """Iterates between generation and tool calling.
 
         Note this is currently only called from the non-vLLM path
+
+        prompt_inputs is a dict with the following keys:
+        - input_ids: [1, 710] ints.  Some stuff at the beginning and the end, the middle full of 151655
+        - attention_mask: [1, 710] ints.  All 1
+        - pixel_values: 2024x1176 floats.  The image.
+        - image_grid_thw: a 1x3 tensor with values: [1, 46, 44].
+        (Note that 46*44 is 2024).
         """
         out = []
         # Loop until tool isn't called.
         while True:
-            prompt_completion_ids = model.generate(
-                **prompt_inputs, generation_config=self.generation_config
-            )
+            prompt_completion_ids = self._generate_completions(model, prompt_inputs)
+            # prompt_completion_ids is a tensor of shape (B, L)
+            # Where B is (3) for the number of generations.
+            # L is 875 here.  It's just token ids, nothing else.
             out.append(prompt_completion_ids)
-            if self.tool_defn:
-                # Check if the stop string is in the completions
-                import pdb; pdb.set_trace()
-                if self.tool_defn.stop_string in prompt_completion_ids:
-                    # Call the tool.
-                    tool_response = self.tool_defn.call_tool(prompt_completion_ids)
-                    out.append(tool_response)
-                    # TODO: Feed the tool response back into the model.
-        return torch.cat(out, dim=0)
+            # Check if the stop string is in the completions
+            # We need to convert the tensor to a string.
+            prompt_completion_str = self.processing_class.tokenizer.decode(prompt_completion_ids[0], skip_special_tokens=True)  
+            if self.tool_defn.completion_has_tool_call(prompt_completion_str):
+                tool_response = self.tool_defn.call_tool(prompt_completion_ids)
+                out.append(tool_response)
+                prompt_inputs = self._add_response_to_prompt_inputs(prompt_inputs, prompt_completion_ids)
+                prompt_inputs = self._add_response_to_prompt_inputs(prompt_inputs, tool_response)
+                # Note: we're gonna have to figure out images.
+            else:
+                # No tool call, so we're done.
+                break
+        all_out = torch.cat(out, dim=0)
+        return all_out
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
@@ -458,7 +494,10 @@ class QwenGRPOTrainer(Trainer):
         else:
             # Regular generation path (not using vLLM)
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                prompt_completion_ids = self._generate_completions_with_tools(unwrapped_model, prompt_inputs)
+                if self.tool_defn:
+                    prompt_completion_ids = self._generate_completions_with_tools(unwrapped_model, prompt_inputs)
+                else:
+                    prompt_completion_ids = self._generate_completions(unwrapped_model, prompt_inputs)
 
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
@@ -657,3 +696,17 @@ class QwenGRPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
+
+
+def print_random_alphabet(n:int=4) -> None:
+    """Print the uppercase alphabet in a random order with four spaces between each letter.
+    For the secret-decoder-ring task.
+    """
+    import random
+    import string
+    letters = list(string.ascii_uppercase)
+    random.shuffle(letters)
+    js = " " * n
+    print(js.join(letters[0:13]))
+    print(js.join(letters[13:]))
