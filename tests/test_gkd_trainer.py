@@ -20,6 +20,7 @@ import torch
 import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+from transformers.testing_utils import require_liger_kernel
 
 from trl import GKDConfig, GKDTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
@@ -262,3 +263,35 @@ class GKDTrainerTester(unittest.TestCase):
             self.assertEqual(trainer.generation_config.max_new_tokens, training_args.max_new_tokens)
             self.assertEqual(trainer.generation_config.temperature, training_args.temperature)
             self.assertEqual(trainer.generation_config.top_k, 0)
+
+    @require_liger_kernel
+    def test_gkd_trainer_with_liger(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GKDConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                per_device_eval_batch_size=2,
+                report_to="none",
+                use_liger_loss=True,  # Enable Liger loss
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+
+            trainer = GKDTrainer(
+                model=self.model_id,
+                teacher_model=self.model_id,
+                args=training_args,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+            )
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+            self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))

@@ -55,6 +55,7 @@ if is_deepspeed_available():
     import deepspeed
 
 if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 if is_peft_available():
@@ -158,6 +159,16 @@ class GKDTrainer(SFTTrainer):
         ):
             self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
 
+        if args.use_liger_loss:
+            if not is_liger_kernel_available():
+                raise ValueError(
+                    "You set `use_liger_loss=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
+            self.liger_loss = LigerFusedLinearJSDLoss(
+                weight_hard_loss=0, weight_soft_loss=1, temperature=args.temperature
+            )
+
     @staticmethod
     def generalized_jsd_loss(
         student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
@@ -218,33 +229,72 @@ class GKDTrainer(SFTTrainer):
             return jsd
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        # compute student output
-        outputs_student = model(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-        )
+        if self.args.use_liger_loss:
+            if hasattr(model, "get_decoder"):
+                base_model = model.get_decoder()
+            else:
+                base_model = getattr(model, self.args.base_model_attribute_name)
+            outputs_student = base_model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+            )
+            lm_head_student = model.get_output_embeddings()
 
-        # compute teacher output in eval mode
-        self.teacher_model.eval()
-        with torch.no_grad():
-            outputs_teacher = self.teacher_model(
+            # compute teacher output in eval mode
+            if hasattr(self.teacher_model, "get_decoder"):
+                base_teacher_model = self.teacher_model.get_decoder()
+            else:
+                base_teacher_model = getattr(self.teacher_model, self.args.teacher_base_model_attribute_name)
+            base_teacher_model.eval()
+            with torch.no_grad():
+                outputs_teacher = base_teacher_model(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                )
+            lm_head_teacher = self.teacher_model.get_output_embeddings()
+
+            # slice the logits for the generated tokens using the inputs["prompts"] lengths
+            prompt_lengths = inputs["prompts"].shape[1]
+            shifted_student_outputs = outputs_student.last_hidden_state[:, prompt_lengths - 1 : -1, :]
+            shifted_teacher_outputs = outputs_teacher.last_hidden_state[:, prompt_lengths - 1 : -1, :]
+            shifted_labels = inputs["labels"][:, prompt_lengths:]
+
+            # compute loss
+            loss = self.liger_loss(
+                student_input=shifted_student_outputs,
+                student_weight=lm_head_student.weight,
+                teacher_input=shifted_teacher_outputs,
+                teacher_weight=lm_head_teacher.weight,
+                true_labels=shifted_labels,
+            )
+        else:
+            # compute student output
+            outputs_student = model(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
             )
 
-        # slice the logits for the generated tokens using the inputs["prompts"] lengths
-        prompt_lengths = inputs["prompts"].shape[1]
-        shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
-        shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
-        shifted_labels = inputs["labels"][:, prompt_lengths:]
+            # compute teacher output in eval mode
+            self.teacher_model.eval()
+            with torch.no_grad():
+                outputs_teacher = self.teacher_model(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                )
 
-        # compute loss
-        loss = self.generalized_jsd_loss(
-            student_logits=shifted_student_logits,
-            teacher_logits=shifted_teacher_logits,
-            labels=shifted_labels,
-            beta=self.beta,
-        )
+            # slice the logits for the generated tokens using the inputs["prompts"] lengths
+            prompt_lengths = inputs["prompts"].shape[1]
+            shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
+            shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
+            shifted_labels = inputs["labels"][:, prompt_lengths:]
+
+            # compute loss
+            loss = self.generalized_jsd_loss(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                labels=shifted_labels,
+                beta=self.beta,
+            )
 
         # empty cache
         empty_cache()
