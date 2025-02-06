@@ -74,6 +74,50 @@ class ToolDefinition:
         return self.stop_string in completion_str
 
 
+class SingleConversationWithTools:
+    """Keeps track of the prompt, and knows how to put together the partial responses and the tool call responses."""
+
+    def __init__(self, prompt_inputs: dict[str, torch.Tensor], tool_defn: ToolDefinition, processing_class: PreTrainedTokenizerBase):
+        self.prompt_inputs = prompt_inputs
+        self.tool_defn = tool_defn
+        self.response = []
+        self.processing_class = processing_class
+
+    def process_response(self, prompt_completion_ids: torch.Tensor) -> bool:
+        """Adds the response to the conversation, including calling the tool if necessary.
+        Returns True if there was a tool call, and the conversation should continue.
+        Returns False if there was no tool call, and the conversation is complete.
+        """
+        self.response.append(prompt_completion_ids)
+        prompt_completion_str = self.processing_class.tokenizer.decode(prompt_completion_ids[0], skip_special_tokens=True)  
+        # Check if the stop string is in the completions
+        # We need to convert the tensor to a string.
+        if self.tool_defn.completion_has_tool_call(prompt_completion_str):
+            tool_response_str = self.tool_defn.call_tool(prompt_completion_str)
+            tool_response_ids_list = self.processing_class.tokenizer.encode(tool_response_str, add_special_tokens=False)
+            tool_response_ids = torch.tensor(tool_response_ids_list, device=prompt_completion_ids.device)  # [L]
+            tool_response_ids = tool_response_ids[None, :]  # [1, L]
+            self.response.append(tool_response_ids)
+            self.prompt_inputs = self._add_response_to_prompt_inputs(self.prompt_inputs, prompt_completion_ids)
+            self.prompt_inputs = self._add_response_to_prompt_inputs(self.prompt_inputs, tool_response_ids)
+            # Note: we're gonna have to figure out images.
+            return True
+        else:
+            # No tool call, so we're done.
+            return False
+
+    def _add_response_to_prompt_inputs(self, prompt_inputs: dict[str, torch.Tensor], response: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Add the response to the prompt inputs."""
+        prompt_inputs["input_ids"] = torch.cat([prompt_inputs["input_ids"], response], dim=1)
+        ones = torch.ones_like(response, device=response.device)
+        prompt_inputs["attention_mask"] = torch.cat([prompt_inputs["attention_mask"], ones], dim=1)
+        return prompt_inputs
+
+
+    def get_response(self) -> torch.Tensor:
+        """Returns the response as a tensor."""
+        return torch.cat(self.response, dim=1)
+
 class QwenGRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -401,12 +445,6 @@ class QwenGRPOTrainer(Trainer):
         )
         return prompt_completion_ids
 
-    def _add_response_to_prompt_inputs(self, prompt_inputs: dict[str, torch.Tensor], response: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Add the response to the prompt inputs."""
-        prompt_inputs["input_ids"] = torch.cat([prompt_inputs["input_ids"], response], dim=1)
-        prompt_inputs["attention_mask"] = torch.cat([prompt_inputs["attention_mask"], torch.ones_like(response)], dim=1)
-        return prompt_inputs
-
     def _generate_completions_with_tools(
         self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]
     ) -> torch.Tensor:
@@ -437,29 +475,18 @@ class QwenGRPOTrainer(Trainer):
         - image_grid_thw: a 1x3 tensor with values: [1, 46, 44].
         (Note that 46*44 is 2024).
         """
-        out = []
+        conv = SingleConversationWithTools(prompt_inputs, self.tool_defn, self.processing_class)
         # Loop until tool isn't called.
         while True:
             prompt_completion_ids = self._generate_completions(model, prompt_inputs, num_generations=1)
             # prompt_completion_ids is a tensor of shape (1, L)
             # Because we only generated one completion.
             # L is 875 here.  It's just token ids, nothing else.
-            out.append(prompt_completion_ids)
-            # Check if the stop string is in the completions
-            # We need to convert the tensor to a string.
-            prompt_completion_str = self.processing_class.tokenizer.decode(prompt_completion_ids[0], skip_special_tokens=True)  
-            if self.tool_defn.completion_has_tool_call(prompt_completion_str):
-                tool_response_str = self.tool_defn.call_tool(prompt_completion_str)
-                tool_response_ids = self.processing_class.tokenizer.encode(tool_response_str, add_special_tokens=False)
-                out.append(tool_response_ids)
-                prompt_inputs = self._add_response_to_prompt_inputs(prompt_inputs, prompt_completion_ids)
-                prompt_inputs = self._add_response_to_prompt_inputs(prompt_inputs, tool_response_ids)
-                # Note: we're gonna have to figure out images.
-            else:
-                # No tool call, so we're done.
+            tool_used = conv.process_response(prompt_completion_ids)
+            if not tool_used:
                 break
-        all_out = torch.cat(out, dim=1)  # dim=1 means the token sequence gets longer.
-        return all_out
+
+        return conv.get_response()
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
