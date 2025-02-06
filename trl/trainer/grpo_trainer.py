@@ -485,18 +485,17 @@ class GRPOTrainer(Trainer):
                 for i in range(0, input_ids.size(0), mini_batch_size):
                     mini_batch_input_ids = input_ids[i : i + mini_batch_size, :]  # (B_mini, P+C)
                     mini_batch_attention_mask = attention_mask[i : i + mini_batch_size, :]  # (B_mini, P+C)
-                    log_probs = (
-                        model(
-                            input_ids=mini_batch_input_ids,
-                            attention_mask=mini_batch_attention_mask,
-                            num_logits_to_keep=num_logits_to_keep + 1,
-                        )
-                        .logits[:, -num_logits_to_keep - 1 : -1]
-                        .log_softmax(dim=-1)
-                    )  # (B_mini, P+C, Vocab_size)
+                    logits = model(
+                        input_ids=mini_batch_input_ids,
+                        attention_mask=mini_batch_attention_mask,
+                        num_logits_to_keep=num_logits_to_keep + 1,
+                    ).logits[:, -num_logits_to_keep - 1 : -1]  # (B_mini, P+C, Vocab_size)
+
                     token_index = mini_batch_input_ids[:, -num_logits_to_keep:].unsqueeze(-1)  # (B_mini, P+C, 1)
-                    token_log_prob = torch.gather(log_probs, dim=-1, index=token_index).squeeze(-1)
-                    del log_probs
+                    token_logits = torch.gather(logits, dim=-1, index=token_index).squeeze(-1)
+                    logsumexp_values = torch.stack([torch.logsumexp(l, dim=-1) for l in logits])
+                    del logits
+                    token_log_prob = token_logits - logsumexp_values
                     per_token_logps.append(token_log_prob)
                 return torch.cat(per_token_logps, dim=0)
 
