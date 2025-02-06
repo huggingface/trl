@@ -449,10 +449,11 @@ class QwenGRPOTrainer(Trainer):
             # We need to convert the tensor to a string.
             prompt_completion_str = self.processing_class.tokenizer.decode(prompt_completion_ids[0], skip_special_tokens=True)  
             if self.tool_defn.completion_has_tool_call(prompt_completion_str):
-                tool_response = self.tool_defn.call_tool(prompt_completion_ids)
-                out.append(tool_response)
+                tool_response_str = self.tool_defn.call_tool(prompt_completion_str)
+                tool_response_ids = self.processing_class.tokenizer.encode(tool_response_str, add_special_tokens=False)
+                out.append(tool_response_ids)
                 prompt_inputs = self._add_response_to_prompt_inputs(prompt_inputs, prompt_completion_ids)
-                prompt_inputs = self._add_response_to_prompt_inputs(prompt_inputs, tool_response)
+                prompt_inputs = self._add_response_to_prompt_inputs(prompt_inputs, tool_response_ids)
                 # Note: we're gonna have to figure out images.
             else:
                 # No tool call, so we're done.
