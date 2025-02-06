@@ -36,7 +36,7 @@ _import_structure = {
     "dpo_trainer": ["DPOTrainer"],
     "gkd_config": ["GKDConfig"],
     "gkd_trainer": ["GKDTrainer"],
-    "qwen_grpo_trainer": ["QwenGRPOTrainer"],
+    "qwen_grpo_trainer": ["QwenGRPOTrainer", "ToolDefinition"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
@@ -134,7 +134,7 @@ if TYPE_CHECKING:
     from .ppo_trainer import PPOTrainer
     from .prm_config import PRMConfig
     from .prm_trainer import PRMTrainer
-    from .qwen_grpo_trainer import QwenGRPOTrainer
+    from .qwen_grpo_trainer import QwenGRPOTrainer, ToolDefinition
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig
@@ -164,3 +164,12 @@ else:
     import sys
 
     sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
+
+# Importing from qwen_grpo_trainer to expose them at the package level.
+from .qwen_grpo_trainer import QwenGRPOTrainer, ToolDefinition
+
+# Define __all__ to explicitly list the public API of this package.
+__all__ = [
+    "QwenGRPOTrainer",
+    "ToolDefinition",
+]

@@ -69,6 +69,7 @@ class ToolDefinition:
     stop_string: str
     call_tool: Callable[[torch.Tensor], torch.Tensor]
 
+
 class QwenGRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -388,9 +389,8 @@ class QwenGRPOTrainer(Trainer):
 
         Note this is currently only called from the non-vLLM path
         """
-
-        # Loop until tool isn't called.
         out = []
+        # Loop until tool isn't called.
         while True:
             prompt_completion_ids = model.generate(
                 **prompt_inputs, generation_config=self.generation_config
@@ -458,7 +458,7 @@ class QwenGRPOTrainer(Trainer):
         else:
             # Regular generation path (not using vLLM)
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                prompt_completion_ids = self._generate_completions(unwrapped_model, prompt_inputs)
+                prompt_completion_ids = self._generate_completions_with_tools(unwrapped_model, prompt_inputs)
 
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
