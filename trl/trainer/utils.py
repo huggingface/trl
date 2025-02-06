@@ -1728,14 +1728,18 @@ def compute_logps_with_prompt_cache(
 
         # More optimized method (https://github.com/huggingface/trl/pull/2773)
         # Get the corresponding completion token ids and gather the logits for completion_ids w/ idx >= 1
-        mini_batch_index = mini_batch_ids[:, 1:].unsqueeze(-1)
-        mini_batch_token_logits = torch.gather(mini_batch_logits, dim=-1, index=mini_batch_index).squeeze(-1)
-        mini_batch_logsumexp_values = torch.stack([torch.logsumexp(l, dim=-1) for l in mini_batch_logits])
+        mini_batch_index = mini_batch_ids[:, 1:].unsqueeze(-1)  # (mini_batch_size, C-1, 1)
+        mini_batch_token_logits = torch.gather(mini_batch_logits, dim=-1, index=mini_batch_index).squeeze(
+            -1
+        )  # (mini_batch_size, C-1)
+        mini_batch_logsumexp_values = torch.stack(
+            [torch.logsumexp(l, dim=-1) for l in mini_batch_logits]
+        )  # (mini_batch_size, C-1)
         del mini_batch_logits
-        mini_batch_token_log_prob = mini_batch_token_logits - mini_batch_logsumexp_values
+        mini_batch_token_log_prob = mini_batch_token_logits - mini_batch_logsumexp_values  # (mini_batch_size, C-1)
         completion_token_logps.append(mini_batch_token_log_prob)
         del mini_batch_token_logits, mini_batch_logsumexp_values, mini_batch_token_log_prob
 
     # Combine results
-    all_completion_token_logps = torch.cat(completion_token_logps, dim=0)
-    return torch.cat([first_completion_token_logps, all_completion_token_logps], dim=1)
+    all_completion_token_logps = torch.cat(completion_token_logps, dim=0)  # (B*G, C-1)
+    return torch.cat([first_completion_token_logps, all_completion_token_logps], dim=1)  # (B*G, C)
