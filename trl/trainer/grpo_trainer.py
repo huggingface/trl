@@ -312,15 +312,25 @@ class GRPOTrainer(Trainer):
             optimizers=optimizers,
         )
 
-        # Check if the per_device_train_batch_size * num processes can be divided by the number of generations
-        if args.per_device_train_batch_size * self.accelerator.num_processes % self.num_generations != 0:
-            global_batch_size = args.per_device_train_batch_size * self.accelerator.num_processes
-            possible_values = [i for i in range(2, global_batch_size + 1) if (global_batch_size) % i == 0]
+        # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
+        num_processes = self.accelerator.num_processes
+        global_batch_size = args.per_device_train_batch_size * num_processes
+        possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+        if self.num_generations not in possible_values:
             raise ValueError(
-                f"The global batch size ({self.accelerator.num_processes} x {args.per_device_train_batch_size}) "
-                f"must be evenly divisible by the number of generations per prompt ({self.num_generations})."
-                f"Given this batch size, the valid values for the number of generations are: {possible_values}."
+                f"The global train batch size ({num_processes} x {args.per_device_train_batch_size}) must be evenly "
+                f"divisible by the number of generations per prompt ({self.num_generations}). Given the current train "
+                f"batch size, the valid values for the number of generations are: {possible_values}."
             )
+        if self.args.eval_strategy != "no":
+            global_batch_size = args.per_device_eval_batch_size * num_processes
+            possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+            if self.num_generations not in possible_values:
+                raise ValueError(
+                    f"The global eval batch size ({num_processes} x {args.per_device_eval_batch_size}) must be evenly "
+                    f"divisible by the number of generations per prompt ({self.num_generations}). Given the current "
+                    f"eval batch size, the valid values for the number of generations are: {possible_values}."
+                )
 
         if self.use_vllm:
             if not is_vllm_available():
@@ -371,7 +381,7 @@ class GRPOTrainer(Trainer):
                     max_tokens=self.max_completion_length,
                 )
 
-            self._last_loaded_step = 0  # tag to avoid useless loading during grad checkpointing
+            self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
@@ -424,9 +434,7 @@ class GRPOTrainer(Trainer):
     # Get the per-token log probabilities for the completions for the model and the reference model
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
         # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-        logits = model(
-            input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1
-        ).logits  # (B, L, V)
+        logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
         input_ids = input_ids[:, -logits_to_keep:]
@@ -436,8 +444,7 @@ class GRPOTrainer(Trainer):
 
         # Compute the log probabilities for the input tokens.
         token_logits = logits.gather(dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
-        # use a loop to reduce memory peak
-        logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
+        logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])  # loop to reduce memory peak
         token_log_probs = token_logits - logsumexp_values  # log_softmax = logits - log(sum(exp(logits)))
         return token_log_probs
 
@@ -477,8 +484,7 @@ class GRPOTrainer(Trainer):
                 outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
                 completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
             else:
-                completion_ids = [None] * len(all_prompts_text) * self.num_generations
-
+                completion_ids = [None] * len(all_prompts_text)
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
             # corresponding slice.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
@@ -491,8 +497,6 @@ class GRPOTrainer(Trainer):
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-            prompt_ids = torch.repeat_interleave(prompt_ids, self.num_generations, dim=0)
-            prompt_mask = torch.repeat_interleave(prompt_mask, self.num_generations, dim=0)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
