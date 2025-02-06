@@ -660,7 +660,6 @@ class TextEnvironment:
             extracted_past_attention_mask[num_generated_tokens:] = 0
         return new_past_attention_mask
 
-
     def _generated_tokens(self, input_ids, sequences, stop_strings):
         """
         Get the amount of newly generated token
@@ -685,7 +684,6 @@ class TextEnvironment:
                     break
 
         return generated_tokens
-
 
     # TODO make batch_size changeable
     def _generate_batched(
@@ -781,14 +779,18 @@ class TextEnvironment:
             extracted_model = extract_model_from_parallel(self.model)
             if caching_enabled and extracted_model.pretrained_model._supports_cache_class:
                 generation_kwargs["past_key_values"] = (
-                    DynamicCache().from_legacy_cache(past_key_values) if past_key_values is not None else DynamicCache()
+                    DynamicCache().from_legacy_cache(past_key_values)
+                    if past_key_values is not None
+                    else DynamicCache()
                 )
             elif caching_enabled:
                 generation_kwargs["past_key_values"] = past_key_values
 
             cloned_attention_mask = padded_inputs["attention_mask"].clone()
             generations = extracted_model.generate(**padded_inputs, **generation_kwargs)
-            num_generated_tokens = self._generated_tokens(padded_inputs["input_ids"], generations.sequences, stop_strings)
+            num_generated_tokens = self._generated_tokens(
+                padded_inputs["input_ids"], generations.sequences, stop_strings
+            )
 
             if output_logits:
                 logits = generations.logits
