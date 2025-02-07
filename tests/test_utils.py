@@ -522,7 +522,7 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
         logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
 
         expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
-        actual_output = selective_log_softmax(logits=logits, input_ids=input_ids)
+        actual_output = selective_log_softmax(logits, input_ids)
 
         if dtype in [torch.float16, torch.bfloat16]:
             # half-precision dtypes fall back to an exact method
