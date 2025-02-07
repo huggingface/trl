@@ -29,8 +29,8 @@ class RewardConfig(TrainingArguments):
 
     Parameters:
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
-            to use the default data collator.
+            Maximum length of the sequences (prompt + completion) in the batch, filters out entries that exceed the
+            limit. This argument is required if you want to use the default data collator.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
         dataset_num_proc (`int`, *optional*, defaults to `None`):
@@ -46,8 +46,8 @@ class RewardConfig(TrainingArguments):
     max_length: Optional[int] = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the sequences (prompt + completion) in the batch. This argument is required if "
-            "you want to use the default data collator."
+            "help": "Maximum length of the sequences (prompt + completion) in the batch, filters out entries that "
+            "exceed the limit. This argument is required if you want to use the default data collator."
         },
     )
     disable_dropout: bool = field(

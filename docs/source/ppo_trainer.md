@@ -26,6 +26,8 @@ python examples/scripts/ppo/ppo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --sft_model_path EleutherAI/pythia-1b-deduped \
+    --reward_model_path EleutherAI/pythia-1b-deduped \
     --missing_eos_penalty 1.0
 ```
 

@@ -94,6 +94,10 @@ def _generate_completions(
 
 
 class SyncRefModelCallback(TrainerCallback):
+    """
+    Callback to synchronize the model with a reference model.
+    """
+
     def __init__(
         self,
         ref_model: Union[PreTrainedModel, torch.nn.Module],
