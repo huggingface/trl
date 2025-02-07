@@ -45,8 +45,7 @@ class CoreTester(unittest.TestCase):
         diffs = (whiten_unmasked - whiten_masked).sum()
         self.assertLess(abs(diffs.item()), 0.00001)
 
-    def test_extract_per_token_logprobs(self):
-        """Test extract_per_token_logprobs with different dtypes"""
+    def test_selective_log_softmax(self):
         dtypes = [torch.float64, torch.float32, torch.float16, torch.bfloat16]
         vocab_size = 32768
         batch_size = 4
