@@ -67,7 +67,7 @@ if is_wandb_available():
 
 class SFTTrainer(Trainer):
     """
-    Trainer for Supervised Finetuning (SFT) method.
+    Trainer for Supervised Fine-Tuning (SFT) method.
 
     This class is a wrapper around the [`transformers.Trainer`] class and inherits all of its attributes and methods.
 
@@ -77,7 +77,7 @@ class SFTTrainer(Trainer):
     from datasets import load_dataset
     from trl import SFTTrainer
 
-    dataset = load_dataset("roneneldan/TinyStories", split="train")
+    dataset = load_dataset("roneneldan/TinyStories", split="train[:1%]")
 
     trainer = SFTTrainer(model="Qwen/Qwen2-0.5B-Instruct", train_dataset=dataset)
     trainer.train()
@@ -409,14 +409,21 @@ class SFTTrainer(Trainer):
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
             dataset = dataset.map(lambda ex: processing_class(ex[args.dataset_text_field]), **map_kwargs)
 
-            # Pack the dataset
+            # Pack or truncate
             if packing:
+                if args.max_seq_length is None:
+                    raise ValueError("When packing is enabled, `max_seq_length` can't be `None`.")
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
-                fn_kwargs = {"seq_length": args.max_seq_length or min(processing_class.model_max_length, 1024)}
                 dataset = dataset.select_columns("input_ids")
-                dataset = dataset.map(pack_examples, batched=True, fn_kwargs=fn_kwargs, **map_kwargs)
-
+                dataset = dataset.map(
+                    pack_examples, batched=True, fn_kwargs={"seq_length": args.max_seq_length}, **map_kwargs
+                )
+            elif args.max_seq_length is not None:
+                dataset = dataset.map(
+                    lambda ex: {key: ex[key][: args.max_seq_length] for key in ["input_ids", "attention_mask"]},
+                    **map_kwargs,
+                )
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger:
                 dataset = dataset.select_columns("input_ids")
