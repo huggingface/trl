@@ -1687,7 +1687,7 @@ def selective_log_softmax(logits, index):
             Index tensor of shape `(...)`, specifying the positions to gather from the log-softmax output.
 
     Returns:
-        `torch.Tensor`: 
+        `torch.Tensor`:
             Gathered log probabilities with the same shape as `index`.
     """
     if logits.dtype in [torch.float32, torch.float64]:
