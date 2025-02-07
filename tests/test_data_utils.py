@@ -42,7 +42,7 @@ class IsConversationalTester(unittest.TestCase):
         {  # Prompt only
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
         },
-        {  # Pompt-completion
+        {  # Prompt-completion
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
             "completion": [{"role": "assistant", "content": "It is blue."}],
         },
@@ -111,7 +111,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         {  # Prompt only
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
         },
-        {  # Pompt-completion
+        {  # Prompt-completion
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
             "completion": [{"role": "assistant", "content": "It is blue."}],
         },
@@ -154,7 +154,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         # Checking if the result is a dictionary
         self.assertIsInstance(result, dict)
 
-        # The chat template should be applied to the the following keys
+        # The chat template should be applied to the following keys
         for key in ["prompt", "chosen", "rejected", "completion"]:
             if key in example:
                 self.assertIn(key, result)
@@ -180,7 +180,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         # Checking if the result is a dictionary
         self.assertIsInstance(result, dict)
 
-        # The chat template should be applied to the the following keys
+        # The chat template should be applied to the following keys
         for key in ["prompt", "chosen", "rejected", "completion"]:
             if key in example:
                 self.assertIn(key, result)
