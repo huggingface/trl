@@ -366,7 +366,7 @@ class SFTTrainer(Trainer):
             dataset = dataset.map(
                 maybe_apply_chat_template,
                 fn_kwargs={"tokenizer": processing_class},
-                remove_columns="messages",
+                remove_columns="messages" if "messages" in dataset.column_names else None,  # renamed to "text"
                 **map_kwargs,
             )
 
