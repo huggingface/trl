@@ -78,7 +78,6 @@ class GKDTrainer(SFTTrainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
@@ -97,7 +96,6 @@ class GKDTrainer(SFTTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
@@ -157,6 +155,14 @@ class GKDTrainer(SFTTrainer):
             and self.model.generation_config.eos_token_id is not None
         ):
             self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
+
+    def _prepare_dataset(self, dataset, *args):
+        # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
+        # need to keep the messages column as it is. We use the following workaround to keep the messages column.
+        dataset = dataset.add_column("_messages", dataset["messages"])
+        dataset = super()._prepare_dataset(dataset, *args)
+        dataset = dataset.rename_column("_messages", "messages")
+        return dataset
 
     @staticmethod
     def generalized_jsd_loss(
