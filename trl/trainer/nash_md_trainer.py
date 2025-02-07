@@ -278,7 +278,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         def compute_logprobs_for_data(m, data):
             output = m(data["input_ids"], attention_mask=data["attention_mask"])
             logits = output.logits[:, context_length - 1 : -1]
-            token_logprobs = selective_log_softmax(logits, data["input_ids"][:, context_length])
+            token_logprobs = selective_log_softmax(logits, data["input_ids"][:, context_length:])
             return token_logprobs
 
         # Compute logprobs for model completions under the model
