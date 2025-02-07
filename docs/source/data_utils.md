@@ -27,3 +27,7 @@
 ## maybe_unpair_preference_dataset
 
 [[autodoc]] maybe_unpair_preference_dataset
+
+## pack_examples
+
+[[autodoc]] pack_examples
