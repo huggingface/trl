@@ -52,7 +52,7 @@ from transformers import (
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
-from ..core import extract_per_token_logprobs
+from ..core import selective_log_softmax
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .kto_config import KTOConfig
@@ -1035,7 +1035,7 @@ class KTOTrainer(Trainer):
         # dummy token; we'll ignore the losses on these tokens later
         labels[labels == label_pad_token_id] = 0
 
-        per_token_logps = extract_per_token_logprobs(logits, labels)
+        per_token_logps = selective_log_softmax(logits, labels)
 
         if average_log_prob:
             return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)

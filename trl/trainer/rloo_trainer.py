@@ -45,7 +45,7 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 
-from ..core import extract_per_token_logprobs
+from ..core import selective_log_softmax
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
     OnlineTrainerState,
@@ -331,14 +331,14 @@ class RLOOTrainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
-                    logprob = extract_per_token_logprobs(logits, response)
+                    logprob = selective_log_softmax(logits, response)
                     del logits
                     torch.cuda.empty_cache()
 
                     ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
-                    ref_logprob = extract_per_token_logprobs(ref_logits, response)
+                    ref_logprob = selective_log_softmax(ref_logits, response)
                     del ref_output, ref_logits
                     torch.cuda.empty_cache()
 
@@ -466,7 +466,7 @@ class RLOOTrainer(Trainer):
                             logits /= args.temperature + 1e-7
 
                             # Compute new logprobs
-                            new_logprobs = extract_per_token_logprobs(logits, mb_responses)
+                            new_logprobs = selective_log_softmax(logits, mb_responses)
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )

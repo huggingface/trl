@@ -16,7 +16,7 @@ import unittest
 
 import torch
 
-from trl.core import extract_per_token_logprobs, masked_mean, masked_var, masked_whiten
+from trl.core import masked_mean, masked_var, masked_whiten, selective_log_softmax
 
 
 class CoreTester(unittest.TestCase):
@@ -57,8 +57,10 @@ class CoreTester(unittest.TestCase):
                 input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len), device="cuda")
                 logits = torch.randn(batch_size, seq_len, vocab_size, device="cuda", dtype=dtype)
 
-                expected_output = extract_per_token_logprobs(logits=logits, input_ids=input_ids)
-                actual_output = extract_per_token_logprobs(logits=logits, input_ids=input_ids)
+                expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(
+                    -1
+                )
+                actual_output = selective_log_softmax(logits=logits, input_ids=input_ids)
 
                 if dtype in [torch.float16, torch.bfloat16]:
                     # float16 falls back to an exact method

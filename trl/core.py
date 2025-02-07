@@ -160,7 +160,7 @@ def randn_tensor(
     return latents
 
 
-def extract_per_token_logprobs(logits, input_ids):
+def selective_log_softmax(logits, input_ids):
     """
     A memory efficient implementation of a common log_softmax -> gather operation.
     Equivalent to the following naive implementation:

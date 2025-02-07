@@ -51,7 +51,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
-from ..core import extract_per_token_logprobs
+from ..core import selective_log_softmax
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper
 from .orpo_config import ORPOConfig
@@ -719,7 +719,7 @@ class ORPOTrainer(Trainer):
         # dummy token; we'll ignore the losses on these tokens later
         labels = torch.where(labels == label_pad_token_id, 0, labels)
 
-        per_token_logps = extract_per_token_logprobs(logits, labels)
+        per_token_logps = selective_log_softmax(logits, labels)
 
         if average_log_prob:
             return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)

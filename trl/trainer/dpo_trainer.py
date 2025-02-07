@@ -53,7 +53,7 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_xpu_available
 from transformers.utils.deprecation import deprecate_kwarg
 
-from ..core import extract_per_token_logprobs
+from ..core import selective_log_softmax
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .callbacks import SyncRefModelCallback
@@ -1214,7 +1214,7 @@ class DPOTrainer(Trainer):
 
         # Compute the log probabilities of the labels
         labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
-        per_token_logps = extract_per_token_logprobs(logits, labels)
+        per_token_logps = selective_log_softmax(logits, labels)
         per_token_logps[~loss_mask] = 0
         per_token_logps = torch.roll(per_token_logps, shifts=1, dims=1)
 

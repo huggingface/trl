@@ -47,7 +47,7 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import is_peft_available
 
-from ..core import extract_per_token_logprobs, masked_mean, masked_whiten
+from ..core import masked_mean, masked_whiten, selective_log_softmax
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .ppo_config import PPOConfig
@@ -429,7 +429,7 @@ class PPOTrainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
-                    logprob = extract_per_token_logprobs(logits, response)
+                    logprob = selective_log_softmax(logits, response)
                     del logits
                     torch.cuda.empty_cache()
 
@@ -440,7 +440,7 @@ class PPOTrainer(Trainer):
                         ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
-                    ref_logprob = extract_per_token_logprobs(ref_logits, response)
+                    ref_logprob = selective_log_softmax(ref_logits, response)
                     del ref_output, ref_logits
                     torch.cuda.empty_cache()
 
@@ -547,7 +547,7 @@ class PPOTrainer(Trainer):
                             output, vpred_temp = forward(model, mb_query_responses, processing_class.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
                             logits /= args.temperature + 1e-7
-                            new_logprobs = extract_per_token_logprobs(logits, mb_responses)
+                            new_logprobs = selective_log_softmax(logits, mb_responses)
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )

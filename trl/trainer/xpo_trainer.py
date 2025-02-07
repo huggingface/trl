@@ -34,7 +34,7 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 
-from ..core import extract_per_token_logprobs
+from ..core import selective_log_softmax
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
@@ -275,7 +275,7 @@ class XPOTrainer(OnlineDPOTrainer):
         def compute_logprobs_for_data(m, data):
             output = m(data["input_ids"], attention_mask=data["attention_mask"])
             logits = output.logits[:, context_length - 1 : -1]
-            token_logprobs = extract_per_token_logprobs(logits, data["input_ids"][:, context_length:])
+            token_logprobs = selective_log_softmax(logits, data["input_ids"][:, context_length:])
             return token_logprobs
 
         # Compute logprobs for model completions
