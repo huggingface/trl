@@ -16,15 +16,18 @@ import dataclasses
 import inspect
 import os
 import warnings
+from collections import defaultdict
 from typing import Callable, Optional, Union
 
 import datasets
 import torch
 import torch.nn as nn
+import transformers
 from accelerate.state import PartialState
 from datasets import Dataset
 from datasets.arrow_writer import SchemaInferenceError
 from datasets.builder import DatasetGenerationError
+from packaging import version
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -48,6 +51,7 @@ from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
     DataCollatorForCompletionOnlyLM,
+    compute_token_accuracy,
     generate_model_card,
     get_comet_experiment_url,
     peft_module_casting_to_bf16,
@@ -304,6 +308,9 @@ class SFTTrainer(Trainer):
                 UserWarning,
             )
 
+        # Initialize the metrics
+        self._metrics = defaultdict(list)
+
         super().__init__(
             model=model,
             args=args,
@@ -546,3 +553,42 @@ class SFTTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """
+        Compute training loss and additionally compute token accuracies
+        """
+        (loss, outputs) = super().compute_loss(
+            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+        )
+
+        # Compute token accuracy if we have labels
+        if "labels" in inputs:
+            shift_logits = outputs.logits[..., :-1, :].contiguous()
+            shift_labels = inputs["labels"][..., 1:].contiguous()
+
+            # Gather logits and labels from all GPUs first
+            shift_logits = self.accelerator.gather_for_metrics(shift_logits)
+            shift_labels = self.accelerator.gather_for_metrics(shift_labels)
+
+            # Then compute accuracy on the gathered tensors
+            if self.accelerator.is_main_process:
+                accuracy = compute_token_accuracy(shift_logits, shift_labels)
+                self._metrics["mean_token_accuracy"].append(accuracy)
+
+        return (loss, outputs) if return_outputs else loss
+
+    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        if next(iter(logs.keys())).startswith("eval_"):
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs = {**logs, **metrics}
+        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
+            super().log(logs, start_time)
+        else:  # transformers<=4.46
+            super().log(logs)
+        self._metrics.clear()
