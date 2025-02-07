@@ -16,7 +16,7 @@ import unittest
 
 import torch
 
-from trl.core import masked_mean, masked_var, masked_whiten, selective_log_softmax
+from trl.core import masked_mean, masked_var, masked_whiten
 
 
 class CoreTester(unittest.TestCase):
@@ -44,25 +44,3 @@ class CoreTester(unittest.TestCase):
         whiten_masked = masked_whiten(self.test_input, self.test_mask)[1:3]
         diffs = (whiten_unmasked - whiten_masked).sum()
         self.assertLess(abs(diffs.item()), 0.00001)
-
-    def test_selective_log_softmax(self):
-        dtypes = [torch.float64, torch.float32, torch.float16, torch.bfloat16]
-        vocab_size = 32768
-        batch_size = 4
-        seq_len = 256
-
-        for dtype in dtypes:
-            with self.subTest(dtype=dtype):
-                input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len), device="cuda")
-                logits = torch.randn(batch_size, seq_len, vocab_size, device="cuda", dtype=dtype)
-
-                expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(
-                    -1
-                )
-                actual_output = selective_log_softmax(logits=logits, input_ids=input_ids)
-
-                if dtype in [torch.float16, torch.bfloat16]:
-                    # float16 falls back to an exact method
-                    self.assertTrue(torch.equal(actual_output, expected_output))
-                else:
-                    torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)

@@ -34,7 +34,6 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 
-from ..core import selective_log_softmax
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
@@ -46,6 +45,7 @@ from .utils import (
     get_comet_experiment_url,
     get_reward,
     truncate_right,
+    selective_log_softmax
 )
 from .xpo_config import XPOConfig
 

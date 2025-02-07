@@ -46,7 +46,7 @@ from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import is_peft_available
 
-from ..core import masked_mean, masked_whiten, selective_log_softmax
+from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .ppo_config import PPOConfig
@@ -65,6 +65,7 @@ from .utils import (
     prepare_deepspeed,
     print_rich_table,
     truncate_response,
+    selective_log_softmax
 )
 
 

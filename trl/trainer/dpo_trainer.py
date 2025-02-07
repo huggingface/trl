@@ -53,7 +53,6 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_xpu_available
 from transformers.utils.deprecation import deprecate_kwarg
 
-from ..core import selective_log_softmax
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .callbacks import SyncRefModelCallback
@@ -70,6 +69,7 @@ from .utils import (
     pad,
     pad_to_length,
     peft_module_casting_to_bf16,
+    selective_log_softmax
 )
 
 

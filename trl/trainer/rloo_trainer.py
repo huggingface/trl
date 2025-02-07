@@ -44,7 +44,6 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 
-from ..core import selective_log_softmax
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
     OnlineTrainerState,
@@ -57,6 +56,7 @@ from ..trainer.utils import (
     prepare_deepspeed,
     print_rich_table,
     truncate_response,
+    selective_log_softmax
 )
 from .rloo_config import RLOOConfig
 from .utils import generate_model_card, get_comet_experiment_url, log_table_to_comet_experiment
