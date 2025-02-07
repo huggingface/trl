@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
+import inspect
 import os
 import warnings
 from collections import defaultdict
@@ -44,11 +46,17 @@ from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, pack_examples
 from .sft_config import SFTConfig
-from .utils import ConstantLengthDataset, compute_token_accuracy, generate_model_card, get_comet_experiment_url
+from .utils import (
+    ConstantLengthDataset,
+    compute_token_accuracy,
+    generate_model_card,
+    get_comet_experiment_url,
+    peft_module_casting_to_bf16,
+)
 
 
 if is_peft_available():
-    from peft import PeftConfig, get_peft_model
+    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
@@ -133,47 +141,18 @@ class SFTTrainer(Trainer):
             dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
-        # 1. Handle the model
+        # 1. Handle model initialization from string
         if args.model_init_kwargs is not None and not isinstance(model, str):
             warnings.warn(
                 "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
                 "The `model_init_kwargs` will be ignored."
             )
-
         if isinstance(model, str):
-            # `model` is a model id. We need to instantiate the model.
-            model_init_kwargs = args.model_init_kwargs or {}
+            model = self._create_model_from_path(model, args)
 
-            # Get the torch dtype from the model_init_kwargs
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
-                # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
-                    raise ValueError(
-                        "Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` "
-                        f"or 'auto', but got {torch_dtype}."
-                    )
-                model_init_kwargs["torch_dtype"] = torch_dtype
-
-            # Create the model
-            if args.use_liger:
-                model = AutoLigerKernelForCausalLM.from_pretrained(model, **model_init_kwargs)
-            else:
-                model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
-
-        # 2. Convert the model to a PeftModel if a PeftConfig is passed
+        # 2. Handle PEFT configuration and model wrapping
         if peft_config is not None:
-            if not is_peft_available():
-                raise ImportError("To use the PeftModel, you need to install the `peft` library.")
-
-            model = get_peft_model(model, peft_config)
-
-            gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
-            use_reentrant = gradient_checkpointing_kwargs.get("use_reentrant", True)
-            if args.gradient_checkpointing and use_reentrant:
-                model.enable_input_require_grads()
+            model = self._prepare_peft_model(model, peft_config, args)
 
         # 3. Handle the tokenizer
         if processing_class is None:
@@ -203,8 +182,15 @@ class SFTTrainer(Trainer):
         if data_collator is None:
             data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
-        # 6. Call the parent class constructor
-        # Some arguments are only available for transformers>=4.47.0. Can be removed when the min version is bumped.
+        # 6. Initialize the metrics dictionary
+        self._metrics = defaultdict(list)
+
+        # 7. Call the parent class constructor which handles:
+        # - DeepSpeed configuration (through create_accelerator_and_postprocess)
+        # - FSDP setup
+        # - Distributed training setup
+        # - Optimizer and scheduler creation
+        # Note: some arguments are only available for transformers>=4.47.0. Can be removed when the min version is bumped.
         super_init_kwargs = {}
         if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
             super_init_kwargs["optimizer_cls_and_kwargs"] = optimizer_cls_and_kwargs
@@ -215,10 +201,6 @@ class SFTTrainer(Trainer):
                     "The default optimizer will be used. "
                     "Remove the `optimizer_cls_and_kwargs` or upgrade to `transformers>=4.47.0`."
                 )
-
-        # Initialize the metrics
-        self._metrics = defaultdict(list)
-
         super().__init__(
             model=model,
             args=args,
@@ -238,6 +220,105 @@ class SFTTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
+
+    def _create_model_from_path(self, model_path: str, args: SFTConfig) -> PreTrainedModel:
+        """Creates a model from a path or model identifier."""
+        model_init_kwargs = args.model_init_kwargs or {}
+
+        # Handle torch dtype
+        torch_dtype = model_init_kwargs.get("torch_dtype")
+        if torch_dtype is not None:
+            if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                torch_dtype = getattr(torch, torch_dtype)
+            if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                raise ValueError(
+                    f"Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                )
+            model_init_kwargs["torch_dtype"] = torch_dtype
+
+        # Create model
+        if args.use_liger:
+            if not is_liger_kernel_available():
+                raise ImportError("Please install Liger-kernel for use_liger=True")
+            return AutoLigerKernelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+        return AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+
+    def _prepare_peft_model(self, model: PreTrainedModel, peft_config: Any, args: SFTConfig) -> PreTrainedModel:
+        """Prepares a model for PEFT training."""
+        if not is_peft_available():
+            raise ImportError("To use PeftModel, you need to install the `peft` library.")
+
+        if not isinstance(peft_config, PeftConfig):
+            raise ValueError(
+                f"Expected PeftConfig object but got {type(peft_config)}. "
+                "If you want to use the PeftModel, you need to pass a PeftConfig object to the SFTTrainer."
+            )
+
+        if isinstance(model, PeftModel):
+            return model
+
+        # Handle quantized models (QLoRA)
+        is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
+        is_sharded_qlora = False
+
+        if getattr(model, "is_loaded_in_4bit", False):
+            # Check if model is sharded (FSDP/DS-Zero3)
+            for _, param in model.named_parameters():
+                if param.__class__.__name__ == "Params4bit":
+                    is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
+                    break
+
+        # Prepare model for kbit training if needed
+        if is_qlora and not is_sharded_qlora:
+            model = self._prepare_model_for_kbit_training(model, args)
+            # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
+            args = dataclasses.replace(args, gradient_checkpointing=False)
+        elif args.gradient_checkpointing:
+            model = self._enable_gradient_checkpointing(model, args)
+
+        # Create PEFT model
+        if (
+            "autocast_adapter_dtype" in inspect.signature(get_peft_model).parameters
+            and getattr(model, "is_loaded_in_4bit", False)
+            and is_sharded_qlora
+        ):
+            model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
+        else:
+            model = get_peft_model(model, peft_config)
+
+        # Handle bf16 casting for 4-bit models
+        if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
+            peft_module_casting_to_bf16(model)
+
+        return model
+
+    def _prepare_model_for_kbit_training(self, model: PreTrainedModel, args: SFTConfig) -> PreTrainedModel:
+        """Prepares a quantized model for kbit training."""
+        prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+
+        if hasattr(args, "gradient_checkpointing_kwargs"):
+            prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs or {}
+
+        return prepare_model_for_kbit_training(model, **prepare_model_kwargs)
+
+    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: SFTConfig) -> PreTrainedModel:
+        """Enables gradient checkpointing for the model."""
+        gradient_checkpointing_kwargs = getattr(args, "gradient_checkpointing_kwargs", {}) or {}
+        use_reentrant = (
+            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
+        )
+
+        if use_reentrant:
+            if hasattr(model, "enable_input_require_grads"):
+                model.enable_input_require_grads()
+            else:
+
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+
+                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        return model
 
     def _prepare_dataset(
         self,
