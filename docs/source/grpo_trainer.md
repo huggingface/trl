@@ -234,20 +234,7 @@ trainer = GRPOTrainer(
     ...,
 )
 ```
-
-and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided:
-
-```python
-from trl import GRPOTrainer
-
-trainer = GRPOTrainer(
-    reward_funcs=[reward_func1, reward_func2],
-    reward_weights=[1, 2]
-    ...,
-)
-```
-
-Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
 
 ## GRPOTrainer
 

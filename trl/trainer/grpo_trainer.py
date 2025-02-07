@@ -101,9 +101,6 @@ class GRPOTrainer(Trainer):
                   [Using a custom reward function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
-        reward_weights (`list[Union[float, int]]`, *optional*, defaults to `None`):
-            Weights for each reward function. Must match the number of reward functions. Can be integers or floats 
-            (e.g., [1, 2] or [0.5, 1.5]). If None, all rewards are weighted equally with weight 1.0.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -146,7 +143,6 @@ class GRPOTrainer(Trainer):
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        reward_weights: Optional[list[Union[float, int]]] = None,
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
@@ -220,10 +216,10 @@ class GRPOTrainer(Trainer):
         self.reward_funcs = reward_funcs
 
         # Reward weights
-        if reward_weights is not None:
-            if len(reward_weights) != len(reward_funcs):
+        if args.reward_weights is not None:
+            if len(args.reward_weights) != len(reward_funcs):
                 raise ValueError("Number of reward weights must match number of reward functions.")
-            self.reward_weights = torch.tensor(reward_weights, dtype=torch.float32)
+            self.reward_weights = torch.tensor(args.reward_weights, dtype=torch.float32)
         else:
             self.reward_weights = torch.ones(len(reward_funcs), dtype=torch.float32)
 

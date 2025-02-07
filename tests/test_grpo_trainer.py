@@ -269,11 +269,6 @@ class GRPOTrainerTester(unittest.TestCase):
             """Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
-        reward_weights = [
-            0.7,    # weight of reward_func1
-            0.3     # weight of reward_func2
-        ]        
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
@@ -282,11 +277,11 @@ class GRPOTrainerTester(unittest.TestCase):
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
+                reward_weights=[0.7, 0.3],  # weight of reward_func1 and reward_func2 respectively
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs=[reward_func1, reward_func2],
-                reward_weights=reward_weights, 
                 args=training_args,
                 train_dataset=dataset,
             )
