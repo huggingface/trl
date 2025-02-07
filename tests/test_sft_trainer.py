@@ -327,7 +327,6 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
-                num_of_sequences=32,
                 packing=True,
                 report_to="none",
             )
@@ -463,7 +462,6 @@ class SFTTrainerTester(unittest.TestCase):
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
                 max_seq_length=16,
-                num_of_sequences=16,
                 packing=True,
                 report_to="none",
             )
@@ -537,7 +535,6 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 max_seq_length=16,
-                num_of_sequences=16,
                 packing=True,
                 report_to="none",
             )
@@ -562,7 +559,6 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 max_seq_length=16,
-                num_of_sequences=16,
                 packing=True,
                 report_to="none",
             )
