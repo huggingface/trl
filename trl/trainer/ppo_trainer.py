@@ -25,7 +25,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
@@ -197,9 +196,9 @@ class PPOTrainer(Trainer):
             args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
         if args.whiten_rewards:
-            assert args.local_mini_batch_size >= 8, (
-                f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
-            )
+            assert (
+                args.local_mini_batch_size >= 8
+            ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
         # `per_rank_rollout_batch_size` is our `args.local_batch_size`
         # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
         args.num_total_batches = math.ceil(
