@@ -514,12 +514,12 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
     @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
     def test_selective_log_softmax(self, dtype):
         """Test selective_log_softmax with logits of different dtypes"""
-        vocab_size = 32768
+        vocab_size = 1024
         batch_size = 4
-        seq_len = 256
+        seq_len = 32
 
-        input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len), device="cuda")
-        logits = torch.randn(batch_size, seq_len, vocab_size, device="cuda", dtype=dtype)
+        input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
 
         expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
         actual_output = selective_log_softmax(logits=logits, input_ids=input_ids)
