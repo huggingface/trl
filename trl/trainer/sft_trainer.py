@@ -382,6 +382,9 @@ class SFTTrainer(Trainer):
                 fn_kwargs = {"seq_length": args.max_seq_length or min(processing_class.model_max_length, 1024)}
                 dataset = dataset.select_columns(["input_ids"])
                 dataset = dataset.map(pack_examples, batched=True, fn_kwargs=fn_kwargs, **map_kwargs)
+            elif args.use_liger:
+                # For Liger kernel, ensure only input_ids is present
+                dataset = dataset.select_columns(["input_ids"])
 
         return dataset
 
