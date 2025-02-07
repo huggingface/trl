@@ -535,16 +535,11 @@ class GRPOTrainer(Trainer):
                     )
 
         # Decode the generated completions
-        completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-
-        # For logging
-        table = defaultdict(list)
-        table["step"] = [str(self.state.global_step)] * len(gather_object(prompts_text))
-        table["prompt"].extend(gather_object(prompts_text))
-        table["completion"].extend(gather_object(completions))
-
+        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
-            completions = [[{"role": "assistant", "content": completion}] for completion in completions]
+            completions = [[{"role": "assistant", "content": completion}] for completion in completions_text]
+        else:
+            completions = completions_text
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
         for i, (reward_func, reward_processing_class) in enumerate(
@@ -605,17 +600,22 @@ class GRPOTrainer(Trainer):
         self._metrics["reward_std"].append(std_grouped_rewards.mean().item())
 
         if (
-            self.accelerator.is_main_process
-            and self.log_completions
+            self.log_completions
             and self.state.global_step % self.args.logging_steps == 0
             and "wandb" in self.args.report_to
         ):
             import pandas as pd
 
-            table["reward"] = rewards.tolist()
+            # For logging
+            table = {
+                "step": [str(self.state.global_step)] * len(rewards),
+                "prompt": gather_object(prompts_text),
+                "completion": gather_object(completions_text),
+                "reward": rewards.tolist(),
+            }
             df = pd.DataFrame(table)
 
-            if wandb.run is not None:
+            if wandb.run is not None and self.accelerator.is_main_process:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
