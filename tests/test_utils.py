@@ -17,10 +17,10 @@ import unittest
 import numpy as np
 import torch
 from datasets import load_dataset
+from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
-from parameterized import parameterized
 
 from trl import ModelConfig
 from trl.trainer import compute_accuracy
@@ -33,7 +33,7 @@ from trl.trainer.utils import (
     generate_model_card,
     get_peft_config,
     pad,
-    selective_log_softmax
+    selective_log_softmax,
 )
 
 
@@ -510,14 +510,8 @@ class TestComputeTokenAccuracy(unittest.TestCase):
         self.assertAlmostEqual(accuracy, 0.8)
 
 
-
 class TestSelectiveLogSoftmax(unittest.TestCase):
-    @parameterized.expand([
-        (torch.float64,),
-        (torch.float32,),
-        (torch.float16,),
-        (torch.bfloat16,)
-    ])
+    @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
     def test_selective_log_softmax(self, dtype):
         """Test selective_log_softmax with logits of different dtypes"""
         vocab_size = 32768
@@ -527,9 +521,7 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
         input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len), device="cuda")
         logits = torch.randn(batch_size, seq_len, vocab_size, device="cuda", dtype=dtype)
 
-        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(
-            -1
-        )
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
         actual_output = selective_log_softmax(logits=logits, input_ids=input_ids)
 
         if dtype in [torch.float16, torch.bfloat16]:

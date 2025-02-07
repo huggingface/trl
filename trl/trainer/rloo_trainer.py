@@ -55,8 +55,8 @@ from ..trainer.utils import (
     get_reward,
     prepare_deepspeed,
     print_rich_table,
+    selective_log_softmax,
     truncate_response,
-    selective_log_softmax
 )
 from .rloo_config import RLOOConfig
 from .utils import generate_model_card, get_comet_experiment_url, log_table_to_comet_experiment

@@ -46,8 +46,8 @@ from .utils import (
     generate_model_card,
     get_comet_experiment_url,
     get_reward,
+    selective_log_softmax,
     truncate_right,
-    selective_log_softmax
 )
 
 

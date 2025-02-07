@@ -20,7 +20,6 @@ from typing import Optional, Union
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from transformers import is_torch_npu_available, is_torch_xpu_available
 
 

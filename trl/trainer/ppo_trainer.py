@@ -64,8 +64,8 @@ from .utils import (
     peft_module_casting_to_bf16,
     prepare_deepspeed,
     print_rich_table,
+    selective_log_softmax,
     truncate_response,
-    selective_log_softmax
 )
 
 
