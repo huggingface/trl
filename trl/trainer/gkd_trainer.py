@@ -158,6 +158,14 @@ class GKDTrainer(SFTTrainer):
         ):
             self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
 
+    def _prepare_dataset(self, dataset, *args):
+        # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
+        # need to keep the messages column as it is. We use the following workaround to keep the messages column.
+        dataset = dataset.add_column("_messages", dataset["messages"])
+        dataset = super()._prepare_dataset(dataset, *args)
+        dataset = dataset.rename_column("_messages", "messages")
+        return dataset
+
     @staticmethod
     def generalized_jsd_loss(
         student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
