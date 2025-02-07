@@ -99,6 +99,11 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
+
+        > Parameters that control the logging
+
+        log_completions (`bool`, *optional*, defaults to `False`):
+            Whether to log the completions during training.
     """
 
     # Parameters that control the model and reference model
@@ -226,4 +231,10 @@ class GRPOConfig(TrainingArguments):
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
+    )
+
+    # Parameters that control the logging
+    log_completions: bool = field(
+        default=False,
+        metadata={"help": "Whether to log the completions during training."},
     )
