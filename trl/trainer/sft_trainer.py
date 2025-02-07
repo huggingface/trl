@@ -44,7 +44,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
-from ..data_utils import maybe_apply_chat_template, pack_examples
+from ..data_utils import is_conversational, maybe_apply_chat_template, pack_examples
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -353,25 +353,28 @@ class SFTTrainer(Trainer):
 
             # If the dataset is prompt-completion, convert it to language modeling type
             if "prompt" in dataset.column_names and "completion" in dataset.column_names:
+                key = "messages" if is_conversational(dataset[0]) else "text"
 
                 def concat_prompt_completion(example):
-                    return {"text": example["prompt"] + example["completion"]}
+                    return {key: example["prompt"] + example["completion"]}
 
                 dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
-            dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
+            dataset = dataset.map(
+                maybe_apply_chat_template,
+                fn_kwargs={"tokenizer": processing_class},
+                remove_columns="messages",
+                **map_kwargs,
+            )
 
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
-            dataset = dataset.map(
-                lambda ex: processing_class(ex[args.dataset_text_field]),
-                remove_columns=dataset.column_names,
-                **map_kwargs,
-            )
+            dataset = dataset.map(lambda ex: processing_class(ex[args.dataset_text_field]), **map_kwargs)
+
             # Pack the dataset
             if packing:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
