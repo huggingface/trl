@@ -612,8 +612,6 @@ class GRPOTrainer(Trainer):
         ):
             import pandas as pd
 
-            import wandb
-
             table["reward"] = rewards.tolist()
             df = pd.DataFrame(table)
 
