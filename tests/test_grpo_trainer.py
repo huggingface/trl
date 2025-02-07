@@ -49,7 +49,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -78,8 +78,8 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
-                per_device_eval_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 eval_strategy="steps",
@@ -106,7 +106,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -149,7 +149,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -185,7 +185,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -221,7 +221,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -260,7 +260,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -295,7 +295,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -334,7 +334,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -367,7 +367,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -400,7 +400,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 torch_compile=True,
@@ -431,7 +431,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 sync_ref_model=True,
