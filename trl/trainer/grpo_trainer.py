@@ -69,7 +69,6 @@ class GRPOTrainer(Trainer):
     trainer = GRPOTrainer(
         model="Qwen/Qwen2-0.5B-Instruct",
         reward_funcs=["weqweasdas/RM-Gemma-2B", custom_reward_func],
-        reward_weights=[2, 1],
         train_dataset=dataset,
     )
 
