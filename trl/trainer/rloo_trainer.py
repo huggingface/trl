@@ -24,7 +24,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
@@ -56,6 +55,7 @@ from ..trainer.utils import (
     get_reward,
     prepare_deepspeed,
     print_rich_table,
+    selective_log_softmax,
     truncate_response,
 )
 from .rloo_config import RLOOConfig
@@ -330,17 +330,15 @@ class RLOOTrainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
-                    all_logprob = F.log_softmax(logits, dim=-1)
-                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del logits, all_logprob
+                    logprob = selective_log_softmax(logits, response)
+                    del logits
                     torch.cuda.empty_cache()
 
                     ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
-                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del ref_output, ref_logits, ref_all_logprob
+                    ref_logprob = selective_log_softmax(ref_logits, response)
+                    del ref_output, ref_logits
                     torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
@@ -467,8 +465,7 @@ class RLOOTrainer(Trainer):
                             logits /= args.temperature + 1e-7
 
                             # Compute new logprobs
-                            new_all_logprobs = F.log_softmax(logits, dim=-1)
-                            new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
+                            new_logprobs = selective_log_softmax(logits, mb_responses)
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
@@ -512,9 +509,8 @@ class RLOOTrainer(Trainer):
                     # del everything and empty cache
                     # fmt: off
                     del (
-                        output, logits, new_all_logprobs, new_logprobs,
-                        logprobs_diff, ratio, pg_losses, pg_losses2,
-                        pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
+                        output, logits, new_logprobs, logprobs_diff, ratio, pg_losses,
+                        pg_losses2, pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
                         mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
                     )
                     # fmt: on

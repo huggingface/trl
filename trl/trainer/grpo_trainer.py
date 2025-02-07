@@ -47,7 +47,7 @@ from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad
+from .utils import generate_model_card, get_comet_experiment_url, pad, selective_log_softmax
 
 
 if is_peft_available():
@@ -442,12 +442,7 @@ class GRPOTrainer(Trainer):
         # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
         # See https://github.com/huggingface/trl/issues/2770
         logits = logits[:, -logits_to_keep:]
-
-        # Compute the log probabilities for the input tokens.
-        token_logits = logits.gather(dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
-        logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])  # loop to reduce memory peak
-        token_log_probs = token_logits - logsumexp_values  # log_softmax = logits - log(sum(exp(logits)))
-        return token_log_probs
+        return selective_log_softmax(logits, input_ids)  #  compute logprobs for the input tokens
 
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
