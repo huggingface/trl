@@ -45,6 +45,7 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 
+from ..core import extract_per_token_logprobs
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
     OnlineTrainerState,
@@ -330,17 +331,15 @@ class RLOOTrainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
-                    all_logprob = F.log_softmax(logits, dim=-1)
-                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del logits, all_logprob
+                    logprob = extract_per_token_logprobs(logits, response)
+                    del logits
                     torch.cuda.empty_cache()
 
                     ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
-                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del ref_output, ref_logits, ref_all_logprob
+                    ref_logprob = extract_per_token_logprobs(ref_logits, response)
+                    del ref_output, ref_logits
                     torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
@@ -467,8 +466,7 @@ class RLOOTrainer(Trainer):
                             logits /= args.temperature + 1e-7
 
                             # Compute new logprobs
-                            new_all_logprobs = F.log_softmax(logits, dim=-1)
-                            new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
+                            new_logprobs = extract_per_token_logprobs(logits, mb_responses)
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
@@ -512,9 +510,8 @@ class RLOOTrainer(Trainer):
                     # del everything and empty cache
                     # fmt: off
                     del (
-                        output, logits, new_all_logprobs, new_logprobs,
-                        logprobs_diff, ratio, pg_losses, pg_losses2,
-                        pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
+                        output, logits, new_logprobs, logprobs_diff, ratio, pg_losses,
+                        pg_losses2, pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
                         mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
                     )
                     # fmt: on

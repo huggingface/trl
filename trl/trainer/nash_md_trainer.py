@@ -34,6 +34,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_apex_available
 
+from ..core import extract_per_token_logprobs
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
 from ..models.utils import unwrap_model_for_generation
@@ -277,8 +278,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         def compute_logprobs_for_data(m, data):
             output = m(data["input_ids"], attention_mask=data["attention_mask"])
             logits = output.logits[:, context_length - 1 : -1]
-            logprobs = F.log_softmax(logits, dim=-1)
-            token_logprobs = torch.gather(logprobs, 2, data["input_ids"][:, context_length:].unsqueeze(-1)).squeeze(-1)
+            token_logprobs = extract_per_token_logprobs(logits, data["input_ids"][:, context_length])
             return token_logprobs
 
         # Compute logprobs for model completions under the model

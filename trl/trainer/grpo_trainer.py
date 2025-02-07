@@ -42,6 +42,7 @@ from transformers import (
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
+from ..core import extract_per_token_logprobs
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
@@ -442,12 +443,7 @@ class GRPOTrainer(Trainer):
         # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
         # See https://github.com/huggingface/trl/issues/2770
         logits = logits[:, -logits_to_keep:]
-
-        # Compute the log probabilities for the input tokens.
-        token_logits = logits.gather(dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
-        logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])  # loop to reduce memory peak
-        token_log_probs = token_logits - logsumexp_values  # log_softmax = logits - log(sum(exp(logits)))
-        return token_log_probs
+        return extract_per_token_logprobs(logits, input_ids)  #  compute logprobs for the input tokens
 
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
