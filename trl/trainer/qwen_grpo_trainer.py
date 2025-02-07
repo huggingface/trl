@@ -21,6 +21,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 from unittest.mock import patch
+import copy
 
 import torch
 import torch.utils.data
@@ -36,7 +37,9 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Qwen2_5_VLForConditionalGeneration,
+    Qwen2VLForConditionalGeneration,
     Qwen2_5_VLProcessor,
+    Qwen2VLProcessor,
     Trainer,
     TrainerCallback,
     is_wandb_available,
@@ -234,9 +237,9 @@ class QwenGRPOTrainer(Trainer):
         # Models
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
-        if not isinstance(model, Qwen2_5_VLForConditionalGeneration):
+        if not isinstance(model, Qwen2_5_VLForConditionalGeneration) and not isinstance(model, Qwen2VLForConditionalGeneration):
             raise ValueError(
-                "QwenGRPOTrainer does not support loading from a model ID. Please pass `model` as a `PreTrainedModel` object."
+                "QwenGRPOTrainer only support passing a Qwen2_5_VLForConditionalGeneration or Qwen2VLForConditionalGeneration object as the `model` argument."
             )
         else:
             model_id = model.config._name_or_path
@@ -267,8 +270,8 @@ class QwenGRPOTrainer(Trainer):
             self.ref_model = None
 
         # Processing class
-        if not isinstance(processing_class, Qwen2_5_VLProcessor):
-            raise ValueError("`processing_class` must be a `Qwen2_5_VLProcessor` object.")
+        if not isinstance(processing_class, Qwen2_5_VLProcessor) and not isinstance(processing_class, Qwen2VLProcessor):
+            raise ValueError("`processing_class` must be a `Qwen2_5_VLProcessor` or `Qwen2VLProcessor` object.")
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -438,34 +441,18 @@ class QwenGRPOTrainer(Trainer):
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         return inputs
 
-    def _generate_completions(
-        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor], num_generations: int | None = None
+    def _generate_completion(
+        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]
     ) -> torch.Tensor:
         """Generate completion(s) using the model."""
-        if num_generations is not None:
-            self.generation_config.num_return_sequences = num_generations
+        temp_generation_config = copy.deepcopy(self.generation_config)
+        temp_generation_config.num_return_sequences = 1
         prompt_completion_ids = model.generate(
                 **prompt_inputs,
-                generation_config=self.generation_config,
+                generation_config=temp_generation_config,
                 tokenizer=self.processing_class.tokenizer,
         )
         return prompt_completion_ids
-
-    def _generate_completions_with_tools(
-        self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor]
-    ) -> torch.Tensor:
-        """Generate the full set of completions with tools, and stitch them together.
-        """
-        out = []
-        for _ in range(self.num_generations):
-            out.append(self._generate_single_completion_with_tools(model, prompt_inputs))
-        # Now we have a ragged list of tensors. We need to pad them to the same length.
-        max_length = max(completion.size(1) for completion in out)
-        for i in range(len(out)):
-            padding = torch.zeros(1, max_length - out[i].size(1), dtype=torch.long, device=out[i].device)
-            out[i] = torch.cat([out[i], padding], dim=1)
-        final = torch.cat(out, dim=0)
-        return final
 
     def _generate_single_completion_with_tools(
         self, model: PreTrainedModel, prompt_inputs: dict[str, torch.Tensor], max_steps: int = 10
@@ -489,7 +476,7 @@ class QwenGRPOTrainer(Trainer):
                 for key, val in prompt_inputs.items():
                     print(f"{key}: {val.shape}")
                 print(f"Text of the prompt: {self.processing_class.decode(prompt_inputs['input_ids'][0])}")
-            prompt_completion_ids = self._generate_completions(model, prompt_inputs, num_generations=1)
+            prompt_completion_ids = self._generate_completion(model, prompt_inputs)
             # prompt_completion_ids is a tensor of shape (1, L) Because we only generated one completion.
             # Note that L includes both the prompt and the response.
             # We only want to process the response, so we'll strip the prompt.
@@ -556,41 +543,62 @@ class QwenGRPOTrainer(Trainer):
         else:
             # Regular generation path (not using vLLM)
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                if self.tool_defn:
-                    prompt_completion_ids = self._generate_completions_with_tools(unwrapped_model, prompt_inputs)
-                else:
-                    prompt_completion_ids = self._generate_completions(unwrapped_model, prompt_inputs)
+                # Generate N times, each generate one with the temp_generation_config
+                num_generations = self.generation_config.num_return_sequences
+
+                all_completions = []
+                for i in range(num_generations):
+                    if self.tool_defn:
+                        completion = self._generate_single_completion_with_tools(unwrapped_model, prompt_inputs)
+                    else:
+                        completion = self._generate_completion(unwrapped_model, prompt_inputs)
+                    all_completions.append(completion)
+                
+                # Stack all completions and pad if needed
+                max_length = max(completion.size(1) for completion in all_completions)
+                padded_completions = []
+
+                for completion in all_completions:
+                    if completion.size(1) < max_length:
+                        padding = torch.full((completion.size(0), max_length - completion.size(1)), 
+                                        self.processing_class.tokenizer.pad_token_id, 
+                                        dtype=completion.dtype,
+                                        device=completion.device)
+                        padded_completion = torch.cat([completion, padding], dim=1)
+                    else:
+                        padded_completion = completion
+                    padded_completions.append(padded_completion)
+
+                # Stack all padded completions
+                prompt_completion_ids = torch.cat(padded_completions, dim=0)
 
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Get the per-token log probabilities for the completions for the model and the reference model
-        def get_per_token_logps(model, input_ids, logits_to_keep):
-            # NOTE: I had to do major surgery here to make this work. See
-            # https://github.com/huggingface/trl/blob/main/trl/trainer/grpo_trainer.py#L430 for the
-            # original implementation.
-
-            logits = model(input_ids).logits  # Expected shape: [B, L, V]
-            logits = logits[:, :-1, :]  # Shape becomes [B, L-1, V] - drop extra last token's logits.
-            logits = logits[:, -logits_to_keep:, :]  # Select the last `logits_to_keep` tokens.
-
+        def get_per_token_logps(model, input_ids):
+            logits = model(input_ids).logits  # (B, L, V)
+            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            input_ids = input_ids[:, 1:]  # (B, L-1), exclude the first input ID since we don't have logits for it
             # Compute the log probabilities for the input tokens. Use a loop to reduce memory peak.
             per_token_logps = []
-            for logits_row, input_ids_row in zip(logits, input_ids[:, -logits_to_keep:]):
+            for logits_row, input_ids_row in zip(logits, input_ids):
                 log_probs = logits_row.log_softmax(dim=-1)
                 token_log_prob = torch.gather(log_probs, dim=1, index=input_ids_row.unsqueeze(1)).squeeze(1)
                 per_token_logps.append(token_log_prob)
             return torch.stack(per_token_logps)
 
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        per_token_logps = get_per_token_logps(model, prompt_completion_ids, logits_to_keep)
+        per_token_logps = get_per_token_logps(model, prompt_completion_ids)
+        # Get rid of the prompt (-1 because of the shift done in get_per_token_logps)
+        per_token_logps = per_token_logps[:, prompt_length - 1:]
 
         with torch.inference_mode():
             if self.ref_model is not None:
-                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids, logits_to_keep)
+                ref_per_token_logps = get_per_token_logps(self.ref_model, prompt_completion_ids)
             else:
                 with self.accelerator.unwrap_model(model).disable_adapter():
-                    ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids, logits_to_keep)
+                    ref_per_token_logps = get_per_token_logps(model, prompt_completion_ids)
+        ref_per_token_logps = ref_per_token_logps[:, prompt_length - 1:]
 
         # Compute the KL divergence between the model and the reference model
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
@@ -618,7 +626,7 @@ class QwenGRPOTrainer(Trainer):
                 print(
                     "using pretrained model as reward fn, this is unexpected as Im passing in functions as reward fns"
                 )
-                if is_conversational(inputs[0]):
+                if is_conversational(inputs[0]):    
                     messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                     texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
                 else:
