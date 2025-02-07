@@ -25,7 +25,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
@@ -65,6 +64,7 @@ from .utils import (
     peft_module_casting_to_bf16,
     prepare_deepspeed,
     print_rich_table,
+    selective_log_softmax,
     truncate_response,
 )
 
@@ -310,9 +310,11 @@ class PPOTrainer(Trainer):
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        with self.accelerator.unwrap_model(
-            self.model.policy
-        ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
+        with (
+            self.accelerator.unwrap_model(self.model.policy).disable_adapter()
+            if self.is_peft_model and not self.ref_adapter_name
+            else nullcontext()
+        ):
             if self.ref_adapter_name:
                 self.model.policy.set_adapter(self.ref_adapter_name)
             yield
@@ -427,9 +429,8 @@ class PPOTrainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
-                    all_logprob = F.log_softmax(logits, dim=-1)
-                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del logits, all_logprob
+                    logprob = selective_log_softmax(logits, response)
+                    del logits
                     torch.cuda.empty_cache()
 
                     if ref_policy is None:
@@ -439,9 +440,8 @@ class PPOTrainer(Trainer):
                         ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
-                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del ref_output, ref_logits, ref_all_logprob
+                    ref_logprob = selective_log_softmax(ref_logits, response)
+                    del ref_output, ref_logits
                     torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
@@ -547,8 +547,7 @@ class PPOTrainer(Trainer):
                             output, vpred_temp = forward(model, mb_query_responses, processing_class.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
                             logits /= args.temperature + 1e-7
-                            new_all_logprobs = F.log_softmax(logits, dim=-1)
-                            new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
+                            new_logprobs = selective_log_softmax(logits, mb_responses)
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
@@ -599,7 +598,7 @@ class PPOTrainer(Trainer):
                     # del everything and empty cache
                     # fmt: off
                     del (
-                        output, vpred_temp, logits, new_all_logprobs, new_logprobs, vpred, vpredclipped,
+                        output, vpred_temp, logits, new_logprobs, vpred, vpredclipped,
                         vf_losses1, vf_losses2, vf_loss, vf_clipfrac, logprobs_diff, ratio, pg_losses, pg_losses2, pg_loss_max,
                         pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
                         mb_advantage, mb_values, mb_responses, mb_query_responses, mb_logprobs,

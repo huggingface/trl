@@ -60,6 +60,7 @@ from .utils import (
     log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
+    selective_log_softmax,
 )
 
 
@@ -711,7 +712,7 @@ class CPOTrainer(Trainer):
         # dummy token; we'll ignore the losses on these tokens later
         labels[labels == label_pad_token_id] = 0
 
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps = selective_log_softmax(logits, labels)
 
         if average_log_prob:
             return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
