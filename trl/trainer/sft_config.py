@@ -36,7 +36,7 @@ class SFTConfig(TrainingArguments):
 
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`GRPOTrainer`] is provided as a string.
+            argument of the [`SFTTrainer`] is provided as a string.
         use_liger (`bool`, *optional*, defaults to `False`):
             Monkey patch the model with Liger kernels to increase throughput and reduce memory usage.
 
