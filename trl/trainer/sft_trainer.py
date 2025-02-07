@@ -268,7 +268,8 @@ class SFTTrainer(Trainer):
                 f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
             )
         # Disable caching if gradient checkpointing is enabled (not supported)
-        model_init_kwargs["use_cache"] = False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
+        if args.gradient_checkpointing:
+            model_init_kwargs["use_cache"] = False
 
         # Create model
         if args.use_liger:

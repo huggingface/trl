@@ -1302,7 +1302,8 @@ class SFTTrainerTester(unittest.TestCase):
                 )
 
             self.assertIn(
-                "Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+                "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
+                "a `torch.dtype` (e.g., 'float32'), but got -1.",
                 str(context.exception),
             )
 
