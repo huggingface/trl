@@ -536,6 +536,13 @@ class GRPOTrainer(Trainer):
 
         # Decode the generated completions
         completions = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+
+        # For logging
+        table = defaultdict(list)
+        table["step"] = [str(self.state.global_step)] * len(gather_object(prompts_text))
+        table["prompt"].extend(gather_object(prompts_text))
+        table["completion"].extend(gather_object(completions))
+
         if is_conversational(inputs[0]):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
@@ -607,7 +614,8 @@ class GRPOTrainer(Trainer):
 
             import wandb
 
-            df = pd.DataFrame({"Prompt": prompts, "Completion": completions, "Reward": rewards.tolist()})
+            table["reward"] = rewards.tolist()
+            df = pd.DataFrame(table)
 
             if wandb.run is not None:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
