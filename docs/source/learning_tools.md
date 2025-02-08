@@ -22,7 +22,7 @@ Note that the scripts above rely heavily on the `TextEnvironment` API which is s
 
 The rough idea is as follows:
 
-1. Load a tool such as [ybelkada/simple-calculator](https://huggingface.co/spaces/ybelkada/simple-calculator) that parse a text calculation like `"14 + 34"` and return the calulated number:
+1. Load a tool such as [ybelkada/simple-calculator](https://huggingface.co/spaces/ybelkada/simple-calculator) that parse a text calculation like `"14 + 34"` and return the calculated number:
     ```python
     from transformers import AutoTokenizer, load_tool
     tool = load_tool("ybelkada/simple-calculator")
@@ -154,7 +154,7 @@ We then basically deployed this snippet as a Hugging Face space [here](https://h
 We use the following settings:
 
 * use the `bigcode/starcoderbase` model as the base model
-* use the `pyserini-wikipedia-kilt-doc` space as the wiki tool and only uses the first paragrahs of the search result, allowing the `TextEnvironment` to obtain at most `max_tool_reponse=400` response tokens from the tool.
+* use the `pyserini-wikipedia-kilt-doc` space as the wiki tool and only uses the first paragraphs of the search result, allowing the `TextEnvironment` to obtain at most `max_tool_reponse=400` response tokens from the tool.
 * test if the response contain the answer string, if so, give a reward of 1, otherwise, give a reward of 0.
     * notice this is a simplified evaluation criteria. In [ToolFormer](https://huggingface.co/papers/2302.04761), the authors checks if the first 20 words of the response contain the correct answer.
 * used the following prompt that demonstrates the usage of the wiki tool.
