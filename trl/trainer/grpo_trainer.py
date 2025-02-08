@@ -645,8 +645,8 @@ class GRPOTrainer(Trainer):
         # Compute the KL divergence between the model and the reference model if beta is not 0
         ref_per_token_logps = inputs["ref_per_token_logps"]
         # x - x.detach() allows for preserving gradients from x
+        per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
         if ref_per_token_logps is None:
-            per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
             per_token_loss = -per_token_loss
         else:
             # we need to compute the KL divergence between the model and the reference model
@@ -654,7 +654,6 @@ class GRPOTrainer(Trainer):
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
 
-            per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
             per_token_loss = -(per_token_loss - self.beta * per_token_kl)
 
             mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
