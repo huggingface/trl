@@ -380,7 +380,7 @@ class GRPOTrainer(Trainer):
                         enable_prefix_caching=True,
                         max_model_len=self.args.vllm_max_model_len,
                     )
-                    self.llm = AsyncLLMEngine(engine_args)
+                    self.llm = AsyncLLMEngine.from_engine_args(engine_args)
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,
                     max_tokens=self.max_completion_length,
