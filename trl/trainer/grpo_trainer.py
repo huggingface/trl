@@ -403,9 +403,7 @@ class GRPOTrainer(Trainer):
             # Environment
         self.env = env
         if self.env is not None and self.use_vllm:
-            self.env.llm = self.llm
             self.env.processing_class = processing_class
-            self.env.sampling_params = self.sampling_params
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -490,6 +488,8 @@ class GRPOTrainer(Trainer):
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
                 if self.env is not None:
+                    self.env.llm = self.llm
+                    self.env.sampling_params = self.sampling_params
                     outputs = self.env.generate(prompts=all_prompts)
                 else:
                     outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
