@@ -461,7 +461,7 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                beta=0, # set beta to 0 to test the case where the reference model is not used
+                beta=0,  # set beta to 0 to test the case where the reference model is not used
                 learning_rate=0.1,
                 per_device_train_batch_size=3,
                 num_generations=3,
@@ -484,5 +484,3 @@ class GRPOTrainerTester(unittest.TestCase):
             # Check that no KL divergence was computed during training
             for log in trainer.state.log_history:
                 self.assertNotIn("kl", log, "KL divergence metric should not be logged when beta==0")
-
-

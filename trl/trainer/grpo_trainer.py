@@ -228,7 +228,7 @@ class GRPOTrainer(Trainer):
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
-        
+
         self.beta = args.beta
 
         if peft_config is not None:
@@ -292,7 +292,6 @@ class GRPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.use_vllm = args.use_vllm
-
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
@@ -651,7 +650,9 @@ class GRPOTrainer(Trainer):
             per_token_loss = -per_token_loss
         else:
             # we need to compute the KL divergence between the model and the reference model
-            per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            per_token_kl = (
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            )
 
             per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
             per_token_loss = -(per_token_loss - self.beta * per_token_kl)
