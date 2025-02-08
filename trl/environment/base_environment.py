@@ -774,7 +774,7 @@ class TextEnvironment:
                 padded_inputs["input_ids"] = torch.concatenate([past_input_ids, padded_inputs["input_ids"]], dim=1)
 
             if self.max_length is not None and padded_inputs["input_ids"].shape[-1] > self.max_length:
-                return None, None, None, None, True
+                return None, None, None, None, True, []
 
             extracted_model = extract_model_from_parallel(self.model)
             if caching_enabled and extracted_model.pretrained_model._supports_cache_class:
