@@ -381,6 +381,7 @@ class GRPOTrainer(Trainer):
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,
                     max_tokens=self.max_completion_length,
+                    include_stop_str_in_output=True,
                 )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
