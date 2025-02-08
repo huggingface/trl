@@ -43,6 +43,7 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..environment.env_protocol import Environment
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
@@ -177,6 +178,8 @@ class GRPOTrainer(Trainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        env ([`Environment`], *optional*, defaults to `None`):
+            Environment to use for generating completions. If `None`, the environment is not used.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -193,6 +196,7 @@ class GRPOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        env: Optional["Environment"] = None,
     ):
         # Args
         if args is None:
@@ -396,6 +400,13 @@ class GRPOTrainer(Trainer):
                 pad_token_id=processing_class.pad_token_id,
             )
 
+            # Environment
+        self.env = env
+        if self.env is not None and self.use_vllm:
+            self.env.llm = self.llm
+            self.env.processing_class = processing_class
+            self.env.sampling_params = self.sampling_params
+
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
@@ -475,9 +486,13 @@ class GRPOTrainer(Trainer):
                 self._last_loaded_step = self.state.global_step
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
+            all_prompts = gather_object(prompts)
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
-                outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
+                if self.env is not None:
+                    outputs = self.env.generate(prompts=all_prompts)
+                else:
+                    outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
                 completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
             else:
                 completion_ids = [None] * len(all_prompts_text)
