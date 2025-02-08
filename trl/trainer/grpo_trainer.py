@@ -402,8 +402,6 @@ class GRPOTrainer(Trainer):
 
             # Environment
         self.env = env
-        if self.env is not None and self.use_vllm:
-            self.env.processing_class = processing_class
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -488,12 +486,10 @@ class GRPOTrainer(Trainer):
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
                 if self.env is not None:
-                    self.env.llm = self.llm
-                    self.env.sampling_params = self.sampling_params
-                    outputs = self.env.generate(prompts=all_prompts)
+                    completion_ids = self.env.generate(prompts=all_prompts, llm=self.llm, sampling_params=self.sampling_params)
                 else:
                     outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
-                completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
+                    completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
             else:
                 completion_ids = [None] * len(all_prompts_text)
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
