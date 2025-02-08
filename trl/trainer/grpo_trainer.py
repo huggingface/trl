@@ -55,9 +55,7 @@ if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
 if is_vllm_available():
-    from vllm.engine.async_llm_engine import AsyncLLMEngine
     from vllm import LLM, SamplingParams
-    from vllm.engine.arg_utils import AsyncEngineArgs
 
 if is_wandb_available():
     import wandb
@@ -372,7 +370,7 @@ class GRPOTrainer(Trainer):
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
                 )
                 with world_size_patch, profiling_patch:
-                    engine_args = AsyncEngineArgs(
+                    self.llm = LLM(
                         model=model.name_or_path,
                         device=vllm_device,
                         gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
@@ -380,7 +378,6 @@ class GRPOTrainer(Trainer):
                         enable_prefix_caching=True,
                         max_model_len=self.args.vllm_max_model_len,
                     )
-                    self.llm = AsyncLLMEngine.from_engine_args(engine_args)
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,
                     max_tokens=self.max_completion_length,
@@ -477,7 +474,7 @@ class GRPOTrainer(Trainer):
                     else:
                         state_dict = unwrapped_model.state_dict()
                 if self.accelerator.is_main_process:
-                    llm_model = self.llm.engine.model_executor.driver_worker.model_runner.model
+                    llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                     llm_model.load_weights(state_dict.items())
                 self._last_loaded_step = self.state.global_step
 
@@ -488,7 +485,7 @@ class GRPOTrainer(Trainer):
                 if self.env is not None:
                     completion_ids = self.env.generate(prompts=all_prompts, llm=self.llm, sampling_params=self.sampling_params)
                 else:
-                    outputs = asyncio.run(self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False))
+                    outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
                     completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
             else:
                 completion_ids = [None] * len(all_prompts_text)
