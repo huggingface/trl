@@ -55,7 +55,9 @@ if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
 if is_vllm_available():
+    from vllm.engine.async_llm_engine import AsyncLLMEngine
     from vllm import LLM, SamplingParams
+    from vllm.engine.arg_utils import AsyncEngineArgs
 
 if is_wandb_available():
     import wandb
@@ -370,17 +372,15 @@ class GRPOTrainer(Trainer):
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
                 )
                 with world_size_patch, profiling_patch:
-                    self.llm = LLM(
+                    engine_args = AsyncEngineArgs(
                         model=model.name_or_path,
                         device=vllm_device,
                         gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
                         dtype=self.args.vllm_dtype,
-                        # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
-                        # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
-                        # This is particularly useful here because we generate completions from the same prompts.
                         enable_prefix_caching=True,
                         max_model_len=self.args.vllm_max_model_len,
                     )
+                    self.llm = AsyncLLMEngine(engine_args)
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,
                     max_tokens=self.max_completion_length,
