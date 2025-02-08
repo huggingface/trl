@@ -488,7 +488,7 @@ class GRPOTrainer(Trainer):
                 if self.env is not None:
                     completion_ids = self.env.generate(prompts=all_prompts, llm=self.llm, sampling_params=self.sampling_params)
                 else:
-                    outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
+                    outputs = asyncio.run(self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False))
                     completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
             else:
                 completion_ids = [None] * len(all_prompts_text)
