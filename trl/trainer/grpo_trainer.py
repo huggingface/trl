@@ -43,7 +43,7 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
-from ..environment import Environment, RewardFunc
+from ..environment.env_protocol import Environment
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
@@ -60,7 +60,9 @@ if is_vllm_available():
 if is_wandb_available():
     import wandb
 
-
+# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
+# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
+RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 
 class RepeatRandomSampler(Sampler):
@@ -396,7 +398,8 @@ class GRPOTrainer(Trainer):
                 pad_token_id=processing_class.pad_token_id,
             )
 
-
+        # Environment
+        self.env = env
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
