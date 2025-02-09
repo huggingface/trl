@@ -19,10 +19,12 @@ from ..import_utils import _LazyModule
 
 _import_structure = {
     "base_environment": ["TextEnvironment", "TextHistory"],
+    "env_protocol": ["Environment"],
 }
 
 if TYPE_CHECKING:
     from .base_environment import TextEnvironment, TextHistory
+    from .env_protocol import Environment
 else:
     import sys
 
