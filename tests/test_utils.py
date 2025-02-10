@@ -17,6 +17,7 @@ import unittest
 import numpy as np
 import torch
 from datasets import load_dataset
+from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
@@ -26,11 +27,13 @@ from trl.trainer import compute_accuracy
 from trl.trainer.utils import (
     DataCollatorForChatML,
     batch_generation,
+    compute_token_accuracy,
     decode_and_strip_padding,
     flush_left,
     generate_model_card,
     get_peft_config,
     pad,
+    selective_log_softmax,
 )
 
 
@@ -451,3 +454,78 @@ class TestFlushLeft(unittest.TestCase):
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
 
         self.assertTrue(torch.equal(new_mask, expected_mask))
+
+
+class TestComputeTokenAccuracy(unittest.TestCase):
+    def test_basic_accuracy(self):
+        # Test basic accuracy computation
+        logits = torch.tensor([[[0.9, 0.1], [0.8, 0.2]], [[0.3, 0.7], [0.6, 0.4]]])  # Shape: [2, 2, 2]
+        labels = torch.tensor([[1, 0], [1, 0]])  # Shape: [2, 2]
+        accuracy = compute_token_accuracy(logits, labels)
+        self.assertAlmostEqual(accuracy, 0.75)  # 3 correct out of 4 tokens
+
+    def test_with_ignore_index(self):
+        # Test accuracy computation with ignored tokens
+        logits = torch.tensor([[[0.9, 0.1], [0.8, 0.2]], [[0.3, 0.7], [0.6, 0.4]]])
+        labels = torch.tensor([[1, -100], [1, 0]])  # -100 is ignored
+        accuracy = compute_token_accuracy(logits, labels, ignore_index=-100)
+        self.assertAlmostEqual(accuracy, 2 / 3)  # 2 correct out of 3 non-ignored tokens
+
+    def test_all_ignored(self):
+        # Test case where all tokens are ignored
+        logits = torch.tensor([[[0.1, 0.9], [0.8, 0.2]]])
+        labels = torch.tensor([[-100, -100]])
+        accuracy = compute_token_accuracy(logits, labels)
+        self.assertEqual(accuracy, 0.0)  # No valid tokens to compute accuracy
+
+    def test_perfect_accuracy(self):
+        # Test case with 100% accuracy
+        logits = torch.tensor([[[0.1, 0.9], [0.8, 0.2]]])
+        labels = torch.tensor([[1, 0]])
+        accuracy = compute_token_accuracy(logits, labels)
+        self.assertEqual(accuracy, 1.0)  # All predictions correct
+
+    def test_zero_accuracy(self):
+        # Test case with 0% accuracy
+        logits = torch.tensor([[[0.1, 0.9], [0.8, 0.2]]])
+        labels = torch.tensor([[0, 1]])
+        accuracy = compute_token_accuracy(logits, labels)
+        self.assertEqual(accuracy, 0.0)  # All predictions wrong
+
+    def test_batch_accuracy(self):
+        # Test accuracy computation across multiple batches
+        logits = torch.tensor(
+            [
+                [[0.9, 0.1], [0.8, 0.2], [0.3, 0.7]],  # Batch 1
+                [[0.2, 0.8], [0.7, 0.3], [0.6, 0.4]],  # Batch 2
+            ]
+        )
+        labels = torch.tensor(
+            [
+                [1, 0, 1],  # Batch 1
+                [1, 0, -100],  # Batch 2 (last token ignored)
+            ]
+        )
+        accuracy = compute_token_accuracy(logits, labels)
+        self.assertAlmostEqual(accuracy, 0.8)
+
+
+class TestSelectiveLogSoftmax(unittest.TestCase):
+    @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
+    def test_selective_log_softmax(self, dtype):
+        """Test selective_log_softmax with logits of different dtypes"""
+        vocab_size = 1024
+        batch_size = 4
+        seq_len = 32
+
+        input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+        actual_output = selective_log_softmax(logits, input_ids)
+
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            self.assertTrue(torch.equal(actual_output, expected_output))
+        else:
+            torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
