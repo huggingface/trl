@@ -451,13 +451,18 @@ class GRPOTrainer(Trainer):
             if is_compiled_module(unwrapped_model):
                 state_dict = unwrapped_model._orig_mod.state_dict()
             elif isinstance(unwrapped_model, PeftModel):
-                self.model.merge_adapter()
-                state_dict = self.model.state_dict()
-                self.model.unmerge_adapter()
+                unwrapped_model.merge_adapter()
+                state_dict = unwrapped_model.state_dict()
+                unwrapped_model.unmerge_adapter()
                 state_dict = {
                     k.removeprefix("base_model.model.").replace(".base_layer", ""): v
                     for k, v in state_dict.items()
                     if self.model.prefix not in k
+                }
+                state_dict = {
+                    k.replace("modules_to_save.default.", ""): v
+                    for k, v in state_dict.items()
+                    if "original_module" not in k
                 }
             else:
                 state_dict = unwrapped_model.state_dict()
