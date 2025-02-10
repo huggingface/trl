@@ -22,6 +22,7 @@ from unittest.mock import patch
 import torch
 import torch.utils.data
 import transformers
+from accelerate import PartialState
 from accelerate.utils import broadcast_object_list, gather, gather_object
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
@@ -342,18 +343,21 @@ class GRPOTrainer(Trainer):
 
             if self.accelerator.is_main_process:
                 vllm_device = self.args.vllm_device
+                device_type = PartialState().default_device.type
+                device_module = getattr(torch, device_type)
                 if vllm_device == "auto":
-                    vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
+                    vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
+                    self.args.vllm_device = vllm_device
                 # Check that the requested device is available
-                if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
+                if vllm_device.split(":")[0] == f"{device_type}" and int(vllm_device.split(":")[1]) >= device_module.device_count():
                     raise ValueError(
                         f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
                         "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
                         "value lower than the number of GPUs available on your machine—typically, reducing it by one "
-                        f"is sufficient. In your case: `--num_processes {torch.cuda.device_count() - 1}`."
+                        f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
                     )
                 # Check that the requested device is not also used for training
-                if vllm_device in {f"cuda:{idx}" for idx in range(self.accelerator.num_processes)}:
+                if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
                     warnings.warn(
                         f"The requested device {vllm_device} is also used for training. This may lead to unexpected "
                         "behavior. It is recommended to use a dedicated device for vLLM."
@@ -470,6 +474,11 @@ class GRPOTrainer(Trainer):
                     else:
                         state_dict = unwrapped_model.state_dict()
                 if self.accelerator.is_main_process:
+                    if PartialState().default_device.type == "npu":
+                        # For Ascend NPUs, torch.Tensor.copy_ does not support cross-device tensor copy
+                        for k, v in state_dict.items():
+                            if isinstance(v, torch.tensor):
+                                state_dict[k] = v.to("cpu").to(self.args.vllm_device)
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                     llm_model.load_weights(state_dict.items())
                 self._last_loaded_step = self.state.global_step
