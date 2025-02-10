@@ -55,6 +55,7 @@ if is_peft_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
 
 if is_wandb_available():
     import wandb
@@ -377,10 +378,16 @@ class GRPOTrainer(Trainer):
                         enable_prefix_caching=True,
                         max_model_len=self.args.vllm_max_model_len,
                     )
+                guided_decoding = None
+                if args.vllm_guided_decoding_regex is not None:
+                    guided_decoding = GuidedDecodingParams(
+                        backend="outlines",
+                        regex=args.vllm_guided_decoding_regex
+                    )
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,
                     max_tokens=self.max_completion_length,
-                    guided_decoding=args.vllm_guided_decoding_params,
+                    guided_decoding=guided_decoding,
                 )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation

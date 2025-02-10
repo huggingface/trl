@@ -17,12 +17,6 @@ from typing import Optional
 
 from transformers import TrainingArguments
 
-from ..import_utils import is_vllm_available
-
-if is_vllm_available():
-    from vllm.sampling_params import GuidedDecodingParams
-
-
 @dataclass
 class GRPOConfig(TrainingArguments):
     r"""
@@ -204,10 +198,10 @@ class GRPOConfig(TrainingArguments):
             "context size, which might be much larger than the KV cache, leading to inefficiencies."
         },
     )
-    vllm_guided_decoding_params: Optional["GuidedDecodingParams"] = field(
+    vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
         metadata={
-            "help": "Parameters for vLLM guided decoding."
+            "help": "Regex for vLLM guided decoding."
         },
     )
 
