@@ -31,6 +31,10 @@ class GRPOScriptArguments(ScriptArguments):
         reward_model_name_or_path (`str` or `None`):
             Reward model id of a pretrained model hosted inside a model repo on huggingface.co or local path to a
             directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
+        max_retries_per_question (`int` or `None`):
+            Maximum number of retry attempts per question.
+        min_reward_threshold (`float` or `None`):
+            Minimum reward threshold to consider a response satisfactory.
     """
 
     reward_model_name_or_path: Optional[str] = field(
@@ -39,6 +43,14 @@ class GRPOScriptArguments(ScriptArguments):
             "help": "Reward model id of a pretrained model hosted inside a model repo on huggingface.co or "
             "local path to a directory containing model weights saved using `PreTrainedModel.save_pretrained`."
         },
+    )
+    max_retries_per_question: Optional[int] = field(
+        default=1,
+        metadata={"help": "Maximum number of retry attempts per question."},
+    )
+    min_reward_threshold: Optional[float] = field(
+        default=None,
+        metadata={"help": "Minimum reward threshold to consider a response satisfactory."},
     )
 
 

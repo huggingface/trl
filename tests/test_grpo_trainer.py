@@ -455,3 +455,75 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_retries(self):
+        """Test that training works with retry mechanism."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=32,
+                max_retries_per_question=3,
+                min_reward_threshold=2.0,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            # Verify training completed successfully
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that retry metrics were logged
+            metrics = trainer.state.log_history[-1]
+            self.assertIn("retry_count", metrics)
+            self.assertIn("skipped_low_reward", metrics)
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_early_stopping_on_reward(self):
+        """Test that training stops early when reward threshold is met."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Always return high reward to test early stopping."""
+            return [3.0 for _ in completions]  # Above min_reward_threshold
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=32,
+                max_retries_per_question=3,
+                min_reward_threshold=2.0,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            trainer.train()
+
+            # Check that all questions used only 1 attempt (no retries needed)
+            metrics = trainer.state.log_history[-1]
+            self.assertEqual(metrics["retry_count"], 1.0)
+            self.assertEqual(metrics["skipped_low_reward"], 0.0)

@@ -104,6 +104,13 @@ class GRPOConfig(TrainingArguments):
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log the completions during training.
+
+        > Parameters for retry mechanism
+
+        max_retries_per_question (`int`, *optional*, defaults to `1`):
+            Maximum number of retry attempts per question before moving to the next one. Set to 1 for original behavior (no retries).
+        min_reward_threshold (`float`, *optional*, defaults to `None`):
+            Minimum reward threshold to consider a response satisfactory. If None, always use max_retries_per_question attempts.
     """
 
     # Parameters that control the model and reference model
@@ -237,4 +244,20 @@ class GRPOConfig(TrainingArguments):
     log_completions: bool = field(
         default=False,
         metadata={"help": "Whether to log the completions during training."},
+    )
+
+    # Parameters for retry mechanism
+    max_retries_per_question: Optional[int] = field(
+        default=1,
+        metadata={
+            "help": "Maximum number of retry attempts per question before moving to the next one. "
+            "Set to 1 for original behavior (no retries)."
+        },
+    )
+    min_reward_threshold: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Minimum reward threshold to consider a response satisfactory. If None, always "
+            "use max_retries_per_question attempts."
+        },
     )
