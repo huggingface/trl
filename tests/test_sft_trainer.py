@@ -53,7 +53,7 @@ def formatting_prompts_func_batched(example):
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel
+    from peft import LoraConfig, PeftModel, get_peft_model
 
 if is_vision_available():
     from PIL import Image as PILImage
@@ -327,7 +327,6 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 max_seq_length=32,  # make sure there is at least 1 packed sequence
-                num_of_sequences=32,
                 packing=True,
                 report_to="none",
             )
@@ -408,45 +407,6 @@ class SFTTrainerTester(unittest.TestCase):
                 formatting_func=formatting_prompts_func,
             )
 
-            # This should not work because not enough data for one sample
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                max_steps=2,
-                eval_steps=1,
-                save_steps=1,
-                per_device_train_batch_size=2,
-                max_seq_length=1024,  # make sure there is NOT at least 1 packed sequence
-                packing=True,
-                report_to="none",
-            )
-            with self.assertRaises(ValueError):
-                _ = SFTTrainer(
-                    model=self.model,
-                    args=training_args,
-                    train_dataset=self.dummy_dataset,
-                    formatting_func=formatting_prompts_func,
-                )
-
-            # This should not work as well
-            with self.assertRaises(ValueError):
-                training_args = SFTConfig(
-                    output_dir=tmp_dir,
-                    dataloader_drop_last=True,
-                    max_steps=2,
-                    eval_steps=1,
-                    save_steps=1,
-                    per_device_train_batch_size=2,
-                    packing=False,
-                    report_to="none",
-                )
-                _ = SFTTrainer(
-                    model=self.model,
-                    args=training_args,
-                    train_dataset=self.dummy_dataset,
-                    formatting_func=formatting_prompts_func,
-                )
-
             # but this should work
             training_args = SFTConfig(
                 output_dir=tmp_dir,
@@ -502,7 +462,6 @@ class SFTTrainerTester(unittest.TestCase):
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
                 max_seq_length=16,
-                num_of_sequences=16,
                 packing=True,
                 report_to="none",
             )
@@ -576,7 +535,6 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 max_seq_length=16,
-                num_of_sequences=16,
                 packing=True,
                 report_to="none",
             )
@@ -601,7 +559,6 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 max_seq_length=16,
-                num_of_sequences=16,
                 packing=True,
                 report_to="none",
             )
@@ -808,8 +765,6 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.eval_dataset,
             )
 
-            self.assertTrue(trainer.train_dataset.infinite)
-
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
@@ -836,8 +791,6 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
-
-            self.assertFalse(trainer.train_dataset.infinite)
 
             trainer.train()
 
@@ -1345,6 +1298,75 @@ class SFTTrainerTester(unittest.TestCase):
                 )
 
             self.assertIn(
-                "Invalid `torch_dtype` passed to the SFTConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+                "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
+                "a `torch.dtype` (e.g., 'float32'), but got -1.",
                 str(context.exception),
             )
+
+
+# This new tester aims to replace the first one at some point
+class SFTTrainerTester2(unittest.TestCase):
+    def test_train(self):
+        # Get the model and dataset
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            trainer = SFTTrainer(args=training_args, model=model, train_dataset=dataset)
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @require_peft
+    def test_train_peft_model(self):
+        # Get the base model
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        # Get the base model parameter names
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        # Turn the model into a peft model
+        lora_config = LoraConfig()
+        model = get_peft_model(model, lora_config)
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            trainer = SFTTrainer(args=training_args, model=model, train_dataset=dataset)
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the peft params have changed and the base model params have not changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if n in base_param_names:  # We expect the base model parameters to be the same
+                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                elif (
+                    "base_layer" not in n
+                ):  # We expect the peft parameters to be different (except for the base layer)
+                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")

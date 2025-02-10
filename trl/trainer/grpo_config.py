@@ -50,7 +50,8 @@ class GRPOConfig(TrainingArguments):
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `8`):
-            Number of generations per prompt to sample.
+            Number of generations per prompt to sample. The global batch size (num_processes * per_device_batch_size)
+            must be divisible by this value.
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
@@ -90,11 +91,6 @@ class GRPOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        per_device_train_batch_size (`int`, *optional*, defaults to `1`):
-            Number of prompts sampled per device for training. The actual batch passed into the model will be this
-            value multiplied by `num_generations`.
-        gradient_accumulation_steps (`int`, *optional*, defaults to `8`):
-            Number of updates steps to accumulate the gradients for, before performing a backward/update pass.
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
@@ -110,6 +106,11 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
+
+        > Parameters that control the logging
+
+        log_completions (`bool`, *optional*, defaults to `False`):
+            Whether to log the completions during training.
     """
 
     # Parameters that control the model and reference model
@@ -139,7 +140,10 @@ class GRPOConfig(TrainingArguments):
     )
     num_generations: Optional[int] = field(
         default=8,
-        metadata={"help": "Number of generations to sample."},
+        metadata={
+            "help": "Number of generations to sample. The global batch size (num_processes * per_device_batch_size) "
+            "must be divisible by this value."
+        },
     )
     temperature: Optional[float] = field(
         default=0.9,
@@ -215,23 +219,6 @@ class GRPOConfig(TrainingArguments):
             "`transformers.TrainingArguments`."
         },
     )
-    # GRPO generates multiple completions per prompt, increasing memory usage.
-    # To accommodate this, the per-device train batch size is decreased (overriden from the parent class),
-    # and the number gradient accumulation steps is increased to maintain the effective batch size.
-    per_device_train_batch_size: int = field(
-        default=1,
-        metadata={
-            "help": "Number of prompts sampled per device for training. The actual batch passed into the model will "
-            "be this value multiplied by `num_generations`."
-        },
-    )
-    gradient_accumulation_steps: int = field(
-        default=8,
-        metadata={
-            "help": "Number of updates steps to accumulate the gradients for, before performing a backward/update "
-            "pass."
-        },
-    )
     beta: float = field(
         default=0.04,
         metadata={"help": "KL coefficient."},
@@ -257,4 +244,10 @@ class GRPOConfig(TrainingArguments):
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
+    )
+
+    # Parameters that control the logging
+    log_completions: bool = field(
+        default=False,
+        metadata={"help": "Whether to log the completions during training."},
     )

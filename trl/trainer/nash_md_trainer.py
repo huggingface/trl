@@ -46,6 +46,7 @@ from .utils import (
     generate_model_card,
     get_comet_experiment_url,
     get_reward,
+    selective_log_softmax,
     truncate_right,
 )
 
@@ -277,8 +278,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         def compute_logprobs_for_data(m, data):
             output = m(data["input_ids"], attention_mask=data["attention_mask"])
             logits = output.logits[:, context_length - 1 : -1]
-            logprobs = F.log_softmax(logits, dim=-1)
-            token_logprobs = torch.gather(logprobs, 2, data["input_ids"][:, context_length:].unsqueeze(-1)).squeeze(-1)
+            token_logprobs = selective_log_softmax(logits, data["input_ids"][:, context_length:])
             return token_logprobs
 
         # Compute logprobs for model completions under the model
