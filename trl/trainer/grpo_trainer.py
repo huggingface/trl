@@ -477,7 +477,7 @@ class GRPOTrainer(Trainer):
                     if PartialState().default_device.type == "npu":
                         # For Ascend NPUs, torch.Tensor.copy_ does not support cross-device tensor copy
                         for k, v in state_dict.items():
-                            if isinstance(v, torch.tensor):
+                            if isinstance(v, torch.Tensor):
                                 state_dict[k] = v.to("cpu").to(self.args.vllm_device)
                     llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                     llm_model.load_weights(state_dict.items())
