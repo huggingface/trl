@@ -22,7 +22,7 @@ from unittest.mock import patch
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import broadcast_object_list, gather, gather_object
+from accelerate.utils import broadcast_object_list, gather, gather_object, set_seed
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
@@ -332,6 +332,11 @@ class GRPOTrainer(Trainer):
                     f"divisible by the number of generations per prompt ({self.num_generations}). Given the current "
                     f"eval batch size, the valid values for the number of generations are: {possible_values}."
                 )
+
+        # Ensure each process receives a unique seed to prevent duplicate completions when generating with
+        # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
+        # it's safer to set it in all cases.
+        set_seed(args.seed, device_specific=True)
 
         if self.use_vllm:
             if not is_vllm_available():
