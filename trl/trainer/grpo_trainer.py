@@ -577,7 +577,10 @@ class GRPOTrainer(Trainer):
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
-            completions = [[{"role": "assistant", "content": completion}] for completion in completions_text]
+            completions = []
+            for prompt, completion in zip(prompts, completions_text):
+                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
 

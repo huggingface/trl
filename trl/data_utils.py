@@ -90,8 +90,21 @@ def apply_chat_template(
 
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
+        last_role = example["prompt"][-1]["role"]
+        if last_role == "user":
+            add_generation_prompt = True
+            continue_final_message = False
+        elif last_role == "assistant":
+            add_generation_prompt = False
+            continue_final_message = True
+        else:
+            raise ValueError(f"Invalid role in the last message: {last_role}")
         prompt = tokenizer.apply_chat_template(
-            example["prompt"], tools=tools, tokenize=False, add_generation_prompt=True
+            example["prompt"],
+            tools=tools,
+            continue_final_message=continue_final_message,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
         )
 
     # Apply the chat template to the entire prompt + completion
@@ -180,9 +193,12 @@ def maybe_apply_chat_template(
     Returns:
         `dict[str, str]`: The formatted example with the chat template applied.
 
-    Note:
-        This function does not alter the keys, except for Language modeling dataset, where `"messages"` is replaced by
+    Notes:
+        - This function does not alter the keys, except for Language modeling dataset, where `"messages"` is replaced by
         `"text"`.
+
+        - In case of prompt-only data, if the last role is `"user"`, the generation prompt is added to the prompt. Else,
+        if the last role is `"assistant"`, the final message is continued.
 
     Example:
 
