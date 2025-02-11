@@ -66,9 +66,13 @@ class GRPOTrainer(Trainer):
 
     dataset = load_dataset("trl-lib/tldr", split="train")
 
+    def reward_func(completions, **kwargs):
+        # Dummy reward function that rewards completions with more unique letters.
+        return [float(len(set(completion))) for completion in completions]
+
     trainer = GRPOTrainer(
         model="Qwen/Qwen2-0.5B-Instruct",
-        reward_funcs=["weqweasdas/RM-Gemma-2B", custom_reward_func],
+        reward_funcs=reward_func,
         train_dataset=dataset,
     )
 
@@ -88,6 +92,7 @@ class GRPOTrainer(Trainer):
         reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
+
             - A single reward function, such as:
                 - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
                 path to a *directory* containing model weights saved using
@@ -217,7 +222,10 @@ class GRPOTrainer(Trainer):
         # Reward weights
         if args.reward_weights is not None:
             if len(args.reward_weights) != len(reward_funcs):
-                raise ValueError("Number of reward weights must match number of reward functions.")
+                raise ValueError(
+                    f"Number of reward weights ({len(len(args.reward_weights))}) must match number of reward "
+                    f"functions ({len(reward_funcs)})"
+                )
             self.reward_weights = torch.tensor(args.reward_weights, dtype=torch.float32)
         else:
             self.reward_weights = torch.ones(len(reward_funcs), dtype=torch.float32)

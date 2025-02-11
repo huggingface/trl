@@ -236,6 +236,8 @@ trainer = GRPOTrainer(
 ```
 and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
 
+Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+
 ## GRPOTrainer
 
 [[autodoc]] GRPOTrainer

@@ -59,8 +59,8 @@ class GRPOConfig(TrainingArguments):
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
-            Weights for each reward function. Must match the number of reward functions. Should be floats
-            (e.g., [0.5, 1.5]). If None, all rewards are weighted equally with weight 1.0.
+            Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
+            weighted equally with weight `1.0`.
     """
 
     # Parameters that control the model and reference model
@@ -116,7 +116,7 @@ class GRPOConfig(TrainingArguments):
     reward_weights: Optional[list[float]] = field(
         default=None,
         metadata={
-            "help": "Weights for each reward function. Must match the number of reward functions. Should be floats "
-            "(e.g., [0.5, 1.5]). If None, all rewards are weighted equally with weight 1.0."
+            "help": "Weights for each reward function. Must match the number of reward functions. If `None`, all "
+            "rewards are weighted equally with weight `1.0`."
         },
     )
