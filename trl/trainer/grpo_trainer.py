@@ -22,7 +22,7 @@ from unittest.mock import patch
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import broadcast_object_list, gather, gather_object
+from accelerate.utils import broadcast_object_list, gather, gather_object, set_seed
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
@@ -73,6 +73,8 @@ class RepeatRandomSampler(Sampler):
             Dataset to sample from.
         repeat_count (`int`):
             Number of times to repeat each index.
+        seed (`Optional[int]`):
+            Random seed for reproducibility (only affects this sampler).
 
     Example:
     ```python
@@ -82,13 +84,21 @@ class RepeatRandomSampler(Sampler):
     ```
     """
 
-    def __init__(self, data_source: Sized, repeat_count: int):
+    def __init__(self, data_source: Sized, repeat_count: int, seed: Optional[int] = None):
         self.data_source = data_source
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
+        self.seed = seed
+        self.generator = torch.Generator()  # Create a local random generator
+        if seed is not None:
+            self.generator.manual_seed(seed)
 
     def __iter__(self):
-        indexes = [idx for idx in torch.randperm(self.num_samples).tolist() for _ in range(self.repeat_count)]
+        indexes = [
+            idx
+            for idx in torch.randperm(self.num_samples, generator=self.generator).tolist()
+            for _ in range(self.repeat_count)
+        ]
         return iter(indexes)
 
     def __len__(self):
@@ -333,6 +343,11 @@ class GRPOTrainer(Trainer):
                     f"eval batch size, the valid values for the number of generations are: {possible_values}."
                 )
 
+        # Ensure each process receives a unique seed to prevent duplicate completions when generating with
+        # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
+        # it's safer to set it in all cases.
+        set_seed(args.seed, device_specific=True)
+
         if self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
@@ -425,12 +440,19 @@ class GRPOTrainer(Trainer):
         if self._signature_columns is None:
             self._signature_columns = ["prompt"]
 
-    # We need a custom sampler that samples the same prompt multiple times
     def _get_train_sampler(self) -> Sampler:
-        return RepeatRandomSampler(self.train_dataset, self.num_generations)
+        # Returns a sampler that ensures each prompt is repeated across multiple processes. This guarantees that
+        # identical prompts are distributed to different GPUs, allowing rewards to be computed and normalized correctly
+        # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
+        # preventing discrepancies in group formation.
+        return RepeatRandomSampler(self.train_dataset, self.num_generations, seed=self.args.seed)
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
-        return RepeatRandomSampler(eval_dataset, self.num_generations)
+        # Returns a sampler that ensures each prompt is repeated across multiple processes. This guarantees that
+        # identical prompts are distributed to different GPUs, allowing rewards to be computed and normalized correctly
+        # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
+        # preventing discrepancies in group formation.
+        return RepeatRandomSampler(eval_dataset, self.num_generations, seed=self.args.seed)
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
