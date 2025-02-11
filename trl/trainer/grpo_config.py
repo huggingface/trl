@@ -86,6 +86,9 @@ class GRPOConfig(TrainingArguments):
             [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
+        reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
+            Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
+            weighted equally with weight `1.0`.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
@@ -209,6 +212,13 @@ class GRPOConfig(TrainingArguments):
     beta: float = field(
         default=0.04,
         metadata={"help": "KL coefficient."},
+    )
+    reward_weights: Optional[list[float]] = field(
+        default=None,
+        metadata={
+            "help": "Weights for each reward function. Must match the number of reward functions. If `None`, all "
+            "rewards are weighted equally with weight `1.0`."
+        },
     )
     sync_ref_model: bool = field(
         default=False,
