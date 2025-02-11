@@ -373,7 +373,10 @@ class GRPOTrainer(Trainer):
             if self.accelerator.is_main_process:
                 vllm_device = self.args.vllm_device
                 if vllm_device == "auto":
-                    vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
+                    if torch.cuda.device_count() == 1:
+                        vllm_device = "cuda:0"  # particular case when training with onyl 1 GPU: share it
+                    else:
+                        vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
                 # Check that the requested device is available
                 if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
                     raise ValueError(
@@ -385,8 +388,10 @@ class GRPOTrainer(Trainer):
                 # Check that the requested device is not also used for training
                 if vllm_device in {f"cuda:{idx}" for idx in range(self.accelerator.num_processes)}:
                     warnings.warn(
-                        f"The requested device {vllm_device} is also used for training. This may lead to unexpected "
-                        "behavior. It is recommended to use a dedicated device for vLLM."
+                        f"The requested device {vllm_device} is also being used for training. For higher throughput "
+                        "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
+                        "If this is intentional, you may ignore this warning but should adjust "
+                        "`vllm_gpu_memory_utilization` accordingly."
                     )
                 # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) place the vLLM
                 # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
