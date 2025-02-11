@@ -112,6 +112,43 @@ The GRPO Trainer logs the following metrics:
 
 ## Customization
 
+### Retry mechanism for better responses
+
+GRPO can be configured to retry generating responses for each question until a satisfactory reward is achieved or maximum retries are exhausted. This is controlled by two parameters:
+
+- `max_retries_per_question`: Maximum number of retry attempts per question (default=1 for original behavior)
+- `min_reward_threshold`: Minimum reward threshold to consider a response satisfactory (if None, always uses max retries)
+
+Example usage:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    max_retries_per_question=3,    # Try up to 3 times per question
+    min_reward_threshold=2.0,      # Stop if reward >= 2.0
+    # ... other args ...
+)
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    reward_funcs=reward_model,
+    args=training_args,
+    train_dataset=dataset,
+)
+```
+
+With this configuration, for each question:
+1. Generate 8 responses
+2. If any response achieves reward >= 2.0:
+   - Use that batch for training
+   - Move to next question
+3. Otherwise:
+   - Try again up to max_retries_per_question times
+   - Use best batch found across all attempts
+
+This helps ensure higher quality responses while still maintaining training efficiency.
+
 ## Speed up training with vLLM-powered generation  
 
 Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, pass `use_vllm=True` in the training arguments.  
