@@ -219,7 +219,7 @@ You can test this function as follows:
 
 #### Passing the reward function to the trainer
 
-To use your custom reward function, pass it to the `GRPOTrainer` as follows:
+To use your custom reward function, pass it to the [`GRPOTrainer`] as follows:
 
 ```python
 from trl import GRPOTrainer
