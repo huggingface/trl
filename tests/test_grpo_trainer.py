@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import tempfile
 import unittest
 
@@ -19,10 +20,11 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft
+from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.import_utils import is_vllm_available
 
 
 if is_peft_available():
@@ -47,7 +49,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -70,6 +72,30 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    def test_training_with_eval(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                eval_strategy="steps",
+                eval_steps=2,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset["train"],
+                eval_dataset=dataset["test"],
+            )
+
+            trainer.train()
+
     @require_peft
     def test_training_peft(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -80,7 +106,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -123,7 +149,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -159,7 +185,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -195,7 +221,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -234,7 +260,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -312,7 +338,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -351,7 +377,7 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
@@ -370,6 +396,105 @@ class GRPOTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_torch_accelerator
+    def test_training_vllm(self):
+        """Test that training works with vLLM for generation."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                report_to="none",
+                use_vllm=True,
+                vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")  # compiling seems to be broken on Windows
+    def test_training_torch_compile(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                torch_compile=True,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_sync_ref_model(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                sync_ref_model=True,
+                ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")

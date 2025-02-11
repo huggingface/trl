@@ -72,7 +72,7 @@ The TL;DR dataset is a processed version of Reddit posts, specifically curated t
 - **Type**: [Prompt-completion](https://huggingface.co/docs/trl/main/dataset_formats#prompt-completion)
 
 Columns:
-- `"pompt"`: The unabridged Reddit post.
+- `"prompt"`: The unabridged Reddit post.
 - `"completion"`: The concise "TL;DR" summary appended by the author.
 
 This structure enables models to learn the relationship between detailed content and its abbreviated form, enhancing their summarization capabilities.
