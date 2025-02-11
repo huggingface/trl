@@ -245,6 +245,29 @@ and the reward will be computed as the sum of the rewards from each function.
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+
+### Environments
+
+The GRPO Trainer supports optional [`Environment`] objects, which allow for custom generation logic mirroring the vLLM `generate` method (returning `completion_ids` for each prompt). 
+
+This can be used for applications such as:
+- Custom sampling logic (reward thresholds, MCTS, etc.)
+- Tool use
+- Multi-step reasoning
+- Multi-LLM interactions
+
+To use an environment, pass it to the `GRPOTrainer` as follows:
+
+```python
+from trl import GRPOTrainer
+
+tool_env = ToolEnv(tools=[]) # user-defined class which follows trl/environments/env_protocol.py 
+trainer = GRPOTrainer(
+    ...,
+    env=tool_env # optional, defaults to None
+)
+```
+
 ## GRPOTrainer
 
 [[autodoc]] GRPOTrainer
