@@ -260,11 +260,79 @@ To use an environment, pass it to the `GRPOTrainer` as follows:
 ```python
 from trl import GRPOTrainer
 
-tool_env = ToolEnv(tools=[]) # user-defined class which follows trl/environments/env_protocol.py 
+custom_env = CustomEnv() # user-defined class which follows trl/environments/env_protocol.py 
 trainer = GRPOTrainer(
     ...,
-    env=tool_env # optional, defaults to None
+    env=custom_env # optional, defaults to None
 )
+```
+
+Example of a custom environment:
+```python
+class DoubleCheckEnv:
+    """
+    Example Environment that:
+      1) Sends an initial user prompt to the LLM.
+      2) Appends the assistant's reply and a follow-up user query: "Are you sure?".
+      3) Sends everything again to the LLM for a final response.
+      4) Returns just the completion tokens for each prompt.
+    """
+
+    def step(
+        self,
+        states: List[Dict[str, Any]],
+        llm: LLM,
+        sampling_params: SamplingParams
+    ) -> Tuple[List[Dict[str, Any]], List[RequestOutput]]:
+        # First LLM call for each state's messages
+        outputs = llm.chat([s["messages"] for s in states], sampling_params=sampling_params)
+        for i, state in enumerate(states):
+            state["messages"].append({
+                "role": "assistant", 
+                "content": outputs[i].outputs[0].text
+            })
+            state["messages"].append({
+                "role": "user", 
+                "content": "Are you sure?"
+            })
+            # Track prompt_tokens to later slice out the completion part
+            state["prompt_tokens"] = len(outputs[i].prompt_token_ids)
+
+        # Second LLM call after "Are you sure?" is appended
+        outputs = llm.chat([s["messages"] for s in states], sampling_params=sampling_params)
+        for i, state in enumerate(states):
+            state["messages"].append({
+                "role": "assistant", 
+                "content": outputs[i].outputs[0].text
+            })
+            state["completed"] = True
+
+        return states, outputs
+
+    def generate(
+        self,
+        prompts: List[List[Dict[str, Any]]],
+        llm: LLM,
+        sampling_params: SamplingParams
+    ) -> List[Sequence[int]]:
+        # Setup conversation states
+        states = [{"messages": p, "completed": False, "prompt_tokens": -1} for p in prompts]
+        outputs = [None] * len(prompts)
+
+        # Keep stepping until each conversation is marked complete
+        while not all(s["completed"] for s in states):
+            states, outputs = self.step(states, llm, sampling_params)
+
+        # Gather prompt+completion IDs, then slice out the prompt portion
+        all_ids = [
+            list(o.prompt_token_ids) + list(o.outputs[0].token_ids) 
+            for o in outputs
+        ]
+        completion_ids = [
+            all_ids[i][states[i]["prompt_tokens"]:] 
+            for i in range(len(prompts))
+        ]
+        return completion_ids
 ```
 
 ## GRPOTrainer
