@@ -542,6 +542,7 @@ class GRPOTrainer(Trainer):
         else:
             # Regular generation path
             with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+                unwrapped_model.eval()
                 prompt_completion_ids = unwrapped_model.generate(
                     prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                 )
