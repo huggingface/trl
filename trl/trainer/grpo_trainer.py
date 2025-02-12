@@ -51,7 +51,7 @@ from .utils import generate_model_card, get_comet_experiment_url, pad, selective
 
 
 if is_peft_available():
-    from peft import PeftConfig, get_peft_model
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
@@ -492,6 +492,20 @@ class GRPOTrainer(Trainer):
         ) as unwrapped_model:
             if is_compiled_module(unwrapped_model):
                 state_dict = unwrapped_model._orig_mod.state_dict()
+            elif isinstance(unwrapped_model, PeftModel):
+                unwrapped_model.merge_adapter()
+                state_dict = unwrapped_model.state_dict()
+                unwrapped_model.unmerge_adapter()
+                state_dict = {
+                    k.removeprefix("base_model.model.").replace(".base_layer", ""): v
+                    for k, v in state_dict.items()
+                    if self.model.prefix not in k
+                }
+                state_dict = {
+                    k.replace("modules_to_save.default.", ""): v
+                    for k, v in state_dict.items()
+                    if "original_module" not in k
+                }
             else:
                 state_dict = unwrapped_model.state_dict()
         if self.accelerator.is_main_process:
