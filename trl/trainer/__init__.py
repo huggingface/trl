@@ -36,6 +36,7 @@ _import_structure = {
     "dpo_trainer": ["DPOTrainer"],
     "gkd_config": ["GKDConfig"],
     "gkd_trainer": ["GKDTrainer"],
+    "qwen_grpo_trainer": ["QwenGRPOTrainer"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
@@ -134,6 +135,7 @@ if TYPE_CHECKING:
     from .ppo_trainer import PPOTrainer
     from .prm_config import PRMConfig
     from .prm_trainer import PRMTrainer
+    from .qwen_grpo_trainer import QwenGRPOTrainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig
