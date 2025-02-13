@@ -235,6 +235,10 @@ class GRPOTrainer(Trainer):
                 False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
             )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+            if args.gradient_checkpointing:
+                if hasattr(model, "gradient_checkpointing_enable"):
+                    model.gradient_checkpointing_enable()
+
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
@@ -245,6 +249,18 @@ class GRPOTrainer(Trainer):
 
         if peft_config is not None:
             model = get_peft_model(model, peft_config)
+
+            # Enable gradient checkpointing if requested
+            if args.gradient_checkpointing:
+                # Ensure use_cache is disabled
+                if hasattr(model, "config"):
+                    model.config.use_cache = False
+                model.enable_input_require_grads()
+                # Enable gradient checkpointing on the base model
+                if hasattr(model, "gradient_checkpointing_enable"):
+                    model.gradient_checkpointing_enable()
+                elif hasattr(model.base_model, "gradient_checkpointing_enable"):
+                    model.base_model.gradient_checkpointing_enable()
 
         # Reference model
         if is_deepspeed_zero3_enabled():
