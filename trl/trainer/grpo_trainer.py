@@ -378,12 +378,14 @@ class GRPOTrainer(Trainer):
                         enable_prefix_caching=True,
                         max_model_len=self.args.vllm_max_model_len,
                     )
-                guided_decoding = None
+
+                # Guided decoding, if enabled
                 if args.vllm_guided_decoding_regex is not None:
-                    guided_decoding = GuidedDecodingParams(
-                        backend="outlines",
-                        regex=args.vllm_guided_decoding_regex
-                    )
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
+                else:
+                    guided_decoding = None
+
+                # Sampling parameters
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,
                     max_tokens=self.max_completion_length,

@@ -17,6 +17,7 @@ from typing import Optional
 
 from transformers import TrainingArguments
 
+
 @dataclass
 class GRPOConfig(TrainingArguments):
     r"""
@@ -77,8 +78,8 @@ class GRPOConfig(TrainingArguments):
             If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
             `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
             context size, which might be much larger than the KV cache, leading to inefficiencies.
-        vllm_guided_decoding_params (`GuidedDecodingParams`, *optional*, defaults to `None`):
-            Parameters for vLLM guided decoding.
+        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
         > Parameters that control the training
 
@@ -200,9 +201,7 @@ class GRPOConfig(TrainingArguments):
     )
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
-        metadata={
-            "help": "Regex for vLLM guided decoding."
-        },
+        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
 
     # Parameters that control the training
