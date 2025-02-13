@@ -582,8 +582,8 @@ class GRPOTrainer(Trainer):
         print("Mask starts at token indices:", eos_idx.tolist())
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-        print(len(prompt_mask))
-        print(len(completion_mask))
+        print([len(prompt_mask[i]) for i in range(len(prompt_mask))])
+        print([len(completion_mask[i]) for i in range(len(completion_mask))])
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B*G, P+C)
 
