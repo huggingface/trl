@@ -45,7 +45,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
-from .callbacks import SyncRefModelCallback
+from .callbacks import SyncRefModelCallback, SyncPolicyModelCallback
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url, pad, selective_log_softmax
 
@@ -256,7 +256,14 @@ class GRPOTrainer(Trainer):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
             self.ref_model = None
-
+        
+        # old_policy
+        if is_deepspeed_zero3_enabled():
+            self.old_policy = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+        else:
+            # If PEFT configuration is not provided, create a reference model based on the initial model.
+            self.old_policy = create_reference_model(model)
+        
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
@@ -314,6 +321,7 @@ class GRPOTrainer(Trainer):
         self.use_vllm = args.use_vllm
 
         self.beta = args.beta
+        self.clip_range = args.clip_range
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
@@ -447,7 +455,13 @@ class GRPOTrainer(Trainer):
 
         if args.sync_ref_model:
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
-
+        
+        if self.is_deepspeed_enabled:
+            self.old_policy = prepare_deepspeed(self.old_policy, self.accelerator)
+        else:
+            self.old_policy = self.accelerator.prepare_model(self.old_policy, evaluation_mode=True)
+        self.add_callback(SyncPolicyModelCallback(old_policy=self.old_policy, accelerator=self.accelerator)) 
+        
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
