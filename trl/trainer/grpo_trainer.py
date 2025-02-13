@@ -249,8 +249,8 @@ class GRPOTrainer(Trainer):
             model = get_peft_model(model, peft_config)
 
         # Reference model
-        # If beta is 0, the reference model is not needed
-        if self.beta == 0:
+        if self.beta == 0.0:
+            # If beta is 0.0, the reference model is not needed
             self.ref_model = None
         elif is_deepspeed_zero3_enabled():
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
@@ -581,7 +581,7 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         with torch.inference_mode():
-            if self.beta == 0:
+            if self.beta == 0.0:
                 ref_per_token_logps = None
             elif self.ref_model is not None:
                 ref_per_token_logps = self._get_per_token_logps(
@@ -702,29 +702,27 @@ class GRPOTrainer(Trainer):
 
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
-        advantages = inputs["advantages"]
-
-        # Compute the KL divergence between the model and the reference model if beta is not 0
-        ref_per_token_logps = inputs["ref_per_token_logps"]
-        # x - x.detach() allows for preserving gradients from x
-        per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
-        if ref_per_token_logps is None:
-            per_token_loss = -per_token_loss
-        else:
-            # we need to compute the KL divergence between the model and the reference model
+        # Compute the KL divergence between the model and the reference model
+        if self.beta != 0.0:
+            ref_per_token_logps = inputs["ref_per_token_logps"]
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
 
-            per_token_loss = -(per_token_loss - self.beta * per_token_kl)
-
-            mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
-            self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+        # x - x.detach() allows for preserving gradients from x
+        advantages = inputs["advantages"]
+        per_token_loss = -torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
+        if self.beta != 0.0:
+            per_token_loss = per_token_loss + self.beta * per_token_kl
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
 
         # Log the metrics
         completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
         self._metrics["completion_length"].append(completion_length)
+
+        if self.beta != 0.0:
+            mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+            self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
         return loss
 

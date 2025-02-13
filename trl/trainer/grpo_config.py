@@ -86,8 +86,8 @@ class GRPOConfig(TrainingArguments):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
-            KL coefficient.
-            If 0, we do not need to load any reference model reducing memory usage and improving training speed.
+            KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
+            speed.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -213,7 +213,10 @@ class GRPOConfig(TrainingArguments):
     )
     beta: float = field(
         default=0.04,
-        metadata={"help": "KL coefficient."},
+        metadata={
+            "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
+            "training speed."
+        },
     )
     reward_weights: Optional[list[float]] = field(
         default=None,
