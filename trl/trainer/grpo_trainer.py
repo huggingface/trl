@@ -577,8 +577,8 @@ class GRPOTrainer(Trainer):
         # Mask everything after the last EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-        #eos_idx[is_eos.any(dim=1)] = is_eos.size(1) - 1 - is_eos.flip(dims=[1]).int().argmax(dim=1)[is_eos.any(dim=1)]
-        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+        eos_idx[is_eos.any(dim=1)] = is_eos.size(1) - 1 - is_eos.flip(dims=[1]).int().argmax(dim=1)[is_eos.any(dim=1)]
+        #eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         # logging of the mask-start index (i.e. the last EOS token index)
         print("Mask starts at token indices:", eos_idx.tolist())
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
