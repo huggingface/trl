@@ -603,7 +603,9 @@ class GRPOTrainer(Trainer):
                     ref_per_token_logps = self._get_per_token_logps(
                         self.model, prompt_completion_ids, attention_mask, logits_to_keep
                     )
-
+            old_per_token_logps = self._get_per_token_logps(
+                    self.old_policy, prompt_completion_ids, attention_mask, logits_to_keep
+                )
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
@@ -697,6 +699,7 @@ class GRPOTrainer(Trainer):
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
             "ref_per_token_logps": ref_per_token_logps,
+            "old_per_token_logps": old_per_token_logps,
             "advantages": advantages,
         }
 
