@@ -103,10 +103,10 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
-        num_exploration_steps ('int', *optional*, defaults to '1'):
+        num_exploration_steps (`int`, *optional*, defaults to `1`):
             num of exploration steps in from the old policy, mu parameter in Deepseek-Math-Algorithm1
              old_policy weights are updated with the current policy after num_exploration_steps .
-        clip_range ('float', *optional*, defaults to '0.2'):
+        clip_range (`float`, *optional*, defaults to `0.2`):
             clipping parameter from the ppo paper. the ratio of current and previous policy
             prob is clipped in (1-clip_range,1+clip_range)
 
