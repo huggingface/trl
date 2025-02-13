@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2VLForConditionalGeneration
 import os
 import textwrap
 import warnings
@@ -29,12 +28,13 @@ from packaging import version
 from torch import nn
 from torch.utils.data import Sampler
 from transformers import (
-    AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    Qwen2_5_VLForConditionalGeneration,
+    Qwen2VLForConditionalGeneration,
     Trainer,
     TrainerCallback,
     is_wandb_available,
@@ -107,11 +107,7 @@ class RepeatRandomSampler(Sampler):
                 for _ in range(self.repeat_count)
             ]
         else:
-            indexes = [
-                idx
-                for idx in range(self.num_samples)
-                for _ in range(self.repeat_count)
-            ]
+            indexes = [idx for idx in range(self.num_samples) for _ in range(self.repeat_count)]
         return iter(indexes)
 
     def __len__(self):
@@ -219,7 +215,7 @@ class QwenGRPOTrainer(Trainer):
     ):
         # Add shuffle_dataset to instance variables
         self.shuffle_dataset = shuffle_dataset
-        
+
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -236,29 +232,32 @@ class QwenGRPOTrainer(Trainer):
 
         # Reference model
         if is_deepspeed_zero3_enabled():
-            
-            # NOTE: unpacking the args is super hacky. 
+            # NOTE: unpacking the args is super hacky.
 
             # Extract model path from config if needed
             model_init_kwargs_dict = model_init_kwargs.__dict__
-            
+
             ref_model_path = model_init_kwargs_dict["model_name_or_path"]
             ref_model_torch_dtype = model_init_kwargs_dict["torch_dtype"]
             use_peft = model_init_kwargs_dict["use_peft"]
             if use_peft:
                 raise ValueError("PEFT is not supported in DeepSpeed Zero3 yet.")
-            
+
             attn_implementation = model_init_kwargs_dict["attn_implementation"]
-            
+
             if "Qwen2-VL" in ref_model_path:
-                self.ref_model = Qwen2VLForConditionalGeneration.from_pretrained(ref_model_path, torch_dtype=ref_model_torch_dtype, attn_implementation=attn_implementation)
+                self.ref_model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    ref_model_path, torch_dtype=ref_model_torch_dtype, attn_implementation=attn_implementation
+                )
             elif "Qwen2.5-VL" in ref_model_path:
-                self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(ref_model_path, torch_dtype=ref_model_torch_dtype, attn_implementation=attn_implementation)
+                self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                    ref_model_path, torch_dtype=ref_model_torch_dtype, attn_implementation=attn_implementation
+                )
             else:
                 raise ValueError("The base model you provided was unexpected. Expected a Qwen2-VL or Qwen2.5-VL.")
-            
+
             self.ref_model.use_cache = False
-    
+
         elif peft_config is None:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
@@ -478,10 +477,7 @@ class QwenGRPOTrainer(Trainer):
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
         return RepeatRandomSampler(
-            self.train_dataset, 
-            self.num_generations, 
-            shuffle=self.shuffle_dataset,
-            seed=self.args.seed
+            self.train_dataset, self.num_generations, shuffle=self.shuffle_dataset, seed=self.args.seed
         )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
@@ -490,10 +486,7 @@ class QwenGRPOTrainer(Trainer):
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
         return RepeatRandomSampler(
-            eval_dataset, 
-            self.num_generations, 
-            shuffle=self.shuffle_dataset,
-            seed=self.args.seed
+            eval_dataset, self.num_generations, shuffle=self.shuffle_dataset, seed=self.args.seed
         )
 
     # Get the per-token log probabilities for the completions for the model and the reference model
@@ -619,8 +612,8 @@ class QwenGRPOTrainer(Trainer):
                 if isinstance(bootstrap, list):
                     if len(bootstrap) > 1:
                         raise ValueError("Only one bootstrap is supported for now.")
-                    bootstrap = bootstrap[0]['text']
-            
+                    bootstrap = bootstrap[0]["text"]
+
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
@@ -645,7 +638,7 @@ class QwenGRPOTrainer(Trainer):
                 # Repeat all input columns (but "prompt" and "completion") to match the number of generations
                 keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
                 reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
-                reward_kwargs['prompts_text'] = prompts_text
+                reward_kwargs["prompts_text"] = prompts_text
                 output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
