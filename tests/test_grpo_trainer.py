@@ -516,11 +516,19 @@ class GRPOTrainerTester(unittest.TestCase):
                 use_vllm=True,
                 report_to="none",
             )
+            lora_config = LoraConfig(
+                r=4,
+                lora_alpha=8,
+                lora_dropout=0.05,
+                target_modules="all-linear",
+                modules_to_save=["embed_tokens", "lm_head"],
+            )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
+                peft_config=lora_config,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

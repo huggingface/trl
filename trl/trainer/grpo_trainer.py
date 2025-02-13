@@ -22,7 +22,7 @@ from unittest.mock import patch
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import broadcast_object_list, gather, gather_object, set_seed
+from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
@@ -491,21 +491,20 @@ class GRPOTrainer(Trainer):
             self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
             if is_compiled_module(unwrapped_model):
-                state_dict = unwrapped_model._orig_mod.state_dict()
-            elif isinstance(unwrapped_model, PeftModel):
+                unwrapped_model = unwrapped_model._orig_mod
+            if is_peft_model(unwrapped_model):
                 unwrapped_model.merge_adapter()
                 state_dict = unwrapped_model.state_dict()
+                state_dict = {
+                    k.removeprefix("base_model.model.")
+                    .removeprefix("base_model.model.")
+                    .replace(".default", "")
+                    .replace(".base_layer", "")
+                    .replace(".modules_to_save", ""): v
+                    for k, v in state_dict.items()
+                    if unwrapped_model.prefix not in k and "original_module" not in k
+                }
                 unwrapped_model.unmerge_adapter()
-                state_dict = {
-                    k.removeprefix("base_model.model.").replace(".base_layer", ""): v
-                    for k, v in state_dict.items()
-                    if self.model.prefix not in k
-                }
-                state_dict = {
-                    k.replace("modules_to_save.default.", ""): v
-                    for k, v in state_dict.items()
-                    if "original_module" not in k
-                }
             else:
                 state_dict = unwrapped_model.state_dict()
         if self.accelerator.is_main_process:
