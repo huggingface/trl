@@ -275,7 +275,7 @@ class GRPOTrainer(Trainer):
         if args.reward_weights is not None:
             if len(args.reward_weights) != len(reward_funcs):
                 raise ValueError(
-                    f"Number of reward weights ({len(len(args.reward_weights))}) must match number of reward "
+                    f"Number of reward weights ({len(args.reward_weights)}) must match number of reward "
                     f"functions ({len(reward_funcs)})"
                 )
             self.reward_weights = torch.tensor(args.reward_weights, dtype=torch.float32)
