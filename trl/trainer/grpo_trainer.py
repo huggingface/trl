@@ -235,10 +235,6 @@ class GRPOTrainer(Trainer):
                 False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
             )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
-            if args.gradient_checkpointing:
-                if hasattr(model, "gradient_checkpointing_enable"):
-                    model.gradient_checkpointing_enable()
-
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
@@ -248,19 +244,23 @@ class GRPOTrainer(Trainer):
                 )
 
         if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
             model = get_peft_model(model, peft_config)
 
-            # Enable gradient checkpointing if requested
-            if args.gradient_checkpointing:
-                # Ensure use_cache is disabled
-                if hasattr(model, "config"):
-                    model.config.use_cache = False
-                model.enable_input_require_grads()
-                # Enable gradient checkpointing on the base model
-                if hasattr(model, "gradient_checkpointing_enable"):
-                    model.gradient_checkpointing_enable()
-                elif hasattr(model.base_model, "gradient_checkpointing_enable"):
-                    model.base_model.gradient_checkpointing_enable()
+        # Enable gradient checkpointing if requested
+        if args.gradient_checkpointing:
+            # Ensure use_cache is disabled
+            if hasattr(model, "config"):
+                model.config.use_cache = False
+
+            # Enable gradient checkpointing on the base model for PEFT
+            if peft_config is not None and hasattr(model.base_model, "gradient_checkpointing_enable"):
+                model.base_model.gradient_checkpointing_enable()
+            # Enable gradient checkpointing for non-PEFT models
+            elif hasattr(model, "gradient_checkpointing_enable"):
+                model.gradient_checkpointing_enable()
+            model = self._enable_gradient_checkpointing(model, args)
 
         # Reference model
         if is_deepspeed_zero3_enabled():
@@ -489,6 +489,25 @@ class GRPOTrainer(Trainer):
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
         return RepeatRandomSampler(eval_dataset, self.num_generations, seed=self.args.seed)
+
+    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
+        """Enables gradient checkpointing for the model."""
+        gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+        use_reentrant = (
+            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
+        )
+
+        if use_reentrant:
+            if hasattr(model, "enable_input_require_grads"):
+                model.enable_input_require_grads()
+            else:
+
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+
+                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        return model
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
