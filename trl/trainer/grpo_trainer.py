@@ -720,9 +720,15 @@ class GRPOTrainer(Trainer):
         ref_per_token_logps = inputs["ref_per_token_logps"]
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
 
-        # x - x.detach() allows for preserving gradients from x
+        old_per_token_logps = inputs["old_per_token_logps"]
+        log_ratio = per_token_logps - old_per_token_logps
+
         advantages = inputs["advantages"]
-        per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
+        per_token_loss = torch.minimum(torch.exp(log_ratio)*advantages.unsqueeze(1), 
+                             torch.clip(torch.exp(log_ratio), 
+                                        1-self._ppo_clip_r, 
+                                        1+self._ppo_clip_r)*advantages.unsqueeze(1)
+                                        )
         per_token_loss = -(per_token_loss - self.beta * per_token_kl)
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
 
