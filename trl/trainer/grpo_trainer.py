@@ -492,7 +492,7 @@ class GRPOTrainer(Trainer):
         ) as unwrapped_model:
             if is_compiled_module(unwrapped_model):
                 state_dict = unwrapped_model._orig_mod.state_dict()
-            elif isinstance(unwrapped_model, PeftModel):
+            elif is_peft_available() and isinstance(unwrapped_model, PeftModel):
                 unwrapped_model.merge_adapter()
                 state_dict = unwrapped_model.state_dict()
                 unwrapped_model.unmerge_adapter()
