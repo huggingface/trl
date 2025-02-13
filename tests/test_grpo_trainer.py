@@ -419,7 +419,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
             )
             trainer = GRPOTrainer(
-                model="Qwen/Qwen2.5-0.5B-Instruct",  # Tiny is too small for vLLM
+                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny is too small for vLLM
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
