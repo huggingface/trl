@@ -414,8 +414,7 @@ class GRPOTrainer(Trainer):
                         max_model_len=self.args.vllm_max_model_len,
                     )
                 self.sampling_params = SamplingParams(
-                    temperature=args.temperature,
-                    max_tokens=self.max_completion_length
+                    temperature=args.temperature, max_tokens=self.max_completion_length
                 )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
@@ -543,9 +542,7 @@ class GRPOTrainer(Trainer):
             if self.accelerator.is_main_process:
                 if self.env is not None:
                     completion_ids = self.env.generate(
-                        prompts=all_prompts,
-                        llm=self.llm,
-                        sampling_params=self.sampling_params
+                        prompts=all_prompts, llm=self.llm, sampling_params=self.sampling_params
                     )
                 else:
                     outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
@@ -581,6 +578,8 @@ class GRPOTrainer(Trainer):
         is_eos = completion_ids == self.processing_class.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.size(1) - 1 - is_eos.flip(dims=[1]).int().argmax(dim=1)[is_eos.any(dim=1)]
+        # logging of the mask-start index (i.e. the last EOS token index)
+        print("Mask starts at token indices:", eos_idx.tolist())
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
