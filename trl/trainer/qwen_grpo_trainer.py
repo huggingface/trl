@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2VLForConditionalGeneration
 import os
 import textwrap
 import warnings
@@ -73,32 +73,45 @@ class RepeatRandomSampler(Sampler):
             Dataset to sample from.
         repeat_count (`int`):
             Number of times to repeat each index.
+        shuffle (`bool`, defaults to True):
+            If True, randomizes the order of indices. If False, maintains sequential order.
         seed (`Optional[int]`):
-            Random seed for reproducibility (only affects this sampler).
+            Random seed for reproducibility (only affects this sampler when shuffle=True).
 
     Example:
     ```python
-    >>> sampler = RepeatRandomSampler(["a", "b", "c", "d"], repeat_count=2)
+    >>> sampler = RepeatRandomSampler(["a", "b", "c", "d"], repeat_count=2, shuffle=True)
     >>> list(sampler)
     [2, 2, 0, 0, 3, 3, 1, 1]
+    >>> sampler = RepeatRandomSampler(["a", "b", "c", "d"], repeat_count=2, shuffle=False)
+    >>> list(sampler)
+    [0, 0, 1, 1, 2, 2, 3, 3]
     ```
     """
 
-    def __init__(self, data_source: Sized, repeat_count: int, seed: Optional[int] = None):
+    def __init__(self, data_source: Sized, repeat_count: int, shuffle: bool = True, seed: Optional[int] = None):
         self.data_source = data_source
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
+        self.shuffle = shuffle
         self.seed = seed
         self.generator = torch.Generator()  # Create a local random generator
         if seed is not None:
             self.generator.manual_seed(seed)
 
     def __iter__(self):
-        indexes = [
-            idx
-            for idx in torch.randperm(self.num_samples, generator=self.generator).tolist()
-            for _ in range(self.repeat_count)
-        ]
+        if self.shuffle:
+            indexes = [
+                idx
+                for idx in torch.randperm(self.num_samples, generator=self.generator).tolist()
+                for _ in range(self.repeat_count)
+            ]
+        else:
+            indexes = [
+                idx
+                for idx in range(self.num_samples)
+                for _ in range(self.repeat_count)
+            ]
         return iter(indexes)
 
     def __len__(self):
@@ -183,6 +196,8 @@ class QwenGRPOTrainer(Trainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        shuffle_dataset (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the dataset when creating the sampler. If False, the dataset will be trained in order. Useful for curriculm learning.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -200,7 +215,11 @@ class QwenGRPOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        shuffle_dataset: bool = True,
     ):
+        # Add shuffle_dataset to instance variables
+        self.shuffle_dataset = shuffle_dataset
+        
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -211,19 +230,35 @@ class QwenGRPOTrainer(Trainer):
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
         model_id = model.config._name_or_path
-        if args.model_init_kwargs is not None:
-            raise ValueError(
-                "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
-                "This argument can only be used when the `model` argument is a string."
-            )
 
         if peft_config is not None:
             model = get_peft_model(model, peft_config)
 
         # Reference model
         if is_deepspeed_zero3_enabled():
-            raise ValueError("DeepSpeed zero3 not supported yet.")
-            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+            
+            # NOTE: unpacking the args is super hacky. 
+
+            # Extract model path from config if needed
+            model_init_kwargs_dict = model_init_kwargs.__dict__
+            
+            ref_model_path = model_init_kwargs_dict["model_name_or_path"]
+            ref_model_torch_dtype = model_init_kwargs_dict["torch_dtype"]
+            use_peft = model_init_kwargs_dict["use_peft"]
+            if use_peft:
+                raise ValueError("PEFT is not supported in DeepSpeed Zero3 yet.")
+            
+            attn_implementation = model_init_kwargs_dict["attn_implementation"]
+            
+            if "Qwen2-VL" in ref_model_path:
+                self.ref_model = Qwen2VLForConditionalGeneration.from_pretrained(ref_model_path, torch_dtype=ref_model_torch_dtype, attn_implementation=attn_implementation)
+            elif "Qwen2.5-VL" in ref_model_path:
+                self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(ref_model_path, torch_dtype=ref_model_torch_dtype, attn_implementation=attn_implementation)
+            else:
+                raise ValueError("The base model you provided was unexpected. Expected a Qwen2-VL or Qwen2.5-VL.")
+            
+            self.ref_model.use_cache = False
+    
         elif peft_config is None:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
@@ -442,14 +477,24 @@ class QwenGRPOTrainer(Trainer):
         # identical prompts are distributed to different GPUs, allowing rewards to be computed and normalized correctly
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
-        return RepeatRandomSampler(self.train_dataset, self.num_generations, seed=self.args.seed)
+        return RepeatRandomSampler(
+            self.train_dataset, 
+            self.num_generations, 
+            shuffle=self.shuffle_dataset,
+            seed=self.args.seed
+        )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
         # Returns a sampler that ensures each prompt is repeated across multiple processes. This guarantees that
         # identical prompts are distributed to different GPUs, allowing rewards to be computed and normalized correctly
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
-        return RepeatRandomSampler(eval_dataset, self.num_generations, seed=self.args.seed)
+        return RepeatRandomSampler(
+            eval_dataset, 
+            self.num_generations, 
+            shuffle=self.shuffle_dataset,
+            seed=self.args.seed
+        )
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
