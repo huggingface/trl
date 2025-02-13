@@ -132,6 +132,27 @@ class SyncRefModelCallback(TrainerCallback):
             self.sync_target_model(model, self.ref_model, args.ref_model_mixup_alpha)
 
 
+class SyncPolicyModelCallback(SyncRefModelCallback):
+    """
+    Callback to synchronize the model with a reference model.
+    """
+
+    def __init__(
+        self,
+        old_policy: Union[PreTrainedModel, torch.nn.Module],
+        accelerator: Optional[Accelerator],
+    ):
+        super().__init__(ref_model=old_policy, accelerator=accelerator)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        model: PreTrainedModel = kwargs["model"]
+
+        if state.global_step % args.num_exploration_steps == 0:
+            if self.accelerator:
+                model = self.accelerator.unwrap_model(model)
+            self.sync_target_model(model, self.ref_model, alpha=1.0)
+
+
 class RichProgressCallback(TrainerCallback):
     """
     A [`TrainerCallback`] that displays the progress of training or evaluation using Rich.
