@@ -542,7 +542,11 @@ class GRPOTrainer(Trainer):
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
                 if self.env is not None:
-                    completion_ids = self.env.generate(prompts=all_prompts, llm=self.llm, sampling_params=self.sampling_params)
+                    completion_ids = self.env.generate(
+                        prompts=all_prompts,
+                        llm=self.llm,
+                        sampling_params=self.sampling_params
+                    )
                 else:
                     outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
                     completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
@@ -573,7 +577,7 @@ class GRPOTrainer(Trainer):
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Mask everything after the first EOS token
+        # Mask everything after the last EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.size(1) - 1 - is_eos.flip(dims=[1]).int().argmax(dim=1)[is_eos.any(dim=1)]
