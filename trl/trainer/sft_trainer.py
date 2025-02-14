@@ -370,14 +370,20 @@ class SFTTrainer(Trainer):
 
         # If the dataset is already preprocessed (tokenized), return as-is. Only works if dataset is
         # a datasets.Dataset or datasets.IterableDataset -- not for torch Dataset
-        column_names = (
-            dataset.column_names if isinstance(dataset, (Dataset, IterableDataset)) else None
-        )
-        if column_names and "input_ids" in column_names:
+        if isinstance(dataset, Dataset):
+            column_names = dataset.column_names
+        elif isinstance(dataset, IterableDataset):
+            column_names = list(next(iter(dataset)).keys())
+        else:
+            column_names = None
+
+        is_processed = bool(column_names) and ("input_ids" in column_names)
+
+        if is_processed:
             if formatting_func is not None:
                 warnings.warn(
                     "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
-                    "valid formatting function. Therefore `formatting_func` will be ignored. Either remove the "
+                    "formatting function. Therefore `formatting_func` will be ignored. Either remove the "
                     "`formatting_func` or pass a dataset that is not already processed.",
                     UserWarning,
                 )
@@ -391,7 +397,7 @@ class SFTTrainer(Trainer):
 
         with PartialState().local_main_process_first():
             # Apply the formatting function if any
-            if formatting_func is not None:
+            if formatting_func is not None and not is_processed:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
 
