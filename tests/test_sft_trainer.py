@@ -288,7 +288,7 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))
 
-    def test_sft_trainer_with_pretokenzied_data_packing(self):
+    def test_sft_trainer_with_pretokenized_data_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 output_dir=tmp_dir,
@@ -307,6 +307,34 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.train_dataset_from_pretokenized,
                 eval_dataset=self.eval_dataset_from_pretokenized,
+            )
+
+            trainer.train()
+
+            assert trainer.state.log_history[(-1)]["train_loss"] is not None
+            assert trainer.state.log_history[0]["eval_loss"] is not None
+
+            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
+
+    def test_sft_trainer_directly_with_pretokenized_data(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                report_to="none",
+            )
+
+            # Directly passing the pretokenized dataset without wrapping it in ConstantLengthDataset
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.dummy_tokenized_dataset,
+                eval_dataset=self.dummy_tokenized_dataset,
             )
 
             trainer.train()
