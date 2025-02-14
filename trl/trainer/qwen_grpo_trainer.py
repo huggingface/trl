@@ -44,10 +44,19 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational
 from ..import_utils import is_vllm_available
-from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
+from ..models import (
+    create_reference_model,
+    prepare_deepspeed,
+    unwrap_model_for_generation,
+)
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad, selective_log_softmax
+from .utils import (
+    generate_model_card,
+    get_comet_experiment_url,
+    pad,
+    selective_log_softmax,
+)
 
 
 if is_peft_available():
@@ -89,7 +98,13 @@ class RepeatRandomSampler(Sampler):
     ```
     """
 
-    def __init__(self, data_source: Sized, repeat_count: int, shuffle: bool = True, seed: Optional[int] = None):
+    def __init__(
+        self,
+        data_source: Sized,
+        repeat_count: int,
+        shuffle: bool = True,
+        seed: Optional[int] = None,
+    ):
         self.data_source = data_source
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
@@ -247,11 +262,15 @@ class QwenGRPOTrainer(Trainer):
 
             if "Qwen2-VL" in ref_model_path:
                 self.ref_model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    ref_model_path, torch_dtype=ref_model_torch_dtype, attn_implementation=attn_implementation
+                    ref_model_path,
+                    torch_dtype=ref_model_torch_dtype,
+                    attn_implementation=attn_implementation,
                 )
             elif "Qwen2.5-VL" in ref_model_path:
                 self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                    ref_model_path, torch_dtype=ref_model_torch_dtype, attn_implementation=attn_implementation
+                    ref_model_path,
+                    torch_dtype=ref_model_torch_dtype,
+                    attn_implementation=attn_implementation,
                 )
             else:
                 raise ValueError("The base model you provided was unexpected. Expected a Qwen2-VL or Qwen2.5-VL.")
@@ -409,7 +428,8 @@ class QwenGRPOTrainer(Trainer):
                 # setting (profiling_patch).
                 world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
                 profiling_patch = patch(
-                    "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
+                    "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling",
+                    return_value=None,
                 )
                 with world_size_patch, profiling_patch:
                     self.llm = LLM(
@@ -477,7 +497,10 @@ class QwenGRPOTrainer(Trainer):
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
         return RepeatRandomSampler(
-            self.train_dataset, self.num_generations, shuffle=self.shuffle_dataset, seed=self.args.seed
+            self.train_dataset,
+            self.num_generations,
+            shuffle=self.shuffle_dataset,
+            seed=self.args.seed,
         )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
@@ -486,23 +509,45 @@ class QwenGRPOTrainer(Trainer):
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
         return RepeatRandomSampler(
-            eval_dataset, self.num_generations, shuffle=self.shuffle_dataset, seed=self.args.seed
+            eval_dataset,
+            self.num_generations,
+            shuffle=self.shuffle_dataset,
+            seed=self.args.seed,
         )
 
     # Get the per-token log probabilities for the completions for the model and the reference model
-    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
+    def _get_per_token_logps(
+        self,
+        model,
+        input_ids,
+        attention_mask,
+        pixel_values,
+        image_grid_thw,
+        logits_to_keep,
+    ):
+        # NOTE: Flash attention is not supported here yet as our sequences are right padded.
         # Get logits for full sequence
-        logits = model(input_ids=input_ids, attention_mask=attention_mask).logits
+        logits = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+        ).logits
+
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
+        # Only keep the logits for the completion portion
         input_ids = input_ids[:, -logits_to_keep:]
         logits = logits[:, -logits_to_keep:]
-        return selective_log_softmax(logits, input_ids)  #  compute logprobs for the input tokens
+
+        return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
     def _move_model_to_vllm(self):
         raise ValueError("vLLM not supported yet.")
         with unwrap_model_for_generation(
-            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+            self.model,
+            self.accelerator,
+            gather_deepspeed3_params=self.args.ds3_gather_for_generation,
         ) as unwrapped_model:
             if is_compiled_module(unwrapped_model):
                 state_dict = unwrapped_model._orig_mod.state_dict()
@@ -534,7 +579,13 @@ class QwenGRPOTrainer(Trainer):
         )
 
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
-        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+        prompt_ids, prompt_mask, pixel_values, image_grid_thw = (
+            prompt_inputs["input_ids"],
+            prompt_inputs["attention_mask"],
+            prompt_inputs["pixel_values"],
+            prompt_inputs["image_grid_thw"],
+        )
 
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
@@ -551,7 +602,11 @@ class QwenGRPOTrainer(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
-                outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
+                outputs = self.llm.generate(
+                    all_prompts_text,
+                    sampling_params=self.sampling_params,
+                    use_tqdm=False,
+                )
                 completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
             else:
                 completion_ids = [None] * len(all_prompts_text)
@@ -572,7 +627,11 @@ class QwenGRPOTrainer(Trainer):
             # Regular generation path
             with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
-                    prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+                    prompt_ids,
+                    attention_mask=prompt_mask,
+                    pixel_values=pixel_values,
+                    image_grid_thw=image_grid_thw,
+                    generation_config=self.generation_config,
                 )
 
             # Compute prompt length and extract completion ids
@@ -595,12 +654,22 @@ class QwenGRPOTrainer(Trainer):
         with torch.inference_mode():
             if self.ref_model is not None:
                 ref_per_token_logps = self._get_per_token_logps(
-                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                    self.ref_model,
+                    prompt_completion_ids,
+                    attention_mask,
+                    pixel_values,
+                    image_grid_thw,
+                    logits_to_keep,
                 )
             else:
                 with self.accelerator.unwrap_model(self.model).disable_adapter():
                     ref_per_token_logps = self._get_per_token_logps(
-                        self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                        self.model,
+                        prompt_completion_ids,
+                        attention_mask,
+                        pixel_values,
+                        image_grid_thw,
+                        logits_to_keep,
                     )
 
         # Decode the generated completions
@@ -629,7 +698,11 @@ class QwenGRPOTrainer(Trainer):
                 else:
                     texts = [p + c for p, c in zip(prompts, completions)]
                 reward_inputs = reward_processing_class(
-                    texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                    texts,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="right",
+                    add_special_tokens=False,
                 )
                 reward_inputs = super()._prepare_inputs(reward_inputs)
                 with torch.inference_mode():
@@ -703,20 +776,34 @@ class QwenGRPOTrainer(Trainer):
             "completion_mask": completion_mask,
             "ref_per_token_logps": ref_per_token_logps,
             "advantages": advantages,
+            "pixel_values": pixel_values,
+            "image_grid_thw": image_grid_thw,
         }
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
-        # Compute the per-token log probabilities for the model
 
+        # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        completion_ids, completion_mask = (
+            inputs["completion_ids"],
+            inputs["completion_mask"],
+        )
+        pixel_values, image_grid_thw = inputs["pixel_values"], inputs["image_grid_thw"]
+
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        per_token_logps = self._get_per_token_logps(
+            model,
+            input_ids,
+            attention_mask,
+            pixel_values,
+            image_grid_thw,
+            logits_to_keep,
+        )
 
         # Compute the KL divergence between the model and the reference model
         ref_per_token_logps = inputs["ref_per_token_logps"]
@@ -737,7 +824,13 @@ class QwenGRPOTrainer(Trainer):
 
         return loss
 
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
+    def prediction_step(
+        self,
+        model,
+        inputs,
+        prediction_loss_only,
+        ignore_keys: Optional[list[str]] = None,
+    ):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
