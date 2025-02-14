@@ -540,7 +540,9 @@ class GRPOTrainer(Trainer):
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
                 ordered_set_of_prompts = list(dict.fromkeys(all_prompts_text))
-                all_outputs = self.llm.generate(ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False)
+                all_outputs = self.llm.generate(
+                    ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
+                )
                 completion_ids = []
                 for outputs in all_outputs:
                     for output in outputs.outputs:
