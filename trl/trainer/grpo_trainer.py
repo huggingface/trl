@@ -558,15 +558,17 @@ class GRPOTrainer(Trainer):
             )
             completion_ids = completion_ids[process_slice]
 
-            # Pad the completions, and concatenate them with the prompts
+            # Compute completion_lengths
             completion_lengths = [len(ids) for ids in completion_ids]
+            eos_idx = torch.tensor([l - 1 for l in completion_lengths], device=device)
+
+            # Pad completion_ids to uniform length, mask from last output token (EOS)
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-
-            eos_idx = torch.tensor([l - 1 for l in completion_lengths], device=device)
             sequence_indices = torch.arange(completion_ids.size(1), device=device).expand(completion_ids.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
             with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
@@ -578,18 +580,14 @@ class GRPOTrainer(Trainer):
             prompt_length = prompt_ids.size(1)
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
-            completion_lengths = [len(ids) for ids in completion_ids]
 
+            # Mask completion_ids beginning from first EOS token
             is_eos = completion_ids == self.processing_class.eos_token_id
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
             completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
-        print("Mask starts at token indices:", eos_idx.tolist())
-        print([len(prompt_mask[i]) for i in range(len(prompt_mask))])
-        print([len(completion_mask[i]) for i in range(len(completion_mask))])
-        
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B*G, P+C)
 
