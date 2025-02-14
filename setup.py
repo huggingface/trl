@@ -71,7 +71,7 @@ To create the package for PyPI.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.15.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.16.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "accelerate>=0.34.0",
