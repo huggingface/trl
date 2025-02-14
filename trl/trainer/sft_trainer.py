@@ -368,6 +368,22 @@ class SFTTrainer(Trainer):
         if isinstance(dataset, ConstantLengthDataset):
             return dataset
 
+        # If the dataset is already preprocessed (tokenized), return as-is. Only works if dataset is
+        # a datasets.Dataset or datasets.IterableDataset -- not for torch Dataset
+        column_names = (
+            dataset.column_names if isinstance(dataset, (Dataset, IterableDataset)) else None
+        )
+        if column_names and "input_ids" in column_names:
+            if formatting_func is not None:
+                warnings.warn(
+                    "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
+                    "valid formatting function. Therefore `formatting_func` will be ignored. Either remove the "
+                    "`formatting_func` or pass a dataset that is not already processed.",
+                    UserWarning,
+                )
+            if not packing:
+                return dataset
+
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
