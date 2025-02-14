@@ -558,9 +558,8 @@ class GRPOTrainer(Trainer):
             )
             completion_ids = completion_ids[process_slice]
 
-            # Compute completion_lengths
-            completion_lengths = [len(ids) for ids in completion_ids]
-            eos_idx = torch.tensor([l - 1 for l in completion_lengths], device=device)
+            # Compute completion lengths (EOS indices) before padding
+            eos_idx = torch.tensor([len(ids) - 1 for ids in completion_ids], device=device)
 
             # Pad completion_ids to uniform length, mask from last output token (EOS)
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
