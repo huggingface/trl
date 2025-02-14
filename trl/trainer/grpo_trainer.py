@@ -383,7 +383,10 @@ class GRPOTrainer(Trainer):
                     else:
                         vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
                 # Check that the requested device is available
-                if vllm_device.split(":")[0] == f"{device_type}" and int(vllm_device.split(":")[1]) >= device_module.device_count():
+                if (
+                    vllm_device.split(":")[0] == f"{device_type}"
+                    and int(vllm_device.split(":")[1]) >= device_module.device_count()
+                ):
                     raise ValueError(
                         f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
                         "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
@@ -405,8 +408,9 @@ class GRPOTrainer(Trainer):
                 profiling_patch = patch(
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
                 )
-                # For Ascend NPU (torch-npu), collective communication requires the establishment of a communication group, 
-                # and different processes must hold the same group number. However, multiple process groups will be created 
+
+                # For Ascend NPU (torch-npu), collective communication requires the establishment of a communication group,
+                # and different processes must hold the same group number. However, multiple process groups will be created
                 # internally within vLLM. This will cause the group id of the communication group on rank 0 to be different from
                 # that of other ranks, causing backward to hang on because the communication domain cannot be established. So
                 # we need to patch it to make sure the group id of different ranks in the training phase are the same.
@@ -414,7 +418,9 @@ class GRPOTrainer(Trainer):
                 def new_group_context():
                     original_new_group = torch.distributed.new_group
                     try:
-                        torch.distributed.new_group = functools.partial(original_new_group, use_local_synchronization=True) 
+                        torch.distributed.new_group = functools.partial(
+                            original_new_group, use_local_synchronization=True
+                        )
                         yield
                     finally:
                         torch.distributed.new_group = original_new_group
