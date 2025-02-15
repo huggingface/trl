@@ -726,8 +726,8 @@ class GRPOTrainer(Trainer):
         advantages = inputs["advantages"]
         per_token_loss = torch.minimum(torch.exp(log_ratio)*advantages.unsqueeze(1), 
                              torch.clip(torch.exp(log_ratio), 
-                                        1-self._ppo_clip_r, 
-                                        1+self._ppo_clip_r)*advantages.unsqueeze(1)
+                                        1-self.clip_range, 
+                                        1+self.clip_range)*advantages.unsqueeze(1)
                                         )
         per_token_loss = -(per_token_loss - self.beta * per_token_kl)
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
