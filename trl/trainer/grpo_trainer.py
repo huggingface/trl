@@ -326,6 +326,13 @@ class GRPOTrainer(Trainer):
         # Initialize the metrics
         self._metrics = defaultdict(list)
         self.log_completions = args.log_completions
+        if self.log_completions:
+            self._completions = {
+                "step": [],
+                "prompt": [],
+                "completion": [],
+                "reward": []
+            }
 
         super().__init__(
             model=model,
@@ -665,14 +672,13 @@ class GRPOTrainer(Trainer):
         ):
             import pandas as pd
 
-            # For logging
-            table = {
-                "step": [str(self.state.global_step)] * len(rewards),
-                "prompt": gather_object(prompts_text),
-                "completion": gather_object(completions_text),
-                "reward": rewards.tolist(),
-            }
-            df = pd.DataFrame(table)
+            # Append new data to the running log
+            self._completions["step"].extend([str(self.state.global_step)] * len(rewards))
+            self._completions["prompt"].extend(gather_object(prompts_text))
+            self._completions["completion"].extend(gather_object(completions_text))
+            self._completions["reward"].extend(rewards.tolist())
+
+            df = pd.DataFrame(self._completions)
 
             if wandb.run is not None and self.accelerator.is_main_process:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
