@@ -316,34 +316,6 @@ class SFTTrainerTester(unittest.TestCase):
 
             assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
 
-    def test_sft_trainer_directly_with_pretokenized_data(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                eval_strategy="steps",
-                max_steps=4,
-                eval_steps=2,
-                save_steps=2,
-                per_device_train_batch_size=2,
-                report_to="none",
-            )
-
-            # Directly passing the pretokenized dataset without wrapping it in ConstantLengthDataset
-            trainer = SFTTrainer(
-                model=self.model_id,
-                args=training_args,
-                train_dataset=self.dummy_tokenized_dataset,
-                eval_dataset=self.dummy_tokenized_dataset,
-            )
-
-            trainer.train()
-
-            assert trainer.state.log_history[(-1)]["train_loss"] is not None
-            assert trainer.state.log_history[0]["eval_loss"] is not None
-
-            assert "model.safetensors" in os.listdir(tmp_dir + "/checkpoint-2")
-
     def test_sft_trainer_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Shoud work as SFTTrainer natively supports conversational lm dataset
@@ -1398,3 +1370,35 @@ class SFTTrainerTester2(unittest.TestCase):
                     "base_layer" not in n
                 ):  # We expect the peft parameters to be different (except for the base layer)
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_sft_trainer_directly_with_pretokenized_data(self):
+        # Get the model and dataset
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        def tokenize_example(example):
+            return tokenizer(example["text"], padding="max_length", truncation=True, max_length=16)
+
+        # Apply tokenization
+        tokenized_dataset = dataset.map(tokenize_example, remove_columns=["text"])
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            trainer = SFTTrainer(args=training_args, model=model, train_dataset=tokenized_dataset)
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
