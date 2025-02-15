@@ -722,13 +722,10 @@ class GRPOTrainer(Trainer):
 
         old_per_token_logps = inputs["old_per_token_logps"]
         log_ratio = per_token_logps - old_per_token_logps
-
+        ratio = torch.exp(log_ratio)
         advantages = inputs["advantages"]
-        per_token_loss = torch.minimum(torch.exp(log_ratio)*advantages.unsqueeze(1), 
-                             torch.clip(torch.exp(log_ratio), 
-                                        1-self.clip_range, 
-                                        1+self.clip_range)*advantages.unsqueeze(1)
-                                        )
+        per_token_loss = torch.minimum(ratio*advantages.unsqueeze(1), 
+                             torch.clip(ratio, 1-self.clip_range, 1+self.clip_range)*advantages.unsqueeze(1))
         per_token_loss = -(per_token_loss - self.beta * per_token_kl)
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
 
@@ -738,6 +735,9 @@ class GRPOTrainer(Trainer):
 
         mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+        ratio_completion_token = ratio*completion_mask
+        self._metrics["ratio"].append(self.accelerator.gather_for_metrics(ratio_completion_token).mean().item())
+        self._metrics["ratio_var"].append(self.accelerator.gather_for_metrics(ratio_completion_token).var().item())
 
         return loss
 
