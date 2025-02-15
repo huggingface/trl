@@ -639,6 +639,10 @@ class GRPOTrainer(Trainer):
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
 
+        epsilon = 1e-4
+        noise = torch.randn_like(advantages) * epsilon
+        advantages = advantages + noise
+
         # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts),
