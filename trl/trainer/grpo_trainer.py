@@ -486,16 +486,12 @@ class GRPOTrainer(Trainer):
         logits = logits[:, -logits_to_keep:]
         return selective_log_softmax(logits, input_ids)  #  compute logprobs for the input tokens
 
-    def _move_model_to_vllm(self):
+    def _move_model_to_vllm(self, unwrapped_model):
         with unwrap_model_for_generation(
             self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
-            if is_compiled_module(unwrapped_model):
-                unwrapped_model = unwrapped_model._orig_mod
             if is_peft_model(unwrapped_model):
-                unwrapped_model.merge_adapter()
-                state_dict = unwrapped_model.state_dict()
-                unwrapped_model.unmerge_adapter()
+                state_dict = unwrapped_model.state_dict()                
                 # Remove base_model and base_layer prefixes
                 state_dict = {
                     k.removeprefix("base_model.model.").replace(".base_layer", ""): v for k, v in state_dict.items()
@@ -530,31 +526,40 @@ class GRPOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
-            # First, have main process load weights if needed
-            if self.state.global_step != self._last_loaded_step:
-                self._move_model_to_vllm()
-                self._last_loaded_step = self.state.global_step
+            with unwrap_model_for_generation(
+                self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+            ) as unwrapped_model:
+                if is_compiled_module(unwrapped_model):
+                    unwrapped_model = unwrapped_model._orig_mod
+                if is_peft_model(unwrapped_model):
+                    unwrapped_model.merge_adapter()
+                # First, have main process load weights if needed
+                if self.state.global_step != self._last_loaded_step:
+                    self._move_model_to_vllm(unwrapped_model)
+                    self._last_loaded_step = self.state.global_step
 
-            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-            all_prompts_text = gather_object(prompts_text)
-            if self.accelerator.is_main_process:
-                outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
-                completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
-            else:
-                completion_ids = [None] * len(all_prompts_text)
-            # Broadcast the completions from the main process to all processes, ensuring each process receives its
-            # corresponding slice.
-            completion_ids = broadcast_object_list(completion_ids, from_process=0)
-            process_slice = slice(
-                self.accelerator.process_index * len(prompts),
-                (self.accelerator.process_index + 1) * len(prompts),
-            )
-            completion_ids = completion_ids[process_slice]
+                # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
+                all_prompts_text = gather_object(prompts_text)
+                if self.accelerator.is_main_process:
+                    outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
+                    completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
+                else:
+                    completion_ids = [None] * len(all_prompts_text)
+                # Broadcast the completions from the main process to all processes, ensuring each process receives its
+                # corresponding slice.
+                completion_ids = broadcast_object_list(completion_ids, from_process=0)
+                process_slice = slice(
+                    self.accelerator.process_index * len(prompts),
+                    (self.accelerator.process_index + 1) * len(prompts),
+                )
+                completion_ids = completion_ids[process_slice]
 
-            # Pad the completions, and concatenate them with the prompts
-            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+                # Pad the completions, and concatenate them with the prompts
+                completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+                completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+                prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+                if is_peft_model(unwrapped_model):
+                    unwrapped_model.unmerge_adapter()
         else:
             # Regular generation path
             with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
