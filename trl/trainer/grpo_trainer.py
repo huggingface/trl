@@ -400,6 +400,8 @@ class GRPOTrainer(Trainer):
                 profiling_patch = patch(
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
                 )
+                # for now, vLLM does not support `enable_prefix_caching` with a model that has sliding window
+                has_sliding_window = hasattr(self.model.config, "sliding_window")
                 with world_size_patch, profiling_patch:
                     self.llm = LLM(
                         model=model.name_or_path,
@@ -409,7 +411,7 @@ class GRPOTrainer(Trainer):
                         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
                         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
                         # This is particularly useful here because we generate completions from the same prompts.
-                        enable_prefix_caching=True,
+                        enable_prefix_caching=True if not has_sliding_window else False,
                         max_model_len=self.args.vllm_max_model_len,
                     )
                 self.sampling_params = SamplingParams(
