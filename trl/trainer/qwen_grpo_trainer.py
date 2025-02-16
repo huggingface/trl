@@ -432,7 +432,7 @@ class QwenGRPOTrainer(Trainer):
                     return_value=None,
                 )
                 with world_size_patch, profiling_patch:
-                    self.llm = LLM(
+                    self.vlm = LLM(
                         model=model.name_or_path,
                         device=vllm_device,
                         gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
@@ -482,8 +482,6 @@ class QwenGRPOTrainer(Trainer):
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
-
-        raise ValueError("vLLM support in progress - made it through init!")
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -545,7 +543,6 @@ class QwenGRPOTrainer(Trainer):
         return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
     def _move_model_to_vllm(self):
-        raise ValueError("vLLM not supported yet.")
         with unwrap_model_for_generation(
             self.model,
             self.accelerator,
@@ -570,8 +567,8 @@ class QwenGRPOTrainer(Trainer):
             else:
                 state_dict = unwrapped_model.state_dict()
         if self.accelerator.is_main_process:
-            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-            llm_model.load_weights(state_dict.items())
+            vlm_model = self.vlm.llm_engine.model_executor.driver_worker.model_runner.model
+            vlm_model.load_weights(state_dict.items())
 
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
