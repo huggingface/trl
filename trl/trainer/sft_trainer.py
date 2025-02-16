@@ -440,7 +440,9 @@ class SFTTrainer(Trainer):
         )
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        use_liger = self.args.use_liger or (AutoLigerKernelForCausalLM is not None and isinstance(model, AutoLigerKernelForCausalLM))
+        use_liger = self.args.use_liger or (
+            AutoLigerKernelForCausalLM is not None and isinstance(model, AutoLigerKernelForCausalLM)
+        )
         if "labels" in inputs and not use_liger:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
