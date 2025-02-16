@@ -338,9 +338,7 @@ class QwenGRPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.use_vllm = args.use_vllm
-
-        if self.use_vllm:
-            raise ValueError("vLLM not supported yet.")
+        print(f"use_vllm: {self.use_vllm}")
 
         self.beta = args.beta
 
@@ -393,7 +391,6 @@ class QwenGRPOTrainer(Trainer):
         set_seed(args.seed, device_specific=True)
 
         if self.use_vllm:
-            raise ValueError("vLLM not supported yet.")
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
@@ -404,9 +401,12 @@ class QwenGRPOTrainer(Trainer):
                 vllm_device = self.args.vllm_device
                 if vllm_device == "auto":
                     if torch.cuda.device_count() == 1:
+                        print("Only one GPU available, sharing it between vLLM and training.")
                         vllm_device = "cuda:0"  # particular case when training with onyl 1 GPU: share it
                     else:
                         vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
+                        print(f"Using GPU {vllm_device} for vLLM.")
+
                 # Check that the requested device is available
                 if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
                     raise ValueError(
@@ -482,6 +482,8 @@ class QwenGRPOTrainer(Trainer):
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+
+        raise ValueError("vLLM support in progress - made it through init!")
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
