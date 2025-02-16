@@ -60,6 +60,8 @@ if is_peft_available():
 
 if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
+else:
+    AutoLigerKernelForCausalLM = None
 
 if is_wandb_available():
     import wandb
