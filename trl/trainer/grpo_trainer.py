@@ -707,7 +707,7 @@ class GRPOTrainer(Trainer):
         advantages = inputs["advantages"]
         per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
         per_token_loss = -(per_token_loss - self.beta * per_token_kl)
-        loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
 
         # Log the metrics
         completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
