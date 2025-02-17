@@ -372,8 +372,7 @@ class SFTTrainer(Trainer):
         if isinstance(dataset, ConstantLengthDataset):
             return dataset
 
-        # If the dataset is already preprocessed (tokenized), return as-is. Only works if dataset is
-        # a datasets.Dataset or datasets.IterableDataset -- not for torch Dataset
+        # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
 
