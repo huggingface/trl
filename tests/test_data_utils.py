@@ -24,6 +24,7 @@ from trl.data_utils import (
     extract_prompt,
     is_conversational,
     maybe_apply_chat_template,
+    maybe_convert_to_chatml,
     maybe_extract_prompt,
     maybe_unpair_preference_dataset,
     pack_examples,
@@ -433,6 +434,51 @@ class TestPackExamples(unittest.TestCase):
         }
         dataset = dataset.map(pack_examples, batched=True, fn_kwargs={"seq_length": seq_length})
         self.assertEqual(dataset.to_dict(), expected_output)
+
+
+class TestMaybeConvertToChatML(unittest.TestCase):
+    def test_with_conversations_key(self):
+        # Particular case where the key is "conversations": we rename it to "messages"
+        example = {
+            "conversations": [
+                {"from": "user", "value": "What color is the sky?"},
+                {"from": "assistant", "value": "It is blue."},
+            ]
+        }
+        expected_output = {
+            "messages": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ]
+        }
+        self.assertEqual(maybe_convert_to_chatml(example), expected_output)
+
+    def test_without_conversations_key(self):
+        # Same as before, but we don't rename the keys
+        example = {
+            "prompt": [{"from": "user", "value": "What color is the sky?"}],
+            "completion": [{"from": "assistant", "value": "It is blue."}],
+        }
+        expected_output = {
+            "prompt": [{"role": "user", "content": "What color is the sky?"}],
+            "completion": [{"role": "assistant", "content": "It is blue."}],
+        }
+        self.assertEqual(maybe_convert_to_chatml(example), expected_output)
+
+    def test_not_conversional(self):
+        # When not needed, the example should remain unchanged
+        example = {"text": "The sky is blue."}
+        self.assertEqual(maybe_convert_to_chatml(example), example)
+
+    def test_already_chatml(self):
+        # When the example is already in ChatML format, it should remain unchanged
+        example = {
+            "messages": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ]
+        }
+        self.assertEqual(maybe_convert_to_chatml(example), example)
 
 
 # Run the tests

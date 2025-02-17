@@ -31,7 +31,8 @@ def is_conversational(example: dict[str, Any]) -> bool:
             dataset type.
 
     Returns:
-        `bool`: `True` if the data is in a conversational format, `False` otherwise.
+        `bool`:
+            `True` if the data is in a conversational format, `False` otherwise.
 
     Examples:
 
@@ -185,20 +186,21 @@ def maybe_apply_chat_template(
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
             messages, where each message is a dictionary with keys `"role"` and `"content"`.
         tokenizer (`PreTrainedTokenizer`):
-            The tokenizer to apply the chat template with.
+            Tokenizer to apply the chat template with.
         tools (`list[Union[dict, Callable]]` or `None`, *optional*, defaults to `None`):
             A list of tools (callable functions) that will be accessible to the model.
             If the template does not support function calling, this argument will have no effect
 
     Returns:
-        `dict[str, str]`: The formatted example with the chat template applied.
+        `dict[str, str]`:
+            Formatted example with the chat template applied.
 
     Notes:
-        - This function does not alter the keys, except for Language modeling dataset, where `"messages"` is replaced by
-        `"text"`.
+        - This function does not alter the keys, except for Language modeling dataset, where `"messages"` is replaced
+        by `"text"`.
 
-        - In case of prompt-only data, if the last role is `"user"`, the generation prompt is added to the prompt. Else,
-        if the last role is `"assistant"`, the final message is continued.
+        - In case of prompt-only data, if the last role is `"user"`, the generation prompt is added to the prompt.
+        Else, if the last role is `"assistant"`, the final message is continued.
 
     Example:
 
@@ -462,3 +464,52 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     # Split the values into chunks of size seq_length
     examples = {k: [v[i : i + seq_length] for i in range(0, len(v), seq_length)] for k, v in examples.items()}
     return examples
+
+
+def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
+    """
+    Convert a conversational dataset with fields `from` and `value` to ChatML format.
+
+    This function modifies conversational data to align with OpenAI's ChatML format:
+    - Replaces the key `"from"` with `"role"` in message dictionaries.
+    - Replaces the key `"value"` with `"content"` in message dictionaries.
+    - Renames `"conversations"` to `"messages"` for consistency with ChatML.
+
+    Args:
+        example (`dict[str, list]`):
+            A single data entry containing a list of messages.
+
+    Returns:
+        `dict[str, list]`:
+            Example reformatted to ChatML style.
+
+    Example:
+    ```python
+    >>> from trl import maybe_convert_to_chatml
+    >>> example = {
+    ...     "conversations": [
+    ...         {"from": "user", "value": "What color is the sky?"},
+    ...         {"from": "assistant", "value": "It is blue."}
+    ...     ]
+    ... }
+    >>> maybe_convert_to_chatml(example)
+    {'messages': [{'role': 'user', 'content': 'What color is the sky?'},
+                  {'role': 'assistant', 'content': 'It is blue.'}]}
+    ```
+    """
+    # List of possible keys containing message lists
+    for key in ["prompt", "completion", "chosen", "rejected", "messages", "conversations"]:
+        if key in example and isinstance(example[key], list):
+            messages = example[key]
+            for message in messages:
+                if isinstance(message, dict):
+                    if "from" in message:
+                        message["role"] = message.pop("from")
+                    if "value" in message:
+                        message["content"] = message.pop("value")
+
+    # Rename "conversations" to "messages"
+    if "conversations" in example:
+        example["messages"] = example.pop("conversations")
+
+    return example
