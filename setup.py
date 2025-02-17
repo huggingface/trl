@@ -91,7 +91,7 @@ EXTRAS = {
     "quantization": ["bitsandbytes"],
     "scikit": ["scikit-learn"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
-    "vllm": ["vllm>=0.7.1; sys_platform != 'win32'"],  # vllm is not available on Windows
+    "vllm": ["vllm>=0.7.2; sys_platform != 'win32'"],  # vllm is not available on Windows
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
