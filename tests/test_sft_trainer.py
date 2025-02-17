@@ -1379,7 +1379,7 @@ class SFTTrainerTester2(unittest.TestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         def tokenize_example(example):
-            return tokenizer(example["text"], padding="max_length", truncation=True, max_length=16)
+            return tokenizer(example["text"])
 
         # Apply tokenization
         tokenized_dataset = dataset.map(tokenize_example, remove_columns=["text"])
