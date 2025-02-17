@@ -389,8 +389,6 @@ class SFTTrainer(Trainer):
                     "`formatting_func` or pass a dataset that is not already processed.",
                     UserWarning,
                 )
-            if not packing:
-                return dataset
 
         # Build the kwargs for the `map` function
         map_kwargs = {}
