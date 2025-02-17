@@ -43,8 +43,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
-from ..data_utils import is_conversational, maybe_apply_chat_template, pack_examples
-from ..extras.dataset_formatting import get_formatting_func_from_dataset
+from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -194,10 +193,10 @@ class SFTTrainer(Trainer):
                 processing_class.pad_token = processing_class.eos_token  # required for padding when collating data
 
         # Dataset
-        if formatting_func is None:
-            # check if dataset has ChatML format or instruction format and is supported
-            # if not stays None
-            formatting_func = get_formatting_func_from_dataset(train_dataset, processing_class)
+        # if formatting_func is None:
+        #     # check if dataset has ChatML format or instruction format and is supported
+        #     # if not stays None
+        #     formatting_func = get_formatting_func_from_dataset(train_dataset, processing_class)
 
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
         if preprocess_dataset:
@@ -404,6 +403,7 @@ class SFTTrainer(Trainer):
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+            dataset = dataset.map(maybe_convert_to_chatml)
             dataset = dataset.map(
                 maybe_apply_chat_template,
                 fn_kwargs={"tokenizer": processing_class},
