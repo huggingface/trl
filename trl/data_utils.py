@@ -468,7 +468,7 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
 
 def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
     """
-    Convert a dataset entry from NAME_TO_FIND format to ChatML format.
+    Convert a conversational dataset with fields `from` and `value` to ChatML format.
 
     This function modifies conversational data to align with OpenAI's ChatML format:
     - Replaces the key `"from"` with `"role"` in message dictionaries.
