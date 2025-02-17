@@ -1381,7 +1381,7 @@ class SFTTrainerTester2(unittest.TestCase):
             return {"conversations": [{"from": m["role"], "value": m["content"]} for m in example["messages"]]}
 
         dataset = dataset.map(rename_fields, remove_columns="messages")
-        
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
