@@ -434,7 +434,9 @@ class SFTTrainer(Trainer):
             if not is_processed:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
-                dataset = dataset.map(lambda ex: processing_class(ex[args.dataset_text_field]), **map_kwargs)
+                dataset = dataset.map(
+                    lambda ex: {"input_ids": processing_class(ex[args.dataset_text_field])["input_ids"]}, **map_kwargs
+                )
 
             # Pack or truncate
             if packing:
