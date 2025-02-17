@@ -193,11 +193,6 @@ class SFTTrainer(Trainer):
                 processing_class.pad_token = processing_class.eos_token  # required for padding when collating data
 
         # Dataset
-        # if formatting_func is None:
-        #     # check if dataset has ChatML format or instruction format and is supported
-        #     # if not stays None
-        #     formatting_func = get_formatting_func_from_dataset(train_dataset, processing_class)
-
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
         if preprocess_dataset:
             train_dataset = self._prepare_dataset(
