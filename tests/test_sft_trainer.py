@@ -1401,7 +1401,6 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-
     def test_sft_trainer_with_pretokenized_data(self):
         # Get the model and dataset
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
