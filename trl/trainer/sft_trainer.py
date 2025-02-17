@@ -43,7 +43,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
-from ..data_utils import is_conversational, maybe_apply_chat_template, pack_examples
+from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -396,6 +396,15 @@ class SFTTrainer(Trainer):
                     return {key: example["prompt"] + example["completion"]}
 
                 dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
+
+            # Convert the dataset to ChatML if needed
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+            dataset = dataset.map(
+                maybe_convert_to_chatml,
+                remove_columns="conversations" if "conversations" in dataset.column_names else None,
+                **map_kwargs,
+            )
 
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
