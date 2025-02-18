@@ -257,7 +257,7 @@ class GRPOTrainer(Trainer):
             if peft_config is not None and hasattr(model.base_model, "gradient_checkpointing_enable"):
                 model.base_model.gradient_checkpointing_enable()
             # Enable gradient checkpointing for non-PEFT models
-            elif hasattr(model, "gradient_checkpointing_enable"):
+            else:
                 model.gradient_checkpointing_enable()
             model = self._enable_gradient_checkpointing(model, args)
 
