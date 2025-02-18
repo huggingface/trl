@@ -22,7 +22,7 @@ from unittest.mock import patch
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import broadcast_object_list, gather, gather_object, set_seed
+from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
@@ -247,7 +247,6 @@ class GRPOTrainer(Trainer):
             if not is_peft_available():
                 raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
             model = get_peft_model(model, peft_config)
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         # Enable gradient checkpointing if requested
         if args.gradient_checkpointing:
@@ -256,7 +255,7 @@ class GRPOTrainer(Trainer):
         # Reference model
         if is_deepspeed_zero3_enabled():
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
-        elif self.is_peft_model:
+        elif is_peft_model(model):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
             self.ref_model = None
@@ -487,7 +486,7 @@ class GRPOTrainer(Trainer):
         model.config.use_cache = False
 
         # Enable gradient checkpointing on the base model for PEFT
-        if self.is_peft_model:
+        if is_peft_model(model):
             model.base_model.gradient_checkpointing_enable()
         # Enable gradient checkpointing for non-PEFT models
         else:
