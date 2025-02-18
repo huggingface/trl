@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.14.0.dev0"
+__version__ = "0.16.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -26,8 +26,10 @@ _import_structure = {
         "extract_prompt",
         "is_conversational",
         "maybe_apply_chat_template",
+        "maybe_convert_to_chatml",
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
+        "pack_examples",
         "unpair_preference_dataset",
     ],
     "environment": ["TextEnvironment", "TextHistory"],
@@ -68,6 +70,8 @@ _import_structure = {
         "FDivergenceType",
         "GKDConfig",
         "GKDTrainer",
+        "GRPOConfig",
+        "GRPOTrainer",
         "HfPairwiseJudge",
         "IterativeSFTTrainer",
         "KTOConfig",
@@ -123,8 +127,10 @@ if TYPE_CHECKING:
         extract_prompt,
         is_conversational,
         maybe_apply_chat_template,
+        maybe_convert_to_chatml,
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
+        pack_examples,
         unpair_preference_dataset,
     )
     from .environment import TextEnvironment, TextHistory
@@ -166,6 +172,8 @@ if TYPE_CHECKING:
         FDivergenceType,
         GKDConfig,
         GKDTrainer,
+        GRPOConfig,
+        GRPOTrainer,
         HfPairwiseJudge,
         IterativeSFTTrainer,
         KTOConfig,

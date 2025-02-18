@@ -115,7 +115,7 @@ The PRM800K dataset is a processed version of [OpenAI's PRM800K](https://github.
 - **Type**: [Stepwise supervision](https://huggingface.co/docs/trl/main/dataset_formats#stepwise-supervision)
 
 Columns:
-- `"pompt"`: The problem statement.
+- `"prompt"`: The problem statement.
 - `"completions"`: A list of reasoning steps generated to solve the problem.
 - `"labels"`: A list of booleans or floats indicating the correctness of each corresponding reasoning step.
 

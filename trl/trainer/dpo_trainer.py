@@ -51,7 +51,6 @@ from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPIN
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_xpu_available
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -62,12 +61,14 @@ from .utils import (
     cap_exp,
     disable_dropout_in_model,
     empty_cache,
+    flush_left,
     generate_model_card,
     get_comet_experiment_url,
     log_table_to_comet_experiment,
     pad,
     pad_to_length,
     peft_module_casting_to_bf16,
+    selective_log_softmax,
 )
 
 
@@ -200,9 +201,6 @@ class DPOTrainer(Trainer):
 
     _tag_names = ["trl", "dpo"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.16.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
@@ -387,14 +385,14 @@ class DPOTrainer(Trainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
-        self.max_length = args.max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
         self.max_prompt_length = args.max_prompt_length
-        self.truncation_mode = args.truncation_mode
         self.max_completion_length = args.max_completion_length
+        self.max_length = args.max_length
+        self.truncation_mode = args.truncation_mode
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
-        self.use_num_logits_to_keep = args.use_num_logits_to_keep
+        self.use_logits_to_keep = args.use_logits_to_keep
 
         if args.padding_free:
             if model.config._attn_implementation != "flash_attention_2":
@@ -479,6 +477,11 @@ class DPOTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
+
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
@@ -542,7 +545,9 @@ class DPOTrainer(Trainer):
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
-            dataset = dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, **map_kwargs)
+            dataset = dataset.map(
+                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class, "tools": args.tools}, **map_kwargs
+            )
 
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -592,7 +597,9 @@ class DPOTrainer(Trainer):
         >>> from transformers import GPT2Tokenizer
         >>> tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         >>> features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
-        >>> DPOTrainer.tokenize_row(features, tokenizer, max_prompt_length=3, max_completion_length=3, add_special_tokens=False)
+        >>> DPOTrainer.tokenize_row(
+        ...     features, tokenizer, max_prompt_length=3, max_completion_length=3, add_special_tokens=False
+        ... )
         {'prompt_input_ids': [464, 6766, 318], 'chosen_input_ids': [4171, 50256], 'rejected_input_ids': [4077, 50256]}
         ```
         """
@@ -812,9 +819,11 @@ class DPOTrainer(Trainer):
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        with self.accelerator.unwrap_model(
-            self.model
-        ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
+        with (
+            self.accelerator.unwrap_model(self.model).disable_adapter()
+            if self.is_peft_model and not self.ref_adapter_name
+            else nullcontext()
+        ):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.ref_adapter_name)
             yield
@@ -1139,33 +1148,32 @@ class DPOTrainer(Trainer):
             # Flush left to reduce the memory usage
             # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
             #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
-            for i in range(attention_mask.size(0)):
-                first_one_idx = torch.nonzero(attention_mask[i])[0].item()
-                input_ids[i] = torch.roll(input_ids[i], shifts=-first_one_idx)
-                attention_mask[i] = torch.roll(attention_mask[i], shifts=-first_one_idx)
-                loss_mask[i] = torch.roll(loss_mask[i], shifts=-first_one_idx)
-
-            # Get the first column idx that is all zeros and remove every column after that
-            empty_cols = torch.sum(attention_mask, dim=0) == 0
-            first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else attention_mask.size(1)
-            input_ids = input_ids[:, :first_empty_col]
-            attention_mask = attention_mask[:, :first_empty_col]
-            loss_mask = loss_mask[:, :first_empty_col]
+            attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
 
             # Truncate right
-            if self.args.max_length is not None:
-                input_ids = input_ids[:, : self.args.max_length]
-                attention_mask = attention_mask[:, : self.args.max_length]
-                loss_mask = loss_mask[:, : self.args.max_length]
+            if self.max_length is not None:
+                if self.truncation_mode == "keep_end":
+                    input_ids = input_ids[:, -self.max_length :]
+                    attention_mask = attention_mask[:, -self.max_length :]
+                    loss_mask = loss_mask[:, -self.max_length :]
+                elif self.truncation_mode == "keep_start":
+                    input_ids = input_ids[:, : self.max_length]
+                    attention_mask = attention_mask[:, : self.max_length]
+                    loss_mask = loss_mask[:, : self.max_length]
+                else:
+                    raise ValueError(
+                        f"Unknown truncation mode: '{self.truncation_mode}'. Should be one of ['keep_end', "
+                        "'keep_start']."
+                    )
 
-            if self.use_num_logits_to_keep:
-                # Compute num_logits_to_keep based on loss_mask pattern:
+            if self.use_logits_to_keep:
+                # Compute logits_to_keep based on loss_mask pattern:
                 # [[0, 0, 0, x, x, x, x],
                 #  [0, 0, 0, x, x, x, 0]]
                 #         ^ start computing logits from here ([:, -(7-3+1):])
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
-                num_logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1  # +1 for the first label
-                model_kwargs["num_logits_to_keep"] = num_logits_to_keep
+                logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1  # +1 for the first label
+                model_kwargs["logits_to_keep"] = logits_to_keep
 
             if self.padding_free:
                 # Flatten the input_ids, position_ids, and loss_mask
@@ -1185,15 +1193,15 @@ class DPOTrainer(Trainer):
             labels = torch.roll(input_ids, shifts=-1, dims=1)
             loss_mask = torch.roll(loss_mask, shifts=-1, dims=1).bool()
 
-            if self.use_num_logits_to_keep:
+            if self.use_logits_to_keep:
                 # Align labels with logits
                 # logits:    -,  -, [x2, x3, x4, x5, x6]
                 #                     ^ --------- ^       after logits[:, :-1, :]
                 # labels:   [y0, y1, y2, y3, y4, y5, y6]
-                #                         ^ --------- ^   with num_logits_to_keep=4, [:, -4:]
+                #                         ^ --------- ^   with logits_to_keep=4, [:, -4:]
                 # loss_mask: [0,  0,  0,  1,  1,  1,  1]
-                labels = labels[:, -num_logits_to_keep:]
-                loss_mask = loss_mask[:, -num_logits_to_keep:]
+                labels = labels[:, -logits_to_keep:]
+                loss_mask = loss_mask[:, -logits_to_keep:]
 
         if logits.shape[:2] != labels.shape[:2]:
             # for llava, the returned logits include the image tokens (placed before the text tokens)
@@ -1202,7 +1210,7 @@ class DPOTrainer(Trainer):
 
         # Compute the log probabilities of the labels
         labels[~loss_mask] = 0  # dummy token; we'll ignore the losses on these tokens later
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps = selective_log_softmax(logits, labels)
         per_token_logps[~loss_mask] = 0
         per_token_logps = torch.roll(per_token_logps, shifts=1, dims=1)
 

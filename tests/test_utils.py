@@ -17,6 +17,7 @@ import unittest
 import numpy as np
 import torch
 from datasets import load_dataset
+from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
@@ -27,9 +28,11 @@ from trl.trainer.utils import (
     DataCollatorForChatML,
     batch_generation,
     decode_and_strip_padding,
+    flush_left,
     generate_model_card,
     get_peft_config,
     pad,
+    selective_log_softmax,
 )
 
 
@@ -404,3 +407,70 @@ class TestComputeAccuracy(unittest.TestCase):
             "These instances are ignored in the accuracy computation."
         )
         self.assertEqual(str(cm.warning), expected_warning)
+
+
+class TestFlushLeft(unittest.TestCase):
+    def test_basic_case(self):
+        mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+        tensor1 = torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 0, 0]])
+        tensor2 = torch.tensor([[0, 0, 7, 8, 9], [0, 10, 11, 0, 0]])
+        new_mask, new_tensor1, new_tensor2 = flush_left(mask, tensor1, tensor2)
+
+        expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        expected_tensor1 = torch.tensor([[2, 3, 4], [5, 6, 0]])
+        expected_tensor2 = torch.tensor([[7, 8, 9], [10, 11, 0]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        self.assertTrue(torch.equal(new_tensor2, expected_tensor2))
+
+    def test_single_row(self):
+        mask = torch.tensor([[0, 0, 1, 1]])
+        tensor1 = torch.tensor([[0, 0, 2, 3]])
+        new_mask, new_tensor1 = flush_left(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1]])
+        expected_tensor1 = torch.tensor([[2, 3]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_shift_needed(self):
+        mask = torch.tensor([[1, 1, 0, 0], [1, 1, 0, 0]])
+        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 8, 0, 0]])
+        new_mask, new_tensor1 = flush_left(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1], [1, 1]])
+        expected_tensor1 = torch.tensor([[5, 6], [7, 8]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_tensors(self):
+        mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+        new_mask = flush_left(mask)
+
+        expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+
+
+class TestSelectiveLogSoftmax(unittest.TestCase):
+    @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
+    def test_selective_log_softmax(self, dtype):
+        """Test selective_log_softmax with logits of different dtypes"""
+        vocab_size = 1024
+        batch_size = 4
+        seq_len = 32
+
+        input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+        actual_output = selective_log_softmax(logits, input_ids)
+
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            self.assertTrue(torch.equal(actual_output, expected_output))
+        else:
+            torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)

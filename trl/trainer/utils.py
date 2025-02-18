@@ -26,6 +26,7 @@ import datasets
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 import torch.utils.data
 from accelerate import Accelerator, PartialState
 from accelerate.state import AcceleratorState
@@ -139,7 +140,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     warnings.warn(
                         f"Could not find response key `{self.response_template}` in the following instance: "
                         f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
-                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        "calculation. Note, if this happens often, consider increasing the `max_length`.",
                         UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
@@ -166,7 +167,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     warnings.warn(
                         f"Could not find response key `{self.response_template}` in the following instance: "
                         f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
-                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        "calculation. Note, if this happens often, consider increasing the `max_length`.",
                         UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
@@ -181,7 +182,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     warnings.warn(
                         f"Could not find instruction key `{self.instruction_template}` in the following instance: "
                         f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
-                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        "calculation. Note, if this happens often, consider increasing the `max_length`.",
                         UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
@@ -993,9 +994,15 @@ class OnPolicyConfig(TrainingArguments):
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
         stop_token (`str` or `None`, *optional*, defaults to `None`):
-            Stop token.
+            Specifies the stop token to use for text generation. This parameter is mutually exclusive with
+            `stop_token_id`.
+
+            - `None`: No stop token is applied, unless `stop_token_id` is specified.
+            - `'eos'`: Uses the tokenizer's `eos_token`.
+
         stop_token_id (`int` or `None`, *optional*, defaults to `None`):
-            Truncation token id.
+            Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
+            unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
@@ -1054,11 +1061,17 @@ class OnPolicyConfig(TrainingArguments):
     )
     stop_token: Optional[Literal["eos"]] = field(
         default=None,
-        metadata={"help": "Stop token."},
+        metadata={
+            "help": "Specifies the stop token to use for text generation. This parameter is mutually exclusive with "
+            "`stop_token_id`."
+        },
     )
     stop_token_id: Optional[int] = field(
         default=None,
-        metadata={"help": "Truncation token id."},
+        metadata={
+            "help": "Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is "
+            "applied, unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`."
+        },
     )
     temperature: float = field(
         default=0.7,
@@ -1569,3 +1582,104 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     experiment = comet_ml.get_running_experiment()
     if experiment is not None:
         experiment.log_table(tabular_data=table, filename=name)
+
+
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """
+    Shift non-zero elements in the mask and corresponding tensors to the left.
+
+    This function operates on a binary mask and any number of additional tensors with the same dimensions as the mask.
+    For each row, non-zero values are shifted to the leftmost positions. Then, columns that contain only zeros across
+    all rows are truncated from the mask and tensors. Visually, this operation can be represented as follows:
+
+    ```
+    [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+     [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+    ```
+
+    Args:
+
+        mask (`torch.Tensor`):
+            2D tensor (binary mask) with shape `(N, M)`.
+        *tensors (`torch.Tensor`)
+            One or more 2D tensors with the same shape as `mask`. These tensors will be processed alongside `mask`,
+            with non-zero values shifted and excess zero columns truncated in the same manner.
+
+    Returns:
+        `torch.Tensor`:
+            Updated binary mask with non-zero values flushed to the left and trailing zero columns removed.
+        `*torch.Tensor`
+            Updated tensors, processed in the same way as the mask.
+
+    Example:
+    ```python
+    >>> mask = torch.tensor([[0, 0, 1, 1, 1],
+    ...                      [0, 1, 1, 0, 0]])
+    >>> tensor = torch.tensor([[9, 9, 2, 3, 4],
+    ...                        [9, 5, 6, 9, 9]])
+    >>> new_mask, new_tensor = flush_left(mask, tensor)
+    >>> print(new_mask)
+    tensor([[1, 1, 1],
+            [1, 1, 0]])
+    >>> print(new_tensor)
+    tensor([[2, 3, 4],
+            [5, 6, 0]])
+    ```
+    """
+    # Create copy of mask and tensors
+    mask = mask.clone()
+    tensors = [t.clone() for t in tensors]
+
+    # Shift non-zero values to the left
+    for i in range(mask.size(0)):
+        first_one_idx = torch.nonzero(mask[i])[0].item()
+        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
+        for tensor in tensors:
+            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+
+    # Get the first column idx that is all zeros and remove every column after that
+    empty_cols = torch.sum(mask, dim=0) == 0
+    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
+    mask = mask[:, :first_empty_col]
+    for i, tensor in enumerate(tensors):
+        tensors[i] = tensor[:, :first_empty_col]
+
+    if not tensors:
+        return mask
+    else:
+        return mask, *tensors
+
+
+def selective_log_softmax(logits, index):
+    """
+    A memory-efficient implementation of the common `log_softmax -> gather` operation.
+
+    This function is equivalent to the following naive implementation:
+    ```python
+    logps = torch.gather(logits.log_softmax(-1), dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
+    ```
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+        index (`torch.Tensor`):
+            Index tensor of shape `(...)`, specifying the positions to gather from the log-softmax output.
+
+    Returns:
+        `torch.Tensor`:
+            Gathered log probabilities with the same shape as `index`.
+    """
+    if logits.dtype in [torch.float32, torch.float64]:
+        selected_logits = torch.gather(logits, dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
+        # loop to reduce peak mem consumption
+        logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
+        per_token_logps = selected_logits - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
+    else:
+        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficent approach
+        per_token_logps = []
+        for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
+            row_logps = F.log_softmax(row_logits, dim=-1)
+            row_per_token_logps = row_logps.gather(dim=-1, index=row_labels.unsqueeze(-1)).squeeze(-1)
+            per_token_logps.append(row_per_token_logps)
+        per_token_logps = torch.stack(per_token_logps)
+    return per_token_logps

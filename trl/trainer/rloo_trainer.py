@@ -18,13 +18,12 @@ import os
 import textwrap
 import time
 from collections import defaultdict
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
@@ -56,6 +55,7 @@ from ..trainer.utils import (
     get_reward,
     prepare_deepspeed,
     print_rich_table,
+    selective_log_softmax,
     truncate_response,
 )
 from .rloo_config import RLOOConfig
@@ -79,7 +79,7 @@ class RLOOTrainer(Trainer):
         ],
         policy: nn.Module,
         ref_policy: nn.Module,
-        reward_model: nn.Module,
+        reward_model: Union[nn.Module, Callable[[list[str]], list[float]]],
         train_dataset: Dataset,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
@@ -152,7 +152,8 @@ class RLOOTrainer(Trainer):
         # setup model, optimizer, and others
         #########
         for module in [policy, ref_policy, reward_model]:
-            disable_dropout_in_model(module)
+            if isinstance(module, nn.Module):
+                disable_dropout_in_model(module)
         if args.stop_token and args.stop_token == "eos":
             args.stop_token_id = self.processing_class.eos_token_id
         self.model = policy
@@ -219,16 +220,18 @@ class RLOOTrainer(Trainer):
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
 
         if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+            if isinstance(self.reward_model, nn.Module):
+                self.reward_model = prepare_deepspeed(
+                    self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                )
             self.ref_policy = prepare_deepspeed(
                 self.ref_policy, args.per_device_train_batch_size, args.fp16, args.bf16
             )
             self.deepspeed = self.model
         else:
             self.ref_policy = self.ref_policy.to(self.accelerator.device)
-            self.reward_model = self.reward_model.to(self.accelerator.device)
+            if isinstance(self.reward_model, nn.Module):
+                self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
@@ -310,7 +313,9 @@ class RLOOTrainer(Trainer):
                 sequence_lengths = []
 
                 # Generate responses and compute logprobs
-                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                with unwrap_model_for_generation(
+                    self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                ) as unwrapped_model:
                     query_responses, logitss = batch_generation(
                         unwrapped_model,
                         queries,
@@ -325,17 +330,15 @@ class RLOOTrainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
-                    all_logprob = F.log_softmax(logits, dim=-1)
-                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del logits, all_logprob
+                    logprob = selective_log_softmax(logits, response)
+                    del logits
                     torch.cuda.empty_cache()
 
                     ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
-                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del ref_output, ref_logits, ref_all_logprob
+                    ref_logprob = selective_log_softmax(ref_logits, response)
+                    del ref_output, ref_logits
                     torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
@@ -348,9 +351,18 @@ class RLOOTrainer(Trainer):
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == processing_class.pad_token_id) - 1
-                    _, score, _ = get_reward(
-                        reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
-                    )
+
+                    if isinstance(reward_model, nn.Module):
+                        _, score, _ = get_reward(
+                            reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
+                        )
+                    else:
+                        score = torch.tensor(
+                            reward_model(
+                                processing_class.batch_decode(postprocessed_query_response, skip_special_tokens=True)
+                            ),
+                            dtype=torch.float,
+                        ).to(device)
 
                     # Store batch results
                     responses.append(response)
@@ -453,8 +465,7 @@ class RLOOTrainer(Trainer):
                             logits /= args.temperature + 1e-7
 
                             # Compute new logprobs
-                            new_all_logprobs = F.log_softmax(logits, dim=-1)
-                            new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
+                            new_logprobs = selective_log_softmax(logits, mb_responses)
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
@@ -498,9 +509,8 @@ class RLOOTrainer(Trainer):
                     # del everything and empty cache
                     # fmt: off
                     del (
-                        output, logits, new_all_logprobs, new_logprobs,
-                        logprobs_diff, ratio, pg_losses, pg_losses2,
-                        pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
+                        output, logits, new_logprobs, logprobs_diff, ratio, pg_losses,
+                        pg_losses2, pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl,
                         mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
                     )
                     # fmt: on
@@ -565,7 +575,9 @@ class RLOOTrainer(Trainer):
         )
 
         table = defaultdict(list)
-        with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+        with unwrap_model_for_generation(
+            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+        ) as unwrapped_model:
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]
                 with torch.no_grad():
@@ -591,9 +603,21 @@ class RLOOTrainer(Trainer):
                     )
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                    _, score, _ = get_reward(
-                        self.reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
-                    )
+
+                    if isinstance(self.reward_model, nn.Module):
+                        _, score, _ = get_reward(
+                            self.reward_model,
+                            postprocessed_query_response,
+                            processing_class.pad_token_id,
+                            context_length,
+                        )
+                    else:
+                        score = torch.tensor(
+                            self.reward_model(
+                                processing_class.batch_decode(postprocessed_query_response, skip_special_tokens=True)
+                            ),
+                            dtype=torch.float,
+                        ).to(postprocessed_query_response.device)
                     table["score"].extend(self.accelerator.gather_for_metrics(score).float().cpu().numpy())
 
                 if sampling:

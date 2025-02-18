@@ -341,7 +341,7 @@ class MergeModelCallbackTester(unittest.TestCase):
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dataset,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 callbacks=[merge_callback],
             )
             trainer.train()
@@ -364,7 +364,7 @@ class MergeModelCallbackTester(unittest.TestCase):
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dataset,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 callbacks=[merge_callback],
             )
             trainer.train()

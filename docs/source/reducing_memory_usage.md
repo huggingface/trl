@@ -44,7 +44,7 @@ training_args = DPOConfig(..., max_completion_length=...)
 </hfoption>
 <hfoption id="SFT">
 
-SFT truncation is applied to the input sequence via the `max_seq_length` parameter.
+SFT truncation is applied to the input sequence via the `max_length` parameter.
 
 <div class="flex justify-center">
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_input_ids.png" alt="Truncation input ids" width="600"/>
@@ -55,7 +55,7 @@ To set the truncation parameter, use the following code snippet:
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., max_seq_length=...)
+training_args = SFTConfig(..., max_length=...)
 ```
 
 </hfoption>
@@ -85,7 +85,7 @@ Packing eliminates padding, preserves all sequence information, and allows for f
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., packing=True, max_seq_length=512)
+training_args = SFTConfig(..., packing=True, max_length=512)
 ```
 
 <Tip warning={true}>
@@ -93,3 +93,41 @@ training_args = SFTConfig(..., packing=True, max_seq_length=512)
 Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).
 
 </Tip>
+
+## Disabling model gathering for generation in online methods
+
+When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to out-of-memory (OOM) errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
+
+If you encounter this issue, you can disable the gathering of model weights for generation by setting the following parameter:
+
+<hfoptions id="ds3_gather_for_generation">
+<hfoption id="Online DPO">
+
+```python
+from trl import OnlineDPOConfig
+
+training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
+```
+
+</hfoption>
+<hfoption id="PPO">
+
+```python
+from trl import PPOConfig
+
+training_args = PPOConfig(..., ds3_gather_for_generation=False)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(..., ds3_gather_for_generation=False)
+```
+
+</hfoption>
+</hfoptions>
+
+This adjustment prevents model weights from being gathered, avoiding OOM errors, but it may result in slower generation speeds.
