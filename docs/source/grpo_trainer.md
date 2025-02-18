@@ -243,6 +243,66 @@ If the recommended value does not work in your environment, we suggest adding a 
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
+
+### Speed up training with SGLang-powered generation
+
+Another alternative to vLLM is to use the [SGLang](https://sglang.ai/) to enable fast generate. To enable it first install the package with:
+
+```shell
+git clone git@github.com:huggingface/trl.git
+cd trl
+python3 -m uv pip install -e ".[sglang]"
+
+# start sglang-server
+python3 -m sglang.launch_server --model-path qwen/qwen2.5-7b-instruct
+
+# run "export CUDA_VISIBLE_DEVICES"
+# run script
+python3 grpo_test.py
+```
+
+Then, pass the `use_sglang=True` in the training arguments and point to the SGLang server via the `sglang_server_url`:
+
+```python
+import os
+
+from datasets import load_dataset
+
+from trl import GRPOConfig, GRPOTrainer
+
+
+dataset = load_dataset("trl-lib/tldr", split="train[:10%]")
+
+checkpoint_dir = os.path.join("/sgl-workspace/ryang/trl", "checkpoints/sgl")
+os.makedirs(checkpoint_dir, exist_ok=True)
+
+def reward_len(completions, **kwargs):
+    return [-abs(20 - len(completion)) for completion in completions]
+
+
+training_args = GRPOConfig(
+    output_dir=os.path.join(checkpoint_dir, "Qwen2.5_output"),
+    logging_steps=10,
+    use_sglang=True,
+    sglang_device="cuda:0",
+    sglang_gpu_memory_utilization=0.9,
+    sglang_server_url="http://127.0.0.1:30000",
+)
+
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    reward_funcs=reward_len,
+    args=training_args,
+    train_dataset=dataset,
+)
+
+training_args.checkpoint_path = checkpoint_dir 
+
+
+trainer.train()
+```
+
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
