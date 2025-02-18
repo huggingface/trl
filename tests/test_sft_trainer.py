@@ -326,7 +326,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=1,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                max_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
                 report_to="none",
             )
@@ -353,7 +353,7 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.conversational_lm_dataset["train"],
             )
 
-            # Same, but with packing with `max_seq_length`
+            # Same, but with packing with `max_length`
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 dataloader_drop_last=True,
@@ -361,7 +361,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=1,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                max_seq_length=16,  # make sure there is at least 1 packed sequence
+                max_length=16,  # make sure there is at least 1 packed sequence
                 packing=True,
                 report_to="none",
             )
@@ -396,7 +396,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_steps=1,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                max_seq_length=32,  # make sure there is at least 1 packed sequence
+                max_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
                 report_to="none",
             )
@@ -461,7 +461,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
-                max_seq_length=16,
+                max_length=16,
                 packing=True,
                 report_to="none",
             )
@@ -485,7 +485,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
-                max_seq_length=16,
+                max_length=16,
                 report_to="none",
             )
             trainer = SFTTrainer(
@@ -534,7 +534,7 @@ class SFTTrainerTester(unittest.TestCase):
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                max_seq_length=16,
+                max_length=16,
                 packing=True,
                 report_to="none",
             )
@@ -558,7 +558,7 @@ class SFTTrainerTester(unittest.TestCase):
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                max_seq_length=16,
+                max_length=16,
                 packing=True,
                 report_to="none",
             )
@@ -583,7 +583,7 @@ class SFTTrainerTester(unittest.TestCase):
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                max_seq_length=16,
+                max_length=16,
                 report_to="none",
             )
             trainer = SFTTrainer(
@@ -606,7 +606,7 @@ class SFTTrainerTester(unittest.TestCase):
                 max_steps=2,
                 save_steps=1,
                 per_device_train_batch_size=2,
-                max_seq_length=16,
+                max_length=16,
                 report_to="none",
             )
             trainer = SFTTrainer(
@@ -755,7 +755,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=1,
                 per_device_train_batch_size=2,
                 packing=True,
-                max_seq_length=500,
+                max_length=500,
                 report_to="none",
             )
             trainer = SFTTrainer(
@@ -782,7 +782,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 save_strategy="epoch",
                 packing=True,
-                max_seq_length=500,
+                max_length=500,
                 report_to="none",
             )
             trainer = SFTTrainer(
@@ -1088,7 +1088,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
-                max_seq_length=16,  # make sure there is at least 1 packed sequence
+                max_length=16,  # make sure there is at least 1 packed sequence
                 eval_packing=False,
                 report_to="none",
             )
@@ -1114,7 +1114,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
-                max_seq_length=16,  # make sure there is at least 1 packed sequence
+                max_length=16,  # make sure there is at least 1 packed sequence
                 packing=True,
                 report_to="none",
             )
@@ -1139,7 +1139,7 @@ class SFTTrainerTester(unittest.TestCase):
                 save_steps=2,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
-                max_seq_length=16,  # make sure there is at least 1 packed sequence
+                max_length=16,  # make sure there is at least 1 packed sequence
                 packing=False,
                 report_to="none",
             )

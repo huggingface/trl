@@ -434,17 +434,17 @@ class SFTTrainer(Trainer):
 
             # Pack or truncate
             if packing:
-                if args.max_seq_length is None:
-                    raise ValueError("When packing is enabled, `max_seq_length` can't be `None`.")
+                if args.max_length is None:
+                    raise ValueError("When packing is enabled, `max_length` can't be `None`.")
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
                 dataset = dataset.map(
-                    pack_examples, batched=True, fn_kwargs={"seq_length": args.max_seq_length}, **map_kwargs
+                    pack_examples, batched=True, fn_kwargs={"seq_length": args.max_length}, **map_kwargs
                 )
-            elif args.max_seq_length is not None:
+            elif args.max_length is not None:
                 dataset = dataset.map(
-                    lambda ex: {key: ex[key][: args.max_seq_length] for key in ["input_ids", "attention_mask"]},
+                    lambda ex: {key: ex[key][: args.max_length] for key in ["input_ids", "attention_mask"]},
                     **map_kwargs,
                 )
             # For Liger kernel, ensure only input_ids is present
