@@ -434,9 +434,12 @@ class SFTTrainer(Trainer):
             if not is_processed:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
-                dataset = dataset.map(
-                    lambda ex: {"input_ids": processing_class(ex[args.dataset_text_field])["input_ids"]}, **map_kwargs
-                )
+
+                def tokenize(ex):
+                    tokenized = processing_class(ex[args.dataset_text_field])
+                    return {"input_ids": tokenized["input_ids"], "attention_mask": tokenized["attention_mask"]}
+
+                dataset = dataset.map(tokenize, **map_kwargs)
 
             # Pack or truncate
             if packing:
@@ -450,7 +453,7 @@ class SFTTrainer(Trainer):
                 )
             elif args.max_seq_length is not None:
                 dataset = dataset.map(
-                    lambda ex: {"input_ids": ex["input_ids"][: args.max_seq_length]},
+                    lambda ex: {key: ex[key][: args.max_seq_length] for key in ["input_ids", "attention_mask"]},
                     **map_kwargs,
                 )
             # For Liger kernel, ensure only input_ids is present
