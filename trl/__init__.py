@@ -102,7 +102,7 @@ _import_structure = {
         "XPOTrainer",
     ],
     "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config", "compute_token_accuracy"],
+    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
 try:
@@ -204,7 +204,7 @@ if TYPE_CHECKING:
         XPOTrainer,
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
-    from .trainer.utils import compute_token_accuracy, get_kbit_device_map, get_peft_config, get_quantization_config
+    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 
     try:
         if not is_diffusers_available():

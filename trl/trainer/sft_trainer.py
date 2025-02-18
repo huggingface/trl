@@ -45,13 +45,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 
 from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
-from .utils import (
-    ConstantLengthDataset,
-    compute_token_accuracy,
-    generate_model_card,
-    get_comet_experiment_url,
-    peft_module_casting_to_bf16,
-)
+from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
 
 
 if is_peft_available():
@@ -60,8 +54,6 @@ if is_peft_available():
 
 if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
-else:
-    AutoLigerKernelForCausalLM = None
 
 if is_wandb_available():
     import wandb
@@ -185,12 +177,13 @@ class SFTTrainer(Trainer):
             )
         if isinstance(model, str):
             model = self._create_model_from_path(model, args)
+        self.use_liger = is_liger_kernel_available() and isinstance(model, AutoLigerKernelForCausalLM)
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
             model = self._prepare_peft_model(model, peft_config, args)
 
-        # 3. Handle the tokenizer
+        # Handle the tokenizer
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
             if processing_class.pad_token is None:
@@ -279,8 +272,10 @@ class SFTTrainer(Trainer):
         if args.use_liger:
             if not is_liger_kernel_available():
                 raise ImportError("Please install Liger-kernel for use_liger=True")
-            return AutoLigerKernelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        return AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+            model = AutoLigerKernelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+        return model
 
     def _prepare_peft_model(self, model: PreTrainedModel, peft_config: Any, args: SFTConfig) -> PreTrainedModel:
         """Prepares a model for PEFT training."""
@@ -471,21 +466,28 @@ class SFTTrainer(Trainer):
         )
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        use_liger = self.args.use_liger or (
-            AutoLigerKernelForCausalLM is not None and isinstance(model, AutoLigerKernelForCausalLM)
-        )
-        if "labels" in inputs and not use_liger:
+        if "labels" in inputs and not self.use_liger:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
-            # Gather logits and labels from all GPUs first
-            shift_logits = self.accelerator.gather_for_metrics(shift_logits)
-            shift_labels = self.accelerator.gather_for_metrics(shift_labels)
+            # Get predictions
+            predictions = shift_logits.argmax(dim=-1)
 
-            # Then compute accuracy on the gathered tensors
-            if self.accelerator.is_main_process:
-                accuracy = compute_token_accuracy(shift_logits, shift_labels)
-                self._metrics["mean_token_accuracy"].append(accuracy)
+            # Create mask for non-padding tokens (assuming ignore_index is -100)
+            mask = shift_labels != -100
+
+            # Calculate accuracy only on non-padding tokens
+            correct_predictions = (predictions == shift_labels) & mask
+            total_tokens = mask.sum()
+            correct_tokens = correct_predictions.sum()
+
+            # Gather the correct_tokens and total_tokens across all processes
+            correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
+            total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+
+            # Compute the mean token accuracy and log it
+            accuracy = (correct_tokens.sum() / total_tokens.sum()).item() if total_tokens.sum() > 0 else 0.0
+            self._metrics["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
 
