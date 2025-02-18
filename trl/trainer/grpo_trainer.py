@@ -251,8 +251,7 @@ class GRPOTrainer(Trainer):
         # Enable gradient checkpointing if requested
         if args.gradient_checkpointing:
             # Ensure use_cache is disabled
-            if hasattr(model, "config"):
-                model.config.use_cache = False
+             model.config.use_cache = False
 
             # Enable gradient checkpointing on the base model for PEFT
             if peft_config is not None and hasattr(model.base_model, "gradient_checkpointing_enable"):
