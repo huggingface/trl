@@ -247,30 +247,22 @@ class GRPOTrainer(Trainer):
             if not is_peft_available():
                 raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
             model = get_peft_model(model, peft_config)
+        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
 
         # Enable gradient checkpointing if requested
         if args.gradient_checkpointing:
-            # Ensure use_cache is disabled
-             model.config.use_cache = False
-
-            # Enable gradient checkpointing on the base model for PEFT
-            if peft_config is not None and hasattr(model.base_model, "gradient_checkpointing_enable"):
-                model.base_model.gradient_checkpointing_enable()
-            # Enable gradient checkpointing for non-PEFT models
-            else:
-                model.gradient_checkpointing_enable()
             model = self._enable_gradient_checkpointing(model, args)
 
         # Reference model
         if is_deepspeed_zero3_enabled():
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
-        elif peft_config is None:
-            # If PEFT configuration is not provided, create a reference model based on the initial model.
-            self.ref_model = create_reference_model(model)
-        else:
+        elif self.is_peft_model:
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
             self.ref_model = None
+        else:
+            # If PEFT configuration is not provided, create a reference model based on the initial model.
+            self.ref_model = create_reference_model(model)
 
         # Processing class
         if processing_class is None:
@@ -491,6 +483,16 @@ class GRPOTrainer(Trainer):
 
     def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
         """Enables gradient checkpointing for the model."""
+        # Ensure use_cache is disabled
+        model.config.use_cache = False
+
+        # Enable gradient checkpointing on the base model for PEFT
+        if self.is_peft_model:
+            model.base_model.gradient_checkpointing_enable()
+        # Enable gradient checkpointing for non-PEFT models
+        else:
+            model.gradient_checkpointing_enable()
+
         gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
         use_reentrant = (
             "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
