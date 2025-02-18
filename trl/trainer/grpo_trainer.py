@@ -43,12 +43,13 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..extras.profiling import profiling_decorator
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import generate_model_card, get_comet_experiment_url, pad, selective_log_softmax
-from ..extras.profiling import profiling_decorator
+
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -678,11 +679,27 @@ class GRPOTrainer(Trainer):
                 "completion": gather_object(completions_text),
                 "reward": rewards.tolist(),
             }
-            df = pd.DataFrame(table)
 
-            if wandb.run is not None and self.accelerator.is_main_process:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+            SLIDER_TABLE = True
 
+            if SLIDER_TABLE:
+                if wandb.run is not None and self.accelerator.is_main_process:
+                    rows = []
+                    for i in range(len(rewards)):
+                        rows.append(
+                            [
+                                table["step"][i],
+                                table["prompt"][i],
+                                table["completion"][i],
+                                table["reward"][i],
+                            ]
+                        )
+                    html_table = wandb_htmltable(rows, columns=["step", "prompt", "completion", "reward"])
+                    wandb.log({"completions": html_table})
+            else:
+                df = pd.DataFrame(table)
+                if wandb.run is not None and self.accelerator.is_main_process:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
         return {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
