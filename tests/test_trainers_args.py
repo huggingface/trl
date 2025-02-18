@@ -368,7 +368,7 @@ class TrainerArgTester(unittest.TestCase):
                 tmp_dir,
                 dataset_text_field="dummy_text_field",
                 packing=True,
-                max_seq_length=256,
+                max_length=256,
                 dataset_num_proc=4,
                 dataset_batch_size=512,
                 neftune_noise_alpha=0.1,
@@ -379,7 +379,7 @@ class TrainerArgTester(unittest.TestCase):
             trainer = SFTTrainer(model_id, args=training_args, train_dataset=dataset)
             self.assertEqual(trainer.args.dataset_text_field, "dummy_text_field")
             self.assertEqual(trainer.args.packing, True)
-            self.assertEqual(trainer.args.max_seq_length, 256)
+            self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.dataset_num_proc, 4)
             self.assertEqual(trainer.args.dataset_batch_size, 512)
             self.assertEqual(trainer.args.neftune_noise_alpha, 0.1)
