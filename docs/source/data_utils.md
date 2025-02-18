@@ -12,6 +12,10 @@
 
 [[autodoc]] maybe_apply_chat_template
 
+## maybe_convert_to_chatml
+    
+[[autodoc]] maybe_convert_to_chatml
+
 ## extract_prompt
 
 [[autodoc]] extract_prompt

@@ -22,7 +22,7 @@ from unittest.mock import patch
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import broadcast_object_list, gather, gather_object, set_seed
+from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
@@ -51,7 +51,7 @@ from .utils import generate_model_card, get_comet_experiment_url, pad, selective
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
+    from peft import PeftConfig, get_peft_model
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
@@ -250,7 +250,7 @@ class GRPOTrainer(Trainer):
         # Reference model
         if is_deepspeed_zero3_enabled():
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
-        elif peft_config is None:
+        elif not is_peft_model(model):
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
         else:
@@ -425,6 +425,7 @@ class GRPOTrainer(Trainer):
                     temperature=args.temperature,
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
+                    n=args.num_generations,
                 )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
@@ -501,16 +502,17 @@ class GRPOTrainer(Trainer):
             self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
             if is_compiled_module(unwrapped_model):
-                state_dict = unwrapped_model._orig_mod.state_dict()
-            elif is_peft_available() and isinstance(unwrapped_model, PeftModel):
+                unwrapped_model = unwrapped_model._orig_mod
+            if is_peft_model(unwrapped_model):
                 unwrapped_model.merge_adapter()
                 state_dict = unwrapped_model.state_dict()
-                unwrapped_model.unmerge_adapter()
+                # Remove base_model and base_layer prefixes
                 state_dict = {
-                    k.removeprefix("base_model.model.").replace(".base_layer", ""): v
-                    for k, v in state_dict.items()
-                    if self.model.prefix not in k
+                    k.removeprefix("base_model.model.").replace(".base_layer", ""): v for k, v in state_dict.items()
                 }
+                # Remove values with adapter prefix (example: "_lora")
+                state_dict = {k: v for k, v in state_dict.items() if unwrapped_model.prefix not in k}
+                # When module to save, remove its prefix and discard the original module
                 state_dict = {
                     k.replace("modules_to_save.default.", ""): v
                     for k, v in state_dict.items()
@@ -518,9 +520,13 @@ class GRPOTrainer(Trainer):
                 }
             else:
                 state_dict = unwrapped_model.state_dict()
-        if self.accelerator.is_main_process:
-            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-            llm_model.load_weights(state_dict.items())
+            if self.accelerator.is_main_process:
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                llm_model.load_weights(state_dict.items())
+            # Unmerge the adapter to restore the model to its original state.
+            # This must be done after loading weights to ensure they correspond to the merged state.
+            if is_peft_model(unwrapped_model):
+                unwrapped_model.unmerge_adapter()
 
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
@@ -546,8 +552,17 @@ class GRPOTrainer(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
-                outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)
-                completion_ids = [out.token_ids for completions in outputs for out in completions.outputs]
+                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
+                # num_generations outputs for each one. This is faster than generating outputs for each duplicate
+                # prompt individually.
+                ordered_set_of_prompts = list(dict.fromkeys(all_prompts_text))
+                all_outputs = self.llm.generate(
+                    ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
+                )
+                completion_ids = []
+                for outputs in all_outputs:
+                    for output in outputs.outputs:
+                        completion_ids.append(output.token_ids)
             else:
                 completion_ids = [None] * len(all_prompts_text)
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
@@ -715,7 +730,7 @@ class GRPOTrainer(Trainer):
         advantages = inputs["advantages"]
         per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
         per_token_loss = -(per_token_loss - self.beta * per_token_kl)
-        loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
 
         # Log the metrics
         completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
