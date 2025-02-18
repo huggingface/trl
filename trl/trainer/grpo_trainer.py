@@ -18,6 +18,8 @@ import warnings
 from collections import defaultdict
 from typing import Any, Callable, Optional, Sized, Union
 from unittest.mock import patch
+from functools import partial
+import logging
 
 import torch
 import torch.utils.data
@@ -41,6 +43,7 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
+import openai
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
@@ -423,6 +426,23 @@ class GRPOTrainer(Trainer):
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
             # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
+
+        elif self.args.use_openai_compatible_server:
+            api_endpoint = args.api_endpoint
+            api_key = args.api_key
+
+            openai_serving_client = openai.OpenAI(base_url=api_endpoint, api_key=api_key, )
+            # set the openai logger to ERROR level to avoid mess log information
+            logging.getLogger("openai").setLevel(logging.ERROR)
+            logging.getLogger("httpx").setLevel(logging.ERROR)
+            self.ref_model_name = args.ref_model_name
+
+            self.ref_llm = partial(openai_serving_client.chat.completions.create,
+                    model=args.ref_model_name,
+                    max_tokens=self.max_completion_length,
+                    temperature=args.temperature,
+            )
+
         else:
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
@@ -555,6 +575,21 @@ class GRPOTrainer(Trainer):
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+
+        elif self.args.use_openai_compatible_server:
+            completions = []
+            for prompt in prompts_text:
+                # request server
+                response = self.ref_llm(messages=[{"role": "user", "content": prompt}])
+                completion_text = response.choices[0].message.content
+                completion_tokens = self.processing_class.encode(completion_text, add_special_tokens=False)
+                completions.append(completion_tokens)
+
+            completion_ids = completions
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+
         else:
             # Regular generation path
             with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
