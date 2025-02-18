@@ -49,13 +49,11 @@ class SFTConfig(TrainingArguments):
             `skip_prepare_dataset`.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
-        max_seq_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the tokenized sequence. Sequences longer than `max_seq_length` are truncated from the
-            right.
+        max_length (`int` or `None`, *optional*, defaults to `1024`):
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
         packing (`bool`, *optional*, defaults to `False`):
-            Whether to pack multiple sequences into a fixed-length format. Uses `max_seq_length` to define sequence
-            length.
+            Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define sequence length.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
@@ -95,19 +93,19 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    max_seq_length: Optional[int] = field(
+    max_length: Optional[int] = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_seq_length` are truncated "
-            "from the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
+            "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
             "sequence length."
         },
     )
     packing: bool = field(
         default=False,
         metadata={
-            "help": "Whether to pack multiple sequences into a fixed-length format. Uses `max_seq_length` to "
-            "define sequence length."
+            "help": "Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define "
+            "sequence length."
         },
     )
     eval_packing: Optional[bool] = field(
@@ -132,13 +130,17 @@ class SFTConfig(TrainingArguments):
     num_of_sequences: int = field(
         default=None,
         metadata={
-            "help": "Deprecated. Use `max_seq_length` instead, which specifies the maximum length of the tokenized "
+            "help": "Deprecated. Use `max_length` instead, which specifies the maximum length of the tokenized "
             "sequence, unlike `num_of_sequences`, which referred to string sequences."
         },
     )
     chars_per_token: float = field(
         default=None,
-        metadata={"help": "Deprecated. If you want to customize the packing length, use `max_seq_length`."},
+        metadata={"help": "Deprecated. If you want to customize the packing length, use `max_length`."},
+    )
+    max_seq_length: Optional[int] = field(
+        default=None,
+        metadata={"help": "Deprecated. Use `max_length` instead."},
     )
 
     def __post_init__(self):
@@ -153,7 +155,7 @@ class SFTConfig(TrainingArguments):
 
         if self.num_of_sequences is not None:
             warnings.warn(
-                "`num_of_sequences` is deprecated and will be remove in version 0.18.0. Use `max_seq_length` instead, "
+                "`num_of_sequences` is deprecated and will be remove in version 0.18.0. Use `max_length` instead, "
                 "which specifies the maximum length of the tokenized sequence, unlike `num_of_sequences`, which r"
                 "eferred to string sequences.",
                 DeprecationWarning,
@@ -162,6 +164,12 @@ class SFTConfig(TrainingArguments):
         if self.chars_per_token is not None:
             warnings.warn(
                 "`chars_per_token` is deprecated and will be remove in version 0.18.0. If you want to customize the "
-                "packing length, use `max_seq_length`.",
+                "packing length, use `max_length`.",
+                DeprecationWarning,
+            )
+
+        if self.max_seq_length is not None:
+            warnings.warn(
+                "`max_seq_length` is deprecated and will be remove in version 0.20.0. Use `max_length` instead.",
                 DeprecationWarning,
             )

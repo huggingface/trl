@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.15.0.dev0"
+__version__ = "0.16.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -26,6 +26,7 @@ _import_structure = {
         "extract_prompt",
         "is_conversational",
         "maybe_apply_chat_template",
+        "maybe_convert_to_chatml",
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
         "pack_examples",
@@ -101,7 +102,7 @@ _import_structure = {
         "XPOTrainer",
     ],
     "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config", "compute_token_accuracy"],
+    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
 try:
@@ -126,6 +127,7 @@ if TYPE_CHECKING:
         extract_prompt,
         is_conversational,
         maybe_apply_chat_template,
+        maybe_convert_to_chatml,
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
         pack_examples,
@@ -202,7 +204,7 @@ if TYPE_CHECKING:
         XPOTrainer,
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
-    from .trainer.utils import compute_token_accuracy, get_kbit_device_map, get_peft_config, get_quantization_config
+    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 
     try:
         if not is_diffusers_available():

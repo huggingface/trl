@@ -46,7 +46,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
     def setUp(self):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
         self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
-        self.max_seq_length = 128
+        self.max_length = 128
         self.peft_config = LoraConfig(
             lora_alpha=16,
             lora_dropout=0.1,
@@ -74,7 +74,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
             )
 
             trainer = SFTTrainer(
@@ -100,7 +100,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
             )
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -135,7 +135,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 max_steps=10,
                 fp16=True,
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
             )
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -172,7 +172,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 max_steps=10,
                 fp16=True,  # this is sufficient to enable amp
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
             )
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -205,7 +205,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
@@ -242,7 +242,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
@@ -286,7 +286,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
@@ -324,7 +324,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=10,
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
                 fp16=True,  # this is sufficient to enable amp
                 gradient_checkpointing=True,
                 gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
@@ -364,7 +364,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             training_args = SFTConfig(
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
                 output_dir=tmp_dir,
                 logging_strategy="no",
                 report_to="none",
@@ -411,7 +411,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 max_steps=2,
                 packing=packing,
-                max_seq_length=self.max_seq_length,
+                max_length=self.max_length,
                 use_liger=True,
             )
 
