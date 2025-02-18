@@ -451,6 +451,7 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 if isinstance(dataset, Dataset) and is_pyarrow_available():
+                    # Use native pyarrow function for fast truncation
                     dataset = dataset.with_format("arrow")
 
                     def truncate_examples(examples):
