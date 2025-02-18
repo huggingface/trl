@@ -379,7 +379,7 @@ class GRPOTrainer(Trainer):
                 device_module = getattr(torch, device_type)
                 if vllm_device == "auto":
                     if device_module.device_count() == 1:
-                        vllm_device = "{device_type}:0"  # particular case when training with onyl 1 GPU: share it
+                        vllm_device = f"{device_type}:0"  # particular case when training with onyl 1 GPU: share it
                     else:
                         vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
                 # Check that the requested device is available
