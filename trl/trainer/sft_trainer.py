@@ -43,6 +43,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
+from ..import_utils import is_pyarrow_available
 from .sft_config import SFTConfig
 from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
 
@@ -50,6 +51,10 @@ from .utils import ConstantLengthDataset, generate_model_card, get_comet_experim
 if is_peft_available():
     import peft
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+
+if is_pyarrow_available():
+    import pyarrow as pa
+    import pyarrow.compute as pc
 
 if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
@@ -443,10 +448,26 @@ class SFTTrainer(Trainer):
                     pack_examples, batched=True, fn_kwargs={"seq_length": args.max_length}, **map_kwargs
                 )
             elif args.max_length is not None:
-                dataset = dataset.map(
-                    lambda ex: {key: ex[key][: args.max_length] for key in ["input_ids", "attention_mask"]},
-                    **map_kwargs,
-                )
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
+                if isinstance(dataset, Dataset) and is_pyarrow_available():
+                    dataset = dataset.with_format("arrow")
+
+                    def truncate_examples(examples):
+                        truncated_arrays = []
+                        for key, array in zip(examples.column_names, examples.columns):
+                            if key in {"input_ids", "attention_mask"}:
+                                array = pc.list_slice(array, 0, args.max_length)
+                            truncated_arrays.append(array)
+                        return pa.Table.from_arrays(truncated_arrays, names=examples.column_names)
+
+                    dataset = dataset.map(truncate_examples, batched=True, **map_kwargs)
+                    dataset = dataset.with_format(None)
+                else:
+                    dataset = dataset.map(
+                        lambda ex: {key: ex[key][: args.max_length] for key in ["input_ids", "attention_mask"]},
+                        **map_kwargs,
+                    )
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger:
                 dataset = dataset.select_columns("input_ids")
