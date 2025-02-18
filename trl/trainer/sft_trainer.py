@@ -43,7 +43,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 from transformers.utils.deprecation import deprecate_kwarg
 
-from ..data_utils import is_conversational, maybe_apply_chat_template, pack_examples
+from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -60,6 +60,8 @@ if is_peft_available():
 
 if is_liger_kernel_available():
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
+else:
+    AutoLigerKernelForCausalLM = None
 
 if is_wandb_available():
     import wandb
@@ -395,6 +397,15 @@ class SFTTrainer(Trainer):
 
                 dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 
+            # Convert the dataset to ChatML if needed
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+            dataset = dataset.map(
+                maybe_convert_to_chatml,
+                remove_columns="conversations" if "conversations" in dataset.column_names else None,
+                **map_kwargs,
+            )
+
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
@@ -440,7 +451,10 @@ class SFTTrainer(Trainer):
         )
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.args.use_liger:
+        use_liger = self.args.use_liger or (
+            AutoLigerKernelForCausalLM is not None and isinstance(model, AutoLigerKernelForCausalLM)
+        )
+        if "labels" in inputs and not use_liger:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
