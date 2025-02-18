@@ -41,17 +41,10 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
-from transformers.utils.deprecation import deprecate_kwarg
 
-from ..data_utils import is_conversational, maybe_apply_chat_template, pack_examples
+from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
-from .utils import (
-    ConstantLengthDataset,
-    compute_token_accuracy,
-    generate_model_card,
-    get_comet_experiment_url,
-    peft_module_casting_to_bf16,
-)
+from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
 
 
 if is_peft_available():
@@ -107,6 +100,8 @@ class SFTTrainer(Trainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
+
+            The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
@@ -140,9 +135,6 @@ class SFTTrainer(Trainer):
 
     _tag_names = ["trl", "sft"]
 
-    @deprecate_kwarg(
-        "tokenizer", "0.16.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         model: Union[str, nn.Module, PreTrainedModel],
@@ -181,12 +173,13 @@ class SFTTrainer(Trainer):
             )
         if isinstance(model, str):
             model = self._create_model_from_path(model, args)
+        self.use_liger = is_liger_kernel_available() and isinstance(model, AutoLigerKernelForCausalLM)
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
             model = self._prepare_peft_model(model, peft_config, args)
 
-        # 3. Handle the tokenizer
+        # Handle the tokenizer
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
             if processing_class.pad_token is None:
@@ -275,8 +268,10 @@ class SFTTrainer(Trainer):
         if args.use_liger:
             if not is_liger_kernel_available():
                 raise ImportError("Please install Liger-kernel for use_liger=True")
-            return AutoLigerKernelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        return AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+            model = AutoLigerKernelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+        return model
 
     def _prepare_peft_model(self, model: PreTrainedModel, peft_config: Any, args: SFTConfig) -> PreTrainedModel:
         """Prepares a model for PEFT training."""
@@ -368,6 +363,10 @@ class SFTTrainer(Trainer):
         if isinstance(dataset, ConstantLengthDataset):
             return dataset
 
+        # If the dataset is already preprocessed (tokenized), skip the processing steps.
+        column_names = list(next(iter(dataset)).keys())
+        is_processed = "input_ids" in column_names
+
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
@@ -375,7 +374,15 @@ class SFTTrainer(Trainer):
 
         with PartialState().local_main_process_first():
             # Apply the formatting function if any
-            if formatting_func is not None:
+            if formatting_func is not None and is_processed:
+                warnings.warn(
+                    "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
+                    "formatting function. Therefore `formatting_func` will be ignored. Either remove the "
+                    "`formatting_func` or pass a dataset that is not already processed.",
+                    UserWarning,
+                )
+
+            if formatting_func is not None and not is_processed:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
 
@@ -395,6 +402,15 @@ class SFTTrainer(Trainer):
 
                 dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 
+            # Convert the dataset to ChatML if needed
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+            dataset = dataset.map(
+                maybe_convert_to_chatml,
+                remove_columns="conversations" if "conversations" in dataset.column_names else None,
+                **map_kwargs,
+            )
+
             # Apply the chat template if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
@@ -405,24 +421,30 @@ class SFTTrainer(Trainer):
                 **map_kwargs,
             )
 
-            # Tokenize the dataset
-            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
-            dataset = dataset.map(lambda ex: processing_class(ex[args.dataset_text_field]), **map_kwargs)
+            # Tokenize the dataset if needed
+            if not is_processed:
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
+
+                def tokenize(ex):
+                    tokenized = processing_class(ex[args.dataset_text_field])
+                    return {"input_ids": tokenized["input_ids"], "attention_mask": tokenized["attention_mask"]}
+
+                dataset = dataset.map(tokenize, **map_kwargs)
 
             # Pack or truncate
             if packing:
-                if args.max_seq_length is None:
-                    raise ValueError("When packing is enabled, `max_seq_length` can't be `None`.")
+                if args.max_length is None:
+                    raise ValueError("When packing is enabled, `max_length` can't be `None`.")
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
                 dataset = dataset.map(
-                    pack_examples, batched=True, fn_kwargs={"seq_length": args.max_seq_length}, **map_kwargs
+                    pack_examples, batched=True, fn_kwargs={"seq_length": args.max_length}, **map_kwargs
                 )
-            elif args.max_seq_length is not None:
+            elif args.max_length is not None:
                 dataset = dataset.map(
-                    lambda ex: {key: ex[key][: args.max_seq_length] for key in ["input_ids", "attention_mask"]},
+                    lambda ex: {key: ex[key][: args.max_length] for key in ["input_ids", "attention_mask"]},
                     **map_kwargs,
                 )
             # For Liger kernel, ensure only input_ids is present
@@ -440,18 +462,28 @@ class SFTTrainer(Trainer):
         )
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.args.use_liger:
+        if "labels" in inputs and not self.use_liger:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
-            # Gather logits and labels from all GPUs first
-            shift_logits = self.accelerator.gather_for_metrics(shift_logits)
-            shift_labels = self.accelerator.gather_for_metrics(shift_labels)
+            # Get predictions
+            predictions = shift_logits.argmax(dim=-1)
 
-            # Then compute accuracy on the gathered tensors
-            if self.accelerator.is_main_process:
-                accuracy = compute_token_accuracy(shift_logits, shift_labels)
-                self._metrics["mean_token_accuracy"].append(accuracy)
+            # Create mask for non-padding tokens (assuming ignore_index is -100)
+            mask = shift_labels != -100
+
+            # Calculate accuracy only on non-padding tokens
+            correct_predictions = (predictions == shift_labels) & mask
+            total_tokens = mask.sum()
+            correct_tokens = correct_predictions.sum()
+
+            # Gather the correct_tokens and total_tokens across all processes
+            correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
+            total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+
+            # Compute the mean token accuracy and log it
+            accuracy = (correct_tokens.sum() / total_tokens.sum()).item() if total_tokens.sum() > 0 else 0.0
+            self._metrics["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
 

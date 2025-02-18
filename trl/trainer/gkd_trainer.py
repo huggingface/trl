@@ -87,7 +87,7 @@ class GKDTrainer(SFTTrainer):
     ):
         # add remove_unused_columns=False to the dataclass args
         args.remove_unused_columns = False
-        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_seq_length)
+        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
 
         super().__init__(
             model,
