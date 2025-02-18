@@ -336,13 +336,20 @@ class PPOTrainer(Trainer):
         if self.is_deepspeed_enabled:
             self.deepspeed = backup_deepspeed
 
+    def _compute_score(self, query_reponse: torch.Tensor, context_length: int) -> torch.Tensor:
+        """
+        This methods decoples the score computing from the training method.
+        Override it to implement your custom reward function.
+        """
+        _, score, _ = get_reward(self.reward_model, query_reponse, self.processing_class.pad_token_id, context_length)
+        return score
+
     def train(self):
         args = self.args
         accelerator = self.accelerator
         optimizer = self.optimizer
         model = self.model
         ref_policy = self.ref_model
-        reward_model = self.reward_model
         processing_class = self.processing_class
         dataloader = self.dataloader
         device = accelerator.device
@@ -459,9 +466,7 @@ class PPOTrainer(Trainer):
                         unwrapped_value_model, query_response, processing_class.pad_token_id, context_length
                     )
                     value = full_value[:, context_length - 1 : -1].squeeze(-1)
-                    _, score, _ = get_reward(
-                        reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
-                    )
+                    score = self._compute_score(postprocessed_query_response, context_length)
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
@@ -714,9 +719,7 @@ class PPOTrainer(Trainer):
                     )
 
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                    _, score, _ = get_reward(
-                        self.reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
-                    )
+                    score = self._compute_score(postprocessed_query_response, context_length)
                     table["score"].extend(self.accelerator.gather_for_metrics(score).float().cpu().numpy())
 
                 if sampling:
