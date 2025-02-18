@@ -680,7 +680,6 @@ class GRPOTrainer(Trainer):
                 "reward": rewards.tolist(),
             }
             df = pd.DataFrame(table)
-            
             if wandb.run is not None and self.accelerator.is_main_process:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
         return {
