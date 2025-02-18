@@ -680,26 +680,9 @@ class GRPOTrainer(Trainer):
                 "reward": rewards.tolist(),
             }
 
-            SLIDER_TABLE = True
-
-            if SLIDER_TABLE:
-                if wandb.run is not None and self.accelerator.is_main_process:
-                    rows = []
-                    for i in range(len(rewards)):
-                        rows.append(
-                            [
-                                table["step"][i],
-                                table["prompt"][i],
-                                table["completion"][i],
-                                table["reward"][i],
-                            ]
-                        )
-                    html_table = wandb_htmltable(rows, columns=["step", "prompt", "completion", "reward"])
-                    wandb.log({"completions": html_table})
-            else:
-                df = pd.DataFrame(table)
-                if wandb.run is not None and self.accelerator.is_main_process:
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
+            df = pd.DataFrame(table)
+            if wandb.run is not None and self.accelerator.is_main_process:
+                wandb.log({"completions": wandb.Table(dataframe=df)})
         return {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
