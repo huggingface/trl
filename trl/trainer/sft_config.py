@@ -170,6 +170,6 @@ class SFTConfig(TrainingArguments):
 
         if self.max_seq_length is not None:
             warnings.warn(
-                "`max_seq_length` is deprecated and will be remove in version 0.19.0. Use `max_length` instead.",
+                "`max_seq_length` is deprecated and will be remove in version 0.20.0. Use `max_length` instead.",
                 DeprecationWarning,
             )
