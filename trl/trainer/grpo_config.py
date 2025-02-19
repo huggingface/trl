@@ -250,7 +250,7 @@ class GRPOConfig(TrainingArguments):
         metadata={"help": "Whether to log the completions during training."},
     )
 
-    # reference model using api server
+    # reference model using OpenAI compatible api server
     use_openai_compatible_server: bool = field(
         default=False,
         metadata={"help": "Whether to use openai compatible server."},

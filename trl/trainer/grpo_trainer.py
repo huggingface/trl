@@ -578,7 +578,8 @@ class GRPOTrainer(Trainer):
 
         elif self.args.use_openai_compatible_server:
             completions = []
-            for prompt in prompts_text:
+            # don't use any chattemplate, because the server have load it.
+            for prompt in prompts:
                 # request server
                 response = self.ref_llm(messages=[{"role": "user", "content": prompt}])
                 completion_text = response.choices[0].message.content
