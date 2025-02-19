@@ -581,7 +581,7 @@ class GRPOTrainer(Trainer):
             # don't use any chattemplate, because the server have load it.
             for prompt in prompts:
                 # request server
-                response = self.ref_llm(messages=[{"role": "user", "content": prompt}])
+                response = self.ref_llm(messages=prompt)
                 completion_text = response.choices[0].message.content
                 completion_tokens = self.processing_class.encode(completion_text, add_special_tokens=False)
                 completions.append(completion_tokens)
