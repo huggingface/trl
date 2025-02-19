@@ -79,6 +79,10 @@ class GRPOConfig(TrainingArguments):
             If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
             `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
             context size, which might be much larger than the KV cache, leading to inefficiencies.
+        vllm_enable_prefix_caching (`bool`, *optional*, defaults to `True`):
+            Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the GPU used support
+            this feature, because enabling prefix cache on GPUs older than Ampere architecture (like the V100) may
+            cause errors, see: https://github.com/huggingface/trl/issues/2798.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
@@ -202,6 +206,14 @@ class GRPOConfig(TrainingArguments):
             "help": "If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced "
             "`vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model "
             "context size, which might be much larger than the KV cache, leading to inefficiencies."
+        },
+    )
+    vllm_enable_prefix_caching: Optional[bool] = field(
+        default=True,
+        metadata={
+            "help": "Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the GPU used "
+            "support this feature, because enabling prefix cache on GPUs older than Ampere architecture (like the V100) "
+            "may cause errors, see: https://github.com/huggingface/trl/issues/2798."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
