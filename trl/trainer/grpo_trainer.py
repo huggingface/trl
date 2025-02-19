@@ -1482,10 +1482,12 @@ class GRPOTrainer(Trainer):
                 (process_rank + 1) * len(prompts),
             )
             completion_ids = completion_ids[process_slice]
-
-            # Prepare completion tensors
-            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            completion_ids = [
+                torch.tensor(ids, device=device) for ids in completion_ids
+            ]
+            completion_ids = pad(
+                completion_ids, padding_value=self.processing_class.pad_token_id
+            )
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         elif self.use_vllm:
             # First, have main process load weights if needed
