@@ -438,24 +438,14 @@ class GRPOTrainer(Trainer):
 
         # Initialization for the inference backend
         if self.use_sglang:
-            # Launch SGLang server on a dedicated GPU.
-            # args.sglang_device should be a string like "cuda:1"
-            sglang_gpu = args.sglang_device
-            # Use the model id from the pretrained model path
-            model_id = model if isinstance(model, str) else model.config._name_or_path
-            sglang_command = (
-                f"CUDA_VISIBLE_DEVICES={sglang_gpu.split(':')[-1]} python -m sglang.launch_server "
-                f"--model-path {model_id} --host 0.0.0.0"
-            )
-            from sglang.utils import (
-                launch_server_cmd,
-                wait_for_server,
-            )  # wondering do we need these functions here
-
-            self.server_process, port = launch_server_cmd(sglang_command)
-            wait_for_server(f"http://localhost:{port}")
-            self.sglang_server_url = f"http://localhost:{port}"
-            # Set sampling parameters as a simple dict (SGLang expects HTTP JSON payloads)
+            # Use externally managed SGLang server.
+            # The server URL is provided via configuration, e.g., "http://localhost:30033"
+            if not args.sglang_server_url:
+                raise ValueError(
+                    "SGLang is enabled but no server URL was provided (use --sglang_server_url)."
+                )
+            self.sglang_server_url = args.sglang_server_url
+            # Set sampling parameters for SGLang as a dict (to be sent via HTTP)
             self.sglang_sampling_params = {
                 "temperature": args.temperature,
                 "max_new_tokens": self.max_completion_length,
@@ -652,48 +642,45 @@ class GRPOTrainer(Trainer):
             logits, input_ids
         )  #  compute logprobs for the input tokens
 
+    def _update_sglang_weights(self):
+        """
+        Update the model weights on the SGLang server via its API.
+        This function assumes that the training loop writes the latest checkpoint to self.args.checkpoint_path.
+        It performs additional checks and error handling to ensure the server successfully updates its weights.
+        """
+        checkpoint = self.args.checkpoint_path
+        if not os.path.exists(checkpoint):
+            raise FileNotFoundError(f"Checkpoint path {checkpoint} does not exist.")
 
-def _update_sglang_weights(self):
-    """
-    Update the model weights on the SGLang server via its API.
-    This function assumes that the training loop writes the latest checkpoint to self.args.checkpoint_path.
-    It performs additional checks and error handling to ensure the server successfully updates its weights.
-    """
-    checkpoint = self.args.checkpoint_path
-    # Verify that the checkpoint path exists
-    if not os.path.exists(checkpoint):
-        raise FileNotFoundError(f"Checkpoint path {checkpoint} does not exist.")
-
-    payload = {"model_path": checkpoint}
-    try:
-        response = requests.post(
-            f"{self.sglang_server_url}/update_weights_from_disk",
-            json=payload,
-            timeout=60,  # set an appropriate timeout
-        )
-    except requests.RequestException as e:
-        raise RuntimeError(f"Weight update request failed: {e}")
-
-    res_json = response.json()
-    if not res_json.get("success", False):
-        raise RuntimeError(
-            f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
-        )
-
-    # Optionally, flush the cache after updating weights to ensure stale cache entries are cleared.
-    try:
-        flush_response = requests.post(
-            f"{self.sglang_server_url}/flush_cache", timeout=30
-        )
-        flush_json = flush_response.json()
-        if not flush_json.get("success", True):
-            print(
-                f"Warning: Cache flush failed: {flush_json.get('message', 'No message provided')}"
+        payload = {"model_path": checkpoint}
+        try:
+            response = requests.post(
+                f"{self.sglang_server_url}/update_weights_from_disk",
+                json=payload,
+                timeout=60,
             )
-    except requests.RequestException as e:
-        print(f"Warning: Cache flush request failed: {e}")
+        except requests.RequestException as e:
+            raise RuntimeError(f"Weight update request failed: {e}")
 
-    print(f"SGLang weights updated successfully: {res_json.get('message')}")
+        res_json = response.json()
+        if not res_json.get("success", False):
+            raise RuntimeError(
+                f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
+            )
+
+        # Optionally flush the cache after updating weights
+        try:
+            flush_response = requests.post(
+                f"{self.sglang_server_url}/flush_cache", timeout=30
+            )
+            if not flush_response.json().get("success", True):
+                print(
+                    f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
+                )
+        except requests.RequestException as e:
+            print(f"Warning: Cache flush request failed: {e}")
+
+        print(f"SGLang weights updated successfully: {res_json.get('message')}")
 
     def _move_model_to_vllm(self):
         with unwrap_model_for_generation(
@@ -763,14 +750,13 @@ def _update_sglang_weights(self):
 
         # Generation branch: choose SGLang, vLLM, or default generation.
         if self.use_sglang:
-            # Update weights on SGLang server if a new training step has occurred
+            # Update weights if the training step has advanced.
             if self.state.global_step != self._last_loaded_step:
                 self._update_sglang_weights()
                 self._last_loaded_step = self.state.global_step
 
-            # Gather prompt texts from all processes
+            # Gather all prompt texts from all processes.
             all_prompts_text = gather_object(prompts_text)
-
             if self.accelerator.is_main_process:
                 import requests
 
@@ -781,24 +767,20 @@ def _update_sglang_weights(self):
                 response = requests.post(
                     f"{self.sglang_server_url}/generate", json=payload
                 )
-                # Assume the server returns a JSON with key "text" containing generated completions
                 generated_texts = response.json().get("text", [])
-                # Convert generated completions to token IDs
                 completion_ids = [
                     self.processing_class.encode(text) for text in generated_texts
                 ]
             else:
                 completion_ids = [None] * len(all_prompts_text)
 
-            # Broadcast completions to all processes and slice the local subset
+            # Broadcast and slice the generated completions.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
                 (self.accelerator.process_index + 1) * len(prompts),
             )
             completion_ids = completion_ids[process_slice]
-
-            # Convert list of token IDs to tensors and pad them appropriately
             completion_ids = [
                 torch.tensor(ids, device=device) for ids in completion_ids
             ]
