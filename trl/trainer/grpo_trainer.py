@@ -535,7 +535,7 @@ class GRPOTrainer(Trainer):
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
         return RepeatRandomSampler(
-            data_source=self.eval_dataset,
+            data_source=eval_dataset,
             mini_repeat_count=self.num_generations,
             batch_size=self.args.per_device_eval_batch_size * self.accelerator.num_processes,
             repeat_count=self.num_updates,
