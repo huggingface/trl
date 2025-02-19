@@ -522,8 +522,8 @@ class GRPOTrainer(Trainer):
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
         return RepeatRandomSampler(
-            data_source = self.train_dataset,
-            mini_repeat_count= self.num_generations,
+            data_source=self.train_dataset,
+            mini_repeat_count=self.num_generations,
             batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
             repeat_count=self.num_updates,
             seed=self.args.seed,
@@ -535,8 +535,8 @@ class GRPOTrainer(Trainer):
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
         return RepeatRandomSampler(
-            data_source = self.eval_dataset,
-            mini_repeat_count= self.num_generations,
+            data_source=self.eval_dataset,
+            mini_repeat_count=self.num_generations,
             batch_size=self.args.per_device_eval_batch_size * self.accelerator.num_processes,
             repeat_count=self.num_updates,
             seed=self.args.seed,
@@ -670,6 +670,10 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         with torch.inference_mode():
+            old_per_token_logps = self._get_per_token_logps(
+                self.model, prompt_completion_ids, attention_mask, logits_to_keep
+            )
+
             if self.ref_model is not None:
                 ref_per_token_logps = self._get_per_token_logps(
                     self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
@@ -772,6 +776,7 @@ class GRPOTrainer(Trainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
+            "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
             "advantages": advantages,
         }
@@ -793,17 +798,15 @@ class GRPOTrainer(Trainer):
         ref_per_token_logps = inputs["ref_per_token_logps"]
         per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
 
-        # x - x.detach() allows for preserving gradients from x
+        # Compute the loss
         advantages = inputs["advantages"]
-        per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
-
-        per_token_loss1 = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
-        per_token_loss2 = torch.clamp(torch.exp(per_token_logps - per_token_logps.detach()), 1 - self.epsilon, 1 + self.epsilon) * advantages.unsqueeze(1)
-        per_token_loss_min = torch.min(per_token_loss1, per_token_loss2,dim=-1) 
-        per_token_loss = -(per_token_loss_min - self.beta * per_token_kl)
-        
-
-        per_token_loss = -(per_token_loss - self.beta * per_token_kl)
+        old_per_token_logps = inputs["old_per_token_logps"]
+        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        per_token_loss = per_token_loss + self.beta * per_token_kl
         loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
 
         # Log the metrics
@@ -813,6 +816,9 @@ class GRPOTrainer(Trainer):
         mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
+        # Clip ratio
+        clip_ratio = (per_token_loss1 < per_token_loss2).float().mean()
+        self._metrics["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
