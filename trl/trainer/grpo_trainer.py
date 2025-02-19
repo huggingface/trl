@@ -400,7 +400,8 @@ class GRPOTrainer(Trainer):
                 profiling_patch = patch(
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
                 )
-                # for now, vLLM does not support `enable_prefix_caching` with a model that has sliding window
+                # vLLM does not support `enable_prefix_caching` with a model that has sliding window,
+                # see https://github.com/vllm-project/vllm/issues/3355
                 has_sliding_window = hasattr(self.model.config, "sliding_window")
                 with world_size_patch, profiling_patch:
                     self.llm = LLM(
