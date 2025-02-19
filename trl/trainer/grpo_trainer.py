@@ -71,7 +71,7 @@ from ..data_utils import (
     maybe_apply_chat_template,
 )
 from ..extras.profiling import profiling_context, profiling_decorator
-from ..import_utils import is_sglang_available, is_rich_available, is_vllm_available
+from ..import_utils import is_sglang_available, is_rich_available, is_vllm_available, is_sglang_available
 from ..models import (
     create_reference_model,
     prepare_deepspeed,
@@ -101,6 +101,11 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+if is_sglang_available():
+    import requests
+    from sglang.utils import launch_server_cmd
+    from sglang.utils import wait_for_server, terminate_process
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
