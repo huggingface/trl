@@ -30,7 +30,6 @@ from torch.utils.data import Sampler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
-    GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Qwen2_5_VLForConditionalGeneration,
@@ -219,6 +218,7 @@ class QwenGRPOTrainer(Trainer):
         model: PreTrainedModel,
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         processing_class: PreTrainedTokenizerBase,
+        env: Environment,
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
@@ -227,10 +227,8 @@ class QwenGRPOTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
         shuffle_dataset: bool = True,
-        env: Optional[Environment] = None,
     ):
-        # Add shuffle_dataset to instance variables
-        self.shuffle_dataset = shuffle_dataset
+
 
         # Args
         if args is None:
@@ -337,7 +335,7 @@ class QwenGRPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.use_vllm = args.use_vllm
-        print(f"use_vllm: {self.use_vllm}")
+        self.shuffle_dataset = shuffle_dataset
 
         self.beta = args.beta
 
@@ -456,18 +454,10 @@ class QwenGRPOTrainer(Trainer):
             # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
         else:
-            self.generation_config = GenerationConfig(
-                max_new_tokens=self.max_completion_length,
-                do_sample=True,
-                temperature=args.temperature,
-                pad_token_id=processing_class.tokenizer.pad_token_id,
-            )
+            raise ValueError("use_vllm must be True")
 
         self.env = env
-        if self.env is not None:
-            if not self.use_vllm:
-                # env assumes using vllm for generation, so we raise an error if it's not the case
-                raise ValueError("env is not supported when use_vllm is False - vLLM is required for env")
+
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -585,8 +575,8 @@ class QwenGRPOTrainer(Trainer):
 
         # conversations: list of conversations
         # prompts_text: list of prompts as strings
-        # env_inputs: data in the format our env/vllm expects
         # prompt_inputs: tokenized data (with image tokens injected) that we will use to compute log probs on the base model.
+        # env_inputs: data in the format our env/vllm expects
         conversations, prompts_text, prompt_inputs, env_inputs = self.env.prepare_data(
             inputs=inputs, processing_class=self.processing_class
         )
@@ -603,20 +593,19 @@ class QwenGRPOTrainer(Trainer):
         if self.max_prompt_length is not None:
             raise ValueError("max_prompt_length is not supported.")
 
-        # Generate completions using either vLLM or regular generation
+        # Generate completions using vLLM
         if self.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
-            # Generate completions using vLLM: gather all prompt inputs and use them in a single call in the main process
             all_env_inputs = gather_object(env_inputs)
             all_conversations = gather_object(conversations)
 
             if self.accelerator.is_main_process:
                 if self.env is None:
-                    raise ValueError("No environment provided. Only supporting envs now. ")
+                    raise ValueError("No environment provided. Only supporting envs now.")
                 else:
                     completion_ids = self.env.generate(
                         conversations=all_conversations,
