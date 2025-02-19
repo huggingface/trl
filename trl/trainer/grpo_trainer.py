@@ -131,19 +131,11 @@ class RepeatRandomSampler(Sampler):
         # -> [[2, 4, 3], [1, 0, 6]]
         indexes = [chunk for chunk in indexes if len(chunk) == self.batch_size]
 
-        #    [[2, 4, 3], [1, 0, 6]]
-        # -> [[2, 0, 3], [2, 0, 3], [1, 0, 6], [1, 0, 6]]  (repeat_count = 2)
-        indexes = [chunk for chunk in indexes for _ in range(self.repeat_count)]
-
-        #    [[2, 0, 3], [2, 0, 3], [1, 0, 6], [1, 0, 6]]
-        # -> [[2, 2, 0, 0, 3, 3], [2, 2, 0, 0, 3, 3], [1, 1, 0, 0, 6, 6], [1, 1, 0, 0, 6, 6]]  (mini_repeat_count = 2)
-        indexes = [[index for index in chunk for _ in range(self.mini_repeat_count)] for chunk in indexes]
-
-        #    [[2, 2, 0, 0, 3, 3], [2, 2, 0, 0, 3, 3], [1, 1, 0, 0, 6, 6], [1, 1, 0, 0, 6, 6]]
-        # ->  [2, 2, 0, 0, 3, 3,   2, 2, 0, 0, 3, 3,   1, 1, 0, 0, 6, 6,   1, 1, 0, 0, 6, 6]
-        indexes = sum(indexes, [])
-
-        return iter(indexes)
+        for chunk in indexes:
+            for _ in range(self.repeat_count):
+                for index in chunk:
+                    for _ in range(self.mini_repeat_count):
+                        yield index
 
     def __len__(self) -> int:
         return self.num_samples * self.mini_repeat_count * self.repeat_count
@@ -357,9 +349,9 @@ class GRPOTrainer(Trainer):
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.use_vllm = args.use_vllm
         self.num_updates = args.num_updates
-        self._buffered_inputs = []
         self.epsilon = args.epsilon
         self.beta = args.beta
+        self._update_remaning = 0
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
@@ -524,7 +516,7 @@ class GRPOTrainer(Trainer):
         return RepeatRandomSampler(
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
-            batch_size=self.args.per_device_train_batch_size * self.accelerator.num_processes,
+            batch_size=self.args.per_device_train_batch_size * self.num_generations // self.accelerator.num_processes,
             repeat_count=self.num_updates,
             seed=self.args.seed,
         )
@@ -586,11 +578,13 @@ class GRPOTrainer(Trainer):
                 unwrapped_model.unmerge_adapter()
 
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
-        if self.state.global_step % self.num_updates == 0:
+        if self._update_remaning == 0:
             inputs = self._generate_and_score_completions(inputs)
-            self._buffered_inputs.append(inputs)
+            self._buffered_inputs = inputs
+            self._update_remaning = self.num_updates
         else:
-            inputs = self._buffered_inputs.pop(0)
+            inputs = self._buffered_inputs
+        self._update_remaning -= 1
         return inputs
 
     def _generate_and_score_completions(
@@ -817,7 +811,8 @@ class GRPOTrainer(Trainer):
         self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
         # Clip ratio
-        clip_ratio = (per_token_loss1 < per_token_loss2).float().mean()
+        is_clipped = (per_token_loss1 < per_token_loss2).float()
+        clip_ratio = ((is_clipped * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
         self._metrics["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
 
