@@ -54,7 +54,7 @@ from ..data_utils import (
     is_conversational,
     maybe_apply_chat_template,
 )
-from ..import_utils import is_vllm_available
+from ..import_utils import is_vllm_available, is_sglang_available
 from ..models import (
     create_reference_model,
     prepare_deepspeed,
@@ -79,6 +79,11 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+if is_sglang_available():
+    import requests
+    from sglang.utils import launch_server_cmd
+    from sglang.utils import wait_for_server, terminate_process
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -445,11 +450,51 @@ class GRPOTrainer(Trainer):
                     "SGLang is enabled but no server URL was provided (use --sglang_server_url)."
                 )
             self.sglang_server_url = args.sglang_server_url
-            # Set sampling parameters for SGLang as a dict (to be sent via HTTP)
-            self.sglang_sampling_params = {
-                "temperature": args.temperature,
-                "max_new_tokens": self.max_completion_length,
-            }
+            if self.accelerator.is_main_process:
+                # # Jayon: server won't terminate if you don't close it !!!!
+                # sglang_device = args.sglang_device
+                # if sglang_device == "auto":
+                #     if torch.cuda.device_count() == 1:
+                #         sglang_device = "cuda:0"  # particular case when training with onyl 1 GPU: share it
+                #     else:
+                #         sglang_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
+                # # Check that the requested device is available
+                # if (
+                #     sglang_device.split(":")[0] == "cuda"
+                #     and int(sglang_device.split(":")[1]) >= torch.cuda.device_count()
+                # ):
+                #     raise ValueError(
+                #         f"The requested device for vllm ({sglang_device}) is not available. You are likely using vLLM "
+                #         "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
+                #         "value lower than the number of GPUs available on your machine—typically, reducing it by one "
+                #         f"is sufficient. In your case: `--num_processes {torch.cuda.device_count() - 1}`."
+                #     )
+                # # Check that the requested device is not also used for training
+                # if sglang_device in {
+                #     f"cuda:{idx}" for idx in range(self.accelerator.num_processes)
+                # }:
+                #     warnings.warn(
+                #         f"The requested device {sglang_device} is also being used for training. For higher throughput "
+                #         "and to avoid out-of-memory errors, it is recommended to use a dedicated device for sglang. "
+                #         "If this is intentional, you may ignore this warning but should adjust "
+                #         "`sglang_gpu_memory_utilization` accordingly."
+                #     )
+
+                # # sglang start up
+                # sglang_cmd = "python -m sglang.launch_server"
+                # sglang_model = " --model-path " + model.name_or_path
+                # # sglang_url = "  --host 0.0.0.0 --port " + str(args.sglang_server_url.split(":")[-1])
+                # sglang_mem = "  --mem-fraction-static " + str(args.sglang_gpu_memory_utilization)
+                # # Jayon: hard code here
+                # sglang_device = " --device " + "cuda"
+                # launch_server_cmd(sglang_cmd + sglang_model + sglang_mem + sglang_device)
+                # print("lanch server over")
+                # Set sampling parameters for SGLang as a dict (to be sent via HTTP)
+                self.sglang_sampling_params = {
+                    "temperature": args.temperature,
+                    "max_new_tokens": self.max_completion_length,
+                }
+
             self._last_loaded_step = 0
             self.accelerator.wait_for_everyone()
         elif self.use_vllm:
@@ -648,39 +693,70 @@ class GRPOTrainer(Trainer):
         This function assumes that the training loop writes the latest checkpoint to self.args.checkpoint_path.
         It performs additional checks and error handling to ensure the server successfully updates its weights.
         """
-        checkpoint = self.args.checkpoint_path
-        if not os.path.exists(checkpoint):
-            raise FileNotFoundError(f"Checkpoint path {checkpoint} does not exist.")
+        with unwrap_model_for_generation(
+            self.model,
+            self.accelerator,
+            gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+        ) as unwrapped_model:
+            if is_compiled_module(unwrapped_model):
+                unwrapped_model = unwrapped_model._orig_mod
+            if is_peft_model(unwrapped_model):
+                unwrapped_model.merge_adapter()
+                state_dict = unwrapped_model.state_dict()
+                # Remove base_model and base_layer prefixes
+                state_dict = {
+                    k.removeprefix("base_model.model.").replace(".base_layer", ""): v
+                    for k, v in state_dict.items()
+                }
+                # Remove values with adapter prefix (example: "_lora")
+                state_dict = {
+                    k: v
+                    for k, v in state_dict.items()
+                    if unwrapped_model.prefix not in k
+                }
+                # When module to save, remove its prefix and discard the original module
+                state_dict = {
+                    k.replace("modules_to_save.default.", ""): v
+                    for k, v in state_dict.items()
+                    if "original_module" not in k
+                }
+            else:
+                state_dict = unwrapped_model.state_dict()
+            if self.accelerator.is_main_process:
 
-        payload = {"model_path": checkpoint}
-        try:
-            response = requests.post(
-                f"{self.sglang_server_url}/update_weights_from_disk",
-                json=payload,
-                timeout=60,
-            )
-        except requests.RequestException as e:
-            raise RuntimeError(f"Weight update request failed: {e}")
+                try:
+                    response = requests.post(
+                        f"{self.sglang_server_url}/update_weights",
+                        json=state_dict.items(), # bug
+                        timeout=60,
+                    )
+                except requests.RequestException as e:
+                    raise RuntimeError(f"Weight update request failed: {e}")
+                
+                res_json = response.json()
+                if not res_json.get("success", False):
+                    raise RuntimeError(
+                        f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
+                    )
 
-        res_json = response.json()
-        if not res_json.get("success", False):
-            raise RuntimeError(
-                f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
-            )
+                # Optionally flush the cache after updating weights
+                try:
+                    flush_response = requests.post(
+                        f"{self.sglang_server_url}/flush_cache", timeout=30
+                    )
+                    if not flush_response.json().get("success", True):
+                        print(
+                            f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
+                        )
+                except requests.RequestException as e:
+                    print(f"Warning: Cache flush request failed: {e}")
 
-        # Optionally flush the cache after updating weights
-        try:
-            flush_response = requests.post(
-                f"{self.sglang_server_url}/flush_cache", timeout=30
-            )
-            if not flush_response.json().get("success", True):
-                print(
-                    f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
-                )
-        except requests.RequestException as e:
-            print(f"Warning: Cache flush request failed: {e}")
+                print(f"SGLang weights updated successfully: {res_json.get('message')}")
 
-        print(f"SGLang weights updated successfully: {res_json.get('message')}")
+            # Unmerge the adapter to restore the model to its original state.
+            # This must be done after loading weights to ensure they correspond to the merged state.
+            if is_peft_model(unwrapped_model):
+                unwrapped_model.unmerge_adapter()
 
     def _move_model_to_vllm(self):
         with unwrap_model_for_generation(
@@ -758,8 +834,6 @@ class GRPOTrainer(Trainer):
             # Gather all prompt texts from all processes.
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
-                import requests
-
                 payload = {
                     "text": all_prompts_text,
                     "sampling_params": self.sglang_sampling_params,
@@ -767,7 +841,7 @@ class GRPOTrainer(Trainer):
                 response = requests.post(
                     f"{self.sglang_server_url}/generate", json=payload
                 )
-                generated_texts = response.json().get("text", [])
+                generated_texts = [item.get("text") for item in response.json()]
                 completion_ids = [
                     self.processing_class.encode(text) for text in generated_texts
                 ]

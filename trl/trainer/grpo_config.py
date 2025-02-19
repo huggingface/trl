@@ -181,16 +181,20 @@ class GRPOConfig(TrainingArguments):
         },
     )
     sglang_server_url: Optional[str] = field(
-        default=None,
+        default="http://localhost:30011",
         metadata={
-            "help": "The URL of the SGLang server (e.g., 'http://localhost:30033'). Required if use_sglang is True."
+            "help": "The URL of the SGLang server (e.g., 'http://localhost:30011'). Required if use_sglang is True."
         },
     )
     sglang_device: Optional[str] = field(
-        default="cuda:1",
+        default="auto",
         metadata={
             "help": "The GPU device to be used for SGLang generation if launching internally. Optional if the server is managed externally."
         },
+    )
+    sglang_gpu_memory_utilization: float = field(
+        default=0.9,
+        metadata={"help": "Ratio of GPU memory reserved for sglang generation."},
     )
 
     # Parameters that control the training
