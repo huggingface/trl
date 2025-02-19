@@ -219,8 +219,6 @@ class QwenGRPOTrainer(Trainer):
         model: PreTrainedModel,
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         processing_class: PreTrainedTokenizerBase,
-        # TODO: remove this function.
-        tokenize_and_inject_images: Callable,
         args: GRPOConfig = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
@@ -329,8 +327,6 @@ class QwenGRPOTrainer(Trainer):
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
         self.reward_processing_classes = reward_processing_classes
-
-        self.tokenize_and_inject_images = tokenize_and_inject_images
 
         # Data collator
         def data_collator(features):  # No data collation is needed in GRPO
