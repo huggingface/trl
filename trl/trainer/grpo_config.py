@@ -89,6 +89,10 @@ class GRPOConfig(TrainingArguments):
             [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient.
+        num_updates (`int`, *optional*, defaults to `1`):
+            Number of updates per batch.
+        epsilon (`float`, *optional*, defaults to `0.2`):
+            Epsilon value for clipping
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -219,6 +223,14 @@ class GRPOConfig(TrainingArguments):
     beta: float = field(
         default=0.04,
         metadata={"help": "KL coefficient."},
+    )
+    num_updates: int = field(
+        default=1,
+        metadata={"help": "Number of updates per batch."},
+    )
+    epsilon: float = field(
+        default=0.2,
+        metadata={"help": "Epsilon value for clipping."},
     )
     reward_weights: Optional[list[float]] = field(
         default=None,
