@@ -775,6 +775,8 @@ tags:
                 table[f"reward_{reward_func_name}"] = rewards_per_func[:, i].tolist()
 
             df = pd.DataFrame(table)
+            # set data types
+            df = df.astype({"step": "int64"})
             df.to_parquet(
                 os.path.join(
                     f"{self.args.output_dir}/completion_logs",
