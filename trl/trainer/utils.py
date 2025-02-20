@@ -490,7 +490,7 @@ class DPODataCollatorWithPadding:
                         padding_value = self.pad_token_id
                     elif k.endswith("_attention_mask"):
                         padding_value = 0
-                    elif k.startswith(("chosen", "rejected", "completion")) or ("decoder" in k):
+                    elif k.startswith(("reference", "chosen", "rejected", "completion")) or ("decoder" in k):
                         padding_value = self.label_pad_token_id
                     else:
                         raise ValueError(f"Unexpected key in batch '{k}'")
