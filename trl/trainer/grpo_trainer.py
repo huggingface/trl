@@ -485,11 +485,13 @@ class GRPOTrainer(Trainer):
                     "Please make sure you have the necessary permissions to create a repository on Hugging Face Hub."
                 ) from e
             card = DatasetCard(
-                """
-                ----
-                tags: trl-logs, group-completions
-                ----
-                #Trl Completion logs"""
+                """---
+tags:
+- trl-logs
+- grpo-completions
+---
+
+# Trl Completion logs"""
             )
 
             card.push_to_hub(self.args.log_completions_hub_repo)
