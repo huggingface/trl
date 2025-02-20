@@ -8,13 +8,13 @@ Section under construction. Feel free to contribute!
 
 ## Truncation
 
-Sequence lengths in the dataset can vary widely, and by default, TRL does not modify the data. When data is batched, sequences are padded to match the longest one in the batch, which can cause high memory usage, even if most sequences are relatively short.
+Sequence lengths in the dataset can vary widely. When data is batched, sequences are padded to match the longest one in the batch, which can cause high memory usage, even if most sequences are relatively short.
 
 <div class="flex justify-center">
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png" alt="Truncation prompt completion" width="600"/>
 </div>
 
-To reduce memory usage, it’s important to truncate sequences to a reasonable length. Even discarding just a few tokens from the dataset can result in significant memory savings by minimizing unnecessary padding. Truncation is a good practice and should always be applied to ensure efficient use of resources. While the truncation limit doesn’t need to be overly restrictive, setting a sensible value is essential for optimal performance.
+To reduce memory usage, it’s important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
 
 <hfoptions id="dpo">
 <hfoption id="DPO">
@@ -30,7 +30,15 @@ To set the truncation parameters, use the following code snippet:
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., max_prompt_length=..., max_completion_length=..., max_length=...)
+training_args = DPOConfig(..., max_prompt_length=..., max_length=...)
+```
+
+You can also use the `max_completion_length` parameter to truncate the completion, though this is less common since the goal is typically to preserve the completion's full length whenever possible.
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., max_completion_length=...)
 ```
 
 </hfoption>
@@ -77,7 +85,7 @@ Packing eliminates padding, preserves all sequence information, and allows for f
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., packing=True, max_seq_length=512)
+training_args = SFTConfig(..., packing=True, max_length=512)
 ```
 
 <Tip warning={true}>
@@ -85,3 +93,41 @@ training_args = SFTConfig(..., packing=True, max_seq_length=512)
 Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).
 
 </Tip>
+
+## Disabling model gathering for generation in online methods
+
+When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to out-of-memory (OOM) errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
+
+If you encounter this issue, you can disable the gathering of model weights for generation by setting the following parameter:
+
+<hfoptions id="ds3_gather_for_generation">
+<hfoption id="Online DPO">
+
+```python
+from trl import OnlineDPOConfig
+
+training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
+```
+
+</hfoption>
+<hfoption id="PPO">
+
+```python
+from trl import PPOConfig
+
+training_args = PPOConfig(..., ds3_gather_for_generation=False)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(..., ds3_gather_for_generation=False)
+```
+
+</hfoption>
+</hfoptions>
+
+This adjustment prevents model weights from being gathered, avoiding OOM errors, but it may result in slower generation speeds.

@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,7 +31,8 @@ def is_conversational(example: dict[str, Any]) -> bool:
             dataset type.
 
     Returns:
-        `bool`: `True` if the data is in a conversational format, `False` otherwise.
+        `bool`:
+            `True` if the data is in a conversational format, `False` otherwise.
 
     Examples:
 
@@ -90,8 +91,21 @@ def apply_chat_template(
 
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
+        last_role = example["prompt"][-1]["role"]
+        if last_role == "user":
+            add_generation_prompt = True
+            continue_final_message = False
+        elif last_role == "assistant":
+            add_generation_prompt = False
+            continue_final_message = True
+        else:
+            raise ValueError(f"Invalid role in the last message: {last_role}")
         prompt = tokenizer.apply_chat_template(
-            example["prompt"], tools=tools, tokenize=False, add_generation_prompt=True
+            example["prompt"],
+            tools=tools,
+            continue_final_message=continue_final_message,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
         )
 
     # Apply the chat template to the entire prompt + completion
@@ -172,17 +186,21 @@ def maybe_apply_chat_template(
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
             messages, where each message is a dictionary with keys `"role"` and `"content"`.
         tokenizer (`PreTrainedTokenizer`):
-            The tokenizer to apply the chat template with.
-        tools (`Optional[list[Union[dict, Callable]]]`, *optional*, defaults to `None`):
+            Tokenizer to apply the chat template with.
+        tools (`list[Union[dict, Callable]]` or `None`, *optional*, defaults to `None`):
             A list of tools (callable functions) that will be accessible to the model.
             If the template does not support function calling, this argument will have no effect
 
     Returns:
-        `dict[str, str]`: The formatted example with the chat template applied.
+        `dict[str, str]`:
+            Formatted example with the chat template applied.
 
-    Note:
-        This function does not alter the keys, except for Language modeling dataset, where `"messages"` is replaced by
-        `"text"`.
+    Notes:
+        - This function does not alter the keys, except for Language modeling dataset, where `"messages"` is replaced
+        by `"text"`.
+
+        - In case of prompt-only data, if the last role is `"user"`, the generation prompt is added to the prompt.
+        Else, if the last role is `"assistant"`, the final message is continued.
 
     Example:
 
@@ -224,7 +242,7 @@ def unpair_preference_dataset(
         dataset (`Dataset` or `DatasetDict`):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
-        num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         desc (`str` or `None`, *optional*, defaults to `None`):
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
@@ -265,7 +283,7 @@ def maybe_unpair_preference_dataset(
         dataset (`Dataset` or `DatasetDict`):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
-        num_proc (`Optional[int]`, *optional*, defaults to `None`):
+        num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         desc (`str` or `None`, *optional*, defaults to `None`):
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
@@ -412,3 +430,86 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
         if (chosen_conv and prompt_conv) or (not chosen_conv and not prompt_conv):
             return example
     return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
+
+
+def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str, list[list]]:
+    """
+    Pack examples into chunks of size `seq_length`.
+
+    Args:
+        examples (`dict[str, list[list]]`):
+            Dictionary of examples with keys as strings and values as lists of lists.
+        seq_length (`int`):
+            Maximum sequence length.
+
+    Returns:
+        `dict[str, list[list]]`: Dictionary of examples with keys as strings and values as lists of lists.
+
+    Example:
+
+    ```python
+    >>> from trl import pack_examples
+    >>> examples = {
+    ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+    ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+    ... }
+    >>> pack_examples(examples, seq_length=5)
+    {'input_ids': [[1, 2, 3, 4, 5], [6, 7, 8]], 'attention_mask': [[0, 1, 1, 0, 0], [1, 1, 1]]}
+    >>> pack_examples(examples, seq_length=2)
+    {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
+    ```
+    """
+    # Join  all the values into a single list
+    examples = {k: sum(v, []) for k, v in examples.items()}
+    # Split the values into chunks of size seq_length
+    examples = {k: [v[i : i + seq_length] for i in range(0, len(v), seq_length)] for k, v in examples.items()}
+    return examples
+
+
+def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
+    """
+    Convert a conversational dataset with fields `from` and `value` to ChatML format.
+
+    This function modifies conversational data to align with OpenAI's ChatML format:
+    - Replaces the key `"from"` with `"role"` in message dictionaries.
+    - Replaces the key `"value"` with `"content"` in message dictionaries.
+    - Renames `"conversations"` to `"messages"` for consistency with ChatML.
+
+    Args:
+        example (`dict[str, list]`):
+            A single data entry containing a list of messages.
+
+    Returns:
+        `dict[str, list]`:
+            Example reformatted to ChatML style.
+
+    Example:
+    ```python
+    >>> from trl import maybe_convert_to_chatml
+    >>> example = {
+    ...     "conversations": [
+    ...         {"from": "user", "value": "What color is the sky?"},
+    ...         {"from": "assistant", "value": "It is blue."}
+    ...     ]
+    ... }
+    >>> maybe_convert_to_chatml(example)
+    {'messages': [{'role': 'user', 'content': 'What color is the sky?'},
+                  {'role': 'assistant', 'content': 'It is blue.'}]}
+    ```
+    """
+    # List of possible keys containing message lists
+    for key in ["prompt", "completion", "chosen", "rejected", "messages", "conversations"]:
+        if key in example and isinstance(example[key], list):
+            messages = example[key]
+            for message in messages:
+                if isinstance(message, dict):
+                    if "from" in message:
+                        message["role"] = message.pop("from")
+                    if "value" in message:
+                        message["content"] = message.pop("value")
+
+    # Rename "conversations" to "messages"
+    if "conversations" in example:
+        example["messages"] = example.pop("conversations")
+
+    return example

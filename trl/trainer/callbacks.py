@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -94,6 +94,10 @@ def _generate_completions(
 
 
 class SyncRefModelCallback(TrainerCallback):
+    """
+    Callback to synchronize the model with a reference model.
+    """
+
     def __init__(
         self,
         ref_model: Union[PreTrainedModel, torch.nn.Module],

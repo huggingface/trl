@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -78,7 +78,6 @@ class GKDTrainer(SFTTrainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
@@ -86,9 +85,9 @@ class GKDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
     ):
-        # add remove_unused_columns=False to the the dataclass args
+        # add remove_unused_columns=False to the dataclass args
         args.remove_unused_columns = False
-        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_seq_length)
+        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
 
         super().__init__(
             model,
@@ -97,7 +96,6 @@ class GKDTrainer(SFTTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
@@ -157,6 +155,14 @@ class GKDTrainer(SFTTrainer):
             and self.model.generation_config.eos_token_id is not None
         ):
             self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
+
+    def _prepare_dataset(self, dataset, *args):
+        # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
+        # need to keep the messages column as it is. We use the following workaround to keep the messages column.
+        dataset = dataset.add_column("_messages", dataset["messages"])
+        dataset = super()._prepare_dataset(dataset, *args)
+        dataset = dataset.rename_column("_messages", "messages")
+        return dataset
 
     @staticmethod
     def generalized_jsd_loss(
@@ -346,10 +352,10 @@ class GKDTrainer(SFTTrainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """

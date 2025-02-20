@@ -7,12 +7,13 @@ Currently supported CLIs are:
 #### Training commands
 
 - `trl dpo`: fine-tune a LLM with DPO
+- `trl grpo`: fine-tune a LLM with GRPO
 - `trl kto`: fine-tune a LLM with KTO
 - `trl sft`: fine-tune a LLM with SFT
 
 #### Other commands
 
-- `trl chat`: quickly spin up a LLM fine-tuned for chatting
+- `trl chat`: quickly spin up an LLM fine-tuned for chatting
 - `trl env`: get the system information
 
 ## Fine-tuning with the CLI

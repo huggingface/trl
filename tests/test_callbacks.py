@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -341,7 +341,7 @@ class MergeModelCallbackTester(unittest.TestCase):
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dataset,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 callbacks=[merge_callback],
             )
             trainer.train()
@@ -364,7 +364,7 @@ class MergeModelCallbackTester(unittest.TestCase):
                 model=self.model,
                 args=training_args,
                 train_dataset=self.dataset,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 callbacks=[merge_callback],
             )
             trainer.train()
