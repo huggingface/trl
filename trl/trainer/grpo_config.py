@@ -259,3 +259,7 @@ class GRPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to log the completions during training."},
     )
+    log_completions_directory: str = field(
+        default="completions",
+        metadata={"help": "Directory to save the completions during training."},
+    )
