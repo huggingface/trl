@@ -479,6 +479,7 @@ class GRPOTrainer(Trainer):
                 repo_type="dataset",
                 folder_path=self.args.log_completions_directory,
                 every=2,
+                allow_patterns=["*.parquet"],
             )
 
     def _set_signature_columns_if_needed(self):
