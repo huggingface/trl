@@ -390,7 +390,7 @@ class GRPOTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         # Initialize the metrics
-        self._metrics = defaultdict(list)
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self.log_completions = args.log_completions
 
         super().__init__(
@@ -651,12 +651,17 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
-        if self.state.global_step % self.num_iterations == 0:
-            inputs = self._generate_and_score_completions(inputs)
-            self._buffered_inputs[self._step % self.args.gradient_accumulation_steps] = inputs
+        mode = "eval" if self.control.should_evaluate else "train"
+        if mode == "train":
+            if self.state.global_step % self.num_iterations == 0:
+                inputs = self._generate_and_score_completions(inputs)
+                self._buffered_inputs[self._step % self.args.gradient_accumulation_steps] = inputs
+            else:
+                inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+            self._step += 1
         else:
-            inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
-        self._step += 1
+            # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
+            inputs = self._generate_and_score_completions(inputs)
         return inputs
 
     def _generate_and_score_completions(
@@ -814,16 +819,21 @@ class GRPOTrainer(Trainer):
         advantages = advantages[process_slice]
 
         # Log the metrics
+        mode = "eval" if self.control.should_evaluate else "train"
+
+        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
+        self._metrics[mode]["completion_length"].append(completion_length)
+
         reward_per_func = rewards_per_func.mean(0)
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
                 reward_func_name = reward_func.config._name_or_path.split("/")[-1]
             else:
                 reward_func_name = reward_func.__name__
-            self._metrics[f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
+            self._metrics[mode][f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
 
-        self._metrics["reward"].append(rewards.mean().item())
-        self._metrics["reward_std"].append(std_grouped_rewards.mean().item())
+        self._metrics[mode]["reward"].append(rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
         if (
             self.log_completions
@@ -890,16 +900,15 @@ class GRPOTrainer(Trainer):
         loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
 
         # Log the metrics
-        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
-        self._metrics["completion_length"].append(completion_length)
+        mode = "eval" if self.control.should_evaluate else "train"
 
         if self.beta != 0.0:
             mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
-            self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
         is_clipped = (per_token_loss1 < per_token_loss2).float()
         clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
-        self._metrics["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
+        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
@@ -911,11 +920,12 @@ class GRPOTrainer(Trainer):
         return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+        mode = "eval" if self.control.should_evaluate else "train"
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
-        if next(iter(logs.keys())).startswith("eval_"):
+        if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
         logs = {**logs, **metrics}
@@ -923,7 +933,7 @@ class GRPOTrainer(Trainer):
             super().log(logs, start_time)
         else:  # transformers<=4.46
             super().log(logs)
-        self._metrics.clear()
+        self._metrics[mode].clear()
 
     def create_model_card(
         self,
