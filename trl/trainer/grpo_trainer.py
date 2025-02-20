@@ -473,32 +473,30 @@ class GRPOTrainer(Trainer):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
-        if self.args.log_completions:
-            if not os.path.exists(self.args.log_completions_directory):
-                from huggingface_hub import create_repo
-                from huggingface_hub import DatasetCard
+        if self.args.log_completions and self.args.log_completions_hub_repo is not None:
+            from huggingface_hub import create_repo
+            from huggingface_hub import DatasetCard
 
-                try:
-                    create_repo(self.args.log_completions_directory, exist_ok=False)
-                except Exception as e:
-                    raise ValueError(
-                        f"Failed to create the repository {self.args.log_completions_directory} for logging completions. "
-                        "Please make sure you have the necessary permissions to create a repository on Hugging Face Hub."
-                    ) from e
-                card = DatasetCard.load(self.args.log_completions_directory)
-                if not hasattr(card, "tags"):
-                    card.tags = ["trl-logs", "group-completions"]
-                card.push_to_hub()
-                os.makedirs(self.args.log_completions_directory)
-            if self.args.log_completions_hub_repo is not None:
-                self.commit_scheduler = CommitScheduler(
-                    repo_id=self.args.log_completions_hub_repo,
-                    repo_type="dataset",
-                    path_in_repo=f"{self.args.log_completions_directory}",
-                    folder_path=f"{self.args.log_completions_directory}/completion_logs",
-                    every=2,
-                    allow_patterns=["*.parquet"],
-                )
+            try:
+                create_repo(self.args.log_completions_hub_repo, exist_ok=False, repo_type="dataset")
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to create the repository {self.args.log_completions_hub_repo} for logging completions. "
+                    "Please make sure you have the necessary permissions to create a repository on Hugging Face Hub."
+                ) from e
+            card = DatasetCard.load(self.args.log_completions_hub_repo)
+            if not hasattr(card, "tags"):
+                card.tags = ["trl-logs", "group-completions"]
+            card.push_to_hub()
+            os.makedirs(f"{self.args.output_dir}/completion_logs")
+            self.commit_scheduler = CommitScheduler(
+                repo_id=self.args.log_completions_hub_repo,
+                repo_type="dataset",
+                path_in_repo=".",
+                folder_path=f"{self.args.output_dir}/completion_logs",
+                every=2,
+                allow_patterns=["*.parquet"],
+            )
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -772,7 +770,7 @@ class GRPOTrainer(Trainer):
             df = pd.DataFrame(table)
             df.to_parquet(
                 os.path.join(
-                    f"{self.args.log_completions_directory}/completion_logs",
+                    f"{self.args.output_dir}/completion_logs",
                     f"completions_{self.state.global_step}.parquet",
                 ),
             )
