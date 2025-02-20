@@ -740,11 +740,9 @@ class GRPOTrainer(Trainer):
                 "completion": gather_object(completions_text),
                 "reward": rewards.tolist(),
             }
-            df = pd.DataFrame(table)
-            df.to_json(
-                os.path.join(self.args.log_completions_directory, f"completions_{self.state.global_step}.json"),
-                orient="records",
-                lines=True,
+            df = pd.DataFrame(table).dtypes({"step": int, "prompt": str, "completion": str, "reward": float})
+            df.to_parquet(
+                os.path.join(self.args.log_completions_directory, f"completions_{self.state.global_step}.parquet"),
             )
             if wandb.run is not None and self.accelerator.is_main_process:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
