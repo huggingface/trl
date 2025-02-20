@@ -260,6 +260,10 @@ class GRPOConfig(TrainingArguments):
         metadata={"help": "Whether to log the completions during training."},
     )
     log_completions_directory: str = field(
-        default="completions",
-        metadata={"help": "Directory to save the completions during training."},
+        default="completion_logs",
+        metadata={"help": "Log directory to save the completions during training."},
+    )
+    log_completions_hub_repo: Optional[str] = field(
+        default=None,
+        metadata={"help": "Hugging Face Hub repository to save the completions."},
     )
