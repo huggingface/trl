@@ -484,10 +484,15 @@ class GRPOTrainer(Trainer):
                     f"Failed to create the repository {self.args.log_completions_hub_repo} for logging completions. "
                     "Please make sure you have the necessary permissions to create a repository on Hugging Face Hub."
                 ) from e
-            card = DatasetCard.load(self.args.log_completions_hub_repo)
-            if not hasattr(card, "tags"):
-                card.tags = ["trl-logs", "group-completions"]
-            card.push_to_hub()
+            card = DatasetCard(
+                """
+                ----
+                tags: trl-logs, group-completions
+                ----
+                #Trl Completion logs"""
+            )
+
+            card.push_to_hub(self.args.log_completions_hub_repo)
             os.makedirs(f"{self.args.output_dir}/completion_logs")
             self.commit_scheduler = CommitScheduler(
                 repo_id=self.args.log_completions_hub_repo,
