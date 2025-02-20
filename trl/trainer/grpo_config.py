@@ -210,9 +210,9 @@ class GRPOConfig(TrainingArguments):
         },
     )
     sglang_server_url: Optional[str] = field(
-        default="http://localhost:30011",
+        default="http://localhost:32232",
         metadata={
-            "help": "The URL of the SGLang server (e.g., 'http://localhost:30011'). Required if use_sglang is True."
+            "help": "The URL of the SGLang server (e.g., 'http://localhost:32232'). Required if use_sglang is True."
         },
     )
     sglang_device: Optional[str] = field(
