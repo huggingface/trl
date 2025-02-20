@@ -474,10 +474,13 @@ class GRPOTrainer(Trainer):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
         if self.args.log_completions:
+            if not os.path.exists(self.args.log_completions_directory):
+                os.makedirs(self.args.log_completions_directory)
             self.commit_scheduler = CommitScheduler(
                 repo_id="davanstrien/grpo-completions-test",
                 repo_type="dataset",
-                folder_path=self.args.log_completions_directory,
+                path_in_repo=f"{self.args.log_completions_directory}",
+                folder_path=f"{self.args.log_completions_directory}/completion_logs",
                 every=2,
                 allow_patterns=["*.parquet"],
             )
@@ -753,7 +756,10 @@ class GRPOTrainer(Trainer):
 
             df = pd.DataFrame(table)
             df.to_parquet(
-                os.path.join(self.args.log_completions_directory, f"completions_{self.state.global_step}.parquet"),
+                os.path.join(
+                    f"{self.args.log_completions_directory}/completion_logs",
+                    f"completions_{self.state.global_step}.parquet",
+                ),
             )
             if wandb.run is not None and self.accelerator.is_main_process:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
