@@ -126,7 +126,7 @@ class RepeatRandomSampler(Sampler):
             self.generator.manual_seed(seed)
 
     def __iter__(self):
-        # [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
+        # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
         indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
 
         #    [2, 4, 3, 1, 0, 6, 5]
