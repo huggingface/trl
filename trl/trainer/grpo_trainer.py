@@ -689,74 +689,49 @@ class GRPOTrainer(Trainer):
 
     def _update_sglang_weights(self):
         """
-        Update the model weights on the SGLang server via its API.
-        This function assumes that the training loop writes the latest checkpoint to self.args.checkpoint_path.
-        It performs additional checks and error handling to ensure the server successfully updates its weights.
+        Update the model weights on the SGLang server via its disk-based update API.
+        This function assumes that a checkpoint has been saved at self.args.checkpoint_path.
+        The SGLang server will load the new weights from that checkpoint.
         """
-        with unwrap_model_for_generation(
-            self.model,
-            self.accelerator,
-            gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-        ) as unwrapped_model:
-            if is_compiled_module(unwrapped_model):
-                unwrapped_model = unwrapped_model._orig_mod
-            if is_peft_model(unwrapped_model):
-                unwrapped_model.merge_adapter()
-                state_dict = unwrapped_model.state_dict()
-                # Remove base_model and base_layer prefixes
-                state_dict = {
-                    k.removeprefix("base_model.model.").replace(".base_layer", ""): v
-                    for k, v in state_dict.items()
-                }
-                # Remove values with adapter prefix (example: "_lora")
-                state_dict = {
-                    k: v
-                    for k, v in state_dict.items()
-                    if unwrapped_model.prefix not in k
-                }
-                # When module to save, remove its prefix and discard the original module
-                state_dict = {
-                    k.replace("modules_to_save.default.", ""): v
-                    for k, v in state_dict.items()
-                    if "original_module" not in k
-                }
-            else:
-                state_dict = unwrapped_model.state_dict()
-            if self.accelerator.is_main_process:
+        import os
+        import requests
 
-                try:
-                    response = requests.post(
-                        f"{self.sglang_server_url}/update_weights",
-                        json=state_dict.items(), # bug
-                        timeout=60,
-                    )
-                except requests.RequestException as e:
-                    raise RuntimeError(f"Weight update request failed: {e}")
-                
-                res_json = response.json()
-                if not res_json.get("success", False):
-                    raise RuntimeError(
-                        f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
-                    )
+        checkpoint = self.args.checkpoint_path
+        if not checkpoint or not os.path.exists(checkpoint):
+            raise FileNotFoundError(f"Checkpoint path {checkpoint} does not exist.")
 
-                # Optionally flush the cache after updating weights
-                try:
-                    flush_response = requests.post(
-                        f"{self.sglang_server_url}/flush_cache", timeout=30
-                    )
-                    if not flush_response.json().get("success", True):
-                        print(
-                            f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
-                        )
-                except requests.RequestException as e:
-                    print(f"Warning: Cache flush request failed: {e}")
+        payload = {
+            "model_path": checkpoint,
+            "load_format": getattr(self.args, "load_format", "auto"),
+        }
+        try:
+            response = requests.post(
+                f"{self.sglang_server_url}/update_weights_from_disk",
+                json=payload,
+                timeout=60,
+            )
+        except requests.RequestException as e:
+            raise RuntimeError(f"Weight update request failed: {e}")
 
-                print(f"SGLang weights updated successfully: {res_json.get('message')}")
+        res_json = response.json()
+        if not res_json.get("success", False):
+            raise RuntimeError(
+                f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
+            )
 
-            # Unmerge the adapter to restore the model to its original state.
-            # This must be done after loading weights to ensure they correspond to the merged state.
-            if is_peft_model(unwrapped_model):
-                unwrapped_model.unmerge_adapter()
+        # Optionally flush cache.
+        # try:
+        #     flush_response = requests.post(
+        #         f"{self.sglang_server_url}/flush_cache", timeout=30
+        #     )
+        #     if not flush_response.json().get("success", True):
+        #         print(
+        #             f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
+        #         )
+        # except requests.RequestException as e:
+        #     print(f"Warning: Cache flush request failed: {e}")
+
+        print(f"SGLang weights updated successfully: {res_json.get('message')}")
 
     def _move_model_to_vllm(self):
         with unwrap_model_for_generation(

@@ -1,32 +1,47 @@
-
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
 import tempfile
+import os
 import torch
 
-dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+dataset = load_dataset(
+    "trl-internal-testing/zen", "standard_prompt_only", split="train"
+)
 with tempfile.TemporaryDirectory() as tmp_dir:
+    # Create and update training args
     training_args = GRPOConfig(
         output_dir=tmp_dir,
-        learning_rate=0.1,  # increase the learning rate to speed up the test
-        per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-        num_generations=3,  # reduce the number of generations to reduce memory usage
-        max_completion_length=32,  # reduce the completion length to reduce memory usage
+        learning_rate=1.0e-03,
+        per_device_train_batch_size=3,
+        num_generations=9,
+        max_completion_length=32,
         report_to="none",
         use_sglang=True,
-        sglang_device="auto",  # will raise a warning, but allows this test to work with only one GPU
-        sglang_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
+        sglang_device="cuda:7",
+        sglang_gpu_memory_utilization=0.9,
     )
+    # Save a temporary checkpoint from the model and set the checkpoint_path.
+    # We'll initialize the trainer first so that we have the model.
     trainer = GRPOTrainer(
         model="Qwen/Qwen2.5-0.5B-Instruct",
         reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
         args=training_args,
         train_dataset=dataset,
     )
-    previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+    checkpoint_dir = os.path.join(tmp_dir, "checkpoint")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    trainer.model.save_pretrained(checkpoint_dir)
+    training_args.checkpoint_path = checkpoint_dir  # Set the checkpoint path
+
+    # Optionally, clone initial trainable parameters for testing.
+    previous_trainable_params = {
+        n: param.clone() for n, param in trainer.model.named_parameters()
+    }
+
     trainer.train()
-    # Check that the params have changed
+
+    # Check that the parameters have changed.
     for n, param in previous_trainable_params.items():
         new_param = trainer.model.get_parameter(n)
-        assert not(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+        assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
     print("test over")

@@ -181,9 +181,9 @@ class GRPOConfig(TrainingArguments):
         },
     )
     sglang_server_url: Optional[str] = field(
-        default="http://localhost:30011",
+        default="http://localhost:32232",
         metadata={
-            "help": "The URL of the SGLang server (e.g., 'http://localhost:30011'). Required if use_sglang is True."
+            "help": "The URL of the SGLang server (e.g., 'http://localhost:32232'). Required if use_sglang is True."
         },
     )
     sglang_device: Optional[str] = field(
@@ -233,4 +233,10 @@ class GRPOConfig(TrainingArguments):
     log_completions: bool = field(
         default=False,
         metadata={"help": "Whether to log completions during training."},
+    )
+
+    # For testing GRPO
+    checkpoint_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to the checkpoint for SGLang weight update."},
     )
