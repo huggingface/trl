@@ -475,6 +475,20 @@ class GRPOTrainer(Trainer):
 
         if self.args.log_completions:
             if not os.path.exists(self.args.log_completions_directory):
+                from huggingface_hub import create_repo
+                from huggingface_hub import DatasetCard
+
+                try:
+                    create_repo(self.args.log_completions_directory, exist_ok=False)
+                except Exception as e:
+                    raise ValueError(
+                        f"Failed to create the repository {self.args.log_completions_directory} for logging completions. "
+                        "Please make sure you have the necessary permissions to create a repository on Hugging Face Hub."
+                    ) from e
+                card = DatasetCard.load(self.args.log_completions_directory)
+                if not hasattr(card, "tags"):
+                    card.tags = ["trl-logs", "group-completions"]
+                card.push_to_hub()
                 os.makedirs(self.args.log_completions_directory)
             if self.args.log_completions_hub_repo is not None:
                 self.commit_scheduler = CommitScheduler(
