@@ -88,11 +88,12 @@ class GRPOConfig(TrainingArguments):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
-            KL coefficient.
+            KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
+            speed.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
-            Epsilon value for clipping
+            Epsilon value for clipping.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -222,7 +223,10 @@ class GRPOConfig(TrainingArguments):
     )
     beta: float = field(
         default=0.04,
-        metadata={"help": "KL coefficient."},
+        metadata={
+            "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
+            "training speed."
+        },
     )
     num_iterations: int = field(
         default=1,
