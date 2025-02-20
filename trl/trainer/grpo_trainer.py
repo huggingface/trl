@@ -59,6 +59,7 @@ from ..data_utils import (
     is_conversational,
     maybe_apply_chat_template,
 )
+from ..extras.profiling import profiling_decorator
 from ..import_utils import is_sglang_available, is_vllm_available
 from ..models import (
     create_reference_model,
@@ -1069,6 +1070,7 @@ class GRPOTrainer(Trainer):
         return model
 
     # Get the per-token log probabilities for the completions for the model and the reference model
+    @profiling_decorator
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
         # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
         logits = model(
@@ -1196,6 +1198,7 @@ class GRPOTrainer(Trainer):
             if is_peft_model(unwrapped_model):
                 unwrapped_model.unmerge_adapter()
 
+    @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         # Determine process rank/index based on initialization mode
         if hasattr(self, "_using_manual_distributed") and self._using_manual_distributed:
@@ -1484,6 +1487,7 @@ class GRPOTrainer(Trainer):
             "advantages": advantages,
         }
 
+    @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
