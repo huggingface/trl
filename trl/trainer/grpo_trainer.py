@@ -41,7 +41,7 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
-
+from huggingface_hub import CommitScheduler
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_decorator
 from ..import_utils import is_vllm_available
@@ -472,6 +472,14 @@ class GRPOTrainer(Trainer):
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+
+        if self.args.log_completions:
+            self.commit_scheduler = CommitScheduler(
+                repo_id="davanstrien/grpo-completions-test",
+                repo_type="dataset",
+                folder_path=self.args.log_completions_directory,
+                every=2,
+            )
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
