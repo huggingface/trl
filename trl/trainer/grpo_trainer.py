@@ -740,7 +740,17 @@ class GRPOTrainer(Trainer):
                 "completion": gather_object(completions_text),
                 "reward": rewards.tolist(),
             }
-            df = pd.DataFrame(table).dtypes({"step": int, "prompt": str, "completion": str, "reward": float})
+
+            # Add individual rewards from each reward function
+            rewards_per_func = rewards_per_func.cpu()  # Move to CPU for pandas
+            for i, reward_func in enumerate(self.reward_funcs):
+                if isinstance(reward_func, nn.Module):
+                    reward_func_name = reward_func.config._name_or_path.split("/")[-1]
+                else:
+                    reward_func_name = reward_func.__name__
+                table[f"reward_{reward_func_name}"] = rewards_per_func[:, i].tolist()
+
+            df = pd.DataFrame(table)
             df.to_parquet(
                 os.path.join(self.args.log_completions_directory, f"completions_{self.state.global_step}.parquet"),
             )
