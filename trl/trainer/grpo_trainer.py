@@ -476,14 +476,15 @@ class GRPOTrainer(Trainer):
         if self.args.log_completions:
             if not os.path.exists(self.args.log_completions_directory):
                 os.makedirs(self.args.log_completions_directory)
-            self.commit_scheduler = CommitScheduler(
-                repo_id="davanstrien/grpo-completions-test",
-                repo_type="dataset",
-                path_in_repo=f"{self.args.log_completions_directory}",
-                folder_path=f"{self.args.log_completions_directory}/completion_logs",
-                every=2,
-                allow_patterns=["*.parquet"],
-            )
+            if self.args.log_completions_hub_repo is not None:
+                self.commit_scheduler = CommitScheduler(
+                    repo_id=self.args.log_completions_hub_repo,
+                    repo_type="dataset",
+                    path_in_repo=f"{self.args.log_completions_directory}",
+                    folder_path=f"{self.args.log_completions_directory}/completion_logs",
+                    every=2,
+                    allow_patterns=["*.parquet"],
+                )
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
