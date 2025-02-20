@@ -478,17 +478,27 @@ class SFTTrainer(Trainer):
             correct_tokens = correct_predictions.sum()
 
             # Gather the correct_tokens and total_tokens across all processes
-            correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-            total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+            correct_token_sum = self.accelerator.gather_for_metrics(correct_tokens).detach().sum()
+            total_token_sum = self.accelerator.gather_for_metrics(total_tokens).detach().sum()
 
-            # Compute the mean token accuracy and log it
-            accuracy = (correct_tokens.sum() / total_tokens.sum()).item() if total_tokens.sum() > 0 else 0.0
-            self._metrics["mean_token_accuracy"].append(accuracy)
+            # Record data for the mean token accuracy and logging
+            if not self._metrics["mean_token_accuracy"]:
+                self._metrics["mean_token_accuracy"] = [correct_token_sum, total_token_sum]
+            else:
+                self._metrics["mean_token_accuracy"][0] += correct_token_sum
+                self._metrics["mean_token_accuracy"][1] += total_token_sum
 
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+        # average the metrics
+        metrics = {}
+        for key, val in self._metrics.items():
+            if key == "mean_token_accuracy":
+                total_token_sum = val[1].item()
+                metrics[key] = (val[0].item() / total_token_sum) if total_token_sum > 0 else 0.0
+            else:
+                metrics[key] = sum(val) / len(val)
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
