@@ -545,22 +545,25 @@ class GRPOTrainer(Trainer):
         # 2. repeats the batch multiple times to allow reusing generaations across multiple updates. Refer to
         #    _prepare_inputs to see how the generations are stored and reused.
 
-        #                             |     GPU 0     |     GPU 1     |     GPU 2    |
+        # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
+        # second row shows the second sampled batch, and so on.
         #
-        #    global_step   step         <───────>  num_generations=3
-        #                               <───────────> per_device_train_batch_size=4
-        #         0          0          0   0   0   1   1   1   2   2   2   3   3   3  │
-        #         0          1          4   4   4   5   5   5   6   6   6   7   7   7  │ gradient_accumulation=3
-        #         0          2          8   8   8   9   9   9  10  10  10  11  11  11  │
+        #                                     |     GPU 0     |     GPU 1     |     GPU 2    |
         #
-        #         1          3          0   0   0   1   1   1   2   2   2   3   3   3  │ num_iterations=2:
-        #         1          4          4   4   4   5   5   5   6   6   6   7   7   7  │ reuse the batch once
-        #         1          5          8   8   8   9   9   9  10  10  10  11  11  11  │
+        #               global_step   step     <───────>  num_generations=3
+        #                                      <───────────> per_device_train_batch_size=4
+        #                ▲   0          0      0   0   0   1   1   1   2   2   2   3   3   3  │
+        #  grad_accum=3  │   0          1      4   4   4   5   5   5   6   6   6   7   7   7  │ Generate completions for each prompt
+        #                ▼   0          2      8   8   8   9   9   9  10  10  10  11  11  11  │
         #
-        #         2          6         12  12  12  13  13  13  14  14  14  15  15  15
-        #         2          7         16  16  16  17  17  17  18  18  18  19  19  19
-        #         2          8         20  20  20  21  21  21  22  22  22  23  23  23
-        #                                              ...
+        #                    1          3      0   0   0   1   1   1   2   2   2   3   3   3  │ The sampled prompts are the same as in the first iteration
+        #                    1          4      4   4   4   5   5   5   6   6   6   7   7   7  │ Reuse the completions (here, once, because num_iterations=2)
+        #                    1          5      8   8   8   9   9   9  10  10  10  11  11  11  │
+        #
+        #                    2          6     12  12  12  13  13  13  14  14  14  15  15  15
+        #                    2          7     16  16  16  17  17  17  18  18  18  19  19  19
+        #                    2          8     20  20  20  21  21  21  22  22  22  23  23  23
+        #                                          ...
         effective_batch_size = (
             self.args.per_device_train_batch_size
             * self.accelerator.num_processes
