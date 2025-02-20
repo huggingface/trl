@@ -285,8 +285,6 @@ class GRPOTrainer(Trainer):
                     "This argument can only be used when the `model` argument is a string."
                 )
 
-        self.beta = args.beta
-
         if peft_config is not None:
             if not is_peft_available():
                 raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
@@ -297,6 +295,7 @@ class GRPOTrainer(Trainer):
             model = self._enable_gradient_checkpointing(model, args)
 
         # Reference model
+        self.beta = args.beta
         if self.beta == 0.0:
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
@@ -365,7 +364,6 @@ class GRPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.use_vllm = args.use_vllm
-        self.beta = args.beta
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
