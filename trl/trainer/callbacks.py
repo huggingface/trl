@@ -19,7 +19,13 @@ import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import gather_object, is_comet_ml_available, is_deepspeed_available, is_wandb_available
+from accelerate.utils import (
+    broadcast_object_list,
+    gather_object,
+    is_comet_ml_available,
+    is_deepspeed_available,
+    is_wandb_available,
+)
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
@@ -37,15 +43,18 @@ from transformers import (
 from transformers.trainer_utils import has_length
 
 from ..data_utils import maybe_apply_chat_template
-from ..import_utils import is_mergekit_available
+from ..import_utils import is_mergekit_available, is_vllm_available
 from ..mergekit_utils import MergeConfig, merge_models, upload_model_to_hf
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
-from .utils import log_table_to_comet_experiment
+from .utils import hf_generation_config_to_vllm_sampling_params, log_table_to_comet_experiment
 
 
 if is_deepspeed_available():
     import deepspeed
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
 
 if is_comet_ml_available():
     pass
@@ -53,6 +62,37 @@ if is_comet_ml_available():
 if is_wandb_available():
     import wandb
 
+def _generate_completions_vllm(  # for a future thing? idk
+    prompts: list[str],
+    vllm_model: Optional[LLM],
+    accelerator: Accelerator,
+    generation_config: Optional[GenerationConfig],
+) -> list[str]:
+    """
+    Generates completions for a list of pre-formatted prompts from the given model using vLLM
+    (DPO/GRPO only).
+
+    Args:
+        prompts (list[str]): A list of input prompts for which completions are to be generated.
+        vllm_model (Optional[LLM]): The pre-trained model to be used for generation. Since vLLM only runs in the main process,
+            this is None for non-main processes.
+        accelerator (Accelerator): The accelerator to be used for model execution.
+        max_completion_length (int): Maximum completion length during generation.
+
+    Returns:
+        list[str]: A list of generated text completions corresponding to the input prompts.
+    """
+    inference_num_generations = 1 if generation_config is None else generation_config.num_return_sequences
+    if accelerator.is_main_process:
+        if generation_config is None:
+            inference_sampling_params = SamplingParams() # default
+        else:
+            inference_sampling_params = hf_generation_config_to_vllm_sampling_params(generation_config)
+        vllm_response = vllm_model.generate(prompts, sampling_params=inference_sampling_params, use_tqdm=False)
+        outputs = [out.text for completions in vllm_response for out in completions.outputs]
+    else:
+        outputs = [None] * len(prompts) * inference_num_generations
+    return outputs
 
 def _generate_completions(
     prompts: list[str],
@@ -473,18 +513,31 @@ class LogCompletionsCallback(TrainerCallback):
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
-        with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
+
+        if getattr(args, "use_vllm", False): # not all trainers have vLLM!
+            prompts = self.eval_dataset["prompt"]
             prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
-            completions = _generate_completions(
+            vllm_model = self.trainer.llm if accelerator.is_main_process else None
+            completions = _generate_completions_vllm(
                 prompts,
-                model=model,
-                tokenizer=tokenizer,
-                accelerator=accelerator,
+                vllm_model,
+                accelerator,
                 generation_config=self.generation_config,
-                batch_size=args.per_device_eval_batch_size,
             )
-            completions = gather_object(completions)
-            prompts = gather_object(prompts)
+            completions = broadcast_object_list(completions, from_process=0)
+        else:
+            with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
+                prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
+                completions = _generate_completions(
+                    prompts,
+                    model=model,
+                    tokenizer=tokenizer,
+                    accelerator=accelerator,
+                    generation_config=self.generation_config,
+                    batch_size=args.per_device_eval_batch_size,
+                )
+                completions = gather_object(completions)
+        prompts = gather_object(prompts)
 
         # Build the data to log
         if self.trainer.accelerator.is_main_process:
