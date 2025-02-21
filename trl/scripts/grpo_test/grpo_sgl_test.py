@@ -12,8 +12,10 @@ dataset = load_dataset(
     "trl-internal-testing/zen", "standard_prompt_only", split="train"
 )
 
+# Configure training arguments for engine mode.
+# (Notice we do NOT set sglang_server_url so that the trainer uses engine mode.)
 training_args = GRPOConfig(
-    output_dir=checkpoint_dir,  # Set output directory here
+    output_dir=checkpoint_dir,
     learning_rate=1.0e-03,
     per_device_train_batch_size=3,
     num_generations=9,
@@ -22,6 +24,7 @@ training_args = GRPOConfig(
     use_sglang=True,
     sglang_device="cuda:7",
     sglang_gpu_memory_utilization=0.9,
+    # Do not set sglang_server_url – the Engine will be launched internally.
 )
 
 trainer = GRPOTrainer(
@@ -31,9 +34,11 @@ trainer = GRPOTrainer(
     train_dataset=dataset,
 )
 
-# Save a checkpoint to initialize checkpoint_path locally
+# Save a checkpoint so that update_weights_from_disk can work later.
 trainer.model.save_pretrained(checkpoint_dir)
-training_args.checkpoint_path = checkpoint_dir  # Set the checkpoint path for later use
+training_args.checkpoint_path = (
+    checkpoint_dir  # Set the checkpoint path for weight updates
+)
 
 # Optionally, clone initial trainable parameters for testing.
 previous_trainable_params = {

@@ -443,18 +443,46 @@ class GRPOTrainer(Trainer):
 
         # Initialization for the inference backend
         if self.use_sglang:
-            # Use externally managed SGLang server.
-            # The server URL is provided via configuration, e.g., "http://localhost:32232"
-            if not args.sglang_server_url:
-                raise ValueError(
-                    "SGLang is enabled but no server URL was provided (use --sglang_server_url)."
-                )
-            self.sglang_server_url = args.sglang_server_url
+            # Here we choose to launch the offline engine directly.
             if self.accelerator.is_main_process:
+                requested_device = args.sglang_device  # e.g., "cuda:7"
+                # If only one GPU is available, force to "cuda:0"
+                if torch.cuda.device_count() == 1:
+                    sglang_device = "cuda:0"
+                else:
+                    sglang_device = requested_device
+
+                available = torch.cuda.device_count()
+                req_idx = int(requested_device.split(":")[1])
+                if req_idx >= available:
+                    raise ValueError(
+                        f"The requested device for SGLang ({requested_device}) is not available (only {available} GPUs available)."
+                    )
+                if requested_device in {
+                    f"cuda:{idx}" for idx in range(self.accelerator.num_processes)
+                }:
+                    warnings.warn(
+                        f"The requested device {requested_device} is also being used for training. It is recommended to use a dedicated device for SGLang."
+                    )
+
+                # Instantiate the offline engine directly.
+                from sglang import Engine  # ensure sglang is installed and available
+
+                self.engine = Engine(
+                    model_path=model.name_or_path,
+                    device=sglang_device,
+                    mem_fraction_static=args.sglang_gpu_memory_utilization,
+                )
+                # Set sampling parameters for the offline engine.
                 self.sglang_sampling_params = {
                     "temperature": args.temperature,
                     "max_new_tokens": self.max_completion_length,
+                    # You can add extra parameters (e.g., top_p) as required.
                 }
+            else:
+                # Non-main processes do not instantiate the engine.
+                self.engine = None
+                self.sglang_sampling_params = None
 
             self._last_loaded_step = 0
             self.accelerator.wait_for_everyone()
@@ -650,46 +678,23 @@ class GRPOTrainer(Trainer):
 
     def _update_sglang_weights(self):
         """
-        Update the model weights on the SGLang server via its disk-based update API.
-        This function assumes that a checkpoint has been saved at self.args.checkpoint_path.
-        The SGLang server will load the new weights from that checkpoint.
+        Update the engine weights by reading a checkpoint from disk.
+        This method assumes that a checkpoint has been saved at self.args.checkpoint_path.
+        The offline engine will load the new weights directly.
         """
         checkpoint = self.args.checkpoint_path
         if not checkpoint or not os.path.exists(checkpoint):
             raise FileNotFoundError(f"Checkpoint path {checkpoint} does not exist.")
 
-        payload = {
-            "model_path": checkpoint,
-            "load_format": getattr(self.args, "load_format", "auto"),
-        }
-        try:
-            response = requests.post(
-                f"{self.sglang_server_url}/update_weights_from_disk",
-                json=payload,
-                timeout=60,
+        if self.accelerator.is_main_process:
+            # Call the engine’s native update_weights_from_disk method.
+            success, message = self.engine.update_weights_from_disk(
+                model_path=checkpoint,
+                load_format=getattr(self.args, "load_format", "auto"),
             )
-        except requests.RequestException as e:
-            raise RuntimeError(f"Weight update request failed: {e}")
-
-        res_json = response.json()
-        if not res_json.get("success", False):
-            raise RuntimeError(
-                f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
-            )
-
-        # Optionally flush cache.
-        try:
-            flush_response = requests.post(
-                f"{self.sglang_server_url}/flush_cache", timeout=30
-            )
-            if not flush_response.json().get("success", True):
-                print(
-                    f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
-                )
-        except requests.RequestException as e:
-            print(f"Warning: Cache flush request failed: {e}")
-
-        print(f"SGLang weights updated successfully: {res_json.get('message')}")
+            if not success:
+                raise RuntimeError(f"Engine weight update failed: {message}")
+            print(f"Engine weights updated successfully: {message}")
 
     def _move_model_to_vllm(self):
         with unwrap_model_for_generation(
@@ -757,31 +762,25 @@ class GRPOTrainer(Trainer):
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
-        # Generation branch: choose SGLang, vLLM, or default generation.
         if self.use_sglang:
-            # Update weights if the training step has advanced.
+            # Update weights if a new training step has occurred.
             if self.state.global_step != self._last_loaded_step:
                 self._update_sglang_weights()
                 self._last_loaded_step = self.state.global_step
 
-            # Gather all prompt texts from all processes.
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
-                payload = {
-                    "text": all_prompts_text,
-                    "sampling_params": self.sglang_sampling_params,
-                }
-                response = requests.post(
-                    f"{self.sglang_server_url}/generate", json=payload
+                # Use the offline engine's native generate() API.
+                outputs = self.engine.generate(
+                    all_prompts_text, sampling_params=self.sglang_sampling_params
                 )
-                generated_texts = [item.get("text") for item in response.json()]
+                # Assume outputs is a list of dicts with a "text" key.
                 completion_ids = [
-                    self.processing_class.encode(text) for text in generated_texts
+                    self.processing_class.encode(output["text"]) for output in outputs
                 ]
             else:
                 completion_ids = [None] * len(all_prompts_text)
 
-            # Broadcast and slice the generated completions.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
