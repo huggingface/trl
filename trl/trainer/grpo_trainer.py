@@ -421,6 +421,9 @@ class GRPOTrainer(Trainer):
                         torch.distributed.new_group = functools.partial(
                             original_new_group, use_local_synchronization=True
                         )
+                        torch.npu.mem_get_info = functools.partial(
+                            torch.npu.mem_get_info, device=vllm_device
+                        )
                         yield
                     finally:
                         torch.distributed.new_group = original_new_group
