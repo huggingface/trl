@@ -110,7 +110,8 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
-
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use Liger loss.
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
@@ -270,4 +271,9 @@ class GRPOConfig(TrainingArguments):
     log_completions: bool = field(
         default=False,
         metadata={"help": "Whether to log the completions during training."},
+    )
+
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use Liger loss."},
     )
