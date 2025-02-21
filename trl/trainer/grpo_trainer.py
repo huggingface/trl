@@ -768,13 +768,14 @@ class GRPOTrainer(Trainer):
                 self._update_sglang_weights()
                 self._last_loaded_step = self.state.global_step
 
+            # Gather prompts from all processes.
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
                 # Use the offline engine's native generate() API.
+                # outputs should be a list of dicts, each with a "text" key.
                 outputs = self.engine.generate(
                     all_prompts_text, sampling_params=self.sglang_sampling_params
                 )
-                # Assume outputs is a list of dicts with a "text" key.
                 completion_ids = [
                     self.processing_class.encode(output["text"]) for output in outputs
                 ]

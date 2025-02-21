@@ -180,12 +180,6 @@ class GRPOConfig(TrainingArguments):
             "help": "Whether to use SGLang for generating completions. If True, a SGLang server must be running."
         },
     )
-    sglang_server_url: Optional[str] = field(
-        default="http://localhost:32232",
-        metadata={
-            "help": "The URL of the SGLang server (e.g., 'http://localhost:32232'). Required if use_sglang is True."
-        },
-    )
     sglang_device: Optional[str] = field(
         default="auto",
         metadata={
