@@ -20,7 +20,11 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft, require_torch_accelerator
+from transformers.testing_utils import (
+    require_liger_kernel,
+    require_peft,
+    require_torch_accelerator,
+)
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
@@ -791,6 +795,41 @@ class GRPOTrainerTester(unittest.TestCase):
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_liger_kernel
+    @parameterized.expand([("num_iterations_1", 1), ("num_iterations_3", 3)])
+    def test_grpo_trainer_liger(self, _, num_iterations):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                use_liger_loss=True,  # Enable Liger loss
+                num_iterations=num_iterations,
+                report_to="none",
+            )
+
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            # Store initial parameters
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
