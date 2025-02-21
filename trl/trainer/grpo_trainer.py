@@ -383,7 +383,7 @@ class GRPOTrainer(Trainer):
         self.use_vllm = args.use_vllm
         self.use_sglang = getattr(
             args, "use_sglang", False
-        )  # Add backedn selection flag
+        )  # Add backend selection flag
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
@@ -441,46 +441,52 @@ class GRPOTrainer(Trainer):
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
 
-        # Initialization for the inference backend
         if self.use_sglang:
-            # Here we choose to launch the offline engine directly.
+            # Launch the offline engine directly.
             if self.accelerator.is_main_process:
-                requested_device = args.sglang_device  # e.g., "cuda:7"
-                # If only one GPU is available, force to "cuda:0"
+                # Normalize the requested device string.
+                requested_device = args.sglang_device.lower()  # e.g., "cuda:7"
+                # If only one GPU is available, force "cuda:0"
                 if torch.cuda.device_count() == 1:
                     sglang_device = "cuda:0"
                 else:
+                    # Try to parse the requested index; default to 0 if not provided.
+                    try:
+                        req_idx = int(requested_device.split(":")[1])
+                    except IndexError:
+                        req_idx = 0
+                    available = torch.cuda.device_count()
+                    if req_idx >= available:
+                        raise ValueError(
+                            f"The requested device for SGLang ({requested_device}) is not available "
+                            f"(only {available} GPUs available)."
+                        )
                     sglang_device = requested_device
 
-                available = torch.cuda.device_count()
-                req_idx = int(requested_device.split(":")[1])
-                if req_idx >= available:
-                    raise ValueError(
-                        f"The requested device for SGLang ({requested_device}) is not available (only {available} GPUs available)."
-                    )
-                if requested_device in {
+                # Warn if the requested device is among the training devices.
+                if sglang_device in {
                     f"cuda:{idx}" for idx in range(self.accelerator.num_processes)
                 }:
                     warnings.warn(
-                        f"The requested device {requested_device} is also being used for training. It is recommended to use a dedicated device for SGLang."
+                        f"The requested device {sglang_device} is also being used for training. It is recommended "
+                        "to use a dedicated device for SGLang."
                     )
 
                 # Instantiate the offline engine directly.
-                from sglang import Engine  # ensure sglang is installed and available
+                import sglang as sgl  # ensure sglang is installed and available
 
-                self.engine = Engine(
+                self.engine = sgl.Engine(
                     model_path=model.name_or_path,
-                    device=sglang_device,
                     mem_fraction_static=args.sglang_gpu_memory_utilization,
                 )
+
                 # Set sampling parameters for the offline engine.
                 self.sglang_sampling_params = {
                     "temperature": args.temperature,
                     "max_new_tokens": self.max_completion_length,
-                    # You can add extra parameters (e.g., top_p) as required.
                 }
             else:
-                # Non-main processes do not instantiate the engine.
+                # For non-main processes, just set engine and parameters to None.
                 self.engine = None
                 self.sglang_sampling_params = None
 

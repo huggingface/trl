@@ -1,6 +1,6 @@
+import patch_model_runner  # This applies the monkey patch
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
-import tempfile
 import os
 import torch
 
@@ -8,7 +8,6 @@ import torch
 def main():
     checkpoint_dir = os.path.join("/home/misc/jinpan/trl-jin", "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
-
     dataset = load_dataset(
         "trl-internal-testing/zen", "standard_prompt_only", split="train"
     )
