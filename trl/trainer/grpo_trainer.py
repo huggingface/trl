@@ -444,52 +444,13 @@ class GRPOTrainer(Trainer):
         # Initialization for the inference backend
         if self.use_sglang:
             # Use externally managed SGLang server.
-            # The server URL is provided via configuration, e.g., "http://localhost:30033"
+            # The server URL is provided via configuration, e.g., "http://localhost:32232"
             if not args.sglang_server_url:
                 raise ValueError(
                     "SGLang is enabled but no server URL was provided (use --sglang_server_url)."
                 )
             self.sglang_server_url = args.sglang_server_url
             if self.accelerator.is_main_process:
-                # # Jayon: server won't terminate if you don't close it !!!!
-                # sglang_device = args.sglang_device
-                # if sglang_device == "auto":
-                #     if torch.cuda.device_count() == 1:
-                #         sglang_device = "cuda:0"  # particular case when training with onyl 1 GPU: share it
-                #     else:
-                #         sglang_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
-                # # Check that the requested device is available
-                # if (
-                #     sglang_device.split(":")[0] == "cuda"
-                #     and int(sglang_device.split(":")[1]) >= torch.cuda.device_count()
-                # ):
-                #     raise ValueError(
-                #         f"The requested device for vllm ({sglang_device}) is not available. You are likely using vLLM "
-                #         "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
-                #         "value lower than the number of GPUs available on your machine—typically, reducing it by one "
-                #         f"is sufficient. In your case: `--num_processes {torch.cuda.device_count() - 1}`."
-                #     )
-                # # Check that the requested device is not also used for training
-                # if sglang_device in {
-                #     f"cuda:{idx}" for idx in range(self.accelerator.num_processes)
-                # }:
-                #     warnings.warn(
-                #         f"The requested device {sglang_device} is also being used for training. For higher throughput "
-                #         "and to avoid out-of-memory errors, it is recommended to use a dedicated device for sglang. "
-                #         "If this is intentional, you may ignore this warning but should adjust "
-                #         "`sglang_gpu_memory_utilization` accordingly."
-                #     )
-
-                # # sglang start up
-                # sglang_cmd = "python -m sglang.launch_server"
-                # sglang_model = " --model-path " + model.name_or_path
-                # # sglang_url = "  --host 0.0.0.0 --port " + str(args.sglang_server_url.split(":")[-1])
-                # sglang_mem = "  --mem-fraction-static " + str(args.sglang_gpu_memory_utilization)
-                # # Jayon: hard code here
-                # sglang_device = " --device " + "cuda"
-                # launch_server_cmd(sglang_cmd + sglang_model + sglang_mem + sglang_device)
-                # print("lanch server over")
-                # Set sampling parameters for SGLang as a dict (to be sent via HTTP)
                 self.sglang_sampling_params = {
                     "temperature": args.temperature,
                     "max_new_tokens": self.max_completion_length,
@@ -693,9 +654,6 @@ class GRPOTrainer(Trainer):
         This function assumes that a checkpoint has been saved at self.args.checkpoint_path.
         The SGLang server will load the new weights from that checkpoint.
         """
-        import os
-        import requests
-
         checkpoint = self.args.checkpoint_path
         if not checkpoint or not os.path.exists(checkpoint):
             raise FileNotFoundError(f"Checkpoint path {checkpoint} does not exist.")
@@ -720,16 +678,16 @@ class GRPOTrainer(Trainer):
             )
 
         # Optionally flush cache.
-        # try:
-        #     flush_response = requests.post(
-        #         f"{self.sglang_server_url}/flush_cache", timeout=30
-        #     )
-        #     if not flush_response.json().get("success", True):
-        #         print(
-        #             f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
-        #         )
-        # except requests.RequestException as e:
-        #     print(f"Warning: Cache flush request failed: {e}")
+        try:
+            flush_response = requests.post(
+                f"{self.sglang_server_url}/flush_cache", timeout=30
+            )
+            if not flush_response.json().get("success", True):
+                print(
+                    f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
+                )
+        except requests.RequestException as e:
+            print(f"Warning: Cache flush request failed: {e}")
 
         print(f"SGLang weights updated successfully: {res_json.get('message')}")
 
