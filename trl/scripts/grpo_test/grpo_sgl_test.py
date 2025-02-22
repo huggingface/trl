@@ -1,4 +1,3 @@
-import patch_model_runner  # This applies the monkey patch
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
 import os
@@ -20,7 +19,6 @@ def main():
         max_completion_length=32,
         report_to="none",
         use_sglang=True,
-        sglang_device="cuda:7",
         sglang_gpu_memory_utilization=0.9,
     )
 

@@ -16,6 +16,8 @@ import os
 import textwrap
 import warnings
 import requests
+import sglang as sgl
+import logging
 from collections import defaultdict
 from typing import Any, Callable, Optional, Sized, Union
 from unittest.mock import patch
@@ -88,6 +90,9 @@ if is_sglang_available():
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
+print("NCCL_DEBUG =", os.environ.get("NCCL_DEBUG"))
+print("TORCH_DISTRIBUTED_DEBUG =", os.environ.get("TORCH_DISTRIBUTED_DEBUG"))
 
 
 class RepeatRandomSampler(Sampler):
@@ -440,58 +445,88 @@ class GRPOTrainer(Trainer):
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
+        print("[DEBUG] Seed set to", args.seed)
 
         if self.use_sglang:
-            # Launch the offline engine directly.
             if self.accelerator.is_main_process:
-                # Normalize the requested device string.
-                requested_device = args.sglang_device.lower()  # e.g., "cuda:7"
-                # If only one GPU is available, force "cuda:0"
-                if torch.cuda.device_count() == 1:
-                    sglang_device = "cuda:0"
-                else:
-                    # Try to parse the requested index; default to 0 if not provided.
-                    try:
-                        req_idx = int(requested_device.split(":")[1])
-                    except IndexError:
-                        req_idx = 0
-                    available = torch.cuda.device_count()
-                    if req_idx >= available:
-                        raise ValueError(
-                            f"The requested device for SGLang ({requested_device}) is not available "
-                            f"(only {available} GPUs available)."
-                        )
-                    sglang_device = requested_device
-
-                # Warn if the requested device is among the training devices.
-                if sglang_device in {
-                    f"cuda:{idx}" for idx in range(self.accelerator.num_processes)
-                }:
-                    warnings.warn(
-                        f"The requested device {sglang_device} is also being used for training. It is recommended "
-                        "to use a dedicated device for SGLang."
-                    )
-
-                # Instantiate the offline engine directly.
-                import sglang as sgl  # ensure sglang is installed and available
-
-                self.engine = sgl.Engine(
-                    model_path=model.name_or_path,
-                    mem_fraction_static=args.sglang_gpu_memory_utilization,
+                print(
+                    "[DEBUG] Running on main process for SGLang offline engine launch."
                 )
+                # # Normalize the requested device string.
+                # requested_device = args.sglang_device.lower()  # e.g., "cuda:7"
+                # print("[DEBUG] Requested SGLang device (raw):", requested_device)
+                # # If only one GPU is available, force "cuda:0"
+                # if torch.cuda.device_count() == 1:
+                #     sglang_device = "cuda:0"
+                #     print("[DEBUG] Only one GPU available; using:", sglang_device)
+                # else:
+                #     try:
+                #         req_idx = int(requested_device.split(":")[1])
+                #         print("[DEBUG] Parsed requested GPU index:", req_idx)
+                #     except IndexError:
+                #         req_idx = 0
+                #         print("[DEBUG] No GPU index specified; defaulting to index 0")
+                #     available = torch.cuda.device_count()
+                #     print("[DEBUG] Available GPU count:", available)
+                #     if req_idx >= available:
+                #         err_msg = (
+                #             f"The requested device for SGLang ({requested_device}) is not available "
+                #             f"(only {available} GPUs available)."
+                #         )
+                #         print("[ERROR]", err_msg)
+                #         raise ValueError(err_msg)
+                #     sglang_device = requested_device
+                #     print("[DEBUG] Using SGLang device:", sglang_device)
+
+                # training_devices = {
+                #     f"cuda:{idx}" for idx in range(self.accelerator.num_processes)
+                # }
+                # print("[DEBUG] Training devices:", training_devices)
+                # if sglang_device in training_devices:
+                #     warning_msg = (
+                #         f"The requested device {sglang_device} is also being used for training. "
+                #         "It is recommended to use a dedicated device for SGLang."
+                #     )
+                #     warnings.warn(warning_msg)
+                #     print("[DEBUG] Warning issued:", warning_msg)
+
+                # Now attempt to instantiate the SGLang engine.
+                print(
+                    "[DEBUG] Attempting to instantiate SGLang engine with model path:",
+                    model.name_or_path,
+                )
+                try:
+                    self.engine = sgl.Engine(
+                        model_path=model.name_or_path,
+                        mem_fraction_static=args.sglang_gpu_memory_utilization,
+                        base_gpu_id=3,
+                    )
+                    print("[DEBUG] SGLang engine instantiated successfully.")
+                except Exception as e:
+                    print("[ERROR] Failed to instantiate SGLang engine:", e)
+                    raise
 
                 # Set sampling parameters for the offline engine.
                 self.sglang_sampling_params = {
                     "temperature": args.temperature,
                     "max_new_tokens": self.max_completion_length,
                 }
+                print(
+                    "[DEBUG] SGLang sampling parameters set:",
+                    self.sglang_sampling_params,
+                )
             else:
-                # For non-main processes, just set engine and parameters to None.
                 self.engine = None
                 self.sglang_sampling_params = None
+                print(
+                    "[DEBUG] Non-main process: SGLang engine and sampling parameters not instantiated."
+                )
 
             self._last_loaded_step = 0
+            print("[DEBUG] _last_loaded_step reset to 0.")
+            print("[DEBUG] Waiting for all processes to synchronize...")
             self.accelerator.wait_for_everyone()
+            print("[DEBUG] All processes synchronized.")
         elif self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(

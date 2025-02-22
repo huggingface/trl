@@ -180,12 +180,6 @@ class GRPOConfig(TrainingArguments):
             "help": "Whether to use SGLang for generating completions. If True, a SGLang server must be running."
         },
     )
-    sglang_device: Optional[str] = field(
-        default="auto",
-        metadata={
-            "help": "The GPU device to be used for SGLang generation if launching internally. Optional if the server is managed externally."
-        },
-    )
     sglang_gpu_memory_utilization: float = field(
         default=0.9,
         metadata={"help": "Ratio of GPU memory reserved for sglang generation."},
