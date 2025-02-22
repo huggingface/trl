@@ -54,6 +54,7 @@ from transformers.utils import is_peft_available, is_torch_xpu_available
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper, create_reference_model
+from ..models.utils import prepare_fsdp
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
@@ -510,6 +511,8 @@ class DPOTrainer(Trainer):
         else:
             if self.is_deepspeed_enabled:
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
+            elif self.is_fsdp_enabled:
+                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
