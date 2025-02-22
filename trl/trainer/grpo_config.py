@@ -176,6 +176,14 @@ class GRPOConfig(TrainingArguments):
             "(`pip install vllm`)."
         },
     )
+    vllm_worker_num: Optional[int] = field(
+        default=1,
+        metadata={
+            "help": "The number of vllm works used for inference. Notably, this number should be less or equal to "
+            "the number of process used for distributed training (i.e., `--num_processes`). In addition, please "
+            "ensure that `vllm_worker_num + num_processes <= world_size`."
+        },
+    )
     vllm_device: Optional[str] = field(
         default="auto",
         metadata={

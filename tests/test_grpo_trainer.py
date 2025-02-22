@@ -781,6 +781,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 use_vllm=True,
                 vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
                 vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
+                vllm_gpu_memory_utilization=0.4,  # reduce the memory utilization rate to reduce memory usage
             )
             trainer = GRPOTrainer(
                 model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM

@@ -22,7 +22,7 @@ from unittest.mock import patch
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
+from accelerate.utils import gather, gather_object, is_peft_model, set_seed
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
@@ -435,14 +435,19 @@ class GRPOTrainer(Trainer):
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
-
-            if self.accelerator.is_main_process:
+            if self.args.vllm_worker_num > self.accelerator.num_processes:
+                raise ValueError(
+                    f"The requested number of workers for vllm (i.e., {self.args.vllm_worker_num}) should be no larger "
+                    f"than the number of your training processes (i.e., {self.accelerator.num_processes}) "
+                )
+            rank = self.accelerator.process_index
+            if rank < self.args.vllm_worker_num:
                 vllm_device = self.args.vllm_device
                 if vllm_device == "auto":
                     if torch.cuda.device_count() == 1:
                         vllm_device = "cuda:0"  # particular case when training with onyl 1 GPU: share it
                     else:
-                        vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
+                        vllm_device = f"cuda:{self.accelerator.num_processes+rank}"
                 # Check that the requested device is available
                 if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
                     raise ValueError(
@@ -459,14 +464,17 @@ class GRPOTrainer(Trainer):
                         "If this is intentional, you may ignore this warning but should adjust "
                         "`vllm_gpu_memory_utilization` accordingly."
                     )
-                # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) place the vLLM
-                # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
-                # setting (profiling_patch).
+                # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) initilizing vLLM
+                # model on the desired device (world_size_patch, get_rank_patch, new_group_patch, get_backend_patch) without
+                # conflicts and (2) avoid a test that is not designed for our setting (profiling_patch).
                 world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
                 profiling_patch = patch(
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
                 )
-                with world_size_patch, profiling_patch:
+                get_rank_patch = patch("torch.distributed.get_rank", return_value=0)
+                new_group_patch = patch("torch.distributed.new_group", return_value=type("DummyGroup", (), {})())
+                get_backend_patch = patch("torch.distributed.get_backend", lambda _: "gloo")
+                with world_size_patch, get_rank_patch, new_group_patch, get_backend_patch, profiling_patch:
                     self.llm = LLM(
                         model=model.name_or_path,
                         device=vllm_device,
@@ -478,6 +486,7 @@ class GRPOTrainer(Trainer):
                         enable_prefix_caching=True,
                         max_model_len=self.args.vllm_max_model_len,
                     )
+                    self.llm_device = vllm_device
 
                 # Guided decoding, if enabled
                 if args.vllm_guided_decoding_regex is not None:
@@ -644,13 +653,25 @@ class GRPOTrainer(Trainer):
                 }
             else:
                 state_dict = unwrapped_model.state_dict()
-            if self.accelerator.is_main_process:
+            if self.accelerator.process_index < self.args.vllm_worker_num:
                 llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                 llm_model.load_weights(state_dict.items())
             # Unmerge the adapter to restore the model to its original state.
             # This must be done after loading weights to ensure they correspond to the merged state.
             if is_peft_model(unwrapped_model):
                 unwrapped_model.unmerge_adapter()
+
+    def _split_vllm_inputs(self, ordered_set_of_prompts, n_splits):
+        size = (len(ordered_set_of_prompts) + 1) // n_splits
+        data = [ordered_set_of_prompts[size * i : size * (i + 1)] for i in range(n_splits)]
+        return data
+
+    def _vllm_generation(self, ordered_set_of_prompts):
+        with torch.cuda.device(self.llm_device):
+            worker_outputs = self.llm.generate(
+                ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
+            )
+        return worker_outputs
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
@@ -685,6 +706,8 @@ class GRPOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
+            vllm_index = self.accelerator.process_index
+            n_vllms = self.args.vllm_worker_num
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
@@ -692,23 +715,24 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
-            if self.accelerator.is_main_process:
+            if vllm_index < n_vllms:
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually.
                 ordered_set_of_prompts = list(dict.fromkeys(all_prompts_text))
-                all_outputs = self.llm.generate(
-                    ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
-                )
-                completion_ids = []
-                for outputs in all_outputs:
+                # spliting the prompts into N subsets according to the number of vllm processes
+                split_ordered_prompts = self._split_vllm_inputs(ordered_set_of_prompts, n_vllms)
+                subset_results = self._vllm_generation(split_ordered_prompts[vllm_index])
+                completion_ids_subset = []
+                for outputs in subset_results:
                     for output in outputs.outputs:
-                        completion_ids.append(output.token_ids)
+                        completion_ids_subset.append(output.token_ids)
             else:
-                completion_ids = [None] * len(all_prompts_text)
-            # Broadcast the completions from the main process to all processes, ensuring each process receives its
+                completion_ids_subset = [None]
+            # gather the completions from vllm processes to all processes, ensuring each process receives its
             # corresponding slice.
-            completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            completion_ids = gather_object(completion_ids_subset)
+            completion_ids = [seq for seq in completion_ids if seq is not None]
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
                 (self.accelerator.process_index + 1) * len(prompts),
