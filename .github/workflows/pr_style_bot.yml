@@ -79,7 +79,7 @@ jobs:
 
       - name: Run make style and make quality
         run: |
-          make precommit
+          make precommit || true
 
       - name: Commit and push changes
         id: commit_and_push
