@@ -212,7 +212,33 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
-
+    # Parameters that control the agent behavior
+    use_agent: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use an agent for code execution during generation. Only works when use_vllm=True."
+        },
+    )
+    tools_script_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Path to a Python script containing tool definitions that will be made available to the E2B agent "
+            "for code execution."
+        },
+    )
+    parsing_string: str = field(
+        default="<code>",
+        metadata={
+            "help": "String used to identify the beginning of code blocks in the agent's responses that should be "
+            "executed."
+        },
+    )
+    stop_string: str = field(
+        default="</code>",
+        metadata={
+            "help": "String that marks the end of code blocks in the agent's responses and triggers code execution."
+        },
+    )
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,

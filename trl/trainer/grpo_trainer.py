@@ -44,7 +44,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_decorator
-from ..import_utils import is_vllm_available
+from ..import_utils import is_vllm_available, is_agents_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -60,6 +60,9 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+if is_agents_available():
+    from ..agents.utils import generate_agent_responses,LocalExecutor
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -256,6 +259,7 @@ class GRPOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        code_executer: Optional[Callable] = None,
     ):
         # Args
         if args is None:
@@ -366,6 +370,12 @@ class GRPOTrainer(Trainer):
         def data_collator(features):  # No data collation is needed in GRPO
             return features
 
+        # set code executer to LocalExecuter if available and undefined
+        if code_executer is None and is_agents_available():
+            self.code_executer = LocalExecutor()
+        else:
+            self.code_executer = code_executer
+
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
@@ -435,6 +445,12 @@ class GRPOTrainer(Trainer):
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
+            if self.args.use_agent:
+                if not is_agents_available():
+                    raise ImportError(
+                        "Agents utilities are not available and `use_agent` is set to True. Please install trl with "
+                        "`pip install trl[agents]` to use it."
+                    )
 
             if self.accelerator.is_main_process:
                 vllm_device = self.args.vllm_device
@@ -692,6 +708,7 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
+            print("all_prompts_text:",all_prompts_text)
             if self.accelerator.is_main_process:
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate

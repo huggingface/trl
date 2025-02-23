@@ -103,6 +103,15 @@ _import_structure = {
     ],
     "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
+    "agents": [
+        "E2BExecutor",
+        "LocalExecutor",
+        "prepare_data_for_e2b_agent",
+        "prepare_data_for_local_agent",
+        "generate_agent_responses",
+        "get_code",
+        "read_script",
+    ],
 }
 
 try:
@@ -219,6 +228,16 @@ if TYPE_CHECKING:
             DefaultDDPOStableDiffusionPipeline,
         )
         from .trainer import DDPOConfig, DDPOTrainer
+
+    from .agents import (
+        E2BExecutor,
+        LocalExecutor,
+        prepare_data_for_e2b_agent,
+        prepare_data_for_local_agent,
+        generate_agent_responses,
+        get_code,
+        read_script,
+    )
 
 else:
     import sys
