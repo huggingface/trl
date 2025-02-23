@@ -732,8 +732,8 @@ class GRPOTrainer(Trainer):
                     for outputs in all_outputs:
                         for output in outputs.outputs:
                             completion_ids.append(output.token_ids)
-                else:
-                    completion_ids = [None] * len(all_prompts_text)
+            else:
+                completion_ids = [None] * len(all_prompts_text)
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
             # corresponding slice.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
