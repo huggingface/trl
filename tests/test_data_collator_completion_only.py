@@ -80,7 +80,7 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         collator_text = self.tokenizer.decode(
             collator_output["labels"][torch.where(collator_output["labels"] != -100)]
         )
-        expected_text = " First response\n\n Second response" ""
+        expected_text = " First response\n\n Second response"
         self.assertEqual(collator_text, expected_text)
 
     def test_data_collator_handling_of_long_sequences(self):
