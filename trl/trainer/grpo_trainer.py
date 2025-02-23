@@ -44,7 +44,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_decorator
-from ..import_utils import is_vllm_available, is_agents_available
+from ..import_utils import is_agents_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -62,7 +62,7 @@ if is_wandb_available():
     import wandb
 
 if is_agents_available():
-    from ..agents.utils import generate_agent_responses,LocalExecutor
+    from ..agents.utils import LocalExecutor, generate_agent_responses
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -710,16 +710,21 @@ class GRPOTrainer(Trainer):
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
                 if self.args.use_agent:
-                    self.sampling_params.n = 1 # Agents are incomapatible with n>1 since they generate outputs in multiple steps independantly 
-                    outputs = generate_agent_responses(llm=self.llm,
-                                                       dataset=all_prompts_text,
-                                                       sampling_params=self.sampling_params,
-                                                       code_executer=self.code_executer,
-                                                       tools_script_path=self.args.tools_script_path,
-                                                       parsing_string=self.args.parsing_string,
-                                                       stop_string=self.args.stop_string)
+                    self.sampling_params.n = 1  # Agents are incomapatible with n>1 since they generate outputs in multiple steps independantly
+                    outputs = generate_agent_responses(
+                        llm=self.llm,
+                        dataset=all_prompts_text,
+                        sampling_params=self.sampling_params,
+                        code_executer=self.code_executer,
+                        tools_script_path=self.args.tools_script_path,
+                        parsing_string=self.args.parsing_string,
+                        stop_string=self.args.stop_string,
+                    )
                     # parsing and tokenizing the completion since outputs with use_agent is the full chat
-                    completion_ids = [tuple(self.processing_class.encode(output[len(prompt):].strip(), add_special_tokens=False))for prompt, output in zip(all_prompts_text, outputs)]
+                    completion_ids = [
+                        tuple(self.processing_class.encode(output[len(prompt) :].strip(), add_special_tokens=False))
+                        for prompt, output in zip(all_prompts_text, outputs)
+                    ]
                 else:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
