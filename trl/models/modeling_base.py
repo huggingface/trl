@@ -474,8 +474,7 @@ class PreTrainedModelWrapper(nn.Module):
                         )
                     except Exception as exc:
                         raise ValueError(
-                            "Could not find adapter model in the Hub, "
-                            "make sure you have the correct adapter model id."
+                            "Could not find adapter model in the Hub, make sure you have the correct adapter model id."
                         ) from exc
                 else:
                     local_filename = filename
