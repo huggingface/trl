@@ -252,7 +252,7 @@ class RichInterface:
         return input
 
     def clear(self):
-        self._console.clear() 
+        self._console.clear()
         self._console.print(
             "[bold yellow]❗ The chat interface is deprecated and will be removed in TRL 0.19!\n"
             "👉 Please use the `transformers-cli chat` instead.[/bold yellow]"
