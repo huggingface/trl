@@ -145,8 +145,7 @@ class TextHistory:
         """
         if not is_rich_available():
             raise ImportError(
-                "The `rich` library is required to display text with formatting. "
-                "Install it using `pip install rich`."
+                "The `rich` library is required to display text with formatting. Install it using `pip install rich`."
             )
 
         text = Text(self.text)
