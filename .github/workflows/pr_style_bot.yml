@@ -62,7 +62,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install ruff
+          pip install ruff pre-commit
 
       - name: Download Makefile from main branch
         run: |
