@@ -44,7 +44,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_decorator
-from ..import_utils import is_agents_available, is_vllm_available
+from ..import_utils import is_langchain_experimental_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -61,7 +61,7 @@ if is_vllm_available():
 if is_wandb_available():
     import wandb
 
-if is_agents_available():
+if is_langchain_experimental_available() and is_vllm_available():
     from ..agents.utils import LocalExecutor, generate_agent_responses
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
@@ -371,7 +371,7 @@ class GRPOTrainer(Trainer):
             return features
 
         # set code executer to LocalExecuter if available and undefined
-        if code_executer is None and is_agents_available():
+        if code_executer is None and is_langchain_experimental_available():
             self.code_executer = LocalExecutor()
         else:
             self.code_executer = code_executer
@@ -446,7 +446,7 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
             if self.args.use_agent:
-                if not is_agents_available():
+                if not is_langchain_experimental_available():
                     raise ImportError(
                         "Agents utilities are not available and `use_agent` is set to True. Please install trl with "
                         "`pip install trl[agents]` to use it."

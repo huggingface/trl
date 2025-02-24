@@ -12,14 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ..import_utils import is_agents_available
-
-
-if not is_agents_available():
-    raise ImportError(
-        "Agents utilities are not available. Please install trl with `pip install trl[agents]` to use utils"
-    )
-
 from .utils import (
     E2BExecutor,
     LocalExecutor,

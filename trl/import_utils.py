@@ -61,10 +61,6 @@ def is_vllm_available() -> bool:
     return _vllm_available
 
 
-def is_agents_available() -> bool:
-    return _langchain_experimental_available and _vllm_available and _e2b_available
-
-
 def is_langchain_experimental_available() -> bool:
     return _langchain_experimental_available
 
