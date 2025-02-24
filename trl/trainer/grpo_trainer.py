@@ -60,7 +60,7 @@ from ..data_utils import (
     maybe_apply_chat_template,
 )
 from ..extras.profiling import profiling_decorator
-from ..import_utils import is_sglang_available, is_vllm_available
+from ..import_utils import is_sglang_available, is_rich_available, is_vllm_available
 from ..models import (
     create_reference_model,
     prepare_deepspeed,
@@ -69,10 +69,16 @@ from ..models import (
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
+    (
     generate_model_card,
+   
     get_comet_experiment_url,
+   
     pad,
+    print_prompt_completions_sample,
+   
     selective_log_softmax,
+),
 )
 
 
@@ -712,7 +718,7 @@ class GRPOTrainer(Trainer):
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        args: GRPOConfig = None,
+        args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -1579,24 +1585,31 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
-        if (
-            self.log_completions
-            and self.state.global_step % self.args.logging_steps == 0
-            and "wandb" in self.args.report_to
-        ):
-            import pandas as pd
+        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
+            prompts_to_log = gather_object(prompts_text)
+            completions_to_log = gather_object(completions_text)
+            rewards_to_log = rewards.tolist()
 
-            # For logging
-            table = {
-                "step": [str(self.state.global_step)] * len(rewards),
-                "prompt": gather_object(prompts_text),
-                "completion": gather_object(completions_text),
-                "reward": rewards.tolist(),
-            }
-            df = pd.DataFrame(table)
+            if self.accelerator.is_main_process:
+                if is_rich_available():
+                    print_prompt_completions_sample(
+                        prompts_to_log,
+                        completions_to_log,
+                        rewards_to_log,
+                        self.state.global_step,
+                    )
+                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                    import pandas as pd
 
-            if wandb.run is not None and self.accelerator.is_main_process:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+                    # For logging
+                    table = {
+                        "step": [str(self.state.global_step)] * len(rewards),
+                        "prompt": prompts_to_log,
+                        "completion": completions_to_log,
+                        "reward": rewards.tolist(),
+                    }
+                    df = pd.DataFrame(table)
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
             "prompt_ids": prompt_ids,
