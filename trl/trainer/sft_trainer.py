@@ -410,7 +410,7 @@ class SFTTrainer(Trainer):
                     remove_columns="conversations" if "conversations" in dataset.column_names else None,
                     **map_kwargs,
                 )
-    
+
                 # Apply the chat template if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
