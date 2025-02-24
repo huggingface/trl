@@ -269,6 +269,7 @@ class GRPOConfig(TrainingArguments):
     log_completions: bool = field(
         default=False,
         metadata={
-            "help": "Print a sample of (prompt, completion) pairs every `logging_steps` steps. Also logs to `wandb` if available."
+            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
