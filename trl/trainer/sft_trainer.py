@@ -173,7 +173,6 @@ class SFTTrainer(Trainer):
             )
         if isinstance(model, str):
             model = self._create_model_from_path(model, args)
-        self.use_liger = is_liger_kernel_available() and isinstance(model, AutoLigerKernelForCausalLM)
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
@@ -402,35 +401,38 @@ class SFTTrainer(Trainer):
 
                 dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 
-            # Convert the dataset to ChatML if needed
-            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
-            dataset = dataset.map(
-                maybe_convert_to_chatml,
-                remove_columns="conversations" if "conversations" in dataset.column_names else None,
-                **map_kwargs,
-            )
-
-            # Apply the chat template if needed
-            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
-            dataset = dataset.map(
-                maybe_apply_chat_template,
-                fn_kwargs={"tokenizer": processing_class},
-                remove_columns="messages" if "messages" in dataset.column_names else None,  # renamed to "text"
-                **map_kwargs,
-            )
-
-            # Tokenize the dataset if needed
             if not is_processed:
+                # Convert the dataset to ChatML if needed
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+                dataset = dataset.map(
+                    maybe_convert_to_chatml,
+                    remove_columns="conversations" if "conversations" in dataset.column_names else None,
+                    **map_kwargs,
+                )
+
+                # Apply the chat template if needed
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+                dataset = dataset.map(
+                    maybe_apply_chat_template,
+                    fn_kwargs={"tokenizer": processing_class},
+                    remove_columns="messages" if "messages" in dataset.column_names else None,  # renamed to "text"
+                    **map_kwargs,
+                )
+
+                # Tokenize the dataset if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(ex):
-                    tokenized = processing_class(ex[args.dataset_text_field])
-                    return {"input_ids": tokenized["input_ids"], "attention_mask": tokenized["attention_mask"]}
+                def tokenize(example, processing_class, dataset_text_field):
+                    return processing_class(example[dataset_text_field])
 
-                dataset = dataset.map(tokenize, **map_kwargs)
+                dataset = dataset.map(
+                    tokenize,
+                    fn_kwargs={"processing_class": processing_class, "dataset_text_field": args.dataset_text_field},
+                    **map_kwargs,
+                )
 
             # Pack or truncate
             if packing:
@@ -443,8 +445,15 @@ class SFTTrainer(Trainer):
                     pack_examples, batched=True, fn_kwargs={"seq_length": args.max_length}, **map_kwargs
                 )
             elif args.max_length is not None:
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
+
+                def truncate(example, max_length):
+                    return {key: example[key][:max_length] for key in ["input_ids", "attention_mask"]}
+
                 dataset = dataset.map(
-                    lambda ex: {key: ex[key][: args.max_length] for key in ["input_ids", "attention_mask"]},
+                    truncate,
+                    fn_kwargs={"max_length": args.max_length},
                     **map_kwargs,
                 )
             # For Liger kernel, ensure only input_ids is present
@@ -462,7 +471,7 @@ class SFTTrainer(Trainer):
         )
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.use_liger:
+        if "labels" in inputs and not self.args.use_liger:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
