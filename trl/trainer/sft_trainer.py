@@ -40,7 +40,7 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
@@ -50,9 +50,6 @@ from .utils import ConstantLengthDataset, generate_model_card, get_comet_experim
 if is_peft_available():
     import peft
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
-
-if is_liger_kernel_available():
-    pass
 
 if is_wandb_available():
     import wandb
