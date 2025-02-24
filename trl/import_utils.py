@@ -30,6 +30,7 @@ _rich_available = _is_package_available("rich")
 _unsloth_available = _is_package_available("unsloth")
 _vllm_available = _is_package_available("vllm")
 _langchain_experimental_available = _is_package_available("langchain_experimental")
+_e2b_available = _is_package_available("e2b-code-interpreter")
 
 
 def is_deepspeed_available() -> bool:
@@ -59,9 +60,11 @@ def is_unsloth_available() -> bool:
 def is_vllm_available() -> bool:
     return _vllm_available
 
-
 def is_agents_available() -> bool:
-    return _langchain_experimental_available and _vllm_available
+    return _langchain_experimental_available and _vllm_available and _e2b_available
+    
+def is_e2b_available() -> bool:
+    return _e2b_available
 
 
 class _LazyModule(ModuleType):

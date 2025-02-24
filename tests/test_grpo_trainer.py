@@ -24,7 +24,7 @@ from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.import_utils import is_vllm_available
+from trl.import_utils import is_vllm_available,is_agents_available
 from trl.trainer.grpo_trainer import RepeatRandomSampler
 
 
@@ -606,6 +606,46 @@ class GRPOTrainerTester(unittest.TestCase):
             trainer = GRPOTrainer(
                 model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny is too small for vLLM
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @unittest.skipIf(not is_agents_available(), "Agents are not available")
+    @require_torch_accelerator
+    def test_training_agent(self):
+        """Test that training works with vLLM for generation."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_len(completions, **kwargs):
+            return [-abs(20 - len(completion)) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                report_to="none",
+                use_vllm=True,
+                vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
+                vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
+                use_agent=True,
+            )
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny is too small for vLLM
+                reward_funcs=reward_len,
                 args=training_args,
                 train_dataset=dataset,
             )

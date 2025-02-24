@@ -11,21 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from ..import_utils import is_agents_available
 
-
-if is_agents_available():
-    from inspect import getsource
-    from pathlib import Path
-    from typing import Callable, List, Optional
-
-    from e2b_code_interpreter import Sandbox
-    from langchain_experimental.utilities import PythonREPL
-    from vllm import LLM, SamplingParams
-else:
-    raise ImportError(
-        "Agents utilities are not available. Please install trl with " "`pip install trl[agents]` to use utils"
-    )
+from inspect import getsource
+from pathlib import Path
+from typing import Callable, List, Optional
+from e2b_code_interpreter import Sandbox
+from langchain_experimental.utilities import PythonREPL
+from vllm import LLM, SamplingParams
 
 default_system_prompt = "You can answer questions and solve problems. If running code helps, write it inside <code> </code>, and you will see the result. Example: To calculate 2 + 2, write <code> print(2 + 2) </code>."
 
@@ -35,12 +27,18 @@ default_environment_prompt = "This is a user-provided script containing tools th
 def get_code(chat: str, tools_script: str = None, parsing_string: str = "<code>") -> str:
     """
     Extracts and optionally prepends a tools script to a code snippet from a chat message.
+
     Args:
-        chat (str): The chat message containing the code snippet.
-        tools_script (str, optional): A script to prepend to the extracted code snippet. Defaults to None.
-        parsing_string (str, optional): The string used to identify the start of the code snippet in the chat message. Defaults to "<code>".
+        chat (`str`):
+            Chat message containing the code snippet.
+        tools_script (`str` or `None`, *optional*, defaults to `None`):
+            A script to prepend to the extracted code snippet.
+        parsing_string (`str`, *optional*, defaults to `"<code>"`):
+            String used to identify the start of the code snippet in the chat message.
+
     Returns:
-        str: The extracted code snippet, optionally prepended with the tools script.
+        `str`:
+            Extracted code snippet, optionally prepended with the tools script.
     """
     code = chat.split(parsing_string)[-1]
     if tools_script:
@@ -49,18 +47,17 @@ def get_code(chat: str, tools_script: str = None, parsing_string: str = "<code>"
 
 
 class E2BExecutor:
-    """
-    A class to handle code execution in an e2b sandbox environment.
-    """
-
     def __init__(self, api_key: str, dependencies: Optional[List[str]] = None, template: Optional[str] = None):
         """
         Initialize the E2BExecutor with API key and optional settings.
-
+        
         Args:
-            api_key (str): Your E2B API Key.
-            dependencies (Optional[List[str]]): A list of dependencies to install. Defaults to None.
-            template (Optional[str]): Template for the sandbox environment. Defaults to None.
+            api_key (`str`):
+                Your E2B API Key.
+            dependencies (`List[str]` or `None`, *optional*, defaults to `None`):
+                A list of dependencies to install.
+            template (`str` or `None`, *optional*, defaults to `None`):
+                Template for the sandbox environment.
         """
         self.api_key = api_key
         self.dependencies = dependencies
@@ -69,12 +66,14 @@ class E2BExecutor:
     def execute(self, code: str) -> str:
         """
         Executes a given code snippet in an e2b sandbox environment.
-
+        
         Args:
-            code (str): The code snippet to execute.
-
+            code (`str`):
+                The code snippet to execute.
+            
         Returns:
-            str: The response from the sandbox environment after executing the code.
+            `str`:
+                The response from the sandbox environment after executing the code.
         """
         sbx = Sandbox(api_key=self.api_key, template=self.template)
         if self.dependencies:
@@ -89,35 +88,30 @@ class E2BExecutor:
 def read_script(user_script_path: str) -> str:
     """
     Reads and returns the content of the provided script.
+
     Args:
-        user_script_path (str): Path to the user-provided script.
-
+        user_script_path (`str`):
+            Path to the user-provided script.
+    
     Returns:
-        str: The content of the script.
-
-    Raises:
-        RuntimeError: If the script cannot be read.
+        `str`:
+            The content of the script.
     """
-    try:
-        return Path(user_script_path).read_text()
-    except Exception as e:
-        raise RuntimeError(f"Error reading the user script: {e}") from e
+    return Path(user_script_path).read_text()
 
 
 class LocalExecutor:
-    """
-    A class to handle local code execution using LangChain's PythonREPL.
-    """
-
     def execute(self, code: str) -> str:
         """
         Executes a given code snippet using PythonREPL.
-
+        
         Args:
-            code (str): The code snippet to execute.
-
+            code (`str`):
+                The code snippet to execute.
+            
         Returns:
-            str: The output from executing the code.
+            `str`:
+                The output from executing the code.
         """
         try:
             repl = PythonREPL()
@@ -136,19 +130,26 @@ def prepare_data_for_e2b_agent(
     tools_script_path: str = None,
 ) -> list:
     """
-    Prepares the Hugging Face dataset for the e2b agent by constructing conversations
+    Prepares the Hugging Face dataset for the e2b agent by constructing conversations 
     and applying the system prompt.
 
     Args:
-        dataset: A Hugging Face dataset object
-        tokenizer: A tokenizer with an `apply_chat_template` method to process conversations
-        prompt_column (str): Name of the column containing prompts. Defaults to "prompt"
-        system_prompt (str, optional): The base system prompt. Defaults to default_system_prompt
-        environment_prompt (str, optional): Description to prepend before the tools script
-        tools_script_path (str, optional): File path to a tools script to include in system prompt
+        dataset (`Dataset`):
+            A Hugging Face dataset object
+        tokenizer (`PreTrainedTokenizer`):
+            A tokenizer with an `apply_chat_template` method to process conversations
+        prompt_column (`str`, *optional*, defaults to `"prompt"`):
+            Name of the column containing prompts.
+        system_prompt (`str`, *optional*, defaults to `default_system_prompt`):
+            The base system prompt.
+        environment_prompt (`str`, *optional*, defaults to `default_environment_prompt`):
+            Description to prepend before the tools script
+        tools_script_path (`str` or `None`, *optional*, defaults to `None`):
+            File path to a tools script to include in system prompt
 
     Returns:
-        Dataset: Modified dataset with processed prompts in the prompt column
+        `Dataset`:
+            Modified dataset with processed prompts in the prompt column
     """
     # Convert dataset prompts to conversational format
     conversations = [[{"role": "user", "content": prompt}] for prompt in dataset[prompt_column]]
@@ -185,19 +186,26 @@ def prepare_data_for_local_agent(
     include_source_code: bool = True,
 ) -> list:
     """
-    Prepares the Hugging Face dataset for the local agent by constructing conversations
+    Prepares the Hugging Face dataset for the local agent by constructing conversations 
     and applying the system prompt.
 
     Args:
-        dataset: A Hugging Face dataset object
-        tokenizer: A tokenizer with an `apply_chat_template` method to process conversations
-        prompt_column (str): Name of the column containing prompts. Defaults to "prompt"
-        system_prompt (str, optional): The base system prompt. Defaults to default_system_prompt
-        tools (List[Callable], optional): List of callable functions to include in system prompt
-        include_source_code (bool, optional): If True, includes source code of tools, else includes docstrings
+        dataset (`Dataset`):
+            A Hugging Face dataset object
+        tokenizer (`PreTrainedTokenizer`):
+            A tokenizer with an `apply_chat_template` method to process conversations
+        prompt_column (`str`, *optional*, defaults to `"prompt"`):
+            Name of the column containing prompts.
+        system_prompt (`str`, *optional*, defaults to `default_system_prompt`):
+            The base system prompt.
+        tools (`List[Callable]` or `None`, *optional*, defaults to `None`):
+            List of callable functions to include in system prompt
+        include_source_code (`bool`, *optional*, defaults to `True`):
+            If True, includes source code of tools, else includes docstrings
 
     Returns:
-        Dataset: Modified dataset with processed prompts in the prompt column
+        `Dataset`:
+            Modified dataset with processed prompts in the prompt column
     """
     # Convert dataset prompts to conversational format
     conversations = [[{"role": "user", "content": prompt}] for prompt in dataset[prompt_column]]
@@ -244,22 +252,26 @@ def generate_agent_responses(
 ) -> list:
     """
     Generates responses for the agent with potential code execution.
-    This function takes a prepared dataset (list of prompts), uses the provided llm
-    to generate responses, and checks if the response indicates that code execution is expected.
-    If so, it extracts the code using get_code(), executes it via e2b_executer(), appends the
-    execution output to the conversation, and reprocesses it. Once all chats are complete,
-    a list of complete conversations is returned.
+
     Args:
-        dataset (list): List of preprocessed prompts (strings).
-        llm: The language model to use for generation.
-        sampling_params: Sampling parameters for the llm.generate method.
-        tools_scrip_patht (str, optional): path to script to prepend to code extracted. Defaults to None.
-        parsing_string (str, optional): String used to locate the code in the conversation. Defaults to "<code>".
-        api_key (str): API key for executing code in the sandbox.
-        dependancies (list, optional): List of dependencies to install before code execution. Defaults to None.
-        template (str, optional): Optional template for the sandbox environment. Defaults to None.
+        dataset (`list`):
+            List of preprocessed prompts (strings).
+        llm (`LLM`):
+            The language model to use for generation.
+        sampling_params (`SamplingParams`):
+            Sampling parameters for the llm.generate method.
+        tools_script_path (`str` or `None`, *optional*, defaults to `None`):
+            Path to script to prepend to code extracted.
+        parsing_string (`str`, *optional*, defaults to `"<code>"`):
+            String used to locate the code in the conversation.
+        stop_string (`str`, *optional*, defaults to `"</code>"`):
+            String used to stop generation.
+        code_executer (`LocalExecutor`, *optional*, defaults to `LocalExecutor()`):
+            Executor to run the code.
+
     Returns:
-        list: A list of complete conversations (strings).
+        `list`:
+            A list of complete conversations (strings).
     """
     if code_executer is None:
         code_executer = LocalExecutor()

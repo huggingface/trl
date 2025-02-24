@@ -131,6 +131,15 @@ else:
     _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
+    from .agents import (
+    E2BExecutor,
+    LocalExecutor,
+    generate_agent_responses,
+    get_code,
+    prepare_data_for_e2b_agent,
+    prepare_data_for_local_agent,
+    read_script,
+)
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
@@ -228,16 +237,6 @@ if TYPE_CHECKING:
             DefaultDDPOStableDiffusionPipeline,
         )
         from .trainer import DDPOConfig, DDPOTrainer
-
-    from .agents import (
-        E2BExecutor,
-        LocalExecutor,
-        generate_agent_responses,
-        get_code,
-        prepare_data_for_e2b_agent,
-        prepare_data_for_local_agent,
-        read_script,
-    )
 
 else:
     import sys
