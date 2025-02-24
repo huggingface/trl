@@ -421,8 +421,7 @@ class SFTTrainer(Trainer):
                     **map_kwargs,
                 )
 
-            # Tokenize the dataset if needed
-            if not is_processed:
+                # Tokenize the dataset if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
