@@ -32,7 +32,9 @@ from accelerate import Accelerator, PartialState
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import (
@@ -1683,3 +1685,27 @@ def selective_log_softmax(logits, index):
             per_token_logps.append(row_per_token_logps)
         per_token_logps = torch.stack(per_token_logps)
     return per_token_logps
+
+
+def print_prompt_completions_sample(prompts: list[str], completions: list[str], step: int) -> None:
+    """Print out a sample of model completions to the console.
+
+    This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring
+    model outputs during training.
+
+    Args:
+        prompts (list[str]): List of input prompts.
+        completions (list[str]): List of model-generated completions corresponding to the prompts.
+        step (int): Current training step number, used in the output title.
+
+    Returns:
+        None: Prints the formatted table to the console.
+    """
+    console = Console()
+    table = Table(show_header=True, header_style="bold white", expand=True, padding=(0, 1, 1, 0))
+    table.add_column("Prompt", style="bright_yellow")
+    table.add_column("Completion", style="bright_green")
+    for s, p in zip(prompts, completions, strict=True):
+        table.add_row(Text(s), Text(p))
+    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
+    console.print(panel)

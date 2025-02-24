@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import random
 import textwrap
 import warnings
 from collections import defaultdict
@@ -48,7 +49,13 @@ from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad, selective_log_softmax
+from .utils import (
+    generate_model_card,
+    get_comet_experiment_url,
+    pad,
+    print_prompt_completions_sample,
+    selective_log_softmax,
+)
 
 
 if is_peft_available():
@@ -248,7 +255,7 @@ class GRPOTrainer(Trainer):
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        args: GRPOConfig = None,
+        args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -391,7 +398,7 @@ class GRPOTrainer(Trainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self.log_completions = args.log_completions
+        self.log_completions_steps = args.log_completions_steps
 
         super().__init__(
             model=model,
@@ -839,23 +846,32 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
         if (
-            self.log_completions
-            and self.state.global_step % self.args.logging_steps == 0
-            and "wandb" in self.args.report_to
+            self.log_completions_steps is not None
+            and self.log_completions_steps > 0
+            and self.state.global_step % self.log_completions_steps == 0
         ):
-            import pandas as pd
+            prompts_to_log: list[str] = gather_object(prompts_text)
+            completions_to_log: list[str] = gather_object(completions_text)
+            pairs_to_log = random.sample(list(zip(prompts_to_log, completions_to_log)), 5)
+            print_prompt_completions_sample(
+                [prompt for prompt, _ in pairs_to_log],
+                [completion for _, completion in pairs_to_log],
+                self.state.global_step,
+            )
+            if self.args.report_to and "wandb" in self.args.report_to:
+                import pandas as pd
 
-            # For logging
-            table = {
-                "step": [str(self.state.global_step)] * len(rewards),
-                "prompt": gather_object(prompts_text),
-                "completion": gather_object(completions_text),
-                "reward": rewards.tolist(),
-            }
-            df = pd.DataFrame(table)
+                # For logging
+                table = {
+                    "step": [str(self.state.global_step)] * len(rewards),
+                    "prompt": prompts_to_log,
+                    "completion": completions_to_log,
+                    "reward": rewards.tolist(),
+                }
+                df = pd.DataFrame(table)
 
-            if wandb.run is not None and self.accelerator.is_main_process:
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+                if wandb.run is not None and self.accelerator.is_main_process:
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
             "prompt_ids": prompt_ids,
