@@ -858,7 +858,12 @@ class GRPOTrainer(Trainer):
                 [completion for _, completion in pairs_to_log],
                 self.state.global_step,
             )
-            if self.args.report_to and "wandb" in self.args.report_to:
+            if (
+                self.args.report_to
+                and "wandb" in self.args.report_to
+                and wandb.run is not None
+                and self.accelerator.is_main_process
+            ):
                 import pandas as pd
 
                 # For logging
@@ -869,9 +874,7 @@ class GRPOTrainer(Trainer):
                     "reward": rewards.tolist(),
                 }
                 df = pd.DataFrame(table)
-
-                if wandb.run is not None and self.accelerator.is_main_process:
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
+                wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
             "prompt_ids": prompt_ids,
