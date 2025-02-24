@@ -173,7 +173,6 @@ class SFTTrainer(Trainer):
             )
         if isinstance(model, str):
             model = self._create_model_from_path(model, args)
-        self.use_liger = is_liger_kernel_available() and isinstance(model, AutoLigerKernelForCausalLM)
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
@@ -472,7 +471,7 @@ class SFTTrainer(Trainer):
         )
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.use_liger:
+        if "labels" in inputs and not self.args.use_liger:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
