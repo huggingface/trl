@@ -37,8 +37,6 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
-        use_liger (`bool`, *optional*, defaults to `False`):
-            Monkey patch the model with Liger kernels to increase throughput and reduce memory usage.
 
         > Parameters that control the data preprocessing
 
@@ -71,10 +69,6 @@ class SFTConfig(TrainingArguments):
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `SFTTrainer` is provided as a string."
         },
-    )
-    use_liger: bool = field(
-        default=False,
-        metadata={"help": "Monkey patch the model with Liger kernels to increase throughput and reduce memory usage."},
     )
 
     # Parameters that control the data preprocessing
@@ -142,6 +136,10 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={"help": "Deprecated. Use `max_length` instead."},
     )
+    use_liger: bool = field(
+        default=False,
+        metadata={"help": "Deprecated. Use `use_liger_kernel` instead."},
+    )
 
     def __post_init__(self):
         super().__post_init__()
@@ -173,3 +171,10 @@ class SFTConfig(TrainingArguments):
                 "`max_seq_length` is deprecated and will be remove in version 0.20.0. Use `max_length` instead.",
                 DeprecationWarning,
             )
+
+        if self.use_liger is not None:
+            warnings.warn(
+                "`use_liger` is deprecated and will be remove in version 0.18.0. Use `use_liger_kernel` instead.",
+                DeprecationWarning,
+            )
+            self.use_liger_kernel = self.use_liger

@@ -604,17 +604,17 @@ With great memory reduction, you can potentially turn off cpu_offloading or grad
 | ![Speed up](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-tps.png) | ![Memory](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-memory.png) |
 
 
-1. To use Liger-Kernel in `SFTTrainer`, first install by 
+1. To use Liger-Kernel in [`SFTTrainer`], first install by 
 
 ```bash
 pip install liger-kernel
 ```
 
-2. Once installed, set `use_liger` in [`SFTConfig`]. No other changes are needed!
+2. Once installed, set `use_liger_kernel` in [`SFTConfig`]. No other changes are needed!
 
 ```python
 training_args = SFTConfig(
-  use_liger=True
+  use_liger_kernel=True
 )
 ```
 

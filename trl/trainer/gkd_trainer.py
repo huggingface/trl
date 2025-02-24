@@ -55,7 +55,7 @@ if is_deepspeed_available():
     import deepspeed
 
 if is_liger_kernel_available():
-    from liger_kernel.transformers import AutoLigerKernelForCausalLM
+    from liger_kernel.transformers import _apply_liger_kernel_to_instance
 
 if is_peft_available():
     from peft import PeftConfig
@@ -119,10 +119,27 @@ class GKDTrainer(SFTTrainer):
             )
 
         if isinstance(teacher_model, str):
-            if args.use_liger:
-                teacher_model = AutoLigerKernelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
-            else:
-                teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
+            teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
+
+            if self.args.use_liger_kernel:
+                if not is_liger_kernel_available():
+                    raise ImportError(
+                        "You have set `use_liger_kernel` to `True` but liger-kernel is not available. "
+                        "Please install it with `pip install liger-kernel`"
+                    )
+                if isinstance(teacher_model, PreTrainedModel):
+                    # Patch the model with liger kernels. Use the default kernel configurations.
+                    _apply_liger_kernel_to_instance(model=teacher_model)
+                elif hasattr(teacher_model, "get_base_model") and isinstance(
+                    teacher_model.get_base_model(), PreTrainedModel
+                ):
+                    # Patch the base model with liger kernels where model is a PeftModel. Use the default kernel configurations.
+                    _apply_liger_kernel_to_instance(model=teacher_model.get_base_model())
+                else:
+                    raise TypeError(
+                        "You have set `use_liger_kernel` to `True` but the model is not an instance of "
+                        "`PreTrainedModel` or `PeftModel`."
+                    )
 
         # Disable dropout in the model
         if args.disable_dropout:

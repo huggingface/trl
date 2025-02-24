@@ -52,7 +52,7 @@ if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 if is_liger_kernel_available():
-    from liger_kernel.transformers import AutoLigerKernelForCausalLM
+    pass
 
 if is_wandb_available():
     import wandb
@@ -173,7 +173,6 @@ class SFTTrainer(Trainer):
             )
         if isinstance(model, str):
             model = self._create_model_from_path(model, args)
-        self.use_liger = is_liger_kernel_available() and isinstance(model, AutoLigerKernelForCausalLM)
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
@@ -265,12 +264,7 @@ class SFTTrainer(Trainer):
             model_init_kwargs["use_cache"] = False
 
         # Create model
-        if args.use_liger:
-            if not is_liger_kernel_available():
-                raise ImportError("Please install Liger-kernel for use_liger=True")
-            model = AutoLigerKernelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+        model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
         return model
 
     def _prepare_peft_model(self, model: PreTrainedModel, peft_config: Any, args: SFTConfig) -> PreTrainedModel:
@@ -435,6 +429,13 @@ class SFTTrainer(Trainer):
                     **map_kwargs,
                 )
 
+            # plot the length distribution
+            import matplotlib.pyplot as plt
+
+            lengths = [len(x["input_ids"]) for x in dataset]
+            plt.hist(lengths, bins=200)
+            plt.savefig(f"{dataset_name}_length_distribution.png")
+
             # Pack or truncate
             if packing:
                 if args.max_length is None:
@@ -458,7 +459,7 @@ class SFTTrainer(Trainer):
                     **map_kwargs,
                 )
             # For Liger kernel, ensure only input_ids is present
-            if args.use_liger:
+            if args.use_liger_kernel:
                 dataset = dataset.select_columns("input_ids")
 
         return dataset
@@ -472,7 +473,7 @@ class SFTTrainer(Trainer):
         )
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.use_liger:
+        if "labels" in inputs and not self.args.use_liger_kernel:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
