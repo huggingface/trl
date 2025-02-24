@@ -31,10 +31,6 @@ import torch.utils.data
 from accelerate import Accelerator, PartialState
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import (
@@ -54,8 +50,15 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
+from ..import_utils import is_rich_available
 from ..trainer.model_config import ModelConfig
 
+
+if is_rich_available():
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
 
 if is_comet_available():
     import comet_ml
@@ -1693,6 +1696,8 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring
     model outputs during training.
 
+    If `rich` is not available, uses the regular print function.
+
     Args:
         prompts (list[str]): List of input prompts.
         completions (list[str]): List of model-generated completions corresponding to the prompts.
@@ -1701,11 +1706,20 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     Returns:
         None: Prints the formatted table to the console.
     """
-    console = Console()
-    table = Table(show_header=True, header_style="bold white", expand=True, padding=(0, 1, 1, 0))
-    table.add_column("Prompt", style="bright_yellow")
-    table.add_column("Completion", style="bright_green")
-    for s, p in zip(prompts, completions, strict=True):
-        table.add_row(Text(s), Text(p))
-    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
-    console.print(panel)
+    if is_rich_available():
+        console = Console()
+        table = Table(show_header=True, header_style="bold white", expand=True, padding=(0, 1, 1, 0))
+        table.add_column("Prompt", style="bright_yellow")
+        table.add_column("Completion", style="bright_green")
+        for s, p in zip(prompts, completions, strict=True):
+            table.add_row(Text(s), Text(p))
+        panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
+        console.print(panel)
+    else:
+        # Fallback to regular print when rich is not available
+        print(f"\n===== Step {step} =====")
+        for i, (s, p) in enumerate(zip(prompts, completions, strict=True)):
+            print(f"\n--- Sample {i + 1} ---")
+            print(f"Prompt:     {s}")
+            print(f"Completion: {p}")
+        print("\n" + "=" * 30 + "\n")
