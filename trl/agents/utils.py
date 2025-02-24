@@ -15,9 +15,18 @@
 from inspect import getsource
 from pathlib import Path
 from typing import Callable, List, Optional
-from e2b_code_interpreter import Sandbox
-from langchain_experimental.utilities import PythonREPL
-from vllm import LLM, SamplingParams
+
+from ..import_utils import is_e2b_available, is_langchain_experimental_available, is_vllm_available
+
+
+if is_e2b_available():
+    from e2b_code_interpreter import Sandbox
+
+if is_langchain_experimental_available():
+    from langchain_experimental.utilities import PythonREPL
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
 
 default_system_prompt = "You can answer questions and solve problems. If running code helps, write it inside <code> </code>, and you will see the result. Example: To calculate 2 + 2, write <code> print(2 + 2) </code>."
 
@@ -50,7 +59,7 @@ class E2BExecutor:
     def __init__(self, api_key: str, dependencies: Optional[List[str]] = None, template: Optional[str] = None):
         """
         Initialize the E2BExecutor with API key and optional settings.
-        
+
         Args:
             api_key (`str`):
                 Your E2B API Key.
@@ -66,11 +75,11 @@ class E2BExecutor:
     def execute(self, code: str) -> str:
         """
         Executes a given code snippet in an e2b sandbox environment.
-        
+
         Args:
             code (`str`):
                 The code snippet to execute.
-            
+
         Returns:
             `str`:
                 The response from the sandbox environment after executing the code.
@@ -92,7 +101,7 @@ def read_script(user_script_path: str) -> str:
     Args:
         user_script_path (`str`):
             Path to the user-provided script.
-    
+
     Returns:
         `str`:
             The content of the script.
@@ -104,11 +113,11 @@ class LocalExecutor:
     def execute(self, code: str) -> str:
         """
         Executes a given code snippet using PythonREPL.
-        
+
         Args:
             code (`str`):
                 The code snippet to execute.
-            
+
         Returns:
             `str`:
                 The output from executing the code.
@@ -130,7 +139,7 @@ def prepare_data_for_e2b_agent(
     tools_script_path: str = None,
 ) -> list:
     """
-    Prepares the Hugging Face dataset for the e2b agent by constructing conversations 
+    Prepares the Hugging Face dataset for the e2b agent by constructing conversations
     and applying the system prompt.
 
     Args:
@@ -186,7 +195,7 @@ def prepare_data_for_local_agent(
     include_source_code: bool = True,
 ) -> list:
     """
-    Prepares the Hugging Face dataset for the local agent by constructing conversations 
+    Prepares the Hugging Face dataset for the local agent by constructing conversations
     and applying the system prompt.
 
     Args:
