@@ -426,13 +426,6 @@ class SFTTrainer(Trainer):
                     **map_kwargs,
                 )
 
-            # plot the length distribution
-            import matplotlib.pyplot as plt
-
-            lengths = [len(x["input_ids"]) for x in dataset]
-            plt.hist(lengths, bins=200)
-            plt.savefig(f"{dataset_name}_length_distribution.png")
-
             # Pack or truncate
             if packing:
                 if args.max_length is None:
