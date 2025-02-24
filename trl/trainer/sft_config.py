@@ -173,3 +173,4 @@ class SFTConfig(TrainingArguments):
                 "`max_seq_length` is deprecated and will be remove in version 0.20.0. Use `max_length` instead.",
                 DeprecationWarning,
             )
+            self.max_length = self.max_seq_length
