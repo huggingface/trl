@@ -1711,26 +1711,25 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
     >>> print_prompt_completions_sample(prompts, completions, step=42)
-    ╭────────── Step 42 ──────────╮
-    │ ┏━━━━━━━━━━━┳━━━━━━━━━━━━━┓ │
-    │ ┃Prompt     ┃Completion   ┃ │
-    │ ┃           ┃             ┃ │
-    │ ┡━━━━━━━━━━━╇━━━━━━━━━━━━━┩ │
-    │ │The sky is │ blue.       │ │
-    │ │           │             │ │
-    │ │The sun is │ in the sky. │ │
-    │ │           │             │ │
-    │ └───────────┴─────────────┘ │
-    ╰─────────────────────────────╯
+    ╭─────────── Step 42 ───────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │ │
+    │ ├────────────┼──────────────┤ │
+    │ │ The sun is │  in the sky. │ │
+    │ └────────────┴──────────────┘ │
+    ╰───────────────────────────────╯
     ```
     """
     if not is_rich_available():
         raise ImportError("This feature requires `rich` to be installed. Please install it first: `pip install rich`")
     console = Console()
-    table = Table(show_header=True, header_style="bold white", expand=True, padding=(0, 1, 1, 0))
+    table = Table(show_header=True, header_style="bold white", expand=True)
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
     for prompt, completion in zip(prompts, completions, strict=True):
         table.add_row(Text(prompt), Text(completion))
+        table.add_section()
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
