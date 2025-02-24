@@ -112,9 +112,9 @@ class GRPOConfig(TrainingArguments):
             set `sync_ref_model=True`.
 
         > Parameters that control the logging
-
         log_completions (`bool`, *optional*, defaults to `False`):
-            Whether to log the completions during training.
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
+            installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
     """
 
     # Parameters that control the model and reference model
@@ -269,5 +269,8 @@ class GRPOConfig(TrainingArguments):
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
-        metadata={"help": "Whether to log the completions during training."},
+        metadata={
+            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
     )
