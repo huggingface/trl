@@ -61,7 +61,7 @@ git clone https://github.com/huggingface/trl.git
 
 ## Command Line Interface (CLI)
 
-You can use the TRL Command Line Interface (CLI) to quickly get started with Supervised Fine-tuning (SFT) and Direct Preference Optimization (DPO), or vibe check your model with the chat CLI: 
+You can use the TRL Command Line Interface (CLI) to quickly get started with post-training methods like Supervised Fine-Tuning (SFT) or Direct Preference Optimization (DPO):
 
 **SFT:**
 
@@ -77,12 +77,6 @@ trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
 trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --dataset_name argilla/Capybara-Preferences \
     --output_dir Qwen2.5-0.5B-DPO 
-```
-
-**Chat:**
-
-```bash
-trl chat --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct
 ```
 
 Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.

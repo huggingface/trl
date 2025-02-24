@@ -79,6 +79,8 @@ class GRPOConfig(TrainingArguments):
             If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
             `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
             context size, which might be much larger than the KV cache, leading to inefficiencies.
+        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
         > Parameters that control the training
 
@@ -86,7 +88,12 @@ class GRPOConfig(TrainingArguments):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
-            KL coefficient.
+            KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
+            speed.
+        num_iterations (`int`, *optional*, defaults to `1`):
+            Number of iterations per batch (denoted as μ in the algorithm).
+        epsilon (`float`, *optional*, defaults to `0.2`):
+            Epsilon value for clipping.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -105,9 +112,9 @@ class GRPOConfig(TrainingArguments):
             set `sync_ref_model=True`.
 
         > Parameters that control the logging
-
         log_completions (`bool`, *optional*, defaults to `False`):
-            Whether to log the completions during training.
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
+            installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
     """
 
     # Parameters that control the model and reference model
@@ -201,6 +208,10 @@ class GRPOConfig(TrainingArguments):
             "context size, which might be much larger than the KV cache, leading to inefficiencies."
         },
     )
+    vllm_guided_decoding_regex: Optional[str] = field(
+        default=None,
+        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+    )
 
     # Parameters that control the training
     learning_rate: float = field(
@@ -212,7 +223,18 @@ class GRPOConfig(TrainingArguments):
     )
     beta: float = field(
         default=0.04,
-        metadata={"help": "KL coefficient."},
+        metadata={
+            "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
+            "training speed."
+        },
+    )
+    num_iterations: int = field(
+        default=1,
+        metadata={"help": "Number of iterations per batch (denoted as μ in the algorithm)."},
+    )
+    epsilon: float = field(
+        default=0.2,
+        metadata={"help": "Epsilon value for clipping."},
     )
     reward_weights: Optional[list[float]] = field(
         default=None,
@@ -247,5 +269,8 @@ class GRPOConfig(TrainingArguments):
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
-        metadata={"help": "Whether to log the completions during training."},
+        metadata={
+            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
     )
