@@ -113,7 +113,7 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control the logging
         log_completions (`bool`, *optional*, defaults to `False`):
-            If set, will print a sample of completions every `logging_steps` steps. Also logs to `wandb` if available.
+            Print a sample of (prompt, completion) pairs every `logging_steps` steps. Also logs to `wandb` if available.
     """
 
     # Parameters that control the model and reference model
