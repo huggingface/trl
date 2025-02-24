@@ -1730,7 +1730,7 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     table = Table(show_header=True, header_style="bold white", expand=True, padding=(0, 1, 1, 0))
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
-    for s, p in zip(prompts, completions, strict=True):
-        table.add_row(Text(s), Text(p))
+    for prompt, completion in zip(prompts, completions, strict=True):
+        table.add_row(Text(prompt), Text(completion))
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
