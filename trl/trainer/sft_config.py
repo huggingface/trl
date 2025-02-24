@@ -117,18 +117,18 @@ class SFTConfig(TrainingArguments):
     )
 
     # Deprecated parameters
-    dataset_batch_size: int = field(
+    dataset_batch_size: Optional[int] = field(
         default=None,
         metadata={"help": "Deprecated. You can safely remove this parameter from your configuration."},
     )
-    num_of_sequences: int = field(
+    num_of_sequences: Optional[int] = field(
         default=None,
         metadata={
             "help": "Deprecated. Use `max_length` instead, which specifies the maximum length of the tokenized "
             "sequence, unlike `num_of_sequences`, which referred to string sequences."
         },
     )
-    chars_per_token: float = field(
+    chars_per_token: Optional[float] = field(
         default=None,
         metadata={"help": "Deprecated. If you want to customize the packing length, use `max_length`."},
     )
@@ -136,8 +136,8 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={"help": "Deprecated. Use `max_length` instead."},
     )
-    use_liger: bool = field(
-        default=False,
+    use_liger: Optional[bool] = field(
+        default=None,
         metadata={"help": "Deprecated. Use `use_liger_kernel` instead."},
     )
 

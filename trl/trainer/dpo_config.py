@@ -387,15 +387,15 @@ class DPOConfig(TrainingArguments):
     )
 
     # Deprecated parameters
-    use_num_logits_to_keep: bool = field(
-        default=False,
+    use_num_logits_to_keep: Optional[bool] = field(
+        default=None,
         metadata={"help": "Deprecated. Use `use_logits_to_keep` instead."},
     )
 
     def __post_init__(self):
         super().__post_init__()
 
-        if self.use_num_logits_to_keep:
+        if self.use_num_logits_to_keep is not None:
             warnings.warn(
                 "`use_num_logits_to_keep` is deprecated and will be remove in version 0.17.0. Use "
                 "`use_logits_to_keep` instead.",
