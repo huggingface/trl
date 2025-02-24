@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import random
 import textwrap
 import warnings
 from collections import defaultdict
@@ -848,10 +847,9 @@ class GRPOTrainer(Trainer):
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
             prompts_to_log: list[str] = gather_object(prompts_text)
             completions_to_log: list[str] = gather_object(completions_text)
-            pairs_to_log = random.sample(list(zip(prompts_to_log, completions_to_log)), 5)
             print_prompt_completions_sample(
-                [prompt for prompt, _ in pairs_to_log],
-                [completion for _, completion in pairs_to_log],
+                prompts_to_log,
+                completions_to_log,
                 self.state.global_step,
             )
             if (
