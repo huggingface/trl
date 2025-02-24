@@ -844,7 +844,11 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
-        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
+        if (
+            self.log_completions
+            and self.accelerator.is_main_process
+            and self.state.global_step % self.args.logging_steps == 0
+        ):
             prompts_to_log: list[str] = gather_object(prompts_text)
             completions_to_log: list[str] = gather_object(completions_text)
             print_prompt_completions_sample(
@@ -852,12 +856,7 @@ class GRPOTrainer(Trainer):
                 completions_to_log,
                 self.state.global_step,
             )
-            if (
-                self.args.report_to
-                and "wandb" in self.args.report_to
-                and wandb.run is not None
-                and self.accelerator.is_main_process
-            ):
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
                 import pandas as pd
 
                 # For logging
