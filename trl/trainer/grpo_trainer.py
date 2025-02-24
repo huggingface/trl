@@ -44,7 +44,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_decorator
-from ..import_utils import is_vllm_available
+from ..import_utils import is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -844,30 +844,31 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
-        if (
-            self.log_completions
-            and self.accelerator.is_main_process
-            and self.state.global_step % self.args.logging_steps == 0
-        ):
-            prompts_to_log: list[str] = gather_object(prompts_text)
-            completions_to_log: list[str] = gather_object(completions_text)
-            print_prompt_completions_sample(
-                prompts_to_log,
-                completions_to_log,
-                self.state.global_step,
-            )
-            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                import pandas as pd
+        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
+            prompts_to_log = gather_object(prompts_text)
+            completions_to_log = gather_object(completions_text)
+            rewards_to_log = rewards.tolist()
 
-                # For logging
-                table = {
-                    "step": [str(self.state.global_step)] * len(rewards),
-                    "prompt": prompts_to_log,
-                    "completion": completions_to_log,
-                    "reward": rewards.tolist(),
-                }
-                df = pd.DataFrame(table)
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+            if self.accelerator.is_main_process:
+                if is_rich_available():
+                    print_prompt_completions_sample(
+                        prompts_to_log,
+                        completions_to_log,
+                        rewards_to_log,
+                        self.state.global_step,
+                    )
+                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                    import pandas as pd
+
+                    # For logging
+                    table = {
+                        "step": [str(self.state.global_step)] * len(rewards),
+                        "prompt": prompts_to_log,
+                        "completion": completions_to_log,
+                        "reward": rewards.tolist(),
+                    }
+                    df = pd.DataFrame(table)
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
             "prompt_ids": prompt_ids,
