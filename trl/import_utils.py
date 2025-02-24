@@ -30,7 +30,7 @@ _rich_available = _is_package_available("rich")
 _unsloth_available = _is_package_available("unsloth")
 _vllm_available = _is_package_available("vllm")
 _langchain_experimental_available = _is_package_available("langchain_experimental")
-_e2b_available = _is_package_available("e2b-code-interpreter")
+_e2b_available = _is_package_available("e2b_code_interpreter")
 
 
 def is_deepspeed_available() -> bool:
