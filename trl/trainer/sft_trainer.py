@@ -401,27 +401,27 @@ class SFTTrainer(Trainer):
 
                 dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
 
-            # Convert the dataset to ChatML if needed
-            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
-            dataset = dataset.map(
-                maybe_convert_to_chatml,
-                remove_columns="conversations" if "conversations" in dataset.column_names else None,
-                **map_kwargs,
-            )
-
-            # Apply the chat template if needed
-            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
-            dataset = dataset.map(
-                maybe_apply_chat_template,
-                fn_kwargs={"tokenizer": processing_class},
-                remove_columns="messages" if "messages" in dataset.column_names else None,  # renamed to "text"
-                **map_kwargs,
-            )
-
-            # Tokenize the dataset if needed
             if not is_processed:
+                # Convert the dataset to ChatML if needed
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+                dataset = dataset.map(
+                    maybe_convert_to_chatml,
+                    remove_columns="conversations" if "conversations" in dataset.column_names else None,
+                    **map_kwargs,
+                )
+
+                # Apply the chat template if needed
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+                dataset = dataset.map(
+                    maybe_apply_chat_template,
+                    fn_kwargs={"tokenizer": processing_class},
+                    remove_columns="messages" if "messages" in dataset.column_names else None,  # renamed to "text"
+                    **map_kwargs,
+                )
+
+                # Tokenize the dataset if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
