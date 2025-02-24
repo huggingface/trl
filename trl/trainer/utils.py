@@ -1691,20 +1691,38 @@ def selective_log_softmax(logits, index):
 
 
 def print_prompt_completions_sample(prompts: list[str], completions: list[str], step: int) -> None:
-    """Print out a sample of model completions to the console.
+    """
+    Print out a sample of model completions to the console.
 
-    This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring
-    model outputs during training.
-
-    If `rich` is not available, uses the regular print function.
+    This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
+    during training. It requires the `rich` library to be installed.
 
     Args:
-        prompts (list[str]): List of input prompts.
-        completions (list[str]): List of model-generated completions corresponding to the prompts.
-        step (int): Current training step number, used in the output title.
+        prompts (`list[str]`):
+            List of prompts.
+        completions (`list[str]`):
+            List of completions corresponding to the prompts.
+        step (`int`):
+            Current training step number, used in the output title.
 
-    Returns:
-        None: Prints the formatted table to the console.
+    Example:
+    ```python
+    >>> from trl.trainer.utils import print_prompt_completions_sample
+    >>> prompts = ["The sky is", "The sun is"]
+    >>> completions = [" blue.", " in the sky."]
+    >>> print_prompt_completions_sample(prompts, completions, step=42)
+    ╭────────── Step 42 ──────────╮
+    │ ┏━━━━━━━━━━━┳━━━━━━━━━━━━━┓ │
+    │ ┃Prompt     ┃Completion   ┃ │
+    │ ┃           ┃             ┃ │
+    │ ┡━━━━━━━━━━━╇━━━━━━━━━━━━━┩ │
+    │ │The sky is │ blue.       │ │
+    │ │           │             │ │
+    │ │The sun is │ in the sky. │ │
+    │ │           │             │ │
+    │ └───────────┴─────────────┘ │
+    ╰─────────────────────────────╯
+    ```
     """
     if is_rich_available():
         console = Console()
