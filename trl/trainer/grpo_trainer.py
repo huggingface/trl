@@ -398,7 +398,7 @@ class GRPOTrainer(Trainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self.log_completions_steps = args.log_completions_steps
+        self.log_completions = args.log_completions
 
         super().__init__(
             model=model,
@@ -845,11 +845,7 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
-        if (
-            self.log_completions_steps is not None
-            and self.log_completions_steps > 0
-            and self.state.global_step % self.log_completions_steps == 0
-        ):
+        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
             prompts_to_log: list[str] = gather_object(prompts_text)
             completions_to_log: list[str] = gather_object(completions_text)
             pairs_to_log = random.sample(list(zip(prompts_to_log, completions_to_log)), 5)
