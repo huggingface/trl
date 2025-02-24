@@ -1724,20 +1724,13 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     ╰─────────────────────────────╯
     ```
     """
-    if is_rich_available():
-        console = Console()
-        table = Table(show_header=True, header_style="bold white", expand=True, padding=(0, 1, 1, 0))
-        table.add_column("Prompt", style="bright_yellow")
-        table.add_column("Completion", style="bright_green")
-        for s, p in zip(prompts, completions, strict=True):
-            table.add_row(Text(s), Text(p))
-        panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
-        console.print(panel)
-    else:
-        # Fallback to regular print when rich is not available
-        print(f"\n===== Step {step} =====")
-        for i, (s, p) in enumerate(zip(prompts, completions, strict=True)):
-            print(f"\n--- Sample {i + 1} ---")
-            print(f"Prompt:     {s}")
-            print(f"Completion: {p}")
-        print("\n" + "=" * 30 + "\n")
+    if not is_rich_available():
+        raise ImportError("This feature requires `rich` to be installed. Please install it first: `pip install rich`")
+    console = Console()
+    table = Table(show_header=True, header_style="bold white", expand=True, padding=(0, 1, 1, 0))
+    table.add_column("Prompt", style="bright_yellow")
+    table.add_column("Completion", style="bright_green")
+    for s, p in zip(prompts, completions, strict=True):
+        table.add_row(Text(s), Text(p))
+    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
+    console.print(panel)
