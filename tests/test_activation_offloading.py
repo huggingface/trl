@@ -60,7 +60,7 @@ class TestActivationOffloading(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
-                enable_activation_offloading=True,
+                activation_offloading=True,
                 report_to="none",
             )
 
