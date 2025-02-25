@@ -51,8 +51,8 @@ class OffloadActivations(saved_tensors_hooks):
 
     Example:
         >>> with OffloadActivations():
-        >>>     logits = model(inputs)
-        >>> loss = ...
+        >>>     outputs = model(inputs, labels=labels)
+        >>> loss = outputs.loss
         >>> loss.backward()
     """
 
@@ -63,15 +63,10 @@ class OffloadActivations(saved_tensors_hooks):
         max_fwd_stash_size: int = 5,
         min_offload_size: int = 1024,
     ) -> None:
-
         self.use_streams: bool = use_streams
 
-        self.min_tensor_size_bytes = (
-            min_offload_size  # we don't want to bother with small tensors
-        )
-        self.tracker = (
-            {}
-        )  # tensor_id => (new_tensor, if_modified)  ---> track what saved/offloaded tensors are where
+        self.min_tensor_size_bytes = min_offload_size  # we don't want to bother with small tensors
+        self.tracker = {}  # tensor_id => (new_tensor, if_modified)  ---> track what saved/offloaded tensors are where
         self.tensor_id: int = 0
         self.is_first_forward_call = True
         self.is_first_backward_call = True
@@ -79,9 +74,7 @@ class OffloadActivations(saved_tensors_hooks):
 
         # managing cpu memory
         self.use_pin_memory: bool = use_pin_memory
-        self.virtual_memory_safe_pct = (
-            60  # we should not exceed this percentage of memory
-        )
+        self.virtual_memory_safe_pct = 60  # we should not exceed this percentage of memory
 
         self.s0 = torch.cuda.default_stream()  # comp stream
 
@@ -90,9 +83,7 @@ class OffloadActivations(saved_tensors_hooks):
             self.s1 = torch.cuda.Stream()  # comms stream
             self.fwd_stash = {}  # tensor_id => (activation, ev1)
             if max_fwd_stash_size < 1:
-                raise ValueError(
-                    f"max_fwd_stash_size should be at least 1 but is {max_fwd_stash_size}"
-                )
+                raise ValueError(f"max_fwd_stash_size should be at least 1 but is {max_fwd_stash_size}")
             self.max_fwd_stash_size = max_fwd_stash_size
             self.bwd_tensor_stash = {}  # tensor_id => activation
             self.bwd_ev_stash = {}  # tensor_id => ev0
@@ -103,9 +94,7 @@ class OffloadActivations(saved_tensors_hooks):
         def verify_sufficient_virtual_memory():
             curr_pct = get_cpu_ram_pct()
             if curr_pct > self.virtual_memory_safe_pct:
-                warn(
-                    f"***** WARNING: {curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used"
-                )
+                warn(f"***** WARNING: {curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used")
 
         def get_cpu_ram_pct() -> float:
             # get the percentage of memory used by the system
@@ -118,17 +107,14 @@ class OffloadActivations(saved_tensors_hooks):
 
         def get_num_bytes_tensor(x: torch.Tensor) -> int:
             # get the number of bytes in a tensor, for memory management purposes
-            return (
-                x.element_size() * x.nelement()
-            )  # x.element_size() * x._base_storage().nbytes()
+            return x.element_size() * x.nelement()  # x.element_size() * x._base_storage().nbytes()
 
         # -------- core pack / unpack work -------- #
         def pack_tensor(activation: torch.Tensor) -> int:
             # activations are passed in during forward pass - from here we take over and return a unique id
             if self.is_first_forward_call:
-                assert (
-                    len(self.tracker) == 0
-                ), "backward pass should have cleared tracker of all tensors"
+                if len(self.tracker) != 0:
+                    raise ValueError("backward pass should have cleared tracker of all tensors")
 
                 # set training phase trackers
                 self.is_first_forward_call = False
@@ -141,13 +127,12 @@ class OffloadActivations(saved_tensors_hooks):
             # only offload hefty bois if they're activations (our heuristic for that is to
             # check if they're not params or buffers)!
             if num_bytes >= self.min_tensor_size_bytes and (
-                not isinstance(activation, torch.nn.Parameter)
-                and not isinstance(activation, torch.nn.Buffer)
+                not isinstance(activation, torch.nn.Parameter) and not isinstance(activation, torch.nn.Buffer)
             ):
                 if self.use_streams:
                     # First, sync back and dereference previously offloaded tensors
                     # as the offloading should be done sufficiently long ago.
-                    for id in [k for k in self.fwd_stash.keys()]:
+                    for id in list(self.fwd_stash.keys()):
                         if id <= tensor_id - self.max_fwd_stash_size:
                             _, ev = self.fwd_stash[id]
                             self.s0.wait_event(ev)
@@ -160,24 +145,12 @@ class OffloadActivations(saved_tensors_hooks):
 
                 stream = self.s1 if self.use_streams else self.s0
                 with torch.cuda.stream(stream):
-                    try:
-                        cpu_tensor = torch.empty_like(
-                            activation, pin_memory=self.use_pin_memory, device="cpu"
-                        )
-                    except NotImplementedError as e:
-                        if (
-                            isinstance(activation, NF4Tensor)
-                            and torchao.__version__ < "0.6.0.dev20240917"
-                        ):
-                            raise RuntimeError(
-                                "Offloading NF4Tensors requires torchao-0.6.0.dev20240917 or later"
-                            ) from e
-                        raise e
+                    cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
                     cpu_tensor.copy_(activation, non_blocking=True)
                     self.tracker[tensor_id] = (
                         cpu_tensor,
-                        True,
-                    )  # True = (in future) modified
+                        True,  # True = (in future) modified
+                    )
 
                 if self.use_streams:
                     event = self.s1.record_event()
@@ -204,9 +177,8 @@ class OffloadActivations(saved_tensors_hooks):
                 self.is_first_backward_call = False
                 self.is_first_forward_call = True
 
-            assert (
-                unpack_tensor_id in self.tracker
-            ), f"untracked tensor with id {unpack_tensor_id}"
+            if unpack_tensor_id not in self.tracker:
+                raise ValueError(f"untracked tensor with id {unpack_tensor_id}")
 
             maybe_gpu_tensor, modified = self.tracker[unpack_tensor_id]
             if modified:
@@ -224,15 +196,13 @@ class OffloadActivations(saved_tensors_hooks):
                 self.curr_graph_id = torch._C._current_graph_task_id()
 
                 def wait_and_del_remaining_references() -> None:
-                    for id in [k for k in self.bwd_tensor_stash.keys()]:
+                    for id in list(self.bwd_tensor_stash.keys()):
                         event = self.bwd_ev_stash[id]
                         self.s1.wait_event(event)
                         del self.bwd_tensor_stash[id]
 
                 # Register a callback to the end of autograd to clean everything up
-                torch.autograd.variable.Variable._execution_engine.queue_callback(
-                    wait_and_del_remaining_references
-                )
+                torch.autograd.variable.Variable._execution_engine.queue_callback(wait_and_del_remaining_references)
 
                 if self.is_first_forward_pass:
                     self.is_first_forward_pass = False
@@ -242,9 +212,8 @@ class OffloadActivations(saved_tensors_hooks):
                 self.is_first_backward_call = False
                 self.is_first_forward_call = True
 
-            assert (
-                unpack_tensor_id in self.tracker
-            ), f"untracked tensor with id {unpack_tensor_id}"
+            if unpack_tensor_id not in self.tracker:
+                raise ValueError(f"untracked tensor with id {unpack_tensor_id}")
 
             maybe_gpu_tensor, modified = self.tracker[unpack_tensor_id]
             if modified:
@@ -256,7 +225,7 @@ class OffloadActivations(saved_tensors_hooks):
                 # If we're on a new node, mark prev node's tensors to be freed later
                 if graph_id == self.curr_graph_id and self.curr_autograd_node != node:
                     self.curr_autograd_node = node
-                    prev_node_ids = [id for id in self.bwd_tensor_stash.keys()]
+                    prev_node_ids = list(self.bwd_tensor_stash.keys())
 
                 brought_back_from_cpu = True
                 if unpack_tensor_id in self.fwd_stash:
@@ -287,9 +256,7 @@ class OffloadActivations(saved_tensors_hooks):
                     #    up as a view of the unpacked tensor.
                     # 3. The user abuses the system somehow and manually relies on the
                     #    unpacked tensor to exist after the backward node has executed.
-                    storage_refcount = torch._C._storage_Use_Count(
-                        maybe_gpu_tensor.untyped_storage()._cdata
-                    )
+                    storage_refcount = torch._C._storage_Use_Count(maybe_gpu_tensor.untyped_storage()._cdata)
 
                 def hook(outputs, inputs):
                     # create events for the current node inputs/outputs if they were streamed in
@@ -306,12 +273,7 @@ class OffloadActivations(saved_tensors_hooks):
                         # non-deterministic (thus higher) memory usage, but this case
                         # should not happen often.
                         unpacked_tensor = self.bwd_tensor_stash[unpack_tensor_id]
-                        if (
-                            torch._C._storage_Use_Count(
-                                unpacked_tensor.untyped_storage()._cdata
-                            )
-                            > storage_refcount
-                        ):
+                        if torch._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata) > storage_refcount:
                             unpacked_tensor.record_stream(self.s0)
                             del self.bwd_tensor_stash[unpack_tensor_id]
                         else:
@@ -319,7 +281,7 @@ class OffloadActivations(saved_tensors_hooks):
                             self.bwd_ev_stash[unpack_tensor_id] = event
 
                     # if there are still things in the fwd_stash, get rid of them as we're in bwd now
-                    for id in [k for k in self.fwd_stash.keys()]:
+                    for id in list(self.fwd_stash.keys()):
                         _, ev = self.fwd_stash[id]
                         self.s0.wait_event(ev)
                         del self.fwd_stash[id]
@@ -338,11 +300,7 @@ class OffloadActivations(saved_tensors_hooks):
             del self.tracker[unpack_tensor_id]
             return maybe_gpu_tensor
 
-        unpack_tensor = (
-            unpack_tensor_with_streams
-            if self.use_streams
-            else unpack_tensor_single_stream
-        )
+        unpack_tensor = unpack_tensor_with_streams if self.use_streams else unpack_tensor_single_stream
         super().__init__(pack_tensor, unpack_tensor)
 
 
@@ -380,70 +338,76 @@ def get_act_offloading_ctx_manager(
     Returns:
         contextlib.ContextDecorator: the activation offloading context manager for the model.
     """
-    if enable_activation_offloading:
-        activations_handling_ctx = OffloadActivations()
+    if not enable_activation_offloading:
+        return contextlib.nullcontext()
 
-        # Below is our hack to disable offloading the last output Linear in every
-        # step, as the cost for offloading the activation and then soon after bringing
-        # it back is expensive.
-        output_head_detected = False
-        noop_ctx = NoOpManager()
+    activations_handling_ctx = OffloadActivations()
 
-        # Try to get the actual model if it's wrapped
-        if hasattr(model, "module"):
-            model = model.module
-        if hasattr(model, "model"):
-            model = model.model
+    # Below is our hack to disable offloading the last output Linear in every
+    # step, as the cost for offloading the activation and then soon after bringing
+    # it back is expensive.
+    output_head_detected = False
+    noop_ctx = NoOpManager()
 
-        # Check for different types of output heads
-        if hasattr(model, "output"):
-            if isinstance(model.output, nn.Module):
-                model.output.register_forward_pre_hook(
-                    lambda *args: noop_ctx.__enter__()
-                )
-                model.output.register_forward_hook(
-                    lambda *args: noop_ctx.__exit__(), always_call=True
-                )
-                output_head_detected = True
-            elif isinstance(model.output, TiedLinear):
-                model.output.linear.register_forward_pre_hook(
-                    lambda *args: noop_ctx.__enter__()
-                )
-                model.output.linear.register_forward_hook(
-                    lambda *args: noop_ctx.__exit__(), always_call=True
-                )
-                output_head_detected = True
+    # Try to get the actual model if it's wrapped
+    unwrapped_model = model
+    if hasattr(unwrapped_model, "module"):
+        unwrapped_model = unwrapped_model.module
+    if hasattr(unwrapped_model, "model"):
+        unwrapped_model = unwrapped_model.model
+    if hasattr(unwrapped_model, "base_model"):
+        unwrapped_model = unwrapped_model.base_model
 
-        # Check for HuggingFace model output heads
-        elif hasattr(model, "lm_head"):
-            model.lm_head.register_forward_pre_hook(
-                lambda *args: noop_ctx.__enter__()
-            )
-            model.lm_head.register_forward_hook(
-                lambda *args: noop_ctx.__exit__(), always_call=True
-            )
+    # Check for different types of output heads
+    if hasattr(unwrapped_model, "output"):
+        if isinstance(unwrapped_model.output, nn.Module):
+            unwrapped_model.output.register_forward_pre_hook(lambda *args: noop_ctx.__enter__())
+            unwrapped_model.output.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
+            output_head_detected = True
+        elif hasattr(unwrapped_model.output, "linear") and isinstance(unwrapped_model.output.linear, nn.Module):
+            unwrapped_model.output.linear.register_forward_pre_hook(lambda *args: noop_ctx.__enter__())
+            unwrapped_model.output.linear.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
             output_head_detected = True
 
-        elif hasattr(model, "decoder"):
-            if hasattr(model.decoder, "output"):
-                model.decoder.output.register_forward_pre_hook(
-                    lambda *args: noop_ctx.__enter__()
-                )
-                model.decoder.output.register_forward_hook(
-                    lambda *args: noop_ctx.__exit__(), always_call=True
-                )
-                output_head_detected = True
+    # Check for HuggingFace model output heads
+    elif hasattr(unwrapped_model, "lm_head"):
+        unwrapped_model.lm_head.register_forward_pre_hook(lambda *args: noop_ctx.__enter__())
+        unwrapped_model.lm_head.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
+        output_head_detected = True
 
-        if not output_head_detected:
-            warn(
-                "During activation offloading, no output head was detected. "
-                "If your model has an output head, it will be offloaded. "
-                "This usually greatly slows training, given the large vocabulary size. "
-                "To change this behavior, set your output head as model.output and make it "
-                "an nn.Module."
-            )
+    # Check for decoder-based models
+    elif hasattr(unwrapped_model, "decoder"):
+        decoder = unwrapped_model.decoder
+        if hasattr(decoder, "output"):
+            decoder.output.register_forward_pre_hook(lambda *args: noop_ctx.__enter__())
+            decoder.output.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
+            output_head_detected = True
+        # Some models have lm_head in the decoder
+        elif hasattr(decoder, "lm_head"):
+            decoder.lm_head.register_forward_pre_hook(lambda *args: noop_ctx.__enter__())
+            decoder.lm_head.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
+            output_head_detected = True
 
-    else:
-        activations_handling_ctx = contextlib.nullcontext()
+    # Check for transformer models with final layer norm
+    elif hasattr(unwrapped_model, "final_layer_norm") or hasattr(unwrapped_model, "ln_f"):
+        final_norm = getattr(unwrapped_model, "final_layer_norm", None) or unwrapped_model.ln_f
+        final_norm.register_forward_pre_hook(lambda *args: noop_ctx.__enter__())
+        final_norm.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
+        output_head_detected = True
+
+    # Check for models with head module
+    elif hasattr(unwrapped_model, "head") and isinstance(unwrapped_model.head, nn.Module):
+        unwrapped_model.head.register_forward_pre_hook(lambda *args: noop_ctx.__enter__())
+        unwrapped_model.head.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
+        output_head_detected = True
+
+    if not output_head_detected:
+        warn(
+            "During activation offloading, no output head was detected. "
+            "If your model has an output head, it will be offloaded. "
+            "This usually greatly slows training, given the large vocabulary size. "
+            "To change this behavior, set your output head as model.output and make it "
+            "an nn.Module."
+        )
 
     return activations_handling_ctx
