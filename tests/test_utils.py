@@ -17,6 +17,7 @@ import unittest
 import numpy as np
 import torch
 from datasets import load_dataset
+from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
@@ -31,6 +32,7 @@ from trl.trainer.utils import (
     generate_model_card,
     get_peft_config,
     pad,
+    selective_log_softmax,
 )
 
 
@@ -451,3 +453,24 @@ class TestFlushLeft(unittest.TestCase):
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
 
         self.assertTrue(torch.equal(new_mask, expected_mask))
+
+
+class TestSelectiveLogSoftmax(unittest.TestCase):
+    @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
+    def test_selective_log_softmax(self, dtype):
+        """Test selective_log_softmax with logits of different dtypes"""
+        vocab_size = 1024
+        batch_size = 4
+        seq_len = 32
+
+        input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len))
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+        actual_output = selective_log_softmax(logits, input_ids)
+
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            self.assertTrue(torch.equal(actual_output, expected_output))
+        else:
+            torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
