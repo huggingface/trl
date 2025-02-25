@@ -1,3 +1,17 @@
+# Copyright 2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
@@ -15,39 +29,36 @@ from torch.autograd.graph import saved_tensors_hooks
 
 
 class OffloadActivations(saved_tensors_hooks):
-    """Context manager under which activation tensors created in the forward pass will be offloaded.
+    """
+    Context manager under which activation tensors created in the forward pass will be offloaded.
 
-    Enable the memory efficiency technique of activation offloading, where activations bigger than
-    min_offload_size bytes will be offloaded to CPU in the forward and brought back in the backward.
-    This is in contrast to maintaining the activation on GPU VRAM throughout the program.
+    Enable the memory efficiency technique of activation offloading, where activations bigger than `min_offload_size`
+    bytes will be offloaded to CPU in the forward and brought back in the backward. This is in contrast to maintaining
+    the activation on GPU VRAM throughout the program.
 
-    This manager contains the option of using one additional CUDA stream to handle the communication
-    between CUDA and CPU, which is intended to overlap with the default computation stream to improve
-    runtime. We designed synchronization with a few heuristics for optimizing the tradeoff between
-    runtime vs memory usage.
+    This manager contains the option of using one additional CUDA stream to handle the communication between CUDA and
+    CPU, which is intended to overlap with the default computation stream to improve runtime. We designed
+    synchronization with a few heuristics for optimizing the tradeoff between runtime vs memory usage.
 
     Args:
-        use_pin_memory (bool): Whether or not the offloaded Tensor will be placed in pinned
-            memory on the CPU. Pinned memory allows the Tensor to be moved back onto GPU more quickly
-            but is a limited resource. Default: True.
-
-        use_streams (bool): Whether or not to use streams for performance optimization where
-            the communications get overlapped with the computation. Requires a torch build
-            after torch-2.5.0.]. Default: True.
-
-        max_fwd_stash_size (int): The maximum size of the forward stash, or the maximum number of
-            consecutive activations to keep alive during the forward pass. This number must be at
-            least 1. Keeping alive more activations will potentially allow more overlap between the
-            communication and compute streams at the cost of increasing memory usage. Keeping alive
-            fewer activations will conserve memory, but may cause poor overlap between the streams,
-            increasing runtime. Default: 5.
-
-        min_offload_size (int): The minimum number of bytes a Tensor must be in order to qualify
-            for offloading. If the tensor is too small, we do not want to waste bandwidth and resources
-            moving it to CPU and back. Default: 1024 bytes.
+        use_pin_memory (`bool`, *optional*, defaults to `True`):
+            Whether to offloaded Tensor will be placed in pinned memory on the CPU. Pinned memory allows the Tensor to
+            be moved back onto GPU more quickly but is a limited resource.
+        use_streams (`bool`, *optional*, defaults to `True`):
+            Whether to use streams for performance optimization where the communications get overlapped with the
+            computation. Requires a torch build after torch-2.5.0.].
+        max_fwd_stash_size (`int`, *optional*, defaults to `5`):
+            Maximum size of the forward stash, or the maximum number of consecutive activations to keep alive during
+            the forward pass. This number must be at least 1. Keeping alive more activations will potentially allow
+            more overlap between the communication and compute streams at the cost of increasing memory usage. Keeping
+            alive fewer activations will conserve memory, but may cause poor overlap between the streams, increasing
+            runtime.
+        min_offload_size (`int`, *optional*, defaults to `1024`):
+            Minimum number of bytes a Tensor must be in order to qualify for offloading. If the tensor is too small, we
+            do not want to waste bandwidth and resources moving it to CPU and back.
 
     Raises:
-        ValueError: if max_fwd_stash_size is not at least 1.
+        ValueError: if `max_fwd_stash_size` is not at least `1`.
 
     Example:
         >>> with OffloadActivations():
@@ -63,22 +74,22 @@ class OffloadActivations(saved_tensors_hooks):
         max_fwd_stash_size: int = 5,
         min_offload_size: int = 1024,
     ) -> None:
-        self.use_streams: bool = use_streams
+        self.use_streams = use_streams
 
         self.min_tensor_size_bytes = min_offload_size  # we don't want to bother with small tensors
         self.tracker = {}  # tensor_id => (new_tensor, if_modified)  ---> track what saved/offloaded tensors are where
-        self.tensor_id: int = 0
+        self.tensor_id = 0
         self.is_first_forward_call = True
         self.is_first_backward_call = True
         self.is_first_forward_pass = True
 
-        # managing cpu memory
-        self.use_pin_memory: bool = use_pin_memory
+        # Managing cpu memory
+        self.use_pin_memory = use_pin_memory
         self.virtual_memory_safe_pct = 60  # we should not exceed this percentage of memory
 
         self.s0 = torch.cuda.default_stream()  # comp stream
 
-        # for streaming
+        # For streaming
         if self.use_streams:
             self.s1 = torch.cuda.Stream()  # comms stream
             self.fwd_stash = {}  # tensor_id => (activation, ev1)
@@ -94,7 +105,7 @@ class OffloadActivations(saved_tensors_hooks):
         def verify_sufficient_virtual_memory():
             curr_pct = get_cpu_ram_pct()
             if curr_pct > self.virtual_memory_safe_pct:
-                warn(f"***** WARNING: {curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used")
+                warn(f"{curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used")
 
         def get_cpu_ram_pct() -> float:
             # get the percentage of memory used by the system
@@ -114,7 +125,7 @@ class OffloadActivations(saved_tensors_hooks):
             # activations are passed in during forward pass - from here we take over and return a unique id
             if self.is_first_forward_call:
                 if len(self.tracker) != 0:
-                    raise ValueError("backward pass should have cleared tracker of all tensors")
+                    raise ValueError("Backward pass should have cleared tracker of all tensors")
 
                 # set training phase trackers
                 self.is_first_forward_call = False
@@ -178,7 +189,7 @@ class OffloadActivations(saved_tensors_hooks):
                 self.is_first_forward_call = True
 
             if unpack_tensor_id not in self.tracker:
-                raise ValueError(f"untracked tensor with id {unpack_tensor_id}")
+                raise ValueError(f"Untracked tensor with id {unpack_tensor_id}")
 
             maybe_gpu_tensor, modified = self.tracker[unpack_tensor_id]
             if modified:
@@ -306,12 +317,11 @@ class OffloadActivations(saved_tensors_hooks):
 
 class NoOpManager(saved_tensors_hooks):
     """
-    A saved_tensors_hook manager used to disable any other saved_tensors_hook manager
-    applied before. This relies on the behavior that only the most recently registered
-    saved_tensors_hook will run.
+    A saved_tensors_hook manager used to disable any other saved_tensors_hook manager applied before. This relies on
+    the behavior that only the most recently registered saved_tensors_hook will run.
 
-    One example usage is to opt a local region of code out of activations offloading,
-    which is usually applied globally to best track state.
+    One example usage is to opt a local region of code out of activations offloading, which is usually applied globally
+    to best track state.
     """
 
     def __init__(self) -> None:
@@ -329,19 +339,22 @@ def get_act_offloading_ctx_manager(
     min_offload_size: int = 1024,
     max_fwd_stash_size: int = 5,
 ) -> Union[OffloadActivations, contextlib.nullcontext]:
-    """Returns the activation offloading context manager for the model, which will be
-    a null context if enable_activation_offloading is False.
+    """
+    Returns the activation offloading context manager for the model, which will be a null context if
+    `enable_activation_offloading` is `False`.
 
     If activation offloading is enabled, we return the OffloadActivations context manager.
     If activation offloading is disabled, we return a NoOpManager context manager.
 
     Args:
-        model (nn.Module): the model to wrap with the activation offloading context manager.
-        enable_activation_offloading (bool): whether or not to enable activation offloading
-            for the model.
+        model (`nn.Module`):
+            Model to wrap with the activation offloading context manager.
+        enable_activation_offloading (`bool`):
+            Whether or not to enable activation offloading for the model.
 
     Returns:
-        contextlib.ContextDecorator: the activation offloading context manager for the model.
+        `contextlib.ContextDecorator`:
+            Activation offloading context manager for the model.
     """
     if not enable_activation_offloading:
         return contextlib.nullcontext()
