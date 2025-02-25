@@ -433,8 +433,9 @@ class TextEnvironment:
                         extracted_keys.shape[1],
                         max_sequence_length - 1,
                         extracted_keys.shape[3],
-                    )
-                ).to(self.current_device)
+                    ),
+                    device=self.current_device,
+                )
 
                 if extracted_keys.shape[2] != extracted_values.shape[2]:
                     raise Exception("Cache format incompatible")
@@ -443,7 +444,7 @@ class TextEnvironment:
                 start_position = max_sequence_length - 1 - extracted_keys.shape[2]
                 if start_position < 0:
                     raise Exception("start position incorrect")
-                new_values = torch.zeros_like(new_keys).to(self.current_device)
+                new_values = torch.zeros_like(new_keys, device=self.current_device)
                 new_keys[:, :, start_position:, :] = extracted_keys
                 new_values[:, :, start_position:, :] = extracted_values
 
@@ -470,14 +471,17 @@ class TextEnvironment:
             if start_position < 0:
                 raise Exception("start position incorrect")
             padded_attention_mask = torch.zeros(
-                (attention_mask.shape[0], max_sequence_length), dtype=attention_mask.dtype
-            ).to(self.current_device)
+                (attention_mask.shape[0], max_sequence_length), dtype=attention_mask.dtype, device=self.current_device
+            )
             padded_attention_mask[:, start_position:] = attention_mask
             padded_attentions_masks.append(padded_attention_mask)
 
             padded_input_ids = torch.full(
-                (input_ids.shape[0], max_sequence_length), self.tokenizer.pad_token_id, dtype=input_ids.dtype
-            ).to(self.current_device)
+                (input_ids.shape[0], max_sequence_length),
+                self.tokenizer.pad_token_id,
+                dtype=input_ids.dtype,
+                device=self.current_device,
+            )
             padded_input_ids[:, start_position:] = input_ids
             padded_past_input_ids.append(padded_input_ids)
 
