@@ -273,7 +273,7 @@ class TextEnvironment:
         self.response_token = "<response>"
         self.submit_token = "<submit>"
         self.max_turns = max_turns
-        self.max_tool_response = max_tool_reponse
+        self.max_tool_response = max_tool_response
         self.use_cache = use_cache
         self.save_logits = save_logits
 
