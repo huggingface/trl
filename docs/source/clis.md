@@ -1,6 +1,6 @@
 # Command Line Interfaces (CLIs)
 
-You can use TRL to fine-tune your Language Model with Supervised Fine-Tuning (SFT) or Direct Policy Optimization (DPO) or even chat with your model using the TRL CLIs.
+You can use TRL to fine-tune your language model with methods like Supervised Fine-Tuning (SFT) or Direct Policy Optimization (DPO) using the command line interface (CLI).
 
 Currently supported CLIs are:
 
@@ -13,7 +13,6 @@ Currently supported CLIs are:
 
 #### Other commands
 
-- `trl chat`: quickly spin up an LLM fine-tuned for chatting
 - `trl env`: get the system information
 
 ## Fine-tuning with the CLI
@@ -100,6 +99,12 @@ python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity your-hf-org
 ```
 
 ## Chat interface
+
+<Tip warning={true}>
+
+The chat interface is deprecated and will be removed in TRL 0.19. Use `transformers-cli chat` instead. For more information, see the [Transformers documentation, chat with text generation models](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
+
+</Tip>
 
 The chat CLI lets you quickly load the model and talk to it. Simply run the following:
 

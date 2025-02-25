@@ -145,8 +145,7 @@ class TextHistory:
         """
         if not is_rich_available():
             raise ImportError(
-                "The `rich` library is required to display text with formatting. "
-                "Install it using `pip install rich`."
+                "The `rich` library is required to display text with formatting. Install it using `pip install rich`."
             )
 
         text = Text(self.text)
@@ -224,7 +223,7 @@ class TextEnvironment:
         reward_fn=None,
         prompt=None,
         max_turns=4,
-        max_tool_reponse=100,
+        max_tool_response=100,
         max_length=None,
         generation_kwargs=None,
     ):
@@ -256,7 +255,7 @@ class TextEnvironment:
         self.response_token = "<response>"
         self.submit_token = "<submit>"
         self.max_turns = max_turns
-        self.max_tool_response = max_tool_reponse
+        self.max_tool_response = max_tool_response
 
         if generation_kwargs is None:
             self.generation_kwargs = dict()

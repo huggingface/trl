@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Literal, Optional, Union
 
 from accelerate.utils import is_deepspeed_available
 from transformers import PreTrainedModel, PreTrainedTokenizer
-from transformers.utils.deprecation import deprecate_kwarg
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
@@ -175,7 +174,6 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 
 @contextmanager
-@deprecate_kwarg("is_peft_model", "0.16.0", warn_if_greater_or_equal_version=True)
 def unwrap_model_for_generation(
     model: Union["DistributedDataParallel", "DeepSpeedEngine"],
     accelerator: "Accelerator",
