@@ -244,7 +244,7 @@ class SFTTrainer(Trainer):
         # Initialize activation offloading context
         self.activation_offload_context = get_act_offloading_ctx_manager(
             model=self.model,
-            enable_activation_offloading=self.args.enable_activation_offloading,
+            activation_offloading=self.args.activation_offloading,
         )
 
         # Add tags for models that have been loaded with the correct transformers version

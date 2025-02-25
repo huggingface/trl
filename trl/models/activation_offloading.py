@@ -333,7 +333,7 @@ class NoOpManager(saved_tensors_hooks):
 
 def get_act_offloading_ctx_manager(
     model: nn.Module,
-    enable_activation_offloading: bool,
+    activation_offloading: bool,
     use_pin_memory: bool = True,
     use_streams: bool = True,
     min_offload_size: int = 1024,
@@ -341,7 +341,7 @@ def get_act_offloading_ctx_manager(
 ) -> Union[OffloadActivations, contextlib.nullcontext]:
     """
     Returns the activation offloading context manager for the model, which will be a null context if
-    `enable_activation_offloading` is `False`.
+    `activation_offloading` is `False`.
 
     If activation offloading is enabled, we return the OffloadActivations context manager.
     If activation offloading is disabled, we return a NoOpManager context manager.
@@ -349,14 +349,14 @@ def get_act_offloading_ctx_manager(
     Args:
         model (`nn.Module`):
             Model to wrap with the activation offloading context manager.
-        enable_activation_offloading (`bool`):
+        activation_offloading (`bool`):
             Whether or not to enable activation offloading for the model.
 
     Returns:
         `contextlib.ContextDecorator`:
             Activation offloading context manager for the model.
     """
-    if not enable_activation_offloading:
+    if not activation_offloading:
         return contextlib.nullcontext()
 
     activations_handling_ctx = OffloadActivations(
