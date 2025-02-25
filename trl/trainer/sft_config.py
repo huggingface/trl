@@ -39,6 +39,8 @@ class SFTConfig(TrainingArguments):
             argument of the [`SFTTrainer`] is provided as a string.
         use_liger (`bool`, *optional*, defaults to `False`):
             Monkey patch the model with Liger kernels to increase throughput and reduce memory usage.
+        enable_activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
 
         > Parameters that control the data preprocessing
 
@@ -141,6 +143,11 @@ class SFTConfig(TrainingArguments):
     max_seq_length: Optional[int] = field(
         default=None,
         metadata={"help": "Deprecated. Use `max_length` instead."},
+    )
+
+    enable_activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     def __post_init__(self):
