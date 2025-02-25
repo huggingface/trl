@@ -12,6 +12,10 @@
 
 [[autodoc]] maybe_apply_chat_template
 
+## maybe_convert_to_chatml
+    
+[[autodoc]] maybe_convert_to_chatml
+
 ## extract_prompt
 
 [[autodoc]] extract_prompt
@@ -27,3 +31,7 @@
 ## maybe_unpair_preference_dataset
 
 [[autodoc]] maybe_unpair_preference_dataset
+
+## pack_examples
+
+[[autodoc]] pack_examples

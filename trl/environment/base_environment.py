@@ -237,7 +237,7 @@ class TextEnvironment:
         reward_fn=None,
         prompt=None,
         max_turns=4,
-        max_tool_reponse=100,
+        max_tool_response=100,
         max_length=None,
         generation_kwargs=None,
         use_cache=False,

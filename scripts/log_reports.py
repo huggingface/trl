@@ -42,7 +42,7 @@ def process_log_file(log):
                 try:
                     data = json.loads(line)
                     test_name = data.get("nodeid", "")
-                    duration = f'{data["duration"]:.4f}' if "duration" in data else "N/A"
+                    duration = f"{data['duration']:.4f}" if "duration" in data else "N/A"
                     outcome = data.get("outcome", "")
 
                     if test_name:

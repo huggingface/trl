@@ -37,8 +37,6 @@ if TYPE_CHECKING:
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn.parallel.distributed import DistributedDataParallel
 
-    from .modeling_base import PreTrainedModelWrapper
-
 
 # TODO: Add Abstract Base Class if more formats are added
 @dataclass
@@ -179,15 +177,30 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 def unwrap_model_for_generation(
     model: Union["DistributedDataParallel", "DeepSpeedEngine"],
     accelerator: "Accelerator",
-    is_peft_model: bool = False,
     gather_deepspeed3_params: bool = True,
-) -> Union["PreTrainedModelWrapper", "DeepSpeedEngine"]:
-    """Context manager to unwrap a model for generation.
-    For ZeRO-3 models, we gather the weights once to speed up generation.
+):
+    """
+    Context manager to unwrap distributed or accelerated models for generation tasks.
+
+    Args:
+        model (`Union[DistributedDataParallel, DeepSpeedEngine]`):
+            Model to be unwrapped.
+        accelerator (`~accelerate.Accelerator`):
+            Accelerator instance managing the model.
+        gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
+            Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
+            can be more memory-efficient but may lead to slower generation times.
+
+    Yields:
+        Unwrapped model.
+
+    Example:
+    ```python
+    with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+        generated_outputs = unwrapped_model.generate(input_ids)
+    ```
     """
     unwrapped_model = accelerator.unwrap_model(model)
-    if is_peft_model:
-        unwrapped_model.pretrained_model.disable_adapter()
     if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
         if not gather_deepspeed3_params:
             yield accelerator.unwrap_model(model)
