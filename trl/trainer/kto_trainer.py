@@ -341,6 +341,8 @@ class KTOTrainer(Trainer):
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
     ):
+        print("Initially, ref_model: ", ref_model)
+        print("ref_model_init_kwargs: ", args.ref_model_init_kwargs)
         if type(args) is TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
 
@@ -473,6 +475,7 @@ class KTOTrainer(Trainer):
             # The `model` with adapters turned off will be used as the reference model
             self.ref_model = None
         else:
+            print("Creating reference model from model")
             self.ref_model = create_reference_model(model)
 
         if processing_class is None:
@@ -788,11 +791,16 @@ class KTOTrainer(Trainer):
                     "You set `use_liger_loss=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
+            if self.loss_type in ["apo_zero_unpaired"]:
+                raise ValueError(
+                    "You cannot set `loss_type=apo_zero_unpaired` with liger-kernel."
+                    "Only KTO loss is supported with liger-kernel."
+                )
             if self.precompute_ref_log_probs:
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set `precompute_ref_log_probs=False`."
                 )
-            self.orpo_loss_fn = LigerFusedLinearKTOLoss(ignore_index=self.label_pad_token_id, beta=self.beta, use_ref_model=(self.ref_model is not None))
+            self.kto_loss_fn = LigerFusedLinearKTOLoss(ignore_index=self.label_pad_token_id, beta=self.beta, use_ref_model=(self.ref_model is not None))
             print("Correctly set the liger loss")
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
@@ -1210,7 +1218,172 @@ class KTOTrainer(Trainer):
         return losses, chosen_rewards, rejected_rewards, kl
 
     def _compute_loss_liger(self, model, batch):
-        print("Not implemented")
+        if self.calculate_KL:
+            KL_logps = None
+            KL_model_kwargs = (
+                {
+                    "input_ids": batch["KL_prompt_input_ids"],
+                    "attention_mask": batch["KL_prompt_attention_mask"],
+                    "labels": batch["KL_completion_labels"],
+                    "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
+                }
+                if self.is_encoder_decoder
+                else {
+                    "input_ids": batch["KL_completion_input_ids"],
+                    "attention_mask": batch["KL_completion_attention_mask"],
+                }
+            )
+            with torch.no_grad():
+                KL_logits = model(
+                    **KL_model_kwargs,
+                ).logits
+
+            KL_logps = self.get_batch_logps(
+                KL_logits,
+                batch["KL_completion_labels"],
+                average_log_prob=False,
+                is_encoder_decoder=self.is_encoder_decoder,
+                label_pad_token_id=self.label_pad_token_id,
+            )
+        else:
+            KL_logps = None
+
+        model_kwargs = (
+            {
+                "labels": batch["completion_labels"],
+                "decoder_input_ids": batch.get("completion_decoder_input_ids"),
+            }
+            if self.is_encoder_decoder
+            else {}
+        )
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
+
+        if self.is_encoder_decoder:
+            print("Is an encoder decoder model")
+            # 1. Get encoder outputs
+            encoder_outputs = model.get_encoder()(
+                batch["completion_input_ids"],
+                attention_mask=batch["completion_attention_mask"],
+                return_dict=True,
+                **model_kwargs,
+            )
+            # 2. Get decoder outputs
+            outputs = model.get_decoder()(
+                input_ids=model_kwargs["decoder_input_ids"],
+                encoder_hidden_states=encoder_outputs.last_hidden_state,
+                use_cache=False,
+                **model_kwargs,
+            )
+        else:
+            print("Is a decoder only model")
+            # skip the lm head and get the last hidden state
+            if hasattr(model, "get_decoder"):
+                base_model = model.get_decoder()
+            else:
+                base_model = getattr(model, self.args.base_model_attribute_name)
+            outputs = base_model(
+                batch["completion_input_ids"],
+                attention_mask=batch["completion_attention_mask"],
+                use_cache=False,
+                **model_kwargs,
+            )
+        lm_head = model.get_output_embeddings()
+
+        # For reference model
+        if self.is_encoder_decoder:
+            print("Is an encoder decoder ref model")
+            # 1. Get encoder outputs
+            ref_encoder_outputs = self.ref_model.get_encoder()(
+                batch["completion_input_ids"],
+                attention_mask=batch["completion_attention_mask"],
+                return_dict=True,
+                **model_kwargs,
+            )
+            # 2. Get decoder outputs
+            ref_outputs = self.ref_model.get_decoder()(
+                input_ids=model_kwargs["decoder_input_ids"],
+                encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
+                use_cache=False,
+                **model_kwargs,
+            )
+        else:
+            print("Is a decoder only ref model")
+            # skip the lm head and get the last hidden state
+            if hasattr(self.ref_model, "get_decoder"):
+                ref_base_model = self.ref_model.get_decoder()
+            else:
+                ref_base_model = getattr(self.ref_model, self.args.base_model_attribute_name)
+            ref_outputs = ref_base_model(
+                batch["completion_input_ids"],
+                attention_mask=batch["completion_attention_mask"],
+                use_cache=False,
+                **model_kwargs,
+            )
+        ref_lm_head = self.ref_model.get_output_embeddings()
+
+        
+        for k,v in batch.items():
+            print(k, type(v))
+            if k=="completion_labels":
+                print(v.shape)
+                print(v)
+            if k=="label":
+                print(k,v)
+
+        # print(outputs.device)
+        # print(ref_outputs.device)
+        # print(lm_head.device)
+        # print(ref_lm_head.device)
+        print(batch["completion_labels"].device)
+        # print(batch["label"].device)
+        preference_labels_tensor=torch.tensor(batch["label"], dtype=torch.bool).to(batch["completion_labels"].device)
+        print(preference_labels_tensor.device)
+        loss, chosen_dx, rejected_idx = self.kto_loss_fn(
+            _input=outputs.last_hidden_state[:, :-1] if not self.is_encoder_decoder else outputs.last_hidden_state,
+            lin_weight=lm_head.weight,
+            target=batch["completion_labels"][:, 1:],
+            bias=lm_head.bias if hasattr(lm_head, "bias") else None,
+            preference_labels=preference_labels_tensor,
+            ref_input=ref_outputs.last_hidden_state[:, :-1] if not self.is_encoder_decoder else outputs.last_hidden_state,
+            ref_weight=ref_lm_head.weight,
+            ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
+            kl=None,
+        )
+
+        print(loss)
+        print(chosen_dx)
+        print(rejected_idx)
+        exit(1)
+        completion_logps = self.get_batch_logps(
+            completion_logits,
+            batch["completion_labels"],
+            average_log_prob=False,
+            is_encoder_decoder=self.is_encoder_decoder,
+            label_pad_token_id=self.label_pad_token_id,
+        )
+
+        if completion_logps.shape[0] != len(batch["label"]):
+            raise ValueError(
+                "There is a mismatch between the number of examples in this batch and the number of "
+                "examples for which an output sequence was predicted."
+            )
+
+        chosen_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is True]
+        rejected_idx = [i for i in range(completion_logps.shape[0]) if batch["label"][i] is False]
+
+        chosen_logps = completion_logps[chosen_idx, ...]
+        rejected_logps = completion_logps[rejected_idx, ...]
+
+        chosen_logits = completion_logits[chosen_idx, ...]
+        rejected_logits = completion_logits[rejected_idx, ...]
+
+        if self.aux_loss_enabled:
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps, outputs.aux_loss)
+        else:
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, KL_logps)
+
+        print(KL_logps)
         exit(1)
         pass
 
@@ -1224,6 +1397,7 @@ class KTOTrainer(Trainer):
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
 
         if self.args.use_liger_loss:
+            print("self.calculate_KL:", self.calculate_KL)
             model_output = self._compute_loss_liger(model, batch)
             losses = model_output["losses"]
             policy_chosen_logits = model_output["policy_chosen_logits"]
