@@ -917,6 +917,7 @@ class GRPOTrainer(Trainer):
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
+            "prompt_inputs": prompt_inputs,
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
@@ -932,13 +933,23 @@ class GRPOTrainer(Trainer):
             raise ValueError("The GRPOTrainer does not support returning outputs")
         # Compute the per-token log probabilities for the model
 
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        prompt_inputs, prompt_ids, prompt_mask = inputs["prompt_inputs"], inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        if self.args.logit_computation_enable_prompt_caching is False:
+            per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        else:
+            mini_batch_size = self.args.logit_computation_mini_batch_size
+            per_token_logps = compute_logps_with_prompt_cache(
+                model=model,
+                prompt_inputs=prompt_inputs,
+                completion_ids=completion_ids,
+                mini_batch_size=mini_batch_size,
+                requires_grad_for_completion=True,
+            )
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
