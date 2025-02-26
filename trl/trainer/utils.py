@@ -1691,7 +1691,7 @@ def compute_logps_with_prompt_cache(
         mini_batch_size = completion_ids.size(0)
 
     # Forward pass over prompt tokens to get 2 things with torch.no_grad:
-    # 1) `past_key_values`` (KV cache)
+    # 1) `past_key_values` (KV cache)
     # 2) `prompt_last_logps` (the logprobs of the first completion token prediction)
     with torch.no_grad():
         prompt_out = model(**prompt_inputs, use_cache=True, num_logits_to_keep=1)

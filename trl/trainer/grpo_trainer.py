@@ -19,7 +19,6 @@ from collections import defaultdict
 from typing import Any, Callable, Optional, Sized, Union
 from unittest.mock import patch
 
-import time
 import torch
 import torch.utils.data
 import transformers
@@ -307,6 +306,16 @@ class GRPOTrainer(Trainer):
         # Enable gradient checkpointing if requested
         if args.gradient_checkpointing:
             model = self._enable_gradient_checkpointing(model, args)
+
+            # verify that `logit_computation_enable_prompt_caching` is set to False, otherwise we override it
+            if self.args.logit_computation_enable_prompt_caching == True:
+                warnings.warn(
+                    """
+                    `logit_computation_enable_prompt_caching` is set to True, but gradient checkpointing is
+                    enabled. These two are not compatible, and we will disable prompt caching.
+                    """
+                )
+                self.args.logit_computation_enable_prompt_caching = False
 
         # Reference model
         self.beta = args.beta
@@ -692,7 +701,6 @@ class GRPOTrainer(Trainer):
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
         # Generate completions using either vLLM or regular generation
-        start_time = time.perf_counter()
         if self.args.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
@@ -747,121 +755,67 @@ class GRPOTrainer(Trainer):
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
-        # # Get the logit computation mini-batch size from the config
-        # mini_batch_size = self.args.logit_computation_mini_batch_size
-        # start_time = time.perf_counter()
-        # if not self.gradient_checkpointing:
-        #     # Current policy logprobs (with grad)
-        #     per_token_logps = compute_logps_with_prompt_cache(
-        #         model=model,
-        #         prompt_inputs=prompt_inputs,
-        #         completion_ids=completion_ids,
-        #         mini_batch_size=mini_batch_size,
-        #         requires_grad_for_completion=True,
-        #     )
-
-        #     # Reference model logprobs (no grad)
-        #     if self.ref_model is not None:
-        #         ref_per_token_logps = compute_logps_with_prompt_cache(
-        #             model=self.ref_model,
-        #             prompt_inputs=prompt_inputs,
-        #             completion_ids=completion_ids,
-        #             mini_batch_size=mini_batch_size,
-        #             requires_grad_for_completion=False,
-        #         )
-        #     else:
-        #         with self.accelerator.unwrap_model(model).disable_adapter():
-        #             ref_per_token_logps = compute_logps_with_prompt_cache(
-        #                 model=model,
-        #                 prompt_inputs=prompt_inputs,
-        #                 completion_ids=completion_ids,
-        #                 mini_batch_size=mini_batch_size,
-        #                 requires_grad_for_completion=False,
-        #             )
-        
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         with torch.inference_mode():
-            # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
-            # computation here, and use per_token_logps.detach() instead.
-            if self.num_iterations > 1:
-                old_per_token_logps = self._get_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep
-                )
-            else:
-                old_per_token_logps = None
-
-            if self.beta == 0.0:
-                ref_per_token_logps = None
-            elif self.ref_model is not None:
-                ref_per_token_logps = self._get_per_token_logps(
-                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
-                )
-            else:
-                with self.accelerator.unwrap_model(self.model).disable_adapter():
-                    ref_per_token_logps = self._get_per_token_logps(
+            # Original approach
+            if self.args.logit_computation_enable_prompt_caching is False:
+                # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
+                # computation here, and use per_token_logps.detach() instead.
+                if self.num_iterations > 1:
+                    old_per_token_logps = self._get_per_token_logps(
                         self.model, prompt_completion_ids, attention_mask, logits_to_keep
                     )
-        # If gradient checkpointing is used, fall back to original implementation
-        else:
-            # Concatenate prompt_mask with completion_mask for logit computation
-            prompt_mask_repeated = prompt_inputs["attention_mask"].repeat_interleave(self.num_generations, dim=0)
-            attention_mask = torch.cat([prompt_mask_repeated, completion_mask], dim=1)  # (B*G, P+C)
+                else:
+                    old_per_token_logps = None
 
-            # Get the per-token log probabilities for the completions for the model and the reference model
-            def get_per_token_logps(model, input_ids, attention_mask, num_logits_to_keep, mini_batch_size):
-                mini_batch_size = input_ids.size(0) if mini_batch_size == 0 else mini_batch_size
-                per_token_logps = []
-                for i in range(0, input_ids.size(0), mini_batch_size):
-                    mini_batch_input_ids = input_ids[i : i + mini_batch_size, :]  # (B_mini, P+C)
-                    mini_batch_attention_mask = attention_mask[i : i + mini_batch_size, :]  # (B_mini, P+C)
-                    logits = model(
-                        input_ids=mini_batch_input_ids,
-                        attention_mask=mini_batch_attention_mask,
-                        num_logits_to_keep=num_logits_to_keep + 1,
-                    ).logits[:, -num_logits_to_keep - 1 : -1]  # (B_mini, P+C, Vocab_size)
-
-                    token_index = mini_batch_input_ids[:, -num_logits_to_keep:].unsqueeze(-1)  # (B_mini, P+C, 1)
-                    token_logits = torch.gather(logits, dim=-1, index=token_index).squeeze(-1)
-                    logsumexp_values = torch.stack([torch.logsumexp(l, dim=-1) for l in logits])
-                    del logits
-                    token_log_prob = token_logits - logsumexp_values
-                    per_token_logps.append(token_log_prob)
-                return torch.cat(per_token_logps, dim=0)
-
-            num_logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-            per_token_logps = get_per_token_logps(
-                model=model,
-                input_ids=prompt_completion_ids,
-                attention_mask=attention_mask,
-                num_logits_to_keep=num_logits_to_keep,
-                mini_batch_size=mini_batch_size,
-            )
-
-            with torch.inference_mode():
-                if self.ref_model is not None:
-                    ref_per_token_logps = get_per_token_logps(
-                        model=self.ref_model,
-                        input_ids=prompt_completion_ids,
-                        attention_mask=attention_mask,
-                        num_logits_to_keep=num_logits_to_keep,
-                        mini_batch_size=mini_batch_size,
+                if self.beta == 0.0:
+                    ref_per_token_logps = None
+                elif self.ref_model is not None:
+                    ref_per_token_logps = self._get_per_token_logps(
+                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
                     )
                 else:
-                    with self.accelerator.unwrap_model(model).disable_adapter():
-                        ref_per_token_logps = get_per_token_logps(
-                            model=model,
-                            input_ids=prompt_completion_ids,
-                            attention_mask=attention_mask,
-                            num_logits_to_keep=num_logits_to_keep,
-                            mini_batch_size=mini_batch_size,
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        ref_per_token_logps = self._get_per_token_logps(
+                            self.model, prompt_completion_ids, attention_mask, logits_to_keep
                         )
-        end_time = time.perf_counter()
-        if self.accelerator.is_main_process:
-            print(f"Logits computation took {end_time - start_time:0.4f} seconds")
+            # Use the prompt caching method
+            else:
+                mini_batch_size = self.args.logit_computation_mini_batch_size
+                if self.num_iterations > 1:
+                    old_per_token_logps = compute_logps_with_prompt_cache(
+                        model=self.model,
+                        prompt_inputs=prompt_inputs,
+                        completion_ids=completion_ids,
+                        mini_batch_size=mini_batch_size,
+                        requires_grad_for_completion=True,
+                    )
+                else:
+                    old_per_token_logps = None
+
+                if self.beta == 0.0:
+                    ref_per_token_logps = None
+                elif self.ref_model is not None:
+                    ref_per_token_logps = compute_logps_with_prompt_cache(
+                        model=self.ref_model,
+                        prompt_inputs=prompt_inputs,
+                        completion_ids=completion_ids,
+                        mini_batch_size=mini_batch_size,
+                        requires_grad_for_completion=False,
+                    )
+                else:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        ref_per_token_logps = compute_logps_with_prompt_cache(
+                            model=self.model,
+                            prompt_inputs=prompt_inputs,
+                            completion_ids=completion_ids,
+                            mini_batch_size=mini_batch_size,
+                            requires_grad_for_completion=False,
+                        )
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)

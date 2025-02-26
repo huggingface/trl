@@ -113,12 +113,17 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
+        logit_computation_enable_prompt_caching (`bool`, *optional*, defaults to `False`):
+            Whether to re-use the KV cache of the prompt when computing logits. Since We only need the logprobs of the
+            completion tokens for reward/loss calculation and the prompt is "fixed" for all `G` generations, a single
+            forward pass on the fixed prompt tokens is enough and we can re-use the cached kv cache by broadcasting.
+            This saves a lot of VRAM especially if the prompt part is long. Not compatible with gradient checkpointing.
         logit_computation_mini_batch_size (`int`, *optional*, defaults to `0`):
             Number of rows of the completion logit tensors to process at a time. 0 means no mini-batching, which is the
             default. Using a low value will reduce memory usage with tradeoff of slower computation. However, since the
             training speed bottleneck occurs in the generation step, it is recommended to utilize this argument, especially
             when dealing with larger LLMs."
-    
+
         > Parameters that control the logging
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
@@ -287,6 +292,17 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
+    )
+
+
+    logit_computation_enable_prompt_caching: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to re-use the KV cache of the prompt when computing logits. Since We only need the logprobs of the "
+            "completion tokens for reward/loss calculation and the prompt is 'fixed' for all `G` generations, a single "
+            "forward pass on the fixed prompt tokens is enough and we can re-use the cached kv cache by broadcasting. "
+            "This saves a lot of VRAM especially if the prompt part is long. Not compatible with gradient checkpointing."
         },
     )
     logit_computation_mini_batch_size: int = field(
