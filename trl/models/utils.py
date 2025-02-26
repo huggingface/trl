@@ -174,7 +174,11 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer
     else:
         raise NotImplementedError(f"Didn't yet handle optimizer {model.optimizer}.")
-    optimizer_offload._register_hooks_recursively(optimizer_offload.module)
+    if deepspeed.__version__.split(".") >= ("0", "16", "4"):
+        # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
+        optimizer_offload._register_deepspeed_module(optimizer_offload.module)
+    else:
+        optimizer_offload._register_hooks_recursively(optimizer_offload.module)
 
 
 @contextmanager
