@@ -488,6 +488,8 @@ class GRPOTrainer(Trainer):
                 # Guided decoding, if enabled
                 if args.vllm_guided_decoding_regex is not None:
                     guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
+                elif args.vllm_guided_decoding_json is not None:
+                    guided_decoding = GuidedDecodingParams(backend="outlines", json=args.vll_guided_decoding_json)
                 else:
                     guided_decoding = None
 
