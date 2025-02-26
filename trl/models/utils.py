@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, Union
 
 from accelerate.utils import is_deepspeed_available
+from packaging import version
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
@@ -174,7 +175,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer
     else:
         raise NotImplementedError(f"Didn't yet handle optimizer {model.optimizer}.")
-    if deepspeed.__version__.split(".") >= ("0", "16", "4"):
+    if version.parse(deepspeed.__version__) >= version.parse("0.16.4"):
         # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
         optimizer_offload._register_deepspeed_module(optimizer_offload.module)
     else:
