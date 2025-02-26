@@ -141,6 +141,8 @@ def remove_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer.parameter_offload
     elif model.optimizer is not None:
         optimizer_offload = model.optimizer
+    else:
+        raise NotImplementedError(f"Didn't yet handle optimizer {model.optimizer}.")
 
     for param in iter_params(optimizer_offload.module, recurse=True):
         param.ds_active_sub_modules.clear()
@@ -170,6 +172,8 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer.parameter_offload
     elif model.optimizer is not None:
         optimizer_offload = model.optimizer
+    else:
+        raise NotImplementedError(f"Didn't yet handle optimizer {model.optimizer}.")
     optimizer_offload._register_hooks_recursively(optimizer_offload.module)
 
 
