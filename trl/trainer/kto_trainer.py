@@ -1290,6 +1290,8 @@ class KTOTrainer(Trainer):
             )
         lm_head = model.get_output_embeddings()
 
+        print("batch_completion_input_ids.shape: ",batch["completion_input_ids"].shape)
+
         # For reference model
         if self.is_encoder_decoder:
             print("Is an encoder decoder ref model")
@@ -1322,15 +1324,8 @@ class KTOTrainer(Trainer):
             )
         ref_lm_head = self.ref_model.get_output_embeddings()
 
-        # print(outputs.device)
-        # print(ref_outputs.device)
-        # print(lm_head.device)
-        # print(ref_lm_head.device)
-        print(batch["completion_labels"].device)
-        # print(batch["label"].device)
         preference_labels_tensor=torch.tensor(batch["label"], dtype=torch.bool).to(batch["completion_labels"].device)
-        print(preference_labels_tensor.device)
-        loss, chosen_logps, rejected_logps, chosen_rewards, rejected_rewards = self.kto_loss_fn(
+        loss, (chosen_logps, rejected_logps, chosen_logits_sum, rejected_logits_sum, chosen_rewards, rejected_rewards) = self.kto_loss_fn(
             _input=outputs.last_hidden_state[:, :-1] if not self.is_encoder_decoder else outputs.last_hidden_state,
             lin_weight=lm_head.weight,
             target=batch["completion_labels"][:, 1:],
@@ -1344,8 +1339,8 @@ class KTOTrainer(Trainer):
 
         model_output = {}
         model_output["losses"] = loss
-        model_output["policy_chosen_logits"] = torch.zeros((1,1)) #TODO
-        model_output["policy_rejected_logits"] = torch.zeros((1,1)) #TODO
+        model_output["policy_chosen_logits"] = chosen_logits_sum
+        model_output["policy_rejected_logits"] = rejected_logits_sum
         model_output["policy_chosen_logps"] = chosen_logps
         model_output["policy_rejected_logps"] = rejected_logps
         model_output["chosen_rewards"] = chosen_rewards
@@ -1374,7 +1369,7 @@ class KTOTrainer(Trainer):
             rejected_rewards = model_output["rejected_rewards"]
             kl = model_output["kl"]
 
-            print(model_output)
+            # print(model_output)
         else:
             forward_output = self.forward(model, batch)
             (
@@ -1387,10 +1382,7 @@ class KTOTrainer(Trainer):
             if self.aux_loss_enabled:
                 aux_loss = forward_output[5]
             print("Non liger case")
-            print("policy_chosen_logps: ", policy_chosen_logps)
-            print("policy_rejected_logps: ", policy_rejected_logps)
-            print(policy_chosen_logits.shape)
-
+            
             # if reference_logps in batch use them, otherwise use the reference model
             if "reference_logps" in batch:
                 chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is True]
@@ -1430,12 +1422,6 @@ class KTOTrainer(Trainer):
                 reference_rejected_logps,
                 reference_KL_logps,
             )
-
-            
-            # print("losses: ", losses)
-            print("chosen_rewards: ", chosen_rewards)
-            print("rejected_rewards: ", rejected_rewards)
-            # print("kl: ", kl)
     
         metrics["kl"] = kl.item()
         num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
@@ -1472,6 +1458,7 @@ class KTOTrainer(Trainer):
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
         print("loss: ", loss)
+        print(metrics)
         return loss, metrics
 
     def compute_loss(
