@@ -368,20 +368,18 @@ class TrainerArgTester(unittest.TestCase):
                 tmp_dir,
                 dataset_text_field="dummy_text_field",
                 packing=True,
-                max_seq_length=256,
+                max_length=256,
                 dataset_num_proc=4,
                 dataset_batch_size=512,
                 neftune_noise_alpha=0.1,
                 model_init_kwargs={"trust_remote_code": True},
                 dataset_kwargs={"append_concat_token": True, "skip_prepare_dataset": True},
                 eval_packing=True,
-                num_of_sequences=32,
-                chars_per_token=4.2,
             )
             trainer = SFTTrainer(model_id, args=training_args, train_dataset=dataset)
             self.assertEqual(trainer.args.dataset_text_field, "dummy_text_field")
             self.assertEqual(trainer.args.packing, True)
-            self.assertEqual(trainer.args.max_seq_length, 256)
+            self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.dataset_num_proc, 4)
             self.assertEqual(trainer.args.dataset_batch_size, 512)
             self.assertEqual(trainer.args.neftune_noise_alpha, 0.1)
@@ -389,8 +387,6 @@ class TrainerArgTester(unittest.TestCase):
             self.assertIn("append_concat_token", trainer.args.dataset_kwargs)
             self.assertEqual(trainer.args.dataset_kwargs["append_concat_token"], True)
             self.assertEqual(trainer.args.eval_packing, True)
-            self.assertEqual(trainer.args.num_of_sequences, 32)
-            self.assertEqual(trainer.args.chars_per_token, 4.2)
 
     @parameterized.expand([(False,), (True,)])
     def test_xpo(self, alpha_list):
