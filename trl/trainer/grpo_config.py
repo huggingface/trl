@@ -295,7 +295,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
 
-
+    # Parameters that control logit computation
     logit_computation_enable_prompt_caching: bool = field(
         default=False,
         metadata={
