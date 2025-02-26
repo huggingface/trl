@@ -62,6 +62,10 @@ class GRPOConfig(TrainingArguments):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept unused for
             training, as vLLM will require one for generation. vLLM must be installed (`pip install vllm`).
+            ensure that `vllm_worker_num + num_processes <= world_size`.
+        vllm_worker_num (`int`, *optional*, defaults to `1`):
+            Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept
+            the number of process used for distributed training (i.e., `--num_processes`). In addition, please
         vllm_device (`str`, *optional*, defaults to `"auto"`):
             Device where vLLM generation will run, e.g. `"cuda:1"`. If set to `"auto"` (default), the system will
             automatically select the next available GPU after the last one used for training. This assumes that

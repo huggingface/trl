@@ -662,7 +662,7 @@ class GRPOTrainer(Trainer):
                 unwrapped_model.unmerge_adapter()
 
     def _split_vllm_inputs(self, ordered_set_of_prompts, n_splits):
-        size = (len(ordered_set_of_prompts) + 1) // n_splits
+        size = (len(ordered_set_of_prompts) + n_splits - 1) // n_splits
         data = [ordered_set_of_prompts[size * i : size * (i + 1)] for i in range(n_splits)]
         return data
 
