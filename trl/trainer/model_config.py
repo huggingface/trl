@@ -62,6 +62,13 @@ class ModelConfig:
         use_rslora (`bool`, *optional*, defaults to `False`):
             Whether to use Rank-Stabilized LoRA, which sets the adapter scaling factor to `lora_alpha/√r`, instead of
             the original default value of `lora_alpha/r`.
+        use_dora (`bool`, *optional*, defaults to `False`):
+            Enable [Weight-Decomposed Low-Rank Adaptation (DoRA)](https://huggingface.co/papers/2402.09353). This
+            technique decomposes the updates of the weights into two parts, magnitude and direction. Direction is
+            handled by normal LoRA, whereas the magnitude is handled by a separate learnable parameter. This can
+            improve the performance of LoRA, especially at low ranks. Right now, DoRA only supports linear and Conv2D
+            layers. DoRA introduces a bigger overhead than pure LoRA, so it is recommended to merge weights for
+            inference.
         load_in_8bit (`bool`, *optional*, defaults to `False`):
             Whether to use 8 bit precision for the base model. Works only with LoRA.
         load_in_4bit (`bool`, *optional*, defaults to `False`):
@@ -135,6 +142,16 @@ class ModelConfig:
         metadata={
             "help": "Whether to use Rank-Stabilized LoRA, which sets the adapter scaling factor to `lora_alpha/√r`, "
             "instead of the original default value of `lora_alpha/r`."
+        },
+    )
+    use_dora: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable Weight-Decomposed Low-Rank Adaptation (DoRA). This technique decomposes the updates of "
+            "the weights into two parts, magnitude and direction. Direction is handled by normal LoRA, whereas the "
+            "magnitude is handled by a separate learnable parameter. This can improve the performance of LoRA, "
+            "especially at low ranks. Right now, DoRA only supports linear and Conv2D layers. DoRA introduces a "
+            "bigger overhead than pure LoRA, so it is recommended to merge weights for inference."
         },
     )
     load_in_8bit: bool = field(
