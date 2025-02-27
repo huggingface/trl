@@ -1312,16 +1312,20 @@ class KTOTrainer(Trainer):
             kl=kl,
         )
 
-        model_output = {}
-        model_output["losses"] = loss
-        model_output["policy_chosen_logits"] = chosen_logits_sum
-        model_output["policy_rejected_logits"] = rejected_logits_sum
-        model_output["policy_chosen_logps"] = chosen_logps
-        model_output["policy_rejected_logps"] = rejected_logps
-        model_output["chosen_rewards"] = chosen_rewards
-        model_output["rejected_rewards"] = rejected_rewards
-        model_output["kl"] = kl
-        return model_output
+        output = {
+            "loss": loss,
+            "chosen_logits_sum": chosen_logits_sum,
+            "rejected_logits_sum": rejected_logits_sum,
+            "chosen_logps": chosen_logps,
+            "rejected_logps": rejected_logps,
+            "chosen_rewards": chosen_rewards,
+            "rejected_rewards": rejected_rewards,
+            "kl": kl,
+        }
+        if self.aux_loss_enabled:
+            output["aux_loss"] = outputs.aux_loss
+
+        return output
         
 
     def get_batch_loss_metrics(
@@ -1343,6 +1347,8 @@ class KTOTrainer(Trainer):
             chosen_rewards = model_output["chosen_rewards"]
             rejected_rewards = model_output["rejected_rewards"]
             kl = model_output["kl"]
+            if self.aux_loss_enabled:
+                aux_loss = model_output["aux_loss"]
         else:
             forward_output = self.forward(model, batch)
             (
@@ -1429,8 +1435,7 @@ class KTOTrainer(Trainer):
         loss = losses.nanmean()
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
-        print("loss: ", loss)
-        print("metrics: ", metrics)
+
         return loss, metrics
 
     def compute_loss(
