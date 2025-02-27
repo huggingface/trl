@@ -23,6 +23,8 @@
     title: Reducing Memory Usage
   - local: speeding_up_training
     title: Speeding Up Training
+  - local: distributing_training
+    title: Distributing Training
   - local: use_model
     title: Using Trained Models
   title: How-to guides
