@@ -481,24 +481,21 @@ class GRPOTrainer(Trainer):
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
                 )
 
-                # For Ascend NPU (torch-npu), collective communication requires the establishment of a communication group,
-                # and different processes must hold the same group number. However, multiple process groups will be created
-                # internally within vLLM. This will cause the group id of the communication group on rank 0 to be different from
-                # that of other ranks, causing backward to hang on because the communication domain cannot be established. So
-                # we need to patch it to make sure the group id of different ranks in the training phase are the same.
+                # For Ascend NPU (torch-npu), collective communication requires the establishment of a communication
+                # group, and different processes must hold the same group number. However, multiple process groups will
+                # be created internally within vLLM. This will cause the group id of the communication group on rank 0
+                # to be different from that of other ranks, causing backward to hang on because the communication
+                # domain cannot be established. So we need to patch it to make sure the group id of different ranks in
+                # the training phase are the same.
                 @contextlib.contextmanager
                 def new_group_context():
-                    original_new_group = torch.distributed.new_group
+                    new_group = torch.distributed.new_group
                     try:
-                        torch.distributed.new_group = functools.partial(
-                            original_new_group, use_local_synchronization=True
-                        )
-                        torch.npu.mem_get_info = functools.partial(
-                            torch.npu.mem_get_info, device=vllm_device
-                        )
+                        torch.distributed.new_group = functools.partial(new_group, use_local_synchronization=True)
+                        torch.npu.mem_get_info = functools.partial(torch.npu.mem_get_info, device=vllm_device)
                         yield
                     finally:
-                        torch.distributed.new_group = original_new_group
+                        torch.distributed.new_group = new_group
 
                 new_group_patch = new_group_context() if device_type == "npu" else contextlib.nullcontext()
                 with world_size_patch, profiling_patch, new_group_patch:
