@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Dict, Any, Union
 
 from transformers import TrainingArguments
 
@@ -84,6 +84,8 @@ class GRPOConfig(TrainingArguments):
             support this feature.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_guided_decoding_json (`str` or `None`, *optional*, defaults to `None`):
+            JSON for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
         > Parameters that control the training
 
@@ -221,6 +223,10 @@ class GRPOConfig(TrainingArguments):
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+    )
+    vllm_guided_decoding_json: Optional[Union[str, Dict]] = field(
+        default=None,
+        metadata={"help": "JSON for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
 
     # Parameters that control the training
