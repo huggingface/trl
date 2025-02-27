@@ -157,7 +157,7 @@ text_env = TextEnvironment(
     exact_match_reward,
     prompt,
     generation_kwargs=generation_kwargs,
-    max_tool_reponse=400,
+    max_tool_response=400,
 )
 
 

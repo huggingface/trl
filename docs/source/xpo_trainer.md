@@ -50,9 +50,9 @@ accelerate launch train_xpo.py
 
 Distributed across 8 GPUs, the training takes approximately 1 hour.
 
-To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-XPO) performs, you can use the [TRL Chat CLI](clis#chat-interface).
+To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-XPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ trl chat --model_name_or_path trl-lib/Qwen2-0.5B-XPO
+<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-XPO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 

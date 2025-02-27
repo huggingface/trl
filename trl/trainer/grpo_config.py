@@ -79,6 +79,9 @@ class GRPOConfig(TrainingArguments):
             If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
             `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
             context size, which might be much larger than the KV cache, leading to inefficiencies.
+        vllm_enable_prefix_caching (`bool`, *optional*, defaults to `True`):
+            Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the model and the hardware
+            support this feature.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
@@ -101,20 +104,20 @@ class GRPOConfig(TrainingArguments):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
-        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.9`):
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
             between the current policy and the previous reference policy during updates. The reference policy is
             updated according to the equation: `π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you
             must set `sync_ref_model=True`.
-        ref_model_sync_steps (`int`, *optional*, defaults to `64`):
+        ref_model_sync_steps (`int`, *optional*, defaults to `512`):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
 
         > Parameters that control the logging
-
         log_completions (`bool`, *optional*, defaults to `False`):
-            Whether to log the completions during training.
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
+            installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
     """
 
     # Parameters that control the model and reference model
@@ -208,6 +211,13 @@ class GRPOConfig(TrainingArguments):
             "context size, which might be much larger than the KV cache, leading to inefficiencies."
         },
     )
+    vllm_enable_prefix_caching: Optional[bool] = field(
+        default=True,
+        metadata={
+            "help": "Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the model and "
+            "the hardware support this feature."
+        },
+    )
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
@@ -251,7 +261,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     ref_model_mixup_alpha: float = field(
-        default=0.9,
+        default=0.6,
         metadata={
             "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
             "previous reference policy during updates. The reference policy is updated according to the equation: "
@@ -259,7 +269,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     ref_model_sync_steps: int = field(
-        default=64,
+        default=512,
         metadata={
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
@@ -269,5 +279,8 @@ class GRPOConfig(TrainingArguments):
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
-        metadata={"help": "Whether to log the completions during training."},
+        metadata={
+            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
     )
