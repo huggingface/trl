@@ -137,6 +137,18 @@ class ModelConfig:
             "instead of the original default value of `lora_alpha/r`."
         },
     )
+    use_dora: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Enable <a href='https://arxiv.org/abs/2402.09353'>'Weight-Decomposed Low-Rank Adaptation' (DoRA)</a>. This technique decomposes the updates of the "
+                "weights into two parts, magnitude and direction. Direction is handled by normal LoRA, whereas the "
+                "magnitude is handled by a separate learnable parameter. This can improve the performance of LoRA, "
+                "especially at low ranks. Right now, DoRA only supports linear and Conv2D layers. DoRA introduces a bigger"
+                "overhead than pure LoRA, so it is recommended to merge weights for inference."
+            )
+        },
+    )
     load_in_8bit: bool = field(
         default=False,
         metadata={"help": "Whether to use 8 bit precision for the base model. Works only with LoRA."},
