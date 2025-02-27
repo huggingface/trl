@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import functools
 import time
 
@@ -20,22 +21,31 @@ from transformers import is_wandb_available
 
 if is_wandb_available():
     import wandb
+    
+
+@contextlib.contextmanager
+def profiling_context(instance, name):
+    """
+    A context manager function for profiling a block of code.
+    Can also be used as a decorator.
+    """
+    start_time = time.perf_counter()
+    yield
+    end_time = time.perf_counter()
+    duration = end_time - start_time
+
+    if "wandb" in instance.args.report_to and wandb.run is not None and instance.accelerator.is_main_process:
+        wandb.log({f"profiling/Time taken: {instance.__class__.__name__}.{name}": duration})
 
 
 def profiling_decorator(func):
     """
-    Decorator to profile a function and log the time taken to execute it.
+    Decorator to profile a function and log execution time using profiling_context.
     """
 
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        start_time = time.perf_counter()
-        result = func(self, *args, **kwargs)
-        end_time = time.perf_counter()
-        duration = end_time - start_time
-
-        if "wandb" in self.args.report_to and wandb.run is not None and self.accelerator.is_main_process:
-            wandb.log({f"profiling/Time taken: {self.__class__.__name__}.{func.__name__}": duration})
-        return result
+        with profiling_context(self, func.__name__):
+            return func(self, *args, **kwargs)
 
     return wrapper
