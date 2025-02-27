@@ -19,7 +19,7 @@ from trl import SFTConfig, SFTTrainer
 dataset = load_dataset("stanfordnlp/imdb", split="train")
 
 training_args = SFTConfig(
-    max_seq_length=512,
+    max_length=512,
     output_dir="/tmp",
 )
 trainer = SFTTrainer(
@@ -29,7 +29,7 @@ trainer = SFTTrainer(
 )
 trainer.train()
 ```
-Make sure to pass the correct value for `max_seq_length` as the default value will be set to `min(tokenizer.model_max_length, 1024)`.
+Make sure to pass the correct value for `max_length` as the default value will be set to `min(tokenizer.model_max_length, 1024)`.
 
 You can also construct a model outside of the trainer and pass it as follows:
 
@@ -550,12 +550,12 @@ import torch
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastLanguageModel
 
-max_seq_length = 2048 # Supports automatic RoPE Scaling, so choose any number
+max_length = 2048 # Supports automatic RoPE Scaling, so choose any number
 
 # Load model
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="unsloth/mistral-7b",
-    max_seq_length=max_seq_length,
+    max_seq_length=max_length,
     dtype=None,  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
     load_in_4bit=True,  # Use 4bit quantization to reduce memory usage. Can be False
     # token = "hf_...", # use one if using gated models like meta-llama/Llama-2-7b-hf
@@ -581,7 +581,7 @@ model = FastLanguageModel.get_peft_model(
     random_state=3407,
 )
 
-training_args = SFTConfig(output_dir="./output", max_seq_length=max_seq_length)
+training_args = SFTConfig(output_dir="./output", max_length=max_length)
 
 trainer = SFTTrainer(
     model=model,
@@ -624,7 +624,7 @@ To learn more about Liger-Kernel, visit their [official repository](https://gith
 
 Pay attention to the following best practices when training a model with that trainer:
 
-- [`SFTTrainer`] always truncates by default the sequences to the `max_seq_length` argument of the [`SFTConfig`]. If none is passed, the trainer will retrieve that value from the tokenizer. Some tokenizers do not provide a default value, so there is a check to retrieve the minimum between 1024 and that value. Make sure to check it before training.
+- [`SFTTrainer`] always truncates by default the sequences to the `max_length` argument of the [`SFTConfig`]. If none is passed, the trainer will retrieve that value from the tokenizer. Some tokenizers do not provide a default value, so there is a check to retrieve the minimum between 1024 and that value. Make sure to check it before training.
 - For training adapters in 8bit, you might need to tweak the arguments of the `prepare_model_for_kbit_training` method from PEFT, hence we advise users to use `prepare_in_int8_kwargs` field, or create the `PeftModel` outside the [`SFTTrainer`] and pass it.
 - For a more memory-efficient training using adapters, you can load the base model in 8bit, for that simply add `load_in_8bit` argument when creating the [`SFTTrainer`], or create a base model in 8bit outside the trainer and pass it.
 - If you create a model outside the trainer, make sure to not pass to the trainer any additional keyword arguments that are relative to `from_pretrained()` method.

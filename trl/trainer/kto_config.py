@@ -28,7 +28,7 @@ class KTOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        learning_rate (`float`, *optional*, defaults to `5e-7`):
+        learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
         max_length (`int` or `None`, *optional*, defaults to `1024`):
