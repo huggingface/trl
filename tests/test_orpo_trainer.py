@@ -147,7 +147,6 @@ class ORPOTrainerTester(unittest.TestCase):
                     if param.sum() != 0:  # ignore 0 biases
                         self.assertFalse(torch.equal(param, new_param))
 
-
     def test_compute_metrics(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
