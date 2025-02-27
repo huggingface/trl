@@ -446,7 +446,7 @@ class GRPOTrainer(Trainer):
                 vllm_device = self.args.vllm_device
                 if vllm_device == "auto":
                     if torch.cuda.device_count() == 1:
-                        vllm_device = "cuda:0"  # particular case when training with onyl 1 GPU: share it
+                        vllm_device = "cuda:0"  # particular case when training with only 1 GPU: share it
                     else:
                         vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
                 # Check that the requested device is available
