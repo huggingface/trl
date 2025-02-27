@@ -786,7 +786,11 @@ class GRPOTrainer(Trainer):
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
-            with profiling_context(self, reward_func.__name__):
+            if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
+                reward_func_name = reward_func.config._name_or_path.split("/")[-1]
+            else:
+                reward_func_name = reward_func.__name__
+            with profiling_context(self, reward_func_name):
                 if isinstance(
                     reward_func, nn.Module
                 ):  # Module instead of PretrainedModel for compat with compiled models
