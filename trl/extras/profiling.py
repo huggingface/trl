@@ -24,7 +24,7 @@ if is_wandb_available():
 
 
 @contextlib.contextmanager
-def profiling_context(instance, name):
+def profiling_context(trainer, name):
     """
     A context manager function for profiling a block of code.
     Can also be used as a decorator.
