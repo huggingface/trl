@@ -496,6 +496,19 @@ class GRPOTrainer(Trainer):
                     model.name_or_path,
                 )
                 try:
+                    print(
+                        f"[DEBUG] Initializing SGLang with model path: {model.name_or_path}"
+                    )
+                    print(
+                        f"[DEBUG] Available CUDA devices: {torch.cuda.device_count()}"
+                    )
+                    print(
+                        f"[DEBUG] Target GPU memory fraction: {args.sglang_gpu_memory_utilization}"
+                    )
+                    print(
+                        f"[DEBUG] Memory stats for GPU 3: {torch.cuda.memory_summary(3)}"
+                    )
+
                     self.engine = sgl.Engine(
                         model_path=model.name_or_path,
                         mem_fraction_static=args.sglang_gpu_memory_utilization,
