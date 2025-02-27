@@ -25,10 +25,113 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_vllm_available
+from trl.trainer.grpo_trainer import RepeatRandomSampler
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
+
+
+class RepeatRandomSamplerTester(unittest.TestCase):
+    def test_sampler(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2)
+        # Should output something like [4, 4, 3, 3, 0, 0, 1, 1, 2, 2, 6, 6, 5, 5]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+        # Check that each element is repeated twice
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+
+    def test_sampler_no_repeat(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatRandomSampler(dataset, mini_repeat_count=1)
+        # Should output something like [4, 3, 0, 1, 2, 6, 5]
+        sampled = list(sampler)
+        # Check that the length is the same
+        assert len(sampled) == len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+
+    def test_sampler_with_batch_size(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g", "h"]
+        sampler = RepeatRandomSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6, 5, 7, 5, 7]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+        # Check that each element is repeated as expected
+        assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
+
+    def test_sampler_with_batch_size_and_drop(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatRandomSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * (
+            len(dataset) - 1
+        )  # one element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_1(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
+        # Should output something like [4, 4, 3, 3, 0, 0, 4, 4, 3, 3, 0, 0,
+        #                               1, 1, 2, 2, 6, 6, 1, 1, 2, 2, 6, 6]
+        sampled = list(sampler)
+        # Check that the length is quadrupled
+        assert len(sampled) == 4 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        # Check that the batch is repeated as expected
+        assert sampled[0:6] == sampled[6:12]
+        assert sampled[12:18] == sampled[18:24]
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_2(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatRandomSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
+        # Should output something like [4, 4, 4, 3, 3, 3, 4, 4, 4, 3, 3, 3,
+        #                               0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1,
+        #                               2, 2, 2, 6, 6, 6, 2, 2, 2, 6, 6, 6]
+        sampled = list(sampler)
+        # Check that the length is sextupled
+        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i] == sampled[i + 1] == sampled[i + 2] for i in range(0, len(sampled), 3))
+        # Check that the batch is repeated as expected
+        assert sampled[0:6] == sampled[6:12]
+        assert sampled[12:18] == sampled[18:24]
+        assert sampled[24:30] == sampled[30:36]
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_3(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
+        # Should output something like [4, 4, 3, 3, 4, 4, 3, 3, 4, 4, 3, 3,
+        #                               0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
+        #                               2, 2, 6, 6, 2, 2, 6, 6, 2, 2, 6, 6]
+        sampled = list(sampler)
+        # Check that the length is sextupled
+        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
+        assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        # Check that the batch is repeated as expected
+        assert sampled[0:4] == sampled[4:8] == sampled[8:12]
+        assert sampled[12:16] == sampled[16:20] == sampled[20:24]
+        assert sampled[24:28] == sampled[28:32] == sampled[32:36]
 
 
 class GRPOTrainerTester(unittest.TestCase):
@@ -95,6 +198,37 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             trainer.train()
+
+    def test_training_multiple_iterations(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                num_iterations=2,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     @require_peft
     def test_training_peft(self):
