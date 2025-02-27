@@ -1186,6 +1186,7 @@ class KTOTrainer(Trainer):
         return losses, chosen_rewards, rejected_rewards, kl
 
     def _compute_kl_logps(self, model, batch):
+        """Compute KL log probabilities for a given batch."""
         KL_logps = None
         if self.calculate_KL:
             KL_logps = None
@@ -1218,6 +1219,27 @@ class KTOTrainer(Trainer):
         
 
     def _compute_loss_liger(self, model, batch):
+        """
+        Compute the KTO loss using the Liger-Kernel's LigerFusedLinearKTOLoss.
+
+        Args:
+            model: The policy model used for generating log probabilities and outputs. It could be an encoder-decoder model or a regular language model.
+            batch: A dictionary containing the input data and labels for the batch.
+
+        Returns:
+            A dictionary containing the following keys:
+                - "loss": The computed KTO loss for the batch.
+                - "chosen_logits_sum": Sum of the logits for the chosen responses from the policy model.
+                - "rejected_logits_sum": Sum of the logits for the rejected responses from the policy model.
+                - "chosen_logps": Log probabilities of the chosen responses from the policy model.
+                - "rejected_logps": Log probabilities of the rejected responses from the policy model.
+                - "chosen_rewards": Rewards for the chosen responses.
+                - "rejected_rewards": Rewards for the rejected responses.
+                - "kl": The KL divergence between the policy and reference models (detached).
+
+            If auxiliary loss is enabled, the dictionary will also include:
+                - "aux_loss": The auxiliary loss from the model outputs.
+        """
         policy_KL_logps = self._compute_kl_logps(model, batch)
         reference_KL_logps = self._compute_kl_logps(self.ref_model, batch)
         if self.calculate_KL:
