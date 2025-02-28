@@ -36,7 +36,7 @@ To create the package for PyPI.
 
 2. Commit these changes: "git commit -m 'Release: VERSION'"
 
-3. Add a tag in git to mark the release: "git tag VERSION -m 'Add tag VERSION for pypi'"
+3. Add a tag in git to mark the release: "git tag VERSION -m 'Add tag VERSION for PyPI'"
    Push the tag to remote: git push --tags origin main
 
 4. Build both the sources and the wheel. Do not change anything in setup.py between
@@ -55,9 +55,7 @@ To create the package for PyPI.
    twine upload dist/* -r pypitest --repository-url=https://test.pypi.org/legacy/
 
    Check that you can install it in a virtualenv/notebook by running:
-   pip install huggingface_hub fsspec aiohttp
-   pip install -U tqdm
-   pip install -i https://testpypi.python.org/pypi evaluate
+   pip install -i https://testpypi.python.org/pypi trl
 
 6. Upload the final version to actual PyPI:
    twine upload dist/* -r pypi
@@ -85,13 +83,16 @@ EXTRAS = {
     "diffusers": ["diffusers>=0.18.0"],
     "judges": ["openai>=1.23.2", "llm-blender>=0.0.2"],
     # liger-kernel depends on triton, which is only available on Linux https://github.com/triton-lang/triton#compatibility
-    "liger": ["liger-kernel>=0.4.0; sys_platform != 'win32'"],
+    # can be set to >=0.5.3 when https://github.com/linkedin/Liger-Kernel/issues/586 is fixed
+    "liger": ["liger-kernel==0.5.3; sys_platform != 'win32'"],
     "mergekit": ["mergekit>=0.0.5.1"],
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],
     "scikit": ["scikit-learn"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
-    "vllm": ["vllm>=0.7.1; sys_platform != 'win32'"],  # vllm is not available on Windows
+    # vllm is not available on Windows
+    # vllm 0.7.3 causes hanging while gathering. temporary pinning the version until the issue is resolved
+    "vllm": ["vllm==0.7.2; sys_platform != 'win32'"],
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
@@ -132,7 +133,7 @@ setup(
     zip_safe=False,
     version=__version__,
     description="Train transformer language models with reinforcement learning.",
-    keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
+    keywords="transformers, huggingface, language modeling, post-training, rlhf, sft, dpo, grpo",
     author="Leandro von Werra",
     author_email="leandro.vonwerra@gmail.com",
 )
