@@ -92,7 +92,7 @@ class GRPOConfig(TrainingArguments):
             [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
-            speed.
+            speed, but may be numerically unstable for long training runs.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
@@ -235,7 +235,7 @@ class GRPOConfig(TrainingArguments):
         default=0.04,
         metadata={
             "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
-            "training speed."
+            "training speed, but may be numerically unstable for long training runs."
         },
     )
     num_iterations: int = field(
