@@ -806,13 +806,6 @@ class GRPOTrainerTester(unittest.TestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            # Define additional generation kwargs
-            additional_kwargs = {
-                "top_p": 0.9,
-                "top_k": 50,
-                "repetition_penalty": 1.2,
-            }
-
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -820,7 +813,11 @@ class GRPOTrainerTester(unittest.TestCase):
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
-                additional_generation_kwargs=additional_kwargs,
+                top_p=0.9,
+                top_k=10,
+                min_p=0.1,
+                repetition_penalty=0.1,
+                length_penalty=0.1,
             )
 
             trainer = GRPOTrainer(
@@ -852,13 +849,6 @@ class GRPOTrainerTester(unittest.TestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            # Define additional generation kwargs
-            additional_kwargs = {
-                "top_p": 0.9,
-                "top_k": 50,
-                "presence_penalty": 0.5,
-            }
-
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -869,7 +859,11 @@ class GRPOTrainerTester(unittest.TestCase):
                 use_vllm=True,
                 vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
                 vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
-                additional_generation_kwargs=additional_kwargs,
+                top_p=0.9,
+                top_k=10,
+                min_p=0.1,
+                repetition_penalty=0.1,
+                length_penalty=0.1,
             )
 
             trainer = GRPOTrainer(
