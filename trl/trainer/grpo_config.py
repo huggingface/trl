@@ -57,7 +57,7 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control generation
 
-        temperature (`float`, *optional*, defaults to `0.9`):
+        temperature (`float`, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float` or `None`, *optional*, defaults to `1.0`):
             Top-p value for sampling.
