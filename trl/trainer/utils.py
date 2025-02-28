@@ -31,8 +31,6 @@ import torch.utils.data
 from accelerate import Accelerator, PartialState
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
-from rich.console import Console
-from rich.table import Table
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import (
@@ -52,8 +50,15 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
+from ..import_utils import is_rich_available
 from ..trainer.model_config import ModelConfig
 
+
+if is_rich_available():
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
 
 if is_comet_available():
     import comet_ml
@@ -915,6 +920,7 @@ def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
         lora_dropout=model_args.lora_dropout,
         bias="none",
         use_rslora=model_args.use_rslora,
+        use_dora=model_args.use_dora,
         modules_to_save=model_args.lora_modules_to_save,
     )
 
@@ -1683,3 +1689,57 @@ def selective_log_softmax(logits, index):
             per_token_logps.append(row_per_token_logps)
         per_token_logps = torch.stack(per_token_logps)
     return per_token_logps
+
+
+def print_prompt_completions_sample(prompts: list[str], completions: list[str], rewards: list[int], step: int) -> None:
+    """
+    Print out a sample of model completions to the console.
+
+    This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
+    during training. It requires the `rich` library to be installed.
+
+    Args:
+        prompts (`list[str]`):
+            List of prompts.
+        completions (`list[str]`):
+            List of completions corresponding to the prompts.
+        reward (`list[float]`):
+            List of rewards corresponding to the completions.
+        step (`int`):
+            Current training step number, used in the output title.
+
+    Example:
+    ```python
+    >>> from trl.trainer.utils import print_prompt_completions_sample
+    >>> prompts = ["The sky is", "The sun is"]
+    >>> completions = [" blue.", " in the sky."]
+    >>> rewards = [0.12345, 0.68789]
+    >>> print_prompt_completions_sample(prompts, completions, rewards, 42)
+    ╭─────────────── Step 42 ────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Reward ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │   0.12 │ │
+    │ ├────────────┼──────────────┼────────┤ │
+    │ │ The sun is │  in the sky. │   0.68 │ │
+    │ └────────────┴──────────────┴────────┘ │
+    ╰────────────────────────────────────────╯
+    ```
+    """
+    if not is_rich_available():
+        raise ImportError("This feature requires `rich` to be installed. Please install it first: `pip install rich`")
+
+    console = Console()
+    table = Table(show_header=True, header_style="bold white", expand=True)
+
+    # Add columns
+    table.add_column("Prompt", style="bright_yellow")
+    table.add_column("Completion", style="bright_green")
+    table.add_column("Reward", style="bold cyan", justify="right")
+
+    for prompt, completion, reward in zip(prompts, completions, rewards, strict=True):
+        table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places
+        table.add_section()  # Adds a separator between rows
+
+    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
+    console.print(panel)

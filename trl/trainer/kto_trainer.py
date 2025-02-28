@@ -1392,13 +1392,13 @@ class KTOTrainer(Trainer):
             return (loss.detach(), None, None)
 
         # logits for the chosen and rejected samples from model
-        logits_dict = {
-            "eval_logits/chosen": metrics["logits/chosen"],
-            "eval_logits/rejected": metrics["logits/rejected"],
-        }
-        logits = torch.tensor(
-            [v for k, v in logits_dict.items() if k not in ignore_keys], device=self.accelerator.device
-        )
+        logits_dict = {}
+        if "logits/chosen_sum" in metrics:
+            logits_dict["eval_logits/chosen"] = metrics["logits/chosen_sum"]
+        if "logits/rejected_sum" in metrics:
+            logits_dict["eval_logits/rejected"] = metrics["logits/rejected_sum"]
+        logits = [v for k, v in logits_dict.items() if k not in ignore_keys]
+        logits = torch.tensor(logits, device=self.accelerator.device)
         labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
