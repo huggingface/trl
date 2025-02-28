@@ -1361,11 +1361,11 @@ class KTOTrainer(Trainer):
 
         if self.args.use_liger_loss:
             model_output = self._compute_loss_liger(model, batch)
-            losses = model_output["losses"]
-            policy_chosen_logits = model_output["policy_chosen_logits"]
-            policy_rejected_logits = model_output["policy_rejected_logits"]
-            policy_chosen_logps = model_output["policy_chosen_logps"]
-            policy_rejected_logps = model_output["policy_rejected_logps"]
+            losses = model_output["loss"]
+            policy_chosen_logits = model_output["chosen_logits_sum"]
+            policy_rejected_logits = model_output["rejected_logits_sum"]
+            policy_chosen_logps = model_output["chosen_logps"]
+            policy_rejected_logps = model_output["rejected_logps"]
             chosen_rewards = model_output["chosen_rewards"]
             rejected_rewards = model_output["rejected_rewards"]
             kl = model_output["kl"]
@@ -1458,6 +1458,7 @@ class KTOTrainer(Trainer):
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
 
+        print(loss, metrics)
         return loss, metrics
 
     def compute_loss(
