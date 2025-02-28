@@ -655,7 +655,7 @@ class GRPOTrainer(Trainer):
     @profiling_decorator
     def _move_model_to_vllm(self):
         with unwrap_model_for_generation(
-            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+            self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
             if is_compiled_module(unwrapped_model):
                 unwrapped_model = unwrapped_model._orig_mod
@@ -754,7 +754,7 @@ class GRPOTrainer(Trainer):
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
-            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+            with unwrap_model_for_generation(self.model_wrapped, self.accelerator) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
                     prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                 )
