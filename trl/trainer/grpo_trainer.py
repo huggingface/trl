@@ -443,7 +443,6 @@ class GRPOTrainer(Trainer):
             "top_k": args.top_k,
             "min_p": args.min_p,
             "repetition_penalty": args.repetition_penalty,
-            "length_penalty": args.length_penalty,
         }
         sampling_kwargs = {k: v for k, v in sampling_kwargs.items() if v is not None}
 
