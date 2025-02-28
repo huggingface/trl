@@ -57,16 +57,16 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control generation
 
-        temperature (`float` or `None`, *optional*, defaults to `0.9`):
+        temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
-        top_p (`float` or `None`, *optional*, defaults to `None`):
-            Top-p value for sampling. If set to `None`, the default value will be used.
+        top_p (`float` or `None`, *optional*, defaults to `1.0`):
+            Top-p value for sampling.
         top_k (`int` or `None`, *optional*, defaults to `None`):
-            Top-k value for sampling. If set to `None`, the default value will be used.
+            Top-k value for sampling.
         min_p (`float` or `None`, *optional*, defaults to `None`):
-            Min-p value for sampling. If set to `None`, the default value will be used.
+            Min-p value for sampling.
         repetition_penalty (`float` or `None`, *optional*, defaults to `None`):
-            Repetition penalty for sampling. If set to `None`, the default value will be used.
+            Repetition penalty for sampling.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -178,25 +178,25 @@ class GRPOConfig(TrainingArguments):
         },
     )
     # Parameters that control generation
-    temperature: Optional[float] = field(
+    temperature: float = field(
         default=0.9,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
     )
     top_p: Optional[float] = field(
-        default=None,
-        metadata={"help": "Top-p value for sampling. If set to `None`, the default value will be used."},
+        default=1.0,
+        metadata={"help": "Top-p value for sampling."},
     )
     top_k: Optional[int] = field(
         default=None,
-        metadata={"help": "Top-k value for sampling. If set to `None`, the default value will be used."},
+        metadata={"help": "Top-k value for sampling."},
     )
     min_p: Optional[float] = field(
         default=None,
-        metadata={"help": "Min-p value for sampling. If set to `None`, the default value will be used."},
+        metadata={"help": "Min-p value for sampling."},
     )
     repetition_penalty: Optional[float] = field(
         default=None,
-        metadata={"help": "Repetition penalty for sampling. If set to `None`, the default value will be used."},
+        metadata={"help": "Repetition penalty for sampling."},
     )
     # Parameters that control generation acceleration powered by vLLM
     use_vllm: Optional[bool] = field(
