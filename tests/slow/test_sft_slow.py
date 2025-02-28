@@ -412,7 +412,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 max_steps=2,
                 packing=packing,
                 max_length=self.max_length,
-                use_liger=True,
+                use_liger_kernel=True,
             )
 
             trainer = SFTTrainer(
