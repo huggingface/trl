@@ -17,9 +17,9 @@ Learn post-training with TRL and other libraries in 🤗 [smol course](https://g
 
 The documentation is organized into the following sections:
 
-- **Getting started**: installation and quickstart guide.
+- **Getting Started**: installation and quickstart guide.
 - **Conceptual Guides**: dataset formats, training FAQ, and understanding logs.
-- **How-to guides**: reducing memory usage, speeding up training, distributing training, etc.
+- **How-to Guides**: reducing memory usage, speeding up training, distributing training, etc.
 - **Integrations**: DeepSpeed, Liger Kernel, PEFT, etc.
 - **Examples**: example overview, community tutorials, etc.
 - **API**: trainers, utils, etc.
