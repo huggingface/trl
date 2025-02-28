@@ -201,29 +201,22 @@ class GRPOConfig(TrainingArguments):
     # When running the trainer, set the following command-line arguments (or JSON configuration) so that SGLang is used:
     # •	--use_sglang True
     # •	--sglang_server_url "http://localhost:30033"
-    # •	Optionally, --sglang_device "cuda:1" if you wish to assign a specific GPU.
     # Parameters for generation acceleration powered by SGLang
     use_sglang: Optional[bool] = field(
         default=False,
+        metadata={"help": "Whether to use SGLang for generating completions."},
+    )
+    sglang_base_gpu_id: Optional[int] = field(
+        default=6,
         metadata={
-            "help": "Whether to use SGLang for generating completions. If True, a SGLang server must be running."
+            "help": "Base GPU ID for SGLang engine initialization. If None, uses the last available GPU."
         },
     )
-    sglang_server_url: Optional[str] = field(
-        default="http://localhost:32232",
-        metadata={
-            "help": "The URL of the SGLang server (e.g., 'http://localhost:32232'). Required if use_sglang is True."
-        },
-    )
-    sglang_device: Optional[str] = field(
-        default="auto",
-        metadata={
-            "help": "The GPU device to be used for SGLang generation if launching internally. Optional if the server is managed externally."
-        },
-    )
-    sglang_gpu_memory_utilization: float = field(
+    sglang_mem_fraction_static: float = field(
         default=0.9,
-        metadata={"help": "Ratio of GPU memory reserved for sglang generation."},
+        metadata={
+            "help": "Fraction of GPU memory reserved for static memory in SGLang."
+        },
     )
 
     # Parameters that control generation acceleration powered by SGLang
