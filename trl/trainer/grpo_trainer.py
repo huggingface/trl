@@ -47,7 +47,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
-from ..import_utils import is_rich_available, is_vllm_available, is_langchain_experimental_available
+from ..import_utils import is_langchain_experimental_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -764,8 +764,8 @@ class GRPOTrainer(Trainer):
                     ordered_set_of_prompts = list(dict.fromkeys(all_prompts_text))
                     with profiling_context(self, "vLLM.generate"):
                         all_outputs = self.llm.generate(
-                                ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
-                            )
+                            ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
+                        )
                     completion_ids = []
                     for outputs in all_outputs:
                         for output in outputs.outputs:
