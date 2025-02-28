@@ -36,7 +36,7 @@ To create the package for PyPI.
 
 2. Commit these changes: "git commit -m 'Release: VERSION'"
 
-3. Add a tag in git to mark the release: "git tag VERSION -m 'Add tag VERSION for pypi'"
+3. Add a tag in git to mark the release: "git tag VERSION -m 'Add tag VERSION for PyPI'"
    Push the tag to remote: git push --tags origin main
 
 4. Build both the sources and the wheel. Do not change anything in setup.py between
@@ -55,9 +55,7 @@ To create the package for PyPI.
    twine upload dist/* -r pypitest --repository-url=https://test.pypi.org/legacy/
 
    Check that you can install it in a virtualenv/notebook by running:
-   pip install huggingface_hub fsspec aiohttp
-   pip install -U tqdm
-   pip install -i https://testpypi.python.org/pypi evaluate
+   pip install -i https://testpypi.python.org/pypi trl
 
 6. Upload the final version to actual PyPI:
    twine upload dist/* -r pypi
@@ -135,7 +133,7 @@ setup(
     zip_safe=False,
     version=__version__,
     description="Train transformer language models with reinforcement learning.",
-    keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
+    keywords="transformers, huggingface, language modeling, post-training, rlhf, sft, dpo, grpo",
     author="Leandro von Werra",
     author_email="leandro.vonwerra@gmail.com",
 )

@@ -4,37 +4,35 @@
 
 # TRL - Transformer Reinforcement Learning
 
-TRL is a full stack library where we provide a set of tools to train transformer language models with Reinforcement Learning, from the Supervised Fine-tuning step (SFT), Reward Modeling step (RM) to the Proximal Policy Optimization (PPO) step. 
+TRL is a full stack library where we provide a set of tools to train transformer language models with methods like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), Direct Preference Optimization (DPO), Reward Modeling, and more.
 The library is integrated with 🤗 [transformers](https://github.com/huggingface/transformers).
+
+You can also explore TRL-related models, datasets, and demos in the [TRL Hugging Face organization](https://huggingface.co/trl-lib).
 
 ## Learn
 
 Learn post-training with TRL and other libraries in 🤗 [smol course](https://github.com/huggingface/smol-course).
 
-## API documentation
+## Contents
 
-- [Model Classes](models): *A brief overview of what each public model class does.*
-- [`SFTTrainer`](sft_trainer): *Supervise Fine-tune your model easily with `SFTTrainer`*
-- [`RewardTrainer`](reward_trainer): *Train easily your reward model using `RewardTrainer`.*
-- [`PPOTrainer`](ppo_trainer): *Further fine-tune the supervised fine-tuned model using PPO algorithm*
-- [Best-of-N Sampling](best-of-n): *Use best of n sampling as an alternative way to sample predictions from your active model*
-- [`DPOTrainer`](dpo_trainer): *Direct Preference Optimization training using `DPOTrainer`.*
-- [`TextEnvironment`](text_environments): *Text environment to train your model using tools with RL.*
+The documentation is organized into the following sections:
 
-## Examples
-
-- [Sentiment Tuning](sentiment_tuning): *Fine tune your model to generate positive movie contents*
-- [Training with PEFT](lora_tuning_peft): *Memory efficient RLHF training using adapters with PEFT*
-- [Detoxifying LLMs](detoxifying_a_lm): *Detoxify your language model through RLHF*
-- [StackLlama](using_llama_models): *End-to-end RLHF training of a Llama model on Stack exchange dataset*
-- [Learning with Tools](learning_tools): *Walkthrough of using `TextEnvironments`*
-- [Multi-Adapter Training](multi_adapter_rl): *Use a single base model and multiple adapters for memory efficient end-to-end training*
-
+- **Getting Started**: installation and quickstart guide.
+- **Conceptual Guides**: dataset formats, training FAQ, and understanding logs.
+- **How-to Guides**: reducing memory usage, speeding up training, distributing training, etc.
+- **Integrations**: DeepSpeed, Liger Kernel, PEFT, etc.
+- **Examples**: example overview, community tutorials, etc.
+- **API**: trainers, utils, etc.
 
 ## Blog posts
 
 <div class="mt-10">
   <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/open-r1">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/open-r1/thumbnails.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on January 28, 2025</p>
+      <p class="text-gray-700">Open-R1: a fully open reproduction of DeepSeek-R1</p>
+    </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/dpo_vlm">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/dpo_vlm/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on July 10, 2024</p>
