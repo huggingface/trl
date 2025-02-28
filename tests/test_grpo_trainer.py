@@ -780,6 +780,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 report_to="none",
                 use_vllm=True,
                 vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
+                vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
                 vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
             )
             trainer = GRPOTrainer(
@@ -867,6 +868,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 report_to="none",
                 use_vllm=True,
                 vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
+                vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
                 additional_generation_kwargs=additional_kwargs,
             )
 
