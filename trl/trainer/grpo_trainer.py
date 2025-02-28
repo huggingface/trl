@@ -574,7 +574,7 @@ class GRPOTrainer(Trainer):
         #    distributed to different GPUs, allowing rewards to be computed and normalized correctly within each prompt
         #    group. Using the same seed across processes ensures consistent prompt assignment, preventing discrepancies
         #    in group formation.
-        # 2. repeats the batch multiple times to allow reusing generaations across multiple updates. Refer to
+        # 2. repeats the batch multiple times to allow reusing generations across multiple updates. Refer to
         #    _prepare_inputs to see how the generations are stored and reused.
 
         # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
