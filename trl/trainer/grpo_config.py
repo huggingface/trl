@@ -47,8 +47,6 @@ class GRPOConfig(TrainingArguments):
         num_generations (`int` or `None`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The global batch size (num_processes * per_device_batch_size)
             must be divisible by this value.
-        temperature (`float`, *optional*, defaults to `0.9`):
-            Temperature for sampling. The higher the temperature, the more random the completions.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -56,6 +54,19 @@ class GRPOConfig(TrainingArguments):
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
             with vLLM generation.
+
+        > Parameters that control generation
+
+        temperature (`float`, defaults to `0.9`):
+            Temperature for sampling. The higher the temperature, the more random the completions.
+        top_p (`float` or `None`, *optional*, defaults to `1.0`):
+            Top-p value for sampling.
+        top_k (`int` or `None`, *optional*, defaults to `None`):
+            Top-k value for sampling.
+        min_p (`float` or `None`, *optional*, defaults to `None`):
+            Min-p value for sampling.
+        repetition_penalty (`float` or `None`, *optional*, defaults to `None`):
+            Repetition penalty for sampling.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -115,6 +126,7 @@ class GRPOConfig(TrainingArguments):
             set `sync_ref_model=True`.
 
         > Parameters that control the logging
+
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
@@ -152,10 +164,6 @@ class GRPOConfig(TrainingArguments):
             "must be divisible by this value."
         },
     )
-    temperature: Optional[float] = field(
-        default=0.9,
-        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
-    )
     max_completion_length: Optional[int] = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
@@ -169,7 +177,27 @@ class GRPOConfig(TrainingArguments):
             "is not compatible with vLLM generation."
         },
     )
-
+    # Parameters that control generation
+    temperature: float = field(
+        default=0.9,
+        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+    )
+    top_p: Optional[float] = field(
+        default=1.0,
+        metadata={"help": "Top-p value for sampling."},
+    )
+    top_k: Optional[int] = field(
+        default=None,
+        metadata={"help": "Top-k value for sampling."},
+    )
+    min_p: Optional[float] = field(
+        default=None,
+        metadata={"help": "Min-p value for sampling."},
+    )
+    repetition_penalty: Optional[float] = field(
+        default=None,
+        metadata={"help": "Repetition penalty for sampling."},
+    )
     # Parameters that control generation acceleration powered by vLLM
     use_vllm: Optional[bool] = field(
         default=False,
