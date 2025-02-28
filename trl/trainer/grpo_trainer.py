@@ -523,6 +523,7 @@ class GRPOTrainer(Trainer):
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
                     n=args.num_generations,
+                    **(args.additional_generation_kwargs or {}),
                 )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
@@ -537,6 +538,7 @@ class GRPOTrainer(Trainer):
                 do_sample=True,
                 temperature=args.temperature,
                 pad_token_id=processing_class.pad_token_id,
+                **(args.additional_generation_kwargs or {}),
             )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the

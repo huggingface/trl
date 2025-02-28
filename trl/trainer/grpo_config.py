@@ -56,6 +56,9 @@ class GRPOConfig(TrainingArguments):
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
             with vLLM generation.
+        additional_generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+            Additional keyword arguments for `SamplingParams` when using vLLM, or `GenerationConfig` otherwise.
+            Useful kwargs include `presence_penalty`, `top_p`, `top_k`, `repetition_penalty`, `length_penalty`, `min_p`, etc.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -167,6 +170,13 @@ class GRPOConfig(TrainingArguments):
             "generation, improving generation speed. However, disabling this option allows training models that "
             "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
             "is not compatible with vLLM generation."
+        },
+    )
+    additional_generation_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments for `SamplingParams` when using vLLM, or `GenerationConfig` otherwise. "
+            "Useful kwargs include `presence_penalty`, `top_p`, `top_k`, `repetition_penalty`, `length_penalty`, `min_p`, etc."
         },
     )
 
