@@ -57,8 +57,8 @@ from .utils import (
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
+    compute_logps_with_prompt_cache,
 )
-
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -310,6 +310,16 @@ class GRPOTrainer(Trainer):
         if args.gradient_checkpointing:
             model = self._enable_gradient_checkpointing(model, args)
 
+            # verify that `logit_computation_enable_prompt_caching` is set to False, otherwise we override it
+            if self.args.logit_computation_enable_prompt_caching == True:
+                warnings.warn(
+                    """
+                    `logit_computation_enable_prompt_caching` is set to True, but gradient checkpointing is
+                    enabled. These two are not compatible, and we will disable prompt caching.
+                    """
+                )
+                self.args.logit_computation_enable_prompt_caching = False
+
         # Reference model
         self.beta = args.beta
         if self.beta == 0.0:
@@ -380,6 +390,7 @@ class GRPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.use_vllm = args.use_vllm
+        self.gradient_checkpointing = args.gradient_checkpointing
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
@@ -754,7 +765,7 @@ class GRPOTrainer(Trainer):
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
-            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+            with torch.no_grad(), unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
                     prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                 )
@@ -777,26 +788,61 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         with torch.inference_mode():
-            # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
-            # computation here, and use per_token_logps.detach() instead.
-            if self.num_iterations > 1:
-                old_per_token_logps = self._get_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep
-                )
-            else:
-                old_per_token_logps = None
-
-            if self.beta == 0.0:
-                ref_per_token_logps = None
-            elif self.ref_model is not None:
-                ref_per_token_logps = self._get_per_token_logps(
-                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
-                )
-            else:
-                with self.accelerator.unwrap_model(self.model).disable_adapter():
-                    ref_per_token_logps = self._get_per_token_logps(
+            # Original approach
+            if self.args.logit_computation_enable_prompt_caching is False:
+                # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
+                # computation here, and use per_token_logps.detach() instead.
+                if self.num_iterations > 1:
+                    old_per_token_logps = self._get_per_token_logps(
                         self.model, prompt_completion_ids, attention_mask, logits_to_keep
                     )
+                else:
+                    old_per_token_logps = None
+
+                if self.beta == 0.0:
+                    ref_per_token_logps = None
+                elif self.ref_model is not None:
+                    ref_per_token_logps = self._get_per_token_logps(
+                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                    )
+                else:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        ref_per_token_logps = self._get_per_token_logps(
+                            self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                        )
+            # Use the prompt caching method
+            else:
+                mini_batch_size = self.args.logit_computation_mini_batch_size
+                if self.num_iterations > 1:
+                    old_per_token_logps = compute_logps_with_prompt_cache(
+                        model=self.model,
+                        prompt_inputs=prompt_inputs,
+                        completion_ids=completion_ids,
+                        mini_batch_size=mini_batch_size,
+                        requires_grad_for_completion=True,
+                    )
+                else:
+                    old_per_token_logps = None
+
+                if self.beta == 0.0:
+                    ref_per_token_logps = None
+                elif self.ref_model is not None:
+                    ref_per_token_logps = compute_logps_with_prompt_cache(
+                        model=self.ref_model,
+                        prompt_inputs=prompt_inputs,
+                        completion_ids=completion_ids,
+                        mini_batch_size=mini_batch_size,
+                        requires_grad_for_completion=False,
+                    )
+                else:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        ref_per_token_logps = compute_logps_with_prompt_cache(
+                            model=self.model,
+                            prompt_inputs=prompt_inputs,
+                            completion_ids=completion_ids,
+                            mini_batch_size=mini_batch_size,
+                            requires_grad_for_completion=False,
+                        )
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -905,6 +951,7 @@ class GRPOTrainer(Trainer):
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
+            "prompt_inputs": prompt_inputs,
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
@@ -920,13 +967,23 @@ class GRPOTrainer(Trainer):
             raise ValueError("The GRPOTrainer does not support returning outputs")
         # Compute the per-token log probabilities for the model
 
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        prompt_inputs, prompt_ids, prompt_mask = inputs["prompt_inputs"], inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        if self.args.logit_computation_enable_prompt_caching is False:
+            per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        else:
+            mini_batch_size = self.args.logit_computation_mini_batch_size
+            per_token_logps = compute_logps_with_prompt_cache(
+                model=model,
+                prompt_inputs=prompt_inputs,
+                completion_ids=completion_ids,
+                mini_batch_size=mini_batch_size,
+                requires_grad_for_completion=True,
+            )
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
