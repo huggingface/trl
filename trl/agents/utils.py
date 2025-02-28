@@ -14,9 +14,9 @@
 
 from inspect import getsource
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
-from ..import_utils import is_e2b_available, is_langchain_experimental_available, is_vllm_available
+from ..import_utils import is_e2b_available, is_langchain_experimental_available
 
 
 if is_e2b_available():
@@ -25,7 +25,7 @@ if is_e2b_available():
 if is_langchain_experimental_available():
     from langchain_experimental.utilities import PythonREPL
 
-if is_vllm_available():
+if TYPE_CHECKING:
     from vllm import LLM, SamplingParams
 
 default_system_prompt = "You can answer questions and solve problems. If running code helps, write it inside <code> </code>, and you will see the result. Example: To calculate 2 + 2, write <code> print(2 + 2) </code>."
@@ -252,8 +252,8 @@ def prepare_data_for_local_agent(
 
 def generate_agent_responses(
     dataset: list,
-    llm: LLM,
-    sampling_params: SamplingParams,
+    llm: "LLM",
+    sampling_params: "SamplingParams",
     tools_script_path: str = None,
     parsing_string: str = "<code>",
     stop_string: str = "</code>",
