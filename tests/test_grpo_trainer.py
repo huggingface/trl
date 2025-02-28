@@ -24,7 +24,7 @@ from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.import_utils import is_vllm_available
+from trl.import_utils import is_langchain_experimental_available, is_vllm_available
 from trl.trainer.grpo_trainer import RepeatRandomSampler
 
 
