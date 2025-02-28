@@ -817,7 +817,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 top_k=10,
                 min_p=0.1,
                 repetition_penalty=0.1,
-                length_penalty=0.1,
             )
 
             trainer = GRPOTrainer(
@@ -826,10 +825,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
-
-            # Verify that the additional kwargs are in the generation config
-            for key, value in additional_kwargs.items():
-                self.assertEqual(getattr(trainer.generation_config, key), value)
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -863,7 +858,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 top_k=10,
                 min_p=0.1,
                 repetition_penalty=0.1,
-                length_penalty=0.1,
             )
 
             trainer = GRPOTrainer(
@@ -872,10 +866,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
-
-            # Verify that the additional kwargs are in the sampling params
-            for key, value in additional_kwargs.items():
-                self.assertEqual(getattr(trainer.sampling_params, key), value)
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

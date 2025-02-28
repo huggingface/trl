@@ -67,8 +67,6 @@ class GRPOConfig(TrainingArguments):
             Min-p value for sampling. If set to `None`, the default value will be used.
         repetition_penalty (`float` or `None`, *optional*, defaults to `None`):
             Repetition penalty for sampling. If set to `None`, the default value will be used.
-        length_penalty (`float` or `None`, *optional*, defaults to `None`):
-            Length penalty for sampling. If set to `None`, the default value will be used.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -199,10 +197,6 @@ class GRPOConfig(TrainingArguments):
     repetition_penalty: Optional[float] = field(
         default=None,
         metadata={"help": "Repetition penalty for sampling. If set to `None`, the default value will be used."},
-    )
-    length_penalty: Optional[float] = field(
-        default=None,
-        metadata={"help": "Length penalty for sampling. If set to `None`, the default value will be used."},
     )
     # Parameters that control generation acceleration powered by vLLM
     use_vllm: Optional[bool] = field(
