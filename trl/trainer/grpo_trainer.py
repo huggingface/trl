@@ -437,6 +437,15 @@ class GRPOTrainer(Trainer):
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
+        sampling_kwargs: dict[str, Any] = {
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "top_k": args.top_k,
+            "min_p": args.min_p,
+            "repetition_penalty": args.repetition_penalty,
+            "length_penalty": args.length_penalty,
+        }
+        sampling_kwargs = {k: v for k, v in sampling_kwargs.items() if v is not None}
 
         if self.use_vllm:
             if not is_vllm_available():
@@ -519,11 +528,10 @@ class GRPOTrainer(Trainer):
 
                 # Sampling parameters
                 self.sampling_params = SamplingParams(
-                    temperature=args.temperature,
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
                     n=args.num_generations,
-                    **(args.additional_generation_kwargs or {}),
+                    **sampling_kwargs,
                 )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
@@ -536,9 +544,8 @@ class GRPOTrainer(Trainer):
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
                 do_sample=True,
-                temperature=args.temperature,
                 pad_token_id=processing_class.pad_token_id,
-                **(args.additional_generation_kwargs or {}),
+                **sampling_kwargs,
             )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
