@@ -1,150 +1,102 @@
+import os
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
-import os
+import tempfile
 import torch
-import time
-
-
-def print_gpu_memory():
-    """Print memory usage for all available GPUs"""
-    for i in range(torch.cuda.device_count()):
-        allocated = torch.cuda.memory_allocated(i) / 1e9
-        reserved = torch.cuda.memory_reserved(i) / 1e9
-        total = torch.cuda.get_device_properties(i).total_memory / 1e9
-        print(
-            f"GPU {i}: {allocated:.2f}GB/{total:.2f}GB allocated, {reserved:.2f}GB reserved"
-        )
+import sys
+import traceback
 
 
 def main():
-    # Print diagnostic information
-    print("\n=== System Configuration ===")
-    print(f"PyTorch version: {torch.__version__}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
-    print(f"CUDA version: {torch.version.cuda}")
-    print(f"Number of GPUs: {torch.cuda.device_count()}")
-    for i in range(torch.cuda.device_count()):
-        print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+    try:
+        # Display environment info for debugging
+        print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES')}")
+        print(f"Available GPUs: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            print(
+                f"  Memory: {torch.cuda.get_device_properties(i).total_memory / 1e9:.2f} GB"
+            )
 
-    print("\n=== Initial GPU Memory Usage ===")
-    print_gpu_memory()
+        # Use checkpoint directory within project path
+        checkpoint_dir = os.path.join("/home/misc/jinpan/trl-jin", "checkpoints")
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # Create checkpoint directory
-    checkpoint_dir = os.path.join("/home/misc/jinpan/trl-jin", "checkpoints")
-    os.makedirs(checkpoint_dir, exist_ok=True)
+        # Load dataset
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="train"
+        )
+        print(f"Loaded dataset with {len(dataset)} examples")
 
-    # Clear any existing model files to ensure clean state
-    import shutil
+        # Configure training with explicit GPU assignment for SGLang
 
-    if os.path.exists(checkpoint_dir):
-        for item in os.listdir(checkpoint_dir):
-            item_path = os.path.join(checkpoint_dir, item)
-            if os.path.isfile(item_path):
-                os.unlink(item_path)
-            elif os.path.isdir(item_path):
-                shutil.rmtree(item_path)
+        training_args = GRPOConfig(
+            output_dir=checkpoint_dir,
+            learning_rate=1.0e-03,
+            per_device_train_batch_size=3,
+            num_generations=9,
+            max_completion_length=32,
+            report_to="none",
+            use_sglang=True,
+            sglang_base_gpu_id=3,  # Use the correct parameter name
+            sglang_mem_fraction_static=0.9,
+            checkpoint_path=checkpoint_dir,
+        )
 
-    # Prepare model to have a valid checkpoint from the start
-    print("\n=== Preparing Initial Checkpoint ===")
-    model_name = "Qwen/Qwen2.5-0.5B-Instruct"
-    start_time = time.time()
-    print(f"Downloading and saving model: {model_name}")
+        # Initialize trainer with detailed error handling
+        try:
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+            print("Trainer successfully initialized")
+        except Exception as e:
+            print(f"Failed to initialize trainer: {e}")
+            traceback.print_exc()
+            sys.exit(1)
 
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+        # Save a checkpoint for SGLang weight updates
+        trainer.model.save_pretrained(checkpoint_dir)
+        print(f"Initial model checkpoint saved to {checkpoint_dir}")
 
-    model = AutoModelForCausalLM.from_pretrained(model_name)
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Clone parameters for verification after training
+        previous_trainable_params = {
+            n: param.clone()
+            for n, param in trainer.model.named_parameters()
+            if param.requires_grad
+        }
+        print(f"Captured {len(previous_trainable_params)} trainable parameters")
 
-    model.save_pretrained(checkpoint_dir)
-    tokenizer.save_pretrained(checkpoint_dir)
-    print(f"Model saved to {checkpoint_dir} in {time.time() - start_time:.1f}s")
+        # Start training with error handling
+        try:
+            print(
+                "[DEBUG] Starting training; expecting generation requests from SGLang engine..."
+            )
+            trainer.train()
+            print("[DEBUG] Training finished.")
+        except Exception as e:
+            print(f"Training failed: {e}")
+            traceback.print_exc()
+            sys.exit(1)
 
-    # Load dataset
-    print("\n=== Loading Dataset ===")
-    dataset = load_dataset(
-        "trl-internal-testing/zen", "standard_prompt_only", split="train"
-    )
-    print(f"Loaded dataset with {len(dataset)} examples")
+        # Verify that parameters have changed
+        changed_params = 0
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if not torch.equal(param, new_param):
+                changed_params += 1
 
-    # Configure training arguments
-    print("\n=== Configuring Training ===")
-    training_args = GRPOConfig(
-        output_dir=checkpoint_dir,
-        learning_rate=1.0e-03,
-        per_device_train_batch_size=3,
-        num_generations=9,
-        max_completion_length=32,
-        report_to="none",
-        # SGLang configuration - now using proper options
-        use_sglang=True,
-        sglang_device="auto",  # Let it select GPU automatically
-        sglang_gpu_memory_utilization=0.7,
-        sglang_fallback_to_transformers=True,
-        # Set checkpoint path from the beginning
-        checkpoint_path=checkpoint_dir,
-        # Add more verbose output
-        logging_steps=1,
-        logging_first_step=True,
-    )
+        print(
+            f"{changed_params}/{len(previous_trainable_params)} parameters changed during training"
+        )
+        print("Test completed successfully")
 
-    # Initialize trainer
-    print("\n=== Initializing Trainer ===")
-    start_time = time.time()
-
-    trainer = GRPOTrainer(
-        model=model_name,  # Use model name here, not the loaded model
-        reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-        args=training_args,
-        train_dataset=dataset,
-    )
-
-    print(f"Trainer initialized in {time.time() - start_time:.1f}s")
-
-    # Memory state after initialization
-    print("\n=== GPU Memory After Initialization ===")
-    print_gpu_memory()
-
-    # Store initial model parameters to verify training
-    print("\n=== Capturing Initial Model State ===")
-    previous_trainable_params = {
-        n: param.clone()
-        for n, param in trainer.model.named_parameters()
-        if param.requires_grad
-    }
-    print(f"Captured {len(previous_trainable_params)} trainable parameters")
-
-    # Run training
-    print("\n=== Starting Training ===")
-    train_start = time.time()
-    trainer.train()
-    train_time = time.time() - train_start
-    print(f"Training completed in {train_time:.1f}s")
-
-    # Memory state after training
-    print("\n=== GPU Memory After Training ===")
-    print_gpu_memory()
-
-    # Verify parameters changed
-    print("\n=== Verifying Parameter Updates ===")
-    unchanged_count = 0
-    changed_count = 0
-
-    for n, param in previous_trainable_params.items():
-        new_param = trainer.model.get_parameter(n)
-        if torch.allclose(param, new_param, rtol=1e-4, atol=1e-4):
-            unchanged_count += 1
-            print(f"WARNING: Parameter {n} did not change significantly")
-        else:
-            changed_count += 1
-
-    print(f"Results: {changed_count} parameters changed, {unchanged_count} unchanged")
-
-    if unchanged_count == 0:
-        print("\n=== TEST SUCCESSFUL: All parameters were updated ===")
-    else:
-        print(f"\n=== TEST WARNING: {unchanged_count} parameters were not updated ===")
-
-    print("\nTest completed successfully")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

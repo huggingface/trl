@@ -1,8 +1,8 @@
 compute_environment: LOCAL_MACHINE
-debug: true
+debug: false
 distributed_type: MULTI_GPU
 downcast_bf16: 'no'
-gpu_ids: "all"
+gpu_ids: '3,4,5,6'
 machine_rank: 0
 main_training_function: main
 mixed_precision: 'bf16'
