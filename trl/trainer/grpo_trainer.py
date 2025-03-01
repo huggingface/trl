@@ -448,12 +448,13 @@ class GRPOTrainer(Trainer):
             if self.accelerator.is_main_process:
                 vllm_device = self.args.vllm_device
                 device_type = PartialState().default_device.type
+                tensor_parallel_size=self.args.vllm_tensor_parallel_size
                 device_module = getattr(torch, device_type)
                 if vllm_device == "auto":
                     if device_module.device_count() == 1:
                         vllm_device = f"{device_type}:0"  # particular case when training with onyl 1 device: share it
                     else:
-                        vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
+                        vllm_device = f"{device_type}:{self.accelerator.num_processes + tensor_parallel_size - 1}"  # take the next GPU idx
                 # Check that the requested device is available
                 if (
                     vllm_device.split(":")[0] == f"{device_type}"
@@ -509,7 +510,7 @@ class GRPOTrainer(Trainer):
                         # This is particularly useful here because we generate completions from the same prompts.
                         enable_prefix_caching=self.args.vllm_enable_prefix_caching,
                         max_model_len=self.args.vllm_max_model_len,
-                        tensor_parallel_size=self.args.vllm_tensor_parallel_size,
+                        tensor_parallel_size=tensor_parallel_size,
                     )
 
                 # Guided decoding, if enabled
