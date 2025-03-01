@@ -20,7 +20,7 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft, require_torch_accelerator
+from transformers.testing_utils import require_deepspeed, require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
@@ -317,6 +317,35 @@ class GRPOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.equal(param, new_param), f"LoRA parameter {n} has not changed.")
                 else:  # Base model parameters should not change
                     self.assertTrue(torch.equal(param, new_param), f"Base parameter {n} has changed.")
+
+    @require_deepspeed
+    @require_torch_accelerator
+    def test_training_with_deepspeed_zero3(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=32,
+                report_to="none",
+                deepspeed={"train_batch_size": "auto", "zero_optimization": {"stage": 3}},
+                max_steps=2,  # Just need at least one step
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                # Reward function should also involve generation,
+                # that DeepSpeed ZeRO-3 will also optimize
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
     def test_training_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
