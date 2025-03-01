@@ -509,6 +509,7 @@ class GRPOTrainer(Trainer):
                         # This is particularly useful here because we generate completions from the same prompts.
                         enable_prefix_caching=self.args.vllm_enable_prefix_caching,
                         max_model_len=self.args.vllm_max_model_len,
+                        tensor_parallel_size=self.args.vllm_tensor_parallel_size,
                     )
 
                 # Guided decoding, if enabled
