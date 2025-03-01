@@ -1316,12 +1316,12 @@ class KTOTrainer(Trainer):
         ref_lm_head = self.ref_model.get_output_embeddings()
 
         loss, (
-            chosen_logps,
-            rejected_logps,
+            chosen_logps_sum,
+            rejected_logps_sum,
             chosen_logits_sum,
             rejected_logits_sum,
-            chosen_rewards,
-            rejected_rewards
+            chosen_rewards_sum,
+            rejected_rewards_sum,
         ) = self.kto_loss_fn(
             _input=outputs.last_hidden_state[:, :-1] if not self.is_encoder_decoder else outputs.last_hidden_state,
             lin_weight=lm_head.weight,
@@ -1338,10 +1338,10 @@ class KTOTrainer(Trainer):
             "loss": loss,
             "chosen_logits_sum": chosen_logits_sum,
             "rejected_logits_sum": rejected_logits_sum,
-            "chosen_logps": chosen_logps,
-            "rejected_logps": rejected_logps,
-            "chosen_rewards": chosen_rewards,
-            "rejected_rewards": rejected_rewards,
+            "chosen_logps_sum": chosen_logps_sum,
+            "rejected_logps_sum": rejected_logps_sum,
+            "chosen_rewards_sum": chosen_rewards_sum,
+            "rejected_rewards_sum": rejected_rewards_sum,
             "kl": kl,
         }
         if self.aux_loss_enabled:
@@ -1359,15 +1359,19 @@ class KTOTrainer(Trainer):
         metrics = {}
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
 
+        labels = torch.tensor(batch["label"])
+        num_chosen = labels.sum().to(self.accelerator.device)
+        num_rejected = (len(labels) - num_chosen).to(self.accelerator.device)
+
         if self.args.use_liger_loss:
             model_output = self._compute_loss_liger(model, batch)
             losses = model_output["loss"]
             policy_chosen_logits = model_output["chosen_logits_sum"]
             policy_rejected_logits = model_output["rejected_logits_sum"]
-            policy_chosen_logps = model_output["chosen_logps"]
-            policy_rejected_logps = model_output["rejected_logps"]
-            chosen_rewards = model_output["chosen_rewards"]
-            rejected_rewards = model_output["rejected_rewards"]
+            policy_chosen_logps = model_output["chosen_logps_sum"]
+            policy_rejected_logps = model_output["rejected_logps_sum"]
+            chosen_rewards = model_output["chosen_rewards_sum"]
+            rejected_rewards = model_output["rejected_rewards_sum"]
             kl = model_output["kl"]
             if self.aux_loss_enabled:
                 aux_loss = model_output["aux_loss"]
@@ -1424,8 +1428,8 @@ class KTOTrainer(Trainer):
             )
 
         metrics["kl"] = kl.item()
-        num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
-        num_rejected = torch.Tensor([len(rejected_rewards)]).to(self.accelerator.device)
+        # num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
+        # num_rejected = torch.Tensor([len(rejected_rewards)]).to(self.accelerator.device)
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
