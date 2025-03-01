@@ -94,6 +94,7 @@ EXTRAS = {
     # vllm 0.7.3 causes hanging while gathering. temporary pinning the version until the issue is resolved
     "vllm": ["vllm==0.7.2; sys_platform != 'win32'"],
     "vlm": ["Pillow"],
+    "agents": ["vllm>=0.7.2; sys_platform != 'win32'", "e2b-code-interpreter", "langchain_experimental"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
