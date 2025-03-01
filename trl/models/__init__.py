@@ -20,7 +20,13 @@ from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffu
 _import_structure = {
     "modeling_base": ["GeometricMixtureWrapper", "PreTrainedModelWrapper", "create_reference_model"],
     "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
-    "utils": ["SUPPORTED_ARCHITECTURES", "prepare_deepspeed", "setup_chat_format", "unwrap_model_for_generation"],
+    "utils": [
+        "SUPPORTED_ARCHITECTURES",
+        "prepare_deepspeed",
+        "prepare_fsdp",
+        "setup_chat_format",
+        "unwrap_model_for_generation",
+    ],
 }
 
 try:
@@ -39,7 +45,13 @@ else:
 if TYPE_CHECKING:
     from .modeling_base import GeometricMixtureWrapper, PreTrainedModelWrapper, create_reference_model
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
-    from .utils import SUPPORTED_ARCHITECTURES, prepare_deepspeed, setup_chat_format, unwrap_model_for_generation
+    from .utils import (
+        SUPPORTED_ARCHITECTURES,
+        prepare_deepspeed,
+        prepare_fsdp,
+        setup_chat_format,
+        unwrap_model_for_generation,
+    )
 
     try:
         if not is_diffusers_available():
