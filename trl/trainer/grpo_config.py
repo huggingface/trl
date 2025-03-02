@@ -178,7 +178,7 @@ class GRPOConfig(TrainingArguments):
         metadata={"help": "Whether to use SGLang for generating completions."},
     )
     sglang_base_gpu_id: Optional[int] = field(
-        default=6,
+        default=7,
         metadata={
             "help": "Base GPU ID for SGLang engine initialization. If None, uses the last available GPU."
         },

@@ -1,11 +1,12 @@
 compute_environment: LOCAL_MACHINE
-debug: false
+deepspeed_config: {}
 distributed_type: MULTI_GPU
 downcast_bf16: 'no'
-gpu_ids: '4,5,6,7'
 machine_rank: 0
+main_process_ip: null
+main_process_port: null
 main_training_function: main
-mixed_precision: 'bf16'
+mixed_precision: 'no'
 num_machines: 1
 num_processes: 3
 rdzv_backend: static

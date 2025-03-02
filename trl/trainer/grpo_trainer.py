@@ -519,6 +519,42 @@ class GRPOTrainer(Trainer):
             print(
                 f"[DEBUG] Process rank {self.accelerator.process_index} passed accelerator.wait_for_everyone()"
             )
+        # if self.use_sglang:
+        #     # (Optionally, keep the distributed logging and device setup)
+        #     print(f"[DEBUG] LOCAL_RANK: {os.environ.get('LOCAL_RANK')}")
+        #     print(f"[DEBUG] RANK: {os.environ.get('RANK')}")
+        #     print(f"[DEBUG] WORLD_SIZE: {os.environ.get('WORLD_SIZE')}")
+        #     print(
+        #         f"[DEBUG] torch.distributed.is_initialized(): {torch.distributed.is_initialized()}"
+        #     )
+
+        #     # Set the CUDA device for each process
+        #     local_device = torch.device(f"cuda:{self.accelerator.process_index}")
+        #     torch.cuda.set_device(local_device)
+        #     print(
+        #         f"[DEBUG] Process rank {self.accelerator.process_index} set to device {local_device}"
+        #     )
+
+        #     # Call the barrier to synchronize processes
+        #     if torch.distributed.is_initialized():
+        #         current_device = torch.cuda.current_device()
+        #         print(
+        #             f"[DEBUG] Process rank {self.accelerator.process_index} calling torch.distributed.barrier() on device {current_device}"
+        #         )
+        #         torch.distributed.barrier(device_ids=[current_device])
+        #         print(
+        #             f"[DEBUG] Process rank {self.accelerator.process_index} passed torch.distributed.barrier()"
+        #         )
+
+        #     # --- SKIP SGLang engine initialization and generation call ---
+        #     print(
+        #         "[DEBUG] Skipping SGLang engine initialization for testing synchronization."
+        #     )
+        #     # Instead of initializing the engine and making generation calls, simply wait for synchronization.
+        #     self.accelerator.wait_for_everyone()
+        #     print(
+        #         f"[DEBUG] Process rank {self.accelerator.process_index} passed accelerator.wait_for_everyone()"
+        #     )
         elif self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
@@ -802,7 +838,7 @@ class GRPOTrainer(Trainer):
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
         if self.use_sglang:
-            # Update weights if the training step has advanced
+            # If the global step has advanced, update the SGLang engine weights (only on the main process)
             if (
                 self.state.global_step != self._last_loaded_step
                 and self.accelerator.is_main_process
@@ -816,7 +852,7 @@ class GRPOTrainer(Trainer):
                 self._update_sglang_engine_weights()
                 self._last_loaded_step = self.state.global_step
 
-            # Gather all prompt texts from all processes
+            # Gather prompt texts from all processes
             all_prompts_text = gather_object(prompts_text)
             print(
                 "[DEBUG] Process rank",
@@ -826,6 +862,7 @@ class GRPOTrainer(Trainer):
             )
 
             if self.accelerator.is_main_process:
+                # The main process makes the generation call directly
                 print(
                     "[DEBUG] [Main Process] Sending generation request to SGLang engine with sampling parameters:",
                     self.sglang_sampling_params,
@@ -847,7 +884,7 @@ class GRPOTrainer(Trainer):
             else:
                 completion_ids = [None] * len(all_prompts_text)
 
-            # Broadcast and slice the generated completions
+            # Broadcast the generated completions from the main process to all processes
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
@@ -861,6 +898,13 @@ class GRPOTrainer(Trainer):
                 completion_ids, padding_value=self.processing_class.pad_token_id
             )
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        # if self.use_sglang:
+        #     # --- Temporarily disable SGLang generation for synchronization testing ---
+        #     print(
+        #         "[DEBUG] SGLang generation branch disabled for testing synchronization."
+        #     )
+        #     # Instead of generating, simply pass through the prompt IDs.
+        #     prompt_completion_ids = torch.cat([prompt_ids, prompt_ids], dim=1)
         elif self.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
