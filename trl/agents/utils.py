@@ -94,6 +94,7 @@ class LocalExecutor:
                 results.append(f"Error executing code: {str(e)}")
         return results
 
+
 class E2BExecutor:
     def __init__(self, api_key: str, template: str = None, max_concurrent: int = 5):
         """
@@ -151,6 +152,7 @@ class E2BExecutor:
         else:
             # We're in a regular Python environment
             return loop.run_until_complete(run_batch())
+
 
 def prepare_data_for_e2b_agent(
     dataset,
