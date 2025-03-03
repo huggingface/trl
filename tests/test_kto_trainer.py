@@ -378,3 +378,40 @@ class KTOTrainerTester(unittest.TestCase):
                 AutoModelForCausalLM.from_pretrained(tmp_dir)
             except OSError:
                 self.fail("Loading the saved peft adapter failed")
+
+    def test_compute_metrics(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer.pad_token = tokenizer.eos_token
+
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+
+        def dummy_compute_metrics(*args, **kwargs):
+            return {"test": 0.0}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                remove_unused_columns=False,
+                per_device_train_batch_size=2,
+                do_eval=True,
+                eval_strategy="steps",
+                eval_steps=1,
+                per_device_eval_batch_size=2,
+                report_to="none",
+            )
+
+            trainer = KTOTrainer(
+                model=model,
+                ref_model=ref_model,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                compute_metrics=dummy_compute_metrics,
+            )
+
+            trainer.train()
+
+            self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
