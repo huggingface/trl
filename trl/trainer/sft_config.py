@@ -37,8 +37,6 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
-        use_liger (`bool`, *optional*, defaults to `False`):
-            Monkey patch the model with Liger kernels to increase throughput and reduce memory usage.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
 
@@ -73,10 +71,6 @@ class SFTConfig(TrainingArguments):
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `SFTTrainer` is provided as a string."
         },
-    )
-    use_liger: bool = field(
-        default=False,
-        metadata={"help": "Monkey patch the model with Liger kernels to increase throughput and reduce memory usage."},
     )
 
     # Parameters that control the data preprocessing
@@ -125,24 +119,28 @@ class SFTConfig(TrainingArguments):
     )
 
     # Deprecated parameters
-    dataset_batch_size: int = field(
+    dataset_batch_size: Optional[int] = field(
         default=None,
         metadata={"help": "Deprecated. You can safely remove this parameter from your configuration."},
     )
-    num_of_sequences: int = field(
+    num_of_sequences: Optional[int] = field(
         default=None,
         metadata={
             "help": "Deprecated. Use `max_length` instead, which specifies the maximum length of the tokenized "
             "sequence, unlike `num_of_sequences`, which referred to string sequences."
         },
     )
-    chars_per_token: float = field(
+    chars_per_token: Optional[float] = field(
         default=None,
         metadata={"help": "Deprecated. If you want to customize the packing length, use `max_length`."},
     )
     max_seq_length: Optional[int] = field(
         default=None,
         metadata={"help": "Deprecated. Use `max_length` instead."},
+    )
+    use_liger: Optional[bool] = field(
+        default=None,
+        metadata={"help": "Deprecated. Use `use_liger_kernel` instead."},
     )
 
     activation_offloading: bool = field(
@@ -181,3 +179,10 @@ class SFTConfig(TrainingArguments):
                 DeprecationWarning,
             )
             self.max_length = self.max_seq_length
+
+        if self.use_liger is not None:
+            warnings.warn(
+                "`use_liger` is deprecated and will be remove in version 0.18.0. Use `use_liger_kernel` instead.",
+                DeprecationWarning,
+            )
+            self.use_liger_kernel = self.use_liger
