@@ -12,15 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 from inspect import getsource
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List
 
+# from dataclasses import dataclass
+# from e2b_code_interpreter import AsyncSandbox
 from ..import_utils import is_e2b_available, is_langchain_experimental_available
 
 
 if is_e2b_available():
-    from e2b_code_interpreter import Sandbox
+    from e2b_code_interpreter import AsyncSandbox
 
 if is_langchain_experimental_available():
     from langchain_experimental.utilities import PythonREPL
@@ -55,45 +58,6 @@ def get_code(chat: str, tools_script: str = None, parsing_string: str = "<code>"
     return code
 
 
-class E2BExecutor:
-    def __init__(self, api_key: str, dependencies: Optional[List[str]] = None, template: Optional[str] = None):
-        """
-        Initialize the E2BExecutor with API key and optional settings.
-
-        Args:
-            api_key (`str`):
-                Your E2B API Key.
-            dependencies (`List[str]` or `None`, *optional*, defaults to `None`):
-                A list of dependencies to install.
-            template (`str` or `None`, *optional*, defaults to `None`):
-                Template for the sandbox environment.
-        """
-        self.api_key = api_key
-        self.dependencies = dependencies
-        self.template = template
-
-    def execute(self, code: str) -> str:
-        """
-        Executes a given code snippet in an e2b sandbox environment.
-
-        Args:
-            code (`str`):
-                The code snippet to execute.
-
-        Returns:
-            `str`:
-                The response from the sandbox environment after executing the code.
-        """
-        sbx = Sandbox(api_key=self.api_key, template=self.template)
-        if self.dependencies:
-            packages = " ".join(self.dependencies)
-            install_command = f"pip install {packages}"
-            sbx.commands.run(install_command)
-        response = sbx.run_code(code)
-        sbx.kill()
-        return str(response)
-
-
 def read_script(user_script_path: str) -> str:
     """
     Reads and returns the content of the provided script.
@@ -110,25 +74,83 @@ def read_script(user_script_path: str) -> str:
 
 
 class LocalExecutor:
-    def execute(self, code: str) -> str:
+    def execute(self, codes: List[str]) -> List[str]:
         """
-        Executes a given code snippet using PythonREPL.
+        Executes multiple code snippets using PythonREPL sequentially.
 
         Args:
-            code (`str`):
-                The code snippet to execute.
+            codes (List[str]): List of code snippets to execute.
 
         Returns:
-            `str`:
-                The output from executing the code.
+            List[str]: List of execution results in same order as input snippets.
+        """
+        results = []
+        repl = PythonREPL()
+        for code in codes:
+            try:
+                result = repl.run(code)
+                results.append(str(result))
+            except Exception as e:
+                results.append(f"Error executing code: {str(e)}")
+        return results
+
+class E2BExecutor:
+    def __init__(self, api_key: str, template: str = None, max_concurrent: int = 5):
+        """
+        Initialize the E2BExecutor for parallel code execution.
+
+        Args:
+            api_key (`str`): Your E2B API Key.
+            template (`str`, *optional*, defaults to None): Template ID for the sandbox environment.
+            max_concurrent (`int`, *optional*, defaults to 5): Maximum number of concurrent executions.
+        """
+        self.api_key = api_key
+        self.template = template
+        self.max_concurrent = max_concurrent
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def _execute_single(self, code: str) -> str:
+        """Execute a single code snippet in a sandbox"""
+        async with self.semaphore:
+            try:
+                sandbox = await AsyncSandbox.create(api_key=self.api_key, template=self.template)
+                try:
+                    response = await sandbox.run_code(code)
+                    return str(response)
+                finally:
+                    await sandbox.kill()
+            except Exception as e:
+                return f"Error: {str(e)}"
+
+    def execute(self, codes: List[str]) -> List[str]:
+        """
+        Executes multiple code snippets in parallel.
+
+        Args:
+            codes (List[str]): List of code snippets to execute.
+
+        Returns:
+            List[str]: List of execution results in same order as input snippets.
         """
         try:
-            repl = PythonREPL()
-            result = repl.run(code)
-            return str(result)
-        except Exception as e:
-            return f"Error executing code: {str(e)}"
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
+        async def run_batch():
+            tasks = [self._execute_single(code) for code in codes]
+            return await asyncio.gather(*tasks)
+
+        if loop.is_running():
+            # We're in a notebook or similar environment
+            import nest_asyncio
+
+            nest_asyncio.apply()
+            return loop.run_until_complete(run_batch())
+        else:
+            # We're in a regular Python environment
+            return loop.run_until_complete(run_batch())
 
 def prepare_data_for_e2b_agent(
     dataset,
@@ -297,25 +319,28 @@ def generate_agent_responses(
         # Generate outputs for the current batch.
         outputs = llm.generate(current_batch, sampling_params, use_tqdm=False)
         next_batch = []  # To store chats that still need code execution.
+        code_batch = []  # To collect code snippets for batch execution
+        conversations = []  # To keep track of conversations for each code
 
-        # Process each output in the batch.
+        # First pass: collect all codes that need execution
         for output in outputs:
-            # Reconstruct the conversation (prompt + generated response).
             conversation = output.prompt + output.outputs[0].text
-
-            # Check if response is waiting for code execution.
             if output.outputs[0].stop_reason == stop_string:
-                # Extract the code to execute.
-                code_to_execute = get_code(conversation, tools_script=tools_script, parsing_string=parsing_string)
-                # Execute the code via the sandbox.
-                executed_result = code_executer.execute(code_to_execute)
-                # Append the execution result to the conversation.
-                updated_conversation = conversation + f"{stop_string}<output>" + executed_result + "</output>"
-                # Add this updated conversation to the next batch.
-                next_batch.append(updated_conversation)
+                code = get_code(conversation, tools_script=tools_script, parsing_string=parsing_string)
+                code_batch.append(code)
+                conversations.append(conversation)
             else:
-                # If chat is complete, add it.
                 completed_chats.append(conversation)
+
+        # Execute all collected codes in one batch
+        if code_batch:
+            executed_results = code_executer.execute(code_batch)
+
+            # Process results and update conversations
+            for conv, result in zip(conversations, executed_results):
+                updated_conversation = conv + f"{stop_string}<output>" + result + "</output>"
+                next_batch.append(updated_conversation)
+
         # Process next batch.
         current_batch = next_batch
 
