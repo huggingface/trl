@@ -25,7 +25,7 @@ pip install deepspeed
 No modifications to your training script are required. Simply run it with the DeepSpeed configuration file:
 
 ```bash
-accelerate launch --config_file <DEEPSPEED_CONFIG_FILE> train.py
+accelerate launch --config_file <ACCELERATE_WITH_DEEPSPEED_CONFIG_FILE.yaml> train.py
 ```
 
 We provide ready-to-use DeepSpeed configuration files in the [`examples/accelerate_configs`](https://github.com/huggingface/trl/tree/main/examples/accelerate_configs) directory. For example, to run training with ZeRO Stage 2, use the following command:
