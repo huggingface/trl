@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Union
 
 from transformers import TrainingArguments
+from transformers.generation import LogitsProcessor
 
 
 @dataclass
@@ -298,5 +299,12 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
+    )
+
+    logits_processor: Optional[LogitsProcessor] = field(
+        default=None,
+        metadata={
+            "help": "Logits processor list that can be used for guided decoding"
         },
     )
