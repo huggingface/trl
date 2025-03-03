@@ -182,7 +182,7 @@ cd trl/
 pip install -e .[dev]
 ```
 
-## Citation
+## Citation changed by rio
 
 ```bibtex
 @misc{vonwerra2022trl,
