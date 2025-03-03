@@ -579,13 +579,13 @@ class QwenGRPOTrainer(Trainer):
             # Use an empty list for non-main processes
             local_inputs = inputs if self.accelerator.process_index == 0 else []
 
-            self.accelerator.wait_for_everyone()
-
             # Gather from all processes using torch.distributed.gather_object
             all_inputs = gather_object(local_inputs)
 
             # each process takes the inputs from process 0 as its inputs
             inputs = deepcopy(all_inputs)
+
+        self.accelerator.wait_for_everyone()
 
         # conversations: list of conversations
         # prompts_text: list of prompts as strings
@@ -726,15 +726,19 @@ class QwenGRPOTrainer(Trainer):
 
         # # DEBUG: Verify prompt consistency across completions in each group
         # TODO: remove this probably?
-        if self.accelerator.is_main_process:
-            all_prompts = gather_object(prompts_text)
+        # if self.accelerator.is_main_process:
+        #     all_prompts = gather_object(prompts_text)
 
-            if not len(all_prompts) == self.num_generations:
-                raise ValueError(
-                    f"We should have one prompt per generation, but we have {len(all_prompts)} prompts and {self.num_generations} generations"
-                )
-            if not len(set(all_prompts)) == 1:
-                raise ValueError(f"All prompts should be the same. {all_prompts=}")
+        #     if not len(all_prompts) == self.num_generations:
+        #         raise ValueError(
+        #             f"We should have one prompt per generation, but we have {len(all_prompts)} prompts and {self.num_generations} generations"
+        #         )
+        #     if not len(set(all_prompts)) == 1:
+        #         raise ValueError(f"All prompts should be the same. {all_prompts=}")
+        #     print("PASSED PROMPT CONSISTENCY CHECK")
+
+        # # Add synchronization point to prevent processes from getting out of sync
+        # self.accelerator.wait_for_everyone()
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
