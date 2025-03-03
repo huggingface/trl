@@ -594,7 +594,7 @@ class GRPOTrainer(Trainer):
         #    distributed to different GPUs, allowing rewards to be computed and normalized correctly within each prompt
         #    group. Using the same seed across processes ensures consistent prompt assignment, preventing discrepancies
         #    in group formation.
-        # 2. repeats the batch multiple times to allow reusing generaations across multiple updates. Refer to
+        # 2. repeats the batch multiple times to allow reusing generations across multiple updates. Refer to
         #    _prepare_inputs to see how the generations are stored and reused.
 
         # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
@@ -675,7 +675,7 @@ class GRPOTrainer(Trainer):
     @profiling_decorator
     def _move_model_to_vllm(self):
         with unwrap_model_for_generation(
-            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+            self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
             if is_compiled_module(unwrapped_model):
                 unwrapped_model = unwrapped_model._orig_mod
@@ -791,7 +791,7 @@ class GRPOTrainer(Trainer):
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
-            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+            with unwrap_model_for_generation(self.model_wrapped, self.accelerator) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
                     prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                 )
@@ -813,7 +813,7 @@ class GRPOTrainer(Trainer):
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        with torch.inference_mode():
+        with torch.no_grad():
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:

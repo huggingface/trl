@@ -121,14 +121,14 @@ By default, they are both 1. However, if you have more of one or the other, then
 
 While training and evaluating we record the following reward metrics:
 
-- `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
-- `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta
-- `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
-- `logps/chosen`: the mean log probabilities of the chosen completions
-- `logps/rejected`: the mean log probabilities of the rejected completions
-- `logits/chosen`: the mean logits of the chosen completions
-- `logits/rejected`: the mean logits of the rejected completions
-- `kl`: the KL divergence between the policy model and the reference model
+- `rewards/chosen_sum`: the sum of log probabilities of the policy model for the chosen responses scaled by beta
+- `rewards/rejected_sum`: the sum of log probabilities of the policy model for the rejected responses scaled by beta
+- `logps/chosen_sum`: the sum of log probabilities of the chosen completions
+- `logps/rejected_sum`: the sum of log probabilities of the rejected completions
+- `logits/chosen_sum`: the sum of logits of the chosen completions
+- `logits/rejected_sum`: the sum of logits of the rejected completions
+- `count/chosen`: the count of chosen samples in a batch
+- `count/rejected`: the count of rejected samples in a batch
 
 ## KTOTrainer
 
