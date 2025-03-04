@@ -1,0 +1,8 @@
+import codeql
+
+from WorkflowString interpolations
+
+select workflow, "Warning for the config"
+where workflow.string.matches("${{ github.event.issue.title }}")
+   or workflow.string.matches("${{ github.event.pull_request.body }}")
+   or workflow.string.matches("${{ github.event.comment.body }}")
