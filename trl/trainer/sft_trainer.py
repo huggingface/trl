@@ -488,7 +488,8 @@ class SFTTrainer(Trainer):
             total_tokens = self.accelerator.gather_for_metrics(total_tokens)
 
             # Compute the mean token accuracy and log it
-            accuracy = (correct_tokens.sum() / total_tokens.sum()).item() if total_tokens.sum() > 0 else 0.0
+            total_sum = total_tokens.sum()
+            accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
             self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
