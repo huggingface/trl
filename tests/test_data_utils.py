@@ -27,7 +27,9 @@ from trl.data_utils import (
     maybe_convert_to_chatml,
     maybe_extract_prompt,
     maybe_unpair_preference_dataset,
+    pack_dataset,
     pack_examples,
+    truncate_dataset,
     unpair_preference_dataset,
 )
 
@@ -432,8 +434,54 @@ class TestPackExamples(unittest.TestCase):
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
         }
-        dataset = dataset.map(pack_examples, batched=True, fn_kwargs={"seq_length": seq_length})
+        dataset = pack_dataset(dataset, seq_length)
         self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_pack_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        seq_length = 3
+        expected_output = {
+            "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length)
+        num_examples = len(examples[next(iter(examples))])
+        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+
+class TestTruncateExamples(unittest.TestCase):
+    def test_truncate_with_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_pack_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        num_examples = len(examples[next(iter(examples))])
+        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
 
 
 class TestMaybeConvertToChatML(unittest.TestCase):
