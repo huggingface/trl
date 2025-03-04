@@ -1,0 +1,19 @@
+import codeql
+
+from WorkflowString interpolation, Workflow workflow
+where 
+  interpolation.getStringValue().matches("${{ github.event.issue.title }}") or
+  interpolation.getStringValue().matches("${{ github.event.issue.body }}") or
+  interpolation.getStringValue().matches("${{ github.event.pull_request.title }}") or
+  interpolation.getStringValue().matches("${{ github.event.pull_request.body }}") or
+  interpolation.getStringValue().matches("${{ github.event.review.body }}") or
+  interpolation.getStringValue().matches("${{ github.event.comment.body }}") or
+  interpolation.getStringValue().matches("${{ github.event.inputs.* }}") or
+  interpolation.getStringValue().matches("${{ github.event.head_commit.message }}")
+  interpolation.getStringValue().matches("${{ github.event.* }}") and
+  (
+    step.getKey() = "run" or  // Injection in run
+    step.getKey() = "env" or  // Injection via env
+    step.getKey() = "with"    // Injection via with
+  )
+select workflow, "🚨 Do not use directly as input of action"
