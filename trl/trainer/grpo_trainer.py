@@ -524,7 +524,7 @@ class GRPOTrainer(Trainer):
                     n=args.num_generations,
                     temperature=args.temperature,
                     top_p=args.top_p,
-                    top_k=args.top_k,
+                    top_k=-1 if args.top_k is None else args.top_k,
                     min_p=0.0 if args.min_p is None else args.min_p,
                     repetition_penalty=args.repetition_penalty,
                 )

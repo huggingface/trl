@@ -62,8 +62,9 @@ class GRPOConfig(TrainingArguments):
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1
             to consider all tokens.
-        top_k (`int`, *optional*, defaults to `50`):
-            Number of highest probability vocabulary tokens to keep for top-k-filtering.
+        top_k (`int` or `None`, *optional*, defaults to `50`):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
+            disabled.
         min_p (`float` or `None`, *optional*, defaults to `None`):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
@@ -194,9 +195,12 @@ class GRPOConfig(TrainingArguments):
             "Set to 1 to consider all tokens."
         },
     )
-    top_k: int = field(
+    top_k: Optional[int] = field(
         default=50,
-        metadata={"help": "Number of highest probability vocabulary tokens to keep for top-k-filtering."},
+        metadata={
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
+            "top-k-filtering is disabled."
+        },
     )
     min_p: Optional[float] = field(
         default=None,
