@@ -103,6 +103,15 @@ _import_structure = {
     ],
     "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
+    "agents": [
+        "E2BExecutor",
+        "LocalExecutor",
+        "prepare_data_for_e2b_agent",
+        "prepare_data_for_local_agent",
+        "generate_agent_responses",
+        "get_code",
+        "read_script",
+    ],
 }
 
 try:
@@ -122,6 +131,15 @@ else:
     _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
+    from .agents import (
+        E2BExecutor,
+        LocalExecutor,
+        generate_agent_responses,
+        get_code,
+        prepare_data_for_e2b_agent,
+        prepare_data_for_local_agent,
+        read_script,
+    )
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
