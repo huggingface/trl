@@ -953,7 +953,7 @@ class GRPOTrainer(Trainer):
         mode = "eval" if self.control.should_evaluate else "train"
 
         if self.beta != 0.0:
-            mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
         is_clipped = (per_token_loss1 < per_token_loss2).float()
