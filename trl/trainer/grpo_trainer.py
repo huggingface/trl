@@ -30,6 +30,8 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.utils.data
+import torch.distributed as dist
+import torch.multiprocessing as mp
 import transformers
 from accelerate.utils import (
     broadcast_object_list,
@@ -101,11 +103,6 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
-
-if is_sglang_available():
-    import requests
-    from sglang.utils import launch_server_cmd
-    from sglang.utils import wait_for_server, terminate_process
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -1395,6 +1392,20 @@ class GRPOTrainer(Trainer):
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
+        # Determine process rank/index based on initialization mode
+        if (
+            hasattr(self, "_using_manual_distributed")
+            and self._using_manual_distributed
+        ):
+            process_rank = dist.get_rank()
+            world_size = dist.get_world_size()
+            is_main_process = process_rank == 0
+        else:
+            process_rank = self.accelerator.process_index
+            world_size = self.accelerator.num_processes
+            is_main_process = self.accelerator.is_main_process
+
+        # Get appropriate device
         device = self.accelerator.device
 
         # Process prompts
@@ -1487,6 +1498,8 @@ class GRPOTrainer(Trainer):
                 (process_rank + 1) * len(prompts),
             )
             completion_ids = completion_ids[process_slice]
+
+            # Prepare completion tensors
             completion_ids = [
                 torch.tensor(ids, device=device) for ids in completion_ids
             ]
