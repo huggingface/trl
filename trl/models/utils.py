@@ -143,7 +143,7 @@ def remove_hooks(model: "DeepSpeedEngine") -> None:
     elif model.optimizer is not None:
         optimizer_offload = model.optimizer
     else:
-        raise NotImplementedError(f"Didn't yet handle optimizer {model.optimizer}.")
+        raise RuntimeError("The model optimizer is None, which is not yet supported.")
 
     for param in iter_params(optimizer_offload.module, recurse=True):
         param.ds_active_sub_modules.clear()
@@ -174,7 +174,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
     elif model.optimizer is not None:
         optimizer_offload = model.optimizer
     else:
-        raise NotImplementedError(f"Didn't yet handle optimizer {model.optimizer}.")
+        raise RuntimeError("The model optimizer is None, which is not yet supported.")
     if version.parse(deepspeed.__version__) >= version.parse("0.16.4"):
         # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
         optimizer_offload._register_deepspeed_module(optimizer_offload.module)
