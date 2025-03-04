@@ -815,8 +815,8 @@ class GRPOTrainerTester(unittest.TestCase):
                 report_to="none",
                 top_p=0.9,
                 top_k=10,
-                min_p=0.1,
-                repetition_penalty=0.1,
+                min_p=0.01,
+                repetition_penalty=1.1,
             )
 
             trainer = GRPOTrainer(
@@ -856,8 +856,8 @@ class GRPOTrainerTester(unittest.TestCase):
                 vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
                 top_p=0.9,
                 top_k=10,
-                min_p=0.1,
-                repetition_penalty=0.1,
+                min_p=0.01,
+                repetition_penalty=1.1,
             )
 
             trainer = GRPOTrainer(

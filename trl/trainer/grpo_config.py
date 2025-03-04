@@ -60,8 +60,8 @@ class GRPOConfig(TrainingArguments):
         temperature (`float`, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
-            Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1
-            to consider all tokens.
+            Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
+            `1.0` to consider all tokens.
         top_k (`int` or `None`, *optional*, defaults to `50`):
             Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
             disabled.
@@ -192,7 +192,7 @@ class GRPOConfig(TrainingArguments):
         default=1.0,
         metadata={
             "help": "Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. "
-            "Set to 1 to consider all tokens."
+            "Set to 1.0 to consider all tokens."
         },
     )
     top_k: Optional[int] = field(
