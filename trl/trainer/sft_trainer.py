@@ -204,7 +204,8 @@ class SFTTrainer(Trainer):
             data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
         # Initialize the metrics
-        self._metrics = defaultdict(list)
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
 
         # Initialize the Trainer. Parent class will handle:
         # - DeepSpeed configuration (through create_accelerator_and_postprocess)
@@ -458,9 +459,13 @@ class SFTTrainer(Trainer):
         """
         Compute training loss and additionally compute token accuracies
         """
+        mode = "eval" if self.control.should_evaluate else "train"
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
+        if mode == "train":
+            self._total_train_tokens += self.accelerator.gather_for_metrics(inputs["attention_mask"].sum().item())
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
         if "labels" in inputs and not self.args.use_liger_kernel:
@@ -484,16 +489,17 @@ class SFTTrainer(Trainer):
 
             # Compute the mean token accuracy and log it
             accuracy = (correct_tokens.sum() / total_tokens.sum()).item() if total_tokens.sum() > 0 else 0.0
-            self._metrics["mean_token_accuracy"].append(accuracy)
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+        mode = "eval" if self.control.should_evaluate else "train"
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
-        if next(iter(logs.keys())).startswith("eval_"):
+        if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
         logs = {**logs, **metrics}
@@ -501,7 +507,7 @@ class SFTTrainer(Trainer):
             super().log(logs, start_time)
         else:  # transformers<=4.46
             super().log(logs)
-        self._metrics.clear()
+        self._metrics[mode].clear()
 
     def create_model_card(
         self,
