@@ -468,7 +468,7 @@ class TestTruncateExamples(unittest.TestCase):
         dataset = truncate_dataset(dataset, max_length)
         self.assertEqual(dataset.to_dict(), expected_output)
 
-    def test_pack_with_iterable_dataset(self):
+    def test_truncate_with_iterable_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
