@@ -47,8 +47,6 @@ class GRPOConfig(TrainingArguments):
         num_generations (`int` or `None`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The global batch size (num_processes * per_device_batch_size)
             must be divisible by this value.
-        temperature (`float`, *optional*, defaults to `0.9`):
-            Temperature for sampling. The higher the temperature, the more random the completions.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -56,6 +54,24 @@ class GRPOConfig(TrainingArguments):
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
             with vLLM generation.
+
+        > Parameters that control generation
+
+        temperature (`float`, defaults to `0.9`):
+            Temperature for sampling. The higher the temperature, the more random the completions.
+        top_p (`float`, *optional*, defaults to `1.0`):
+            Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
+            `1.0` to consider all tokens.
+        top_k (`int` or `None`, *optional*, defaults to `50`):
+            Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
+            disabled.
+        min_p (`float` or `None`, *optional*, defaults to `None`):
+            Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
+            value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
+        repetition_penalty (`float`, *optional*, defaults to `1.0`):
+            Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
+            Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
+            tokens.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -115,6 +131,7 @@ class GRPOConfig(TrainingArguments):
             set `sync_ref_model=True`.
 
         > Parameters that control the logging
+
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
@@ -152,10 +169,6 @@ class GRPOConfig(TrainingArguments):
             "must be divisible by this value."
         },
     )
-    temperature: Optional[float] = field(
-        default=0.9,
-        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
-    )
     max_completion_length: Optional[int] = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
@@ -167,6 +180,41 @@ class GRPOConfig(TrainingArguments):
             "generation, improving generation speed. However, disabling this option allows training models that "
             "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
             "is not compatible with vLLM generation."
+        },
+    )
+
+    # Parameters that control generation
+    temperature: float = field(
+        default=0.9,
+        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+    )
+    top_p: float = field(
+        default=1.0,
+        metadata={
+            "help": "Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. "
+            "Set to 1.0 to consider all tokens."
+        },
+    )
+    top_k: Optional[int] = field(
+        default=50,
+        metadata={
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
+            "top-k-filtering is disabled."
+        },
+    )
+    min_p: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
+            "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={
+            "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
+            "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
+            "to repeat tokens."
         },
     )
 

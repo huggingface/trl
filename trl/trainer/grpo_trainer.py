@@ -519,10 +519,14 @@ class GRPOTrainer(Trainer):
 
                 # Sampling parameters
                 self.sampling_params = SamplingParams(
-                    temperature=args.temperature,
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
                     n=args.num_generations,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    top_k=-1 if args.top_k is None else args.top_k,
+                    min_p=0.0 if args.min_p is None else args.min_p,
+                    repetition_penalty=args.repetition_penalty,
                 )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
@@ -535,8 +539,12 @@ class GRPOTrainer(Trainer):
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
                 do_sample=True,
-                temperature=args.temperature,
                 pad_token_id=processing_class.pad_token_id,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p,
+                repetition_penalty=args.repetition_penalty,
             )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
