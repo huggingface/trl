@@ -29,7 +29,9 @@ _import_structure = {
         "maybe_convert_to_chatml",
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
+        "pack_dataset",
         "pack_examples",
+        "truncate_dataset",
         "unpair_preference_dataset",
     ],
     "environment": ["TextEnvironment", "TextHistory"],
@@ -130,7 +132,9 @@ if TYPE_CHECKING:
         maybe_convert_to_chatml,
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
+        pack_dataset,
         pack_examples,
+        truncate_dataset,
         unpair_preference_dataset,
     )
     from .environment import TextEnvironment, TextHistory
