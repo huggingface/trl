@@ -55,7 +55,7 @@ for i in $(seq 0 $iter_num); do
 
     { # try
         echo $CMD
-        eval "$CMD" 2> log.txt >log.txt
+        eval "$CMD"
     } || { # catch
         # save log for exception 
         echo "Operation Failed!"
