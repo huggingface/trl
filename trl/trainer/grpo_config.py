@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, Callable
 
 from transformers import TrainingArguments
 from transformers.generation import LogitsProcessor
@@ -302,7 +302,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
 
-    logits_processor: Optional[LogitsProcessor] = field(
+    logits_processor: Optional[Union[LogitsProcessor, Callable[[], LogitsProcessor]]] = field(
         default=None,
         metadata={
             "help": "Logits processor list that can be used for guided decoding"
