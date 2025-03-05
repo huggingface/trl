@@ -13,4 +13,5 @@ export PYTHONPATH="/home/misc/jinpan/trl-jin:$PYTHONPATH"
 # Launch the training using accelerate
 accelerate launch --config_file=trl/scripts/grpo_test/grpo_sgl_test.yaml trl/scripts/grpo_test/grpo_sgl_test.py
 
-# python manual_grpo_launch.py --config_file=trl/scripts/grpo_test/grpo_sgl_test.yaml
+# Under the ~/trl-jin/scripts/grpo_test
+# python manual_grpo_launch.py --config_file=grpo_sgl_test.yaml

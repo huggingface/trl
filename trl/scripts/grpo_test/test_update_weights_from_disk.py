@@ -55,7 +55,7 @@ class TestOfflineEngineUpdateWeights(unittest.TestCase):
         # Initialize the offline engine on rank 0.
         cls.engine = init_sglang_engine(
             rank=0,
-            base_gpu_id=1,
+            base_gpu_id=4,
             mem_fraction=0.5,
             random_seed=42,
             model_path=cls.model_path,

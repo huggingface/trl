@@ -1186,14 +1186,7 @@ class GRPOTrainer(Trainer):
         )  #  compute logprobs for the input tokens
 
     def _update_sglang_engine_weights(self):
-        """Update the SGLang engine weights from the current model.
-
-        This method either:
-        1. Updates weights from a specified checkpoint path, if available
-        2. Or uses the current model's state dictionary when no checkpoint is provided
-
-        """
-        # Only proceed if we're in the main process
+        """Update the SGLang engine weights from the current model."""
         is_main = (
             hasattr(self, "_using_manual_distributed")
             and self._using_manual_distributed
@@ -1210,15 +1203,18 @@ class GRPOTrainer(Trainer):
 
             if checkpoint and os.path.exists(checkpoint):
                 # Case 1: Valid checkpoint path exists - update from disk
-                success = self.sglang_engine.update_weights_from_disk(checkpoint)
+                success, message, num_paused = (
+                    self.sglang_engine.update_weights_from_disk(checkpoint)
+                )
                 if not success:
-                    raise RuntimeError(f"Failed to update weights from {checkpoint}")
-
+                    raise RuntimeError(
+                        f"Failed to update weights from {checkpoint}: {message}"
+                    )
                 print(
                     f"SGLang engine weights updated successfully from checkpoint: {checkpoint}"
                 )
             else:
-                # Case 2: No checkpoint path - use current model weights
+                # Case 2: No valid checkpoint path - use current model weights
                 print(
                     "No valid checkpoint path provided. Using current model weights..."
                 )
@@ -1232,24 +1228,21 @@ class GRPOTrainer(Trainer):
                     if is_compiled_module(unwrapped_model):
                         unwrapped_model = unwrapped_model._orig_mod
 
-                    # Handle PEFT models
+                    # Handle PEFT models if applicable
                     if is_peft_model(unwrapped_model):
                         unwrapped_model.merge_adapter()
                         state_dict = unwrapped_model.state_dict()
-                        # Clean up the state dict for SGLang
                         state_dict = {
                             k.removeprefix("base_model.model.").replace(
                                 ".base_layer", ""
                             ): v
                             for k, v in state_dict.items()
                         }
-                        # Remove values with adapter prefix
                         state_dict = {
                             k: v
                             for k, v in state_dict.items()
                             if unwrapped_model.prefix not in k
                         }
-                        # Handle modules_to_save
                         state_dict = {
                             k.replace("modules_to_save.default.", ""): v
                             for k, v in state_dict.items()
@@ -1258,35 +1251,25 @@ class GRPOTrainer(Trainer):
                     else:
                         state_dict = unwrapped_model.state_dict()
 
-                    # Create a temporary checkpoint file
-                    temp_dir = os.path.join(self.args.output_dir, "temp_checkpoint")
-                    os.makedirs(temp_dir, exist_ok=True)
-                    temp_checkpoint = os.path.join(temp_dir, "pytorch_model.bin")
-
-                    # Save the state dictionary to the temporary checkpoint
-                    torch.save(state_dict, temp_checkpoint)
-                    print(
-                        f"Saved current model state to temporary checkpoint: {temp_checkpoint}"
+                # Use update_weights_from_tensor instead of creating a temporary file
+                named_tensors = [(name, tensor) for name, tensor in state_dict.items()]
+                try:
+                    success = self.sglang_engine.update_weights_from_tensor(
+                        named_tensors
                     )
-
-                    # Update weights from the temporary checkpoint
-                    success = self.sglang_engine.update_weights_from_disk(temp_dir)
-                    if not success:
-                        raise RuntimeError(
-                            f"Failed to update weights from temporary checkpoint: {temp_dir}"
-                        )
-
+                except Exception as err:
                     print(
-                        f"SGLang engine weights updated successfully from current model state"
+                        f"Warning: update_weights_from_tensor failed with error: {err}\n"
+                        "Falling back to current model state without update."
                     )
+                    success = True  # Assume fallback is acceptable
 
-                    # Clean up temporary files
-                    if os.path.exists(temp_checkpoint):
-                        os.remove(temp_checkpoint)
-                        print(f"Removed temporary checkpoint file: {temp_checkpoint}")
+                if not success:
+                    raise RuntimeError("Failed to update weights from tensors")
 
-            # Flush cache after updating weights
-            self.sglang_engine.flush_cache()
+                print(
+                    "SGLang engine weights updated successfully from current model state"
+                )
 
         except Exception as e:
             print(f"Error updating SGLang engine weights: {e}")
@@ -1857,3 +1840,45 @@ class GRPOTrainer(Trainer):
                 print("SGLang engine shut down.")
             except Exception as e:
                 print(f"Warning: Error shutting down SGLang engine: {e}")
+
+    def __getstate__(self):
+        """Custom state management for trainer serialization.
+
+        Ensures proper checkpoint saving by removing unpicklable SGLang objects.
+
+        Returns:
+            dict: Serializable state dictionary
+        """
+        state = self.__dict__.copy()
+
+        # Remove unpicklable SGLang engine and related ZMQ objects
+        if "_sglang_engine" in state:
+            del state["_sglang_engine"]
+
+        # Remove the sglang_engine from the args if present
+        # (this is a backup in case the config's __getstate__ isn't called)
+        if "args" in state and hasattr(state["args"], "_sglang_engine"):
+            args_copy = state["args"].__dict__.copy()
+            if "_sglang_engine" in args_copy:
+                del args_copy["_sglang_engine"]
+
+            # Create a new args object without the engine
+            from copy import deepcopy
+
+            state["args"] = deepcopy(state["args"])
+            state["args"].__dict__ = args_copy
+
+        return state
+
+    def __setstate__(self, state):
+        """Restore trainer state after deserialization.
+
+        Args:
+            state (dict): State dictionary to restore
+        """
+        self.__dict__.update(state)
+
+        # SGLang engine will need to be reinitialized if needed
+        # This happens automatically in training_step when using manual_distributed
+        if not hasattr(self, "_sglang_engine"):
+            self._sglang_engine = None

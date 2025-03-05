@@ -232,3 +232,11 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Path to the checkpoint for SGLang weight update."},
     )
+
+    def __getstate__(self):
+        """Custom state management for pickling support."""
+        state = self.__dict__.copy()
+        # Remove unpicklable attributes (SGLang engine and ZMQ-related objects)
+        if "_sglang_engine" in state:
+            del state["_sglang_engine"]
+        return state
