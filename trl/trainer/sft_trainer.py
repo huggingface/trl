@@ -40,7 +40,7 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
@@ -50,9 +50,6 @@ from .utils import ConstantLengthDataset, generate_model_card, get_comet_experim
 if is_peft_available():
     import peft
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
-
-if is_liger_kernel_available():
-    from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 if is_wandb_available():
     import wandb
@@ -207,7 +204,8 @@ class SFTTrainer(Trainer):
             data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
         # Initialize the metrics
-        self._metrics = defaultdict(list)
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
 
         # Initialize the Trainer. Parent class will handle:
         # - DeepSpeed configuration (through create_accelerator_and_postprocess)
@@ -264,12 +262,7 @@ class SFTTrainer(Trainer):
             model_init_kwargs["use_cache"] = False
 
         # Create model
-        if args.use_liger:
-            if not is_liger_kernel_available():
-                raise ImportError("Please install Liger-kernel for use_liger=True")
-            model = AutoLigerKernelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+        model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
         return model
 
     def _prepare_peft_model(self, model: PreTrainedModel, peft_config: Any, args: SFTConfig) -> PreTrainedModel:
@@ -457,7 +450,7 @@ class SFTTrainer(Trainer):
                     **map_kwargs,
                 )
             # For Liger kernel, ensure only input_ids is present
-            if args.use_liger:
+            if args.use_liger_kernel:
                 dataset = dataset.select_columns("input_ids")
 
         return dataset
@@ -466,12 +459,16 @@ class SFTTrainer(Trainer):
         """
         Compute training loss and additionally compute token accuracies
         """
+        mode = "eval" if self.control.should_evaluate else "train"
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
+        if mode == "train":
+            self._total_train_tokens += self.accelerator.gather_for_metrics(inputs["attention_mask"].sum().item())
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.args.use_liger:
+        if "labels" in inputs and not self.args.use_liger_kernel:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
@@ -491,17 +488,19 @@ class SFTTrainer(Trainer):
             total_tokens = self.accelerator.gather_for_metrics(total_tokens)
 
             # Compute the mean token accuracy and log it
-            accuracy = (correct_tokens.sum() / total_tokens.sum()).item() if total_tokens.sum() > 0 else 0.0
-            self._metrics["mean_token_accuracy"].append(accuracy)
+            total_sum = total_tokens.sum()
+            accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+        mode = "eval" if self.control.should_evaluate else "train"
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
-        if next(iter(logs.keys())).startswith("eval_"):
+        if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
         logs = {**logs, **metrics}
@@ -509,7 +508,7 @@ class SFTTrainer(Trainer):
             super().log(logs, start_time)
         else:  # transformers<=4.46
             super().log(logs)
-        self._metrics.clear()
+        self._metrics[mode].clear()
 
     def create_model_card(
         self,

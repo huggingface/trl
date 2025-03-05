@@ -523,10 +523,14 @@ class GRPOTrainer(Trainer):
 
                 # Sampling parameters
                 self.sampling_params = SamplingParams(
-                    temperature=args.temperature,
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
                     n=args.num_generations,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    top_k=-1 if args.top_k is None else args.top_k,
+                    min_p=0.0 if args.min_p is None else args.min_p,
+                    repetition_penalty=args.repetition_penalty,
                 )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
@@ -539,8 +543,12 @@ class GRPOTrainer(Trainer):
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
                 do_sample=True,
-                temperature=args.temperature,
                 pad_token_id=processing_class.pad_token_id,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p,
+                repetition_penalty=args.repetition_penalty,
             )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
@@ -578,7 +586,7 @@ class GRPOTrainer(Trainer):
         #    distributed to different GPUs, allowing rewards to be computed and normalized correctly within each prompt
         #    group. Using the same seed across processes ensures consistent prompt assignment, preventing discrepancies
         #    in group formation.
-        # 2. repeats the batch multiple times to allow reusing generaations across multiple updates. Refer to
+        # 2. repeats the batch multiple times to allow reusing generations across multiple updates. Refer to
         #    _prepare_inputs to see how the generations are stored and reused.
 
         # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
@@ -659,7 +667,7 @@ class GRPOTrainer(Trainer):
     @profiling_decorator
     def _move_model_to_vllm(self):
         with unwrap_model_for_generation(
-            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+            self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
             if is_compiled_module(unwrapped_model):
                 unwrapped_model = unwrapped_model._orig_mod
@@ -758,7 +766,7 @@ class GRPOTrainer(Trainer):
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
-            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+            with unwrap_model_for_generation(self.model_wrapped, self.accelerator) as unwrapped_model:
                 logits_processor = None
                 if self.args.logits_processor is not None:
                     if self.args.logits_processor:
@@ -787,7 +795,7 @@ class GRPOTrainer(Trainer):
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        with torch.inference_mode():
+        with torch.no_grad():
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:
@@ -964,7 +972,7 @@ class GRPOTrainer(Trainer):
         mode = "eval" if self.control.should_evaluate else "train"
 
         if self.beta != 0.0:
-            mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
         is_clipped = (per_token_loss1 < per_token_loss2).float()

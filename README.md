@@ -2,6 +2,8 @@
 
 Work on our custom fork for internal work with RL. I plan to contribute them all to huggingface.
 
+Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
+
 ## Development
 
 If you want to contribute to `trl` or customize it to your needs make sure to read the [contribution guide](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md) and make sure you make a dev install:
