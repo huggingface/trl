@@ -1,7 +1,7 @@
 #!/bin/bash
 # This script runs SPPO with pre-generated data and hard probability labels. To generate your own data, please refer to https://github.com/uclaml/SPPO/blob/main/scripts/generate.sh
 
-OUTPUT_DIR="test_spin/"
+OUTPUT_DIR="test_sppo"
 MAX_STEPS=500
 BATCH_SIZE=1
 SEQ_LEN=128
@@ -28,32 +28,40 @@ else
   fi
 fi
 
+iter_num=3
+for i in $(seq 1 $iter_num); do
+    echo "Running Iter ${i}"
+    if [ "$i" -eq 1 ]; then
+        MODEL_NAME="mistralai/Mistral-7B-Instruct-v0.2"
+    else
+        MODEL_NAME="UCLA-AGI/Mistral7B-PairRM-SPPO-Iter$((i-1))"
+    fi
+    DATASET_NAME="KaixuanJi/SPPO_mistral-7b-instruct-iter${i}"
 
-MODEL_NAME="mistralai/Mistral-7B-Instruct-v0.2"
-DATASET_NAME="KaixuanJi/SPPO_mistral-7b-instruct-iter1"
+    CMD="""
+    accelerate launch $EXTRA_ACCELERATE_ARGS \
+        --num_processes $NUM_GPUS \
+        --mixed_precision 'fp16' \
+        `pwd`/trl/scripts/dpo.py \
+        --model_name_or_path $MODEL_NAME \
+        --dataset_name $DATASET_NAME \
+        --output_dir $OUTPUT_DIR \
+        --max_steps $MAX_STEPS \
+        --per_device_train_batch_size $BATCH_SIZE \
+        --max_length $SEQ_LEN \
+        $EXTRA_TRAINING_ARGS
+    """
+    echo "Starting program..."
 
-CMD="""
-accelerate launch $EXTRA_ACCELERATE_ARGS \
-    --num_processes $NUM_GPUS \
-    --mixed_precision 'fp16' \
-    `pwd`/trl/scripts/dpo.py \
-    --model_name_or_path $MODEL_NAME \
-    --dataset_name $DATASET_NAME \
-    --output_dir $OUTPUT_DIR \
-    --max_steps $MAX_STEPS \
-    --per_device_train_batch_size $BATCH_SIZE \
-    --max_length $SEQ_LEN \
-    $EXTRA_TRAINING_ARGS
-"""
-echo "Starting program..."
+    { # try
+        echo $CMD
+        eval "$CMD"
+    } || { # catch
+        # save log for exception 
+        echo "Operation Failed!"
+        exit 1
+    }
 
-{ # try
-    echo $CMD
-    eval "$CMD"
-} || { # catch
-    # save log for exception 
-    echo "Operation Failed!"
-    exit 1
-}
+done
 
 exit 0

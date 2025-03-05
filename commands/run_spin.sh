@@ -61,6 +61,6 @@ for i in $(seq 0 $iter_num); do
         echo "Operation Failed!"
         exit 1
     }
-    done
+done
 
 exit 0
