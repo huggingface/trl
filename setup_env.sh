@@ -13,6 +13,10 @@ source ~/.python/trl/bin/activate
 echo "Installing uv package installer..."
 pip install uv
 
+# Install PyTorch with CUDA 12.1 support
+echo "Installing PyTorch with CUDA 12.1 support..."
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+
 # Install the package in development mode
 echo "Installing trl in development mode..."
 pip install -e .[dev]
