@@ -1910,6 +1910,10 @@ class GRPOTrainer(Trainer):
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 5ceab9b (Clean File Hierarchy)
     def __del__(self):
         """Ensure proper cleanup when the trainer is destroyed."""
         if hasattr(self, "sglang_engine") and self.accelerator.is_main_process:
