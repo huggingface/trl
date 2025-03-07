@@ -1203,7 +1203,7 @@ class GRPOTrainer(Trainer):
 
             if checkpoint and os.path.exists(checkpoint):
                 # Case 1: Valid checkpoint path exists - update from disk
-                success, message, num_paused = (
+                success, message = (
                     self.sglang_engine.update_weights_from_disk(checkpoint)
                 )
                 if not success:

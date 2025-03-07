@@ -1,4 +1,23 @@
-accelerate
-datasets
-rich
-transformers>=4.46.0
+# Core dependencies
+torch>=2.5.0
+transformers>=4.48.0
+accelerate>=1.4.0
+datasets>=3.3.0
+peft>=0.9.0
+deepspeed>=0.16.0
+huggingface-hub>=0.29.0
+
+# SGLang dependencies
+"sglang[all] @ git+https://github.com/sgl-project/sglang.git/@main#egg=sglang&subdirectory=python"
+--find-links https://flashinfer.ai/whl/cu124/torch2.5/flashinfer-python
+flashinfer-python>=0.2.2
+
+# Optional utilities
+uv>=0.6.0
+psutil>=7.0.0
+jsonschema>=4.23.0
+outlines>=0.1.11
+
+# Development dependencies
+pytest>=8.3.0
+parameterized>=0.9.0
