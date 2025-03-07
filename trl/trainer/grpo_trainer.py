@@ -59,6 +59,7 @@ from .utils import (
     selective_log_softmax,
 )
 
+from accelerate.utils import DistributedType, get_cpu_distributed_information
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -445,15 +446,23 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
-            if self.accelerator.is_main_process:
+            if self.accelerator.is_local_main_process:
                 vllm_device = self.args.vllm_device
                 device_type = PartialState().default_device.type
                 device_module = getattr(torch, device_type)
+
+                state = self.accelerator.state
+                if state.distributed_type != DistributedType.NO:
+                    num_local_processes = get_cpu_distributed_information().local_world_size
+                else:
+                    num_local_processes = state.num_processes
+
                 if vllm_device == "auto":
                     if device_module.device_count() == 1:
                         vllm_device = f"{device_type}:0"  # particular case when training with onyl 1 device: share it
                     else:
-                        vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
+                        vllm_device = f"{device_type}:{num_local_processes}"  # take the next GPU idx
+
                 # Check that the requested device is available
                 if (
                     vllm_device.split(":")[0] == f"{device_type}"
@@ -461,12 +470,15 @@ class GRPOTrainer(Trainer):
                 ):
                     raise ValueError(
                         f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
-                        "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
-                        "value lower than the number of GPUs available on your machine—typically, reducing it by one "
-                        f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
+                        "without restricting the number of GPUs for training. For single-node training, set the "
+                        "`--num_processes` argument to a value lower than the number of GPUs available on your "
+                        " machine—typically, reducing it by one is sufficient. "
+                        " In your case: `--num_processes {device_module.device_count() - 1}`."
+                        " For multi-node training, reduce the total number of processes by the number of nodes, "
+                        " and the number of local devices by one."
                     )
                 # Check that the requested device is not also used for training
-                if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
+                if vllm_device in {f"{device_type}:{idx}" for idx in range(num_local_processes)}:
                     warnings.warn(
                         f"The requested device {vllm_device} is also being used for training. For higher throughput "
                         "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
@@ -477,6 +489,8 @@ class GRPOTrainer(Trainer):
                 # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
                 # setting (profiling_patch).
                 world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
+                rank_patch = patch("torch.distributed.get_rank", return_value=0)
+                backend_patch = patch("torch.distributed.get_backend", return_value=torch.distributed.get_backend())
                 profiling_patch = patch(
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
                 )
@@ -498,7 +512,7 @@ class GRPOTrainer(Trainer):
                         torch.distributed.new_group = new_group
 
                 new_group_patch = new_group_context() if device_type == "npu" else contextlib.nullcontext()
-                with world_size_patch, profiling_patch, new_group_patch:
+                with world_size_patch, rank_patch, backend_patch, profiling_patch, new_group_patch:
                     self.llm = LLM(
                         model=model.name_or_path,
                         device=vllm_device,
@@ -684,7 +698,7 @@ class GRPOTrainer(Trainer):
                 }
             else:
                 state_dict = unwrapped_model.state_dict()
-            if self.accelerator.is_main_process:
+            if self.accelerator.is_local_main_process:
                 llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                 llm_model.load_weights(state_dict.items())
             # Unmerge the adapter to restore the model to its original state.
@@ -730,26 +744,53 @@ class GRPOTrainer(Trainer):
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
-            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
+            # Generate completions using vLLM: gather all prompts and use them in a single call in the local
+            # main process
             all_prompts_text = gather_object(prompts_text)
-            if self.accelerator.is_main_process:
+
+            state = self.accelerator.state
+            if state.distributed_type != DistributedType.NO:
+                num_local_processes = get_cpu_distributed_information().local_world_size
+            else:
+                num_local_processes = state.num_processes
+
+            if self.accelerator.is_local_main_process:
+                process_slice = slice(
+                    self.accelerator.process_index * len(prompts),
+                    (self.accelerator.process_index + num_local_processes) * len(prompts),
+                )
+                all_prompts_text = all_prompts_text[process_slice]
+
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually.
-                ordered_set_of_prompts = list(dict.fromkeys(all_prompts_text))
+                def group_prompts(prompts, n):
+                    prompt_counts = defaultdict(int)
+                    grouped_prompts = []
+
+                    for prompt in prompts:
+                        count = prompt_counts[prompt]
+                        if count % n == 0:
+                            grouped_prompts.append(prompt)
+                        prompt_counts[prompt] += 1
+
+                    return grouped_prompts
+
+                grouped_prompts = group_prompts(all_prompts_text, self.num_generations)
+
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(
-                        ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
+                        grouped_prompts, sampling_params=self.sampling_params, use_tqdm=False
                     )
                 completion_ids = []
                 for outputs in all_outputs:
                     for output in outputs.outputs:
                         completion_ids.append(output.token_ids)
             else:
-                completion_ids = [None] * len(all_prompts_text)
+                completion_ids = []
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
             # corresponding slice.
-            completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            completion_ids = gather_object(completion_ids)
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
                 (self.accelerator.process_index + 1) * len(prompts),
