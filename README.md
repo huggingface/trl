@@ -25,9 +25,10 @@ TRL is a cutting-edge library designed for post-training foundation models using
 - **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer) and more.
 
 - **Efficient and scalable**: 
-    - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like [DDP](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html) and [DeepSpeed](https://github.com/deepspeedai/DeepSpeed).
-    - Full integration with [🤗 PEFT](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
-    - Integrates [🦥 Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
+    - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like DDP and DeepSpeed.
+    - Full integration with [`PEFT`](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
+    - Integrates [Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
+    - Supports [SGLang](https://github.com/sgl-project/sglang) for accelerated inference and training, especially with GRPO.
     - Supports [SGLang](https://github.com/sgl-project/sglang) for accelerated inference and training, especially with GRPO.
 
 - **Command Line Interface (CLI)**: A simple interface lets you fine-tune with models without needing to write code.
