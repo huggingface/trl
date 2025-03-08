@@ -26,6 +26,7 @@ TRL is a cutting-edge library designed for post-training foundation models using
     - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like DDP and DeepSpeed.
     - Full integration with [`PEFT`](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
     - Integrates [Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
+    - Supports [SGLang](https://github.com/sgl-project/sglang) for accelerated inference and training, especially with GRPO.
 
 - **Command Line Interface (CLI)**: A simple interface lets you fine-tune and interact with models without needing to write code.
 
@@ -160,6 +161,28 @@ trainer = GRPOTrainer(
 )
 trainer.train()
 ```
+
+#### Using SGLang with GRPO
+
+TRL supports SGLang integration for accelerated inference and training with GRPO. SGLang provides optimized kernels for faster generation and training, particularly beneficial for reinforcement learning methods.
+
+To set up the environment with SGLang support:
+
+```bash
+# Execute the setup script to create environment with SGLang and FlashInfer
+./setup_env.sh
+source ~/.python/trl/bin/activate
+```
+
+To run a quick test of GRPO with SGLang:
+
+```bash
+# Navigate to the test directory
+cd tests/grpo_test
+python manual_grpo_launch.py --config_file=grpo_sgl_test.yaml
+```
+
+This integration significantly improves training throughput and enables faster experimentation with reinforcement learning approaches.
 
 ### `DPOTrainer`
 

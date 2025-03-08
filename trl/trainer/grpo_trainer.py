@@ -88,8 +88,8 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-print("NCCL_DEBUG =", os.environ.get("NCCL_DEBUG"))
-print("TORCH_DISTRIBUTED_DEBUG =", os.environ.get("TORCH_DISTRIBUTED_DEBUG"))
+# print("NCCL_DEBUG =", os.environ.get("NCCL_DEBUG"))
+# print("TORCH_DISTRIBUTED_DEBUG =", os.environ.get("TORCH_DISTRIBUTED_DEBUG"))
 
 # Configure logging
 logging.basicConfig(
@@ -907,7 +907,7 @@ class GRPOTrainer(Trainer):
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
-        print("[DEBUG] Seed set to", args.seed)
+        # print("[DEBUG] Seed set to", args.seed)
 
         # Modified SGLang initialization
         if self.use_sglang:
@@ -918,19 +918,19 @@ class GRPOTrainer(Trainer):
                 )
 
             # Log distributed environment variables for debugging
-            print(f"[DEBUG] LOCAL_RANK: {os.environ.get('LOCAL_RANK')}")
-            print(f"[DEBUG] RANK: {os.environ.get('RANK')}")
-            print(f"[DEBUG] WORLD_SIZE: {os.environ.get('WORLD_SIZE')}")
-            print(
-                f"[DEBUG] torch.distributed.is_initialized(): {torch.distributed.is_initialized()}"
-            )
+            # print(f"[DEBUG] LOCAL_RANK: {os.environ.get('LOCAL_RANK')}")
+            # print(f"[DEBUG] RANK: {os.environ.get('RANK')}")
+            # print(f"[DEBUG] WORLD_SIZE: {os.environ.get('WORLD_SIZE')}")
+            # print(
+            #     f"[DEBUG] torch.distributed.is_initialized(): {torch.distributed.is_initialized()}"
+            # )
 
             # If using manual distributed mode, the engine is already initialized
             if self._using_manual_distributed:
                 if self.accelerator.is_main_process:
-                    print(
-                        "[DEBUG] Using pre-initialized SGLang engine from manual distributed mode"
-                    )
+                    # print(
+                    #     "[DEBUG] Using pre-initialized SGLang engine from manual distributed mode"
+                    # )
                     self.sglang_engine = self._sglang_engine
                     self.sglang_sampling_params = {
                         "temperature": args.temperature,
@@ -940,28 +940,28 @@ class GRPOTrainer(Trainer):
                 # Original SGLang initialization code
                 local_device = torch.device(f"cuda:{self.accelerator.process_index}")
                 torch.cuda.set_device(local_device)
-                print(
-                    f"[DEBUG] Process rank {self.accelerator.process_index} set to device {local_device}"
-                )
+                # print(
+                #     f"[DEBUG] Process rank {self.accelerator.process_index} set to device {local_device}"
+                # )
 
                 if torch.distributed.is_initialized():
                     current_device = torch.cuda.current_device()
-                    print(
-                        f"[DEBUG] Process rank {self.accelerator.process_index} calling torch.distributed.barrier() on device {current_device}"
-                    )
+                    # print(
+                    #     f"[DEBUG] Process rank {self.accelerator.process_index} calling torch.distributed.barrier() on device {current_device}"
+                    # )
                     torch.distributed.barrier(device_ids=[current_device])
-                    print(
-                        f"[DEBUG] Process rank {self.accelerator.process_index} passed torch.distributed.barrier()"
-                    )
+                    # print(
+                    #     f"[DEBUG] Process rank {self.accelerator.process_index} passed torch.distributed.barrier()"
+                    # )
 
                 # Initialize SGLang engine in main process
                 if self.accelerator.is_main_process:
                     base_gpu_id = args.sglang_base_gpu_id
                     if base_gpu_id is None:
                         base_gpu_id = self.accelerator.num_processes
-                    print(
-                        f"[DEBUG] [Main Process] Initializing SGLang Engine with base_gpu_id = {base_gpu_id}"
-                    )
+                    # print(
+                    #     f"[DEBUG] [Main Process] Initializing SGLang Engine with base_gpu_id = {base_gpu_id}"
+                    # )
                     try:
                         self.sglang_engine = sgl.Engine(
                             model_path=model_id,
@@ -975,9 +975,9 @@ class GRPOTrainer(Trainer):
                             "temperature": args.temperature,
                             "max_new_tokens": self.max_completion_length,
                         }
-                        print(
-                            "[DEBUG] [Main Process] SGLang engine initialized successfully."
-                        )
+                        # print(
+                        #     "[DEBUG] [Main Process] SGLang engine initialized successfully."
+                        # )
                     except Exception as e:
                         print(
                             "[ERROR] [Main Process] Error initializing SGLang engine:",
@@ -988,13 +988,13 @@ class GRPOTrainer(Trainer):
                         traceback.print_exc()
                         raise e
 
-                print(
-                    f"[DEBUG] Process rank {self.accelerator.process_index} calling accelerator.wait_for_everyone()"
-                )
+                # print(
+                #     f"[DEBUG] Process rank {self.accelerator.process_index} calling accelerator.wait_for_everyone()"
+                # )
                 self.accelerator.wait_for_everyone()
-                print(
-                    f"[DEBUG] Process rank {self.accelerator.process_index} passed accelerator.wait_for_everyone()"
-                )
+                # print(
+                #     f"[DEBUG] Process rank {self.accelerator.process_index} passed accelerator.wait_for_everyone()"
+                # )
         elif self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
@@ -1210,14 +1210,14 @@ class GRPOTrainer(Trainer):
                     raise RuntimeError(
                         f"Failed to update weights from {checkpoint}: {message}"
                     )
-                print(
-                    f"SGLang engine weights updated successfully from checkpoint: {checkpoint}"
-                )
+                # print(
+                #     f"SGLang engine weights updated successfully from checkpoint: {checkpoint}"
+                # )
             else:
                 # Case 2: No valid checkpoint path - use current model weights
-                print(
-                    "No valid checkpoint path provided. Using current model weights..."
-                )
+                # print(
+                #     "No valid checkpoint path provided. Using current model weights..."
+                # )
 
                 # Extract state dictionary from the model
                 with unwrap_model_for_generation(
@@ -1267,9 +1267,9 @@ class GRPOTrainer(Trainer):
                 if not success:
                     raise RuntimeError("Failed to update weights from tensors")
 
-                print(
-                    "SGLang engine weights updated successfully from current model state"
-                )
+                # print(
+                #     "SGLang engine weights updated successfully from current model state"
+                # )
 
         except Exception as e:
             print(f"Error updating SGLang engine weights: {e}")

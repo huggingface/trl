@@ -14,6 +14,7 @@ echo "Installing uv package installer..."
 pip install uv
 
 # Install PyTorch with CUDA 12.1 support
+# System CUDA Version needs to be consistent with pip CUDA Version
 echo "Installing PyTorch with CUDA 12.1 support..."
 pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 

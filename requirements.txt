@@ -1,5 +1,5 @@
 # Core dependencies
-# PyTorch with CUDA 12.1 support(need to verify system CUDA version)
+# System CUDA Version needs to be consistent with pip CUDA Version
 torch==2.5.1 
 torchvision==0.20.1 
 torchaudio==2.5.1
