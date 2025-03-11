@@ -379,8 +379,8 @@ class GRPOTrainer(Trainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.temperature = args.temperature
         self.use_vllm = args.use_vllm
-        self.generation_temperature = args.temperature + 1e-7
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
@@ -523,7 +523,7 @@ class GRPOTrainer(Trainer):
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
                     n=args.num_generations,
-                    temperature=self.generation_temperature,
+                    temperature=args.temperature,
                     top_p=args.top_p,
                     top_k=-1 if args.top_k is None else args.top_k,
                     min_p=0.0 if args.min_p is None else args.min_p,
@@ -541,7 +541,7 @@ class GRPOTrainer(Trainer):
                 max_new_tokens=self.max_completion_length,
                 do_sample=True,
                 pad_token_id=processing_class.pad_token_id,
-                temperature=self.generation_temperature,
+                temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
                 min_p=args.min_p,
@@ -658,7 +658,7 @@ class GRPOTrainer(Trainer):
         input_ids = input_ids[:, -logits_to_keep:]
         # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
         # See https://github.com/huggingface/trl/issues/2770
-        logits = logits[:, -logits_to_keep:] / self.generation_temperature
+        logits = logits[:, -logits_to_keep:] / self.temperature
         return selective_log_softmax(logits, input_ids)  #  compute logprobs for the input tokens
 
     @profiling_decorator
