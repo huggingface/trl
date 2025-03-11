@@ -157,7 +157,9 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         batch = collator(tokenized_instruction)
 
         self.assertEqual(batch["position_ids"].tolist(), [[0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 6]])  # flat pos ids
-        self.assertEqual(batch["cu_seq_lens_q"].tolist(), [0, 6, 13])  # start idx of each seq + total number of tokens
-        self.assertEqual(batch["cu_seq_lens_k"].tolist(), [0, 6, 13])  # idem
-        self.assertEqual(batch["max_length_k"], 7)  # max length in batch, here 7 (second sequence)
-        self.assertEqual(batch["max_length_q"], 7)  # idem
+        self.assertEqual(
+            batch["cu_seq_lens_q"].tolist(), [[0, 6, 13]]
+        )  # start idx of each seq + total number of tokens
+        self.assertEqual(batch["cu_seq_lens_k"].tolist(), [[0, 6, 13]])  # idem
+        self.assertEqual(batch["max_length_k"], [7])  # max length in batch, here 7 (second sequence)
+        self.assertEqual(batch["max_length_q"], [7])  # idem
