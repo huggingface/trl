@@ -658,8 +658,11 @@ class GRPOTrainer(Trainer):
         input_ids = input_ids[:, -logits_to_keep:]
         # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
         # See https://github.com/huggingface/trl/issues/2770
-        logits = logits[:, -logits_to_keep:] / self.temperature
-        return selective_log_softmax(logits, input_ids)  #  compute logprobs for the input tokens
+        logits = logits[:, -logits_to_keep:]
+        # Divide logits by sampling temperature.
+        # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+        logits = logits / self.temperature
+        return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
     @profiling_decorator
     def _move_model_to_vllm(self):
