@@ -742,7 +742,7 @@ class GRPOTrainer(Trainer):
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually.
-                ordered_set_of_prompts = list(dict.fromkeys(all_prompts_text))
+                ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(
                         ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
