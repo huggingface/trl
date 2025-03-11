@@ -89,7 +89,7 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
 
 ### User: How much is 2+2? I'm asking because I'm not sure. And I'm not sure because I'm not good at math.
 """
-        self.response_template = "### Assistant:"
+        self.response_template = "\n### Assistant:"
         # check DataCollatorForCompletionOnlyLM using response template only
         self.tokenized_instruction = self.tokenizer.encode(self.instruction, add_special_tokens=False)
         self.collator = DataCollatorForCompletionOnlyLM(self.response_template, tokenizer=self.tokenizer)
