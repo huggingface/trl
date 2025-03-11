@@ -379,6 +379,7 @@ class GRPOTrainer(Trainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.temperature = args.temperature
         self.use_vllm = args.use_vllm
 
         # Multi-step
@@ -540,6 +541,8 @@ class GRPOTrainer(Trainer):
                 max_new_tokens=self.max_completion_length,
                 do_sample=True,
                 pad_token_id=processing_class.pad_token_id,
+                bos_token_id=processing_class.bos_token_id,
+                eos_token_id=processing_class.eos_token_id,
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
@@ -658,7 +661,10 @@ class GRPOTrainer(Trainer):
         # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
         # See https://github.com/huggingface/trl/issues/2770
         logits = logits[:, -logits_to_keep:]
-        return selective_log_softmax(logits, input_ids)  #  compute logprobs for the input tokens
+        # Divide logits by sampling temperature.
+        # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+        logits = logits / self.temperature
+        return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
     @profiling_decorator
     def _move_model_to_vllm(self):
