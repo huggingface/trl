@@ -539,9 +539,9 @@ class GRPOTrainer(Trainer):
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
                 do_sample=True,
+                pad_token_id=processing_class.pad_token_id,
                 bos_token_id=processing_class.bos_token_id,
                 eos_token_id=processing_class.eos_token_id,
-                pad_token_id=processing_class.pad_token_id,
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
