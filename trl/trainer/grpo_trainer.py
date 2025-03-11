@@ -847,6 +847,7 @@ class GRPOTrainer(Trainer):
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.temperature = args.temperature
         self.use_vllm = args.use_vllm
         self.use_sglang = getattr(args, "use_sglang", False)  # Add backend selection flag
 
@@ -1214,7 +1215,10 @@ class GRPOTrainer(Trainer):
         # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
         # See https://github.com/huggingface/trl/issues/2770
         logits = logits[:, -logits_to_keep:]
-        return selective_log_softmax(logits, input_ids)  #  compute logprobs for the input tokens
+        # Divide logits by sampling temperature.
+        # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+        logits = logits / self.temperature
+        return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
     def _update_sglang_engine_weights(self):
         """Update the SGLang engine weights from the current model."""
