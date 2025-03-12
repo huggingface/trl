@@ -1799,7 +1799,6 @@ class DPOTrainer(Trainer):
                 **ref_model_inputs
             )
             
-            # Get LM head and yield results
             ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
         
         try:
