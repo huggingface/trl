@@ -59,10 +59,10 @@ from .utils import (
     selective_log_softmax,
 )
 
-import debugpy
-debugpy.listen(("0.0.0.0", 5679))  # Allow remote debugging
-print("\n\n\n\n-=-=-=-=-=-Waiting for debugger to attach...\n\n\n\n\n")
-debugpy.wait_for_client()  # Execution will pause here until a debugger is attached
+# import debugpy
+# debugpy.listen(("0.0.0.0", 5679))  # Allow remote debugging
+# print("\n\n\n\n-=-=-=-=-=-Waiting for debugger to attach...\n\n\n\n\n")
+# debugpy.wait_for_client()  # Execution will pause here until a debugger is attached
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -848,11 +848,15 @@ class GRPOTrainer(Trainer):
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
+                    print("In the main process, let's check all prompts size")
+                    print("all_prompts_text", len(all_prompts_text))
+                    print("ordered size: ", len(ordered_set_of_prompts))
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                     with profiling_context(self, "vLLM.generate"):
                         all_outputs = self.llm.generate(
                             ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
                         )
+                    print("all_outputs size: ", len(all_outputs))
                     completion_ids = []
                     for outputs in all_outputs:
                         for output in outputs.outputs:
