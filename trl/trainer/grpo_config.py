@@ -85,7 +85,7 @@ class GRPOConfig(TrainingArguments):
         > Parameters that control generation acceleration powered by SGLang
 
         use_sglang (`bool`, *optional*, defaults to `False`):
-            Whether to use SGLang for generating completions. If set to `True`, a SGLang server must be running.
+            Whether to use SGLang for rollout. If set to `True`, a SGLang engine will be used.
         sglang_base_gpu_id (`int`, *optional*, defaults to `7`):
             Base GPU ID for SGLang engine initialization. If set to `None`, the last available GPU is used.
         sglang_mem_fraction_static (`float`, *optional*, defaults to `0.9`):

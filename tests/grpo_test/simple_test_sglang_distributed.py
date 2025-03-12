@@ -24,7 +24,6 @@ def setup_process(rank: int, world_size: int) -> None:
     os.environ["NCCL_BLOCKING_WAIT"] = "1"
 
     # Initialize the process group
-    print(f"[Process {rank}] Initializing process group")
     torch.cuda.set_device(rank)  # Set GPU device before initialization
 
     try:
@@ -35,9 +34,7 @@ def setup_process(rank: int, world_size: int) -> None:
             world_size=world_size,
             rank=rank,
         )
-        print(f"[Process {rank}] Successfully initialized process group")
     except Exception as e:
-        print(f"[Process {rank}] Failed to initialize process group: {e}")
         raise e
 
 
@@ -58,10 +55,8 @@ def initialize_sglang(rank: int, model_path: str) -> Optional[sgl.Engine]:
         Optional[sgl.Engine]: Initialized engine or None for non-rank-0 processes
     """
     if rank != 0:
-        print(f"[Process {rank}] Skipping SGLang initialization")
         return None
 
-    print(f"[Process {rank}] Initializing SGLang engine")
     try:
         # Initialize the engine
         engine = sgl.Engine(
@@ -70,10 +65,8 @@ def initialize_sglang(rank: int, model_path: str) -> Optional[sgl.Engine]:
             random_seed=42,
             mem_fraction_static=0.9,
         )
-        print(f"[Process {rank}] Successfully initialized SGLang engine")
         return engine
     except Exception as e:
-        print(f"[Process {rank}] Failed to initialize SGLang engine: {e}")
         return None
 
 
@@ -87,55 +80,38 @@ def run_process(rank: int, world_size: int) -> None:
     try:
         # Set the device for this process
         torch.cuda.set_device(rank)
-        print(f"[Process {rank}] Using GPU: {torch.cuda.get_device_name(rank)}")
 
         # Initialize distributed environment
         setup_process(rank, world_size)
 
         # Verify initialization
-        if dist.is_initialized():
-            print(
-                f"[Process {rank}] Distributed rank: {dist.get_rank()}, "
-                f"World size: {dist.get_world_size()}"
-            )
-        else:
-            print(f"[Process {rank}] Distributed environment not initialized")
+        if not dist.is_initialized():
             return
 
         # Synchronize processes
-        print(f"[Process {rank}] Waiting at first barrier")
         dist.barrier()
-        print(f"[Process {rank}] Passed first barrier")
 
         # Initialize SGLang (rank 0 only)
         engine = initialize_sglang(rank, "Qwen/Qwen2.5-0.5B-Instruct")
 
         # Wait for SGLang initialization to complete
-        print(f"[Process {rank}] Waiting at second barrier")
         dist.barrier()
-        print(f"[Process {rank}] Passed second barrier")
 
         # Run a test query on rank 0
         if rank == 0 and engine is not None:
-            print(f"[Process {rank}] Running test query")
             try:
                 result = engine.generate(
                     sgl.Prompt("What is the capital of France?"),
                     sampling_params={"max_tokens": 50},
                 )
-                print(
-                    f"[Process {rank}] Test query result: {result[0].outputs[0].text}"
-                )
-            except Exception as e:
-                print(f"[Process {rank}] Failed to run test query: {e}")
+            except Exception:
+                pass
 
         # Final synchronization
-        print(f"[Process {rank}] Waiting at final barrier")
         dist.barrier()
-        print(f"[Process {rank}] All processes completed successfully")
 
-    except Exception as e:
-        print(f"[Process {rank}] Failed with error: {e}")
+    except Exception:
+        pass
     finally:
         # Clean up distributed environment
         cleanup_process()

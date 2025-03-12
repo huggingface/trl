@@ -11,5 +11,5 @@ export TORCH_DISTRIBUTED_DEBUG=INFO
 # Launch the training using accelerate
 accelerate launch --config_file=trl/scripts/grpo_test/grpo_sgl_test.yaml trl/scripts/grpo_test/grpo_sgl_test.py
 
-# Under the ~/trl-jin/tests/grpo_test
+# Under the ~/trl/tests/grpo_test
 # python manual_grpo_launch.py --config_file=grpo_sgl_test.yaml

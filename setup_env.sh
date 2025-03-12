@@ -1,5 +1,6 @@
 #!/bin/bash
-# Setup script for trl-jin with SGLang support
+# Setup script for trl_GRPO with SGLang support
+# Doc Link: https://docs.sglang.ai/start/install.html
 
 # Create virtual environment
 echo "Creating Python virtual environment at ~/.python/trl..."

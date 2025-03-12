@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# manual_grpo_launch.py
-
 import os
 import sys
 import yaml

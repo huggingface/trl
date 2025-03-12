@@ -914,7 +914,7 @@ class GRPOTrainer(Trainer):
             if not is_sglang_available():
                 raise ImportError(
                     "SGLang is not available and `use_sglang` is set to True. "
-                    "Please install SGLang with `pip install sglang`."
+                    "please install sglang according to the docs."
                 )
 
             # Log distributed environment variables for debugging

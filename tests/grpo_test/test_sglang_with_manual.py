@@ -50,7 +50,6 @@ def setup_distributed(rank: int, config: GRPOConfig) -> None:
     torch.cuda.set_device(rank)
 
     # Initialize process group
-    print(f"[Rank {rank}] Initializing process group")
     try:
         dist.init_process_group(
             backend="nccl",
@@ -58,7 +57,6 @@ def setup_distributed(rank: int, config: GRPOConfig) -> None:
             world_size=world_size,
             rank=rank,
         )
-        print(f"[Rank {rank}] Process group initialized successfully")
     except Exception as e:
         print(f"[Rank {rank}] Failed to initialize process group: {e}")
         raise e
@@ -68,7 +66,6 @@ def cleanup_distributed() -> None:
     """Clean up the distributed environment."""
     if dist.is_initialized():
         dist.destroy_process_group()
-        print("[Cleanup] Destroyed process group")
 
 
 def initialize_sglang(rank: int, config: GRPOConfig) -> Optional[sgl.Engine]:
@@ -82,10 +79,8 @@ def initialize_sglang(rank: int, config: GRPOConfig) -> Optional[sgl.Engine]:
         Optional[sgl.Engine]: Initialized engine or None
     """
     if rank != 0:
-        print(f"[Rank {rank}] Skipping SGLang initialization")
         return None
 
-    print(f"[Rank {rank}] Initializing SGLang engine")
     try:
         engine = sgl.Engine(
             model_path=config.model_path,
@@ -93,7 +88,6 @@ def initialize_sglang(rank: int, config: GRPOConfig) -> Optional[sgl.Engine]:
             random_seed=config.random_seed,
             mem_fraction_static=config.mem_fraction,
         )
-        print(f"[Rank {rank}] SGLang engine initialized successfully")
         return engine
     except Exception as e:
         print(f"[Rank {rank}] Failed to initialize SGLang engine: {e}")
@@ -112,17 +106,13 @@ def run_grpo_process(rank: int, config: GRPOConfig) -> None:
         setup_distributed(rank, config)
 
         # Synchronize processes after initialization
-        print(f"[Rank {rank}] Waiting at first barrier")
         dist.barrier()
-        print(f"[Rank {rank}] Passed first barrier")
 
         # Initialize SGLang (rank 0 only)
         engine = initialize_sglang(rank, config)
 
         # Synchronize after SGLang initialization
-        print(f"[Rank {rank}] Waiting at second barrier")
         dist.barrier()
-        print(f"[Rank {rank}] Passed second barrier")
 
         # Simulate GRPO training (in a real implementation, this would use TRL)
         if rank == 0:
@@ -136,9 +126,7 @@ def run_grpo_process(rank: int, config: GRPOConfig) -> None:
                 print(f"[GRPO] Test response: {result[0].outputs[0].text}")
 
         # Final synchronization
-        print(f"[Rank {rank}] Waiting at final barrier")
         dist.barrier()
-        print(f"[Rank {rank}] All processes completed successfully")
 
     except Exception as e:
         print(f"[Rank {rank}] Failed with error: {e}")
