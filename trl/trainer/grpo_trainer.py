@@ -59,6 +59,10 @@ from .utils import (
     selective_log_softmax,
 )
 
+import debugpy
+debugpy.listen(("0.0.0.0", 5679))  # Allow remote debugging
+print("\n\n\n\n-=-=-=-=-=-Waiting for debugger to attach...\n\n\n\n\n")
+debugpy.wait_for_client()  # Execution will pause here until a debugger is attached
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
