@@ -1149,22 +1149,21 @@ class DPOTrainer(Trainer):
                 use_cache=False,
             )
             hidden_states = decoder_outputs.last_hidden_state
-
-            ref_hidden_states = None
+            
+            ref_encoder_outputs = None
             if not self.reference_free and self.ref_model is not None:
                 ref_encoder_outputs = self.ref_model.get_encoder()(
                     concatenated_batch["prompt_input_ids"],
                     attention_mask=concatenated_batch["prompt_attention_mask"],
                     return_dict=True,
                 )
-                ref_decoder_outputs = self.ref_model.get_decoder()(
-                    input_ids=decoder_input_ids,
-                    attention_mask=concatenated_batch["completion_attention_mask"],
-                    encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
-                    encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
-                    use_cache=False,
-                )
-                ref_hidden_states = ref_decoder_outputs.last_hidden_state
+                # ref_decoder_outputs = self.ref_model.get_decoder()(
+                #     input_ids=decoder_input_ids,
+                #     attention_mask=concatenated_batch["completion_attention_mask"],
+                #     encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
+                #     encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
+                #     use_cache=False,
+                # )
             elif not self.reference_free:
                 with self.null_ref_context():
                     ref_encoder_outputs = model.get_encoder()(
@@ -1172,15 +1171,20 @@ class DPOTrainer(Trainer):
                         attention_mask=concatenated_batch["prompt_attention_mask"],
                         return_dict=True,
                     )
-                    ref_decoder_outputs = model.get_decoder()(
-                        input_ids=decoder_input_ids,
-                        attention_mask=concatenated_batch["completion_attention_mask"],
-                        encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
-                        encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
-                        use_cache=False,
-                    )
-                    ref_hidden_states = ref_decoder_outputs.last_hidden_state
+                    # ref_decoder_outputs = model.get_decoder()(
+                    #     input_ids=decoder_input_ids,
+                    #     attention_mask=concatenated_batch["completion_attention_mask"],
+                    #     encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
+                    #     encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
+                    #     use_cache=False,
+                    # )
 
+            ref_model_inputs = {
+                "input_ids": decoder_input_ids,
+                "attention_mask": concatenated_batch["completion_attention_mask"],
+                "encoder_hidden_states": ref_encoder_outputs.last_hidden_state,
+                "encoder_attention_mask": concatenated_batch["prompt_attention_mask"],
+            }
             labels = concatenated_batch["completion_input_ids"]
         else:
             # For decoder-only models
@@ -1206,66 +1210,73 @@ class DPOTrainer(Trainer):
             )
             hidden_states = outputs.last_hidden_state[:, :-1]
 
-            # Get reference hidden states if needed
-            ref_hidden_states = None
-            if not self.reference_free and self.ref_model is not None:
-                if hasattr(self.ref_model, "get_decoder"):
-                    ref_base_model = self.ref_model.get_decoder()
-                else:
-                    ref_base_model = getattr(self.ref_model, self.args.base_model_attribute_name, self.ref_model)
+            # # Get reference hidden states if needed
+            # ref_hidden_states = None
+            # if not self.reference_free and self.ref_model is not None:
+            #     if hasattr(self.ref_model, "get_decoder"):
+            #         ref_base_model = self.ref_model.get_decoder()
+            #     else:
+            #         ref_base_model = getattr(self.ref_model, self.args.base_model_attribute_name, self.ref_model)
 
-                ref_outputs = ref_base_model(
-                    input_ids,
-                    attention_mask=attention_mask,
-                    use_cache=False,
-                    **model_kwargs,
-                )
-                ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
-            elif not self.reference_free:
-                if hasattr(model, "get_decoder"):
-                    ref_base_model = model.get_decoder()
-                else:
-                    ref_base_model = getattr(model, self.args.base_model_attribute_name, model)
-                with self.null_ref_context():
-                    ref_outputs = ref_base_model(
-                        input_ids,
-                        attention_mask=attention_mask,
-                        use_cache=False,
-                        **model_kwargs,
-                    )
-                    ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
+            #     ref_outputs = ref_base_model(
+            #         input_ids,
+            #         attention_mask=attention_mask,
+            #         use_cache=False,
+            #         **model_kwargs,
+            #     )
+            #     ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
+            # elif not self.reference_free:
+            #     if hasattr(model, "get_decoder"):
+            #         ref_base_model = model.get_decoder()
+            #     else:
+            #         ref_base_model = getattr(model, self.args.base_model_attribute_name, model)
+            #     with self.null_ref_context():
+            #         ref_outputs = ref_base_model(
+            #             input_ids,
+            #             attention_mask=attention_mask,
+            #             use_cache=False,
+            #             **model_kwargs,
+            #         )
+            #         ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
 
+            ref_model_inputs = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "use_cache": False,
+                **model_kwargs,
+            }
             labels = input_ids[:, 1:]  # Shift right for casual LM
 
         # Get the LM head
         lm_head = model.get_output_embeddings()
 
-        # Get reference model weights if needed
-        ref_weight = None
-        ref_bias = None
-        if not self.reference_free:
-            if self.ref_model is not None:
-                ref_lm_head = self.ref_model.get_output_embeddings()
-            else:
-                with self.null_ref_context():
-                    ref_lm_head = model.get_output_embeddings()
-            ref_weight = ref_lm_head.weight
-            ref_bias = ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
-
-        # Compute loss using Liger kernel
-        loss_output = self.dpo_loss_fn(
-            lm_head.weight,
-            hidden_states,
-            labels,
-            bias=lm_head.bias if hasattr(lm_head, "bias") else None,
-            ref_input=ref_hidden_states if not self.reference_free else None,
-            ref_weight=ref_weight if not self.reference_free else None,
-            ref_bias=ref_bias if not self.reference_free else None,
-        )
-        (
-            loss,
-            (chosen_logps, rejected_logps, chosen_logits_mean, rejected_logits_mean, nll_loss, *aux_outputs),
-        ) = loss_output
+        # # Get reference model weights if needed
+        # ref_weight = None
+        # ref_bias = None
+        # if not self.reference_free:
+        #     if self.ref_model is not None:
+        #         ref_lm_head = self.ref_model.get_output_embeddings()
+        #     else:
+        #         with self.null_ref_context():
+        #             ref_lm_head = model.get_output_embeddings()
+        #     ref_weight = ref_lm_head.weight
+        #     ref_bias = ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
+        
+        with self.get_decoder_outputs_for_liger_loss(ref_model_inputs) as (ref_hidden_states, ref_weight, ref_bias):
+            # Compute loss using Liger kernel
+            loss_output = self.dpo_loss_fn(
+                lm_head.weight,
+                hidden_states,
+                labels,
+                bias=lm_head.bias if hasattr(lm_head, "bias") else None,
+                ref_input=ref_hidden_states,
+                ref_weight=ref_weight,
+                ref_bias=ref_bias,
+            )
+            (
+                loss,
+                (chosen_logps, rejected_logps, chosen_logits_mean, rejected_logits_mean, nll_loss, *aux_outputs),
+            ) = loss_output
 
         output = {
             "loss": loss,
@@ -1761,3 +1772,48 @@ class DPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
+    @contextmanager
+    def get_decoder_outputs_for_liger_loss(
+        self,
+        ref_model_inputs: dict[str, Union[list, torch.LongTensor]],
+    ) -> tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        if self.reference_free:
+            yield None, None, None
+            return
+            
+        if self.ref_model is None:
+            ref_model = self.model
+            context_manager = self.null_ref_context()
+        else:
+            ref_model = self.ref_model
+            context_manager = nullcontext()
+        
+        if self.is_encoder_decoder or hasattr(ref_model, "get_decoder"):
+            ref_base_model = ref_model.get_decoder()
+        else:
+            ref_base_model = getattr(ref_model, self.args.base_model_attribute_name, ref_model)
+                
+        with context_manager:
+            ref_outputs = ref_base_model(
+                **ref_model_inputs
+            )
+            
+            # Get LM head and yield results
+            ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
+        
+        try:
+            if self.ref_model is None:
+                ref_lm_head = self.model.get_output_embeddings()
+                ref_lm_head.merge()
+            else:
+                ref_lm_head = self.ref_model.get_output_embeddings()
+
+            yield (
+                ref_hidden_states,
+                ref_lm_head.weight,
+                ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
+            )
+        finally:
+            if self.ref_model is None:
+                ref_lm_head.unmerge()
