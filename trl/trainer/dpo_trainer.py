@@ -71,6 +71,7 @@ from .utils import (
     peft_module_casting_to_bf16,
 )
 
+from peft.tuners.tuners_utils import BaseTunerLayer
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
@@ -1804,7 +1805,8 @@ class DPOTrainer(Trainer):
         try:
             if self.ref_model is None:
                 ref_lm_head = self.model.get_output_embeddings()
-                ref_lm_head.merge()
+                if isinstance(ref_lm_head, BaseTunerLayer):
+                    ref_lm_head.merge()
             else:
                 ref_lm_head = self.ref_model.get_output_embeddings()
 
@@ -1814,5 +1816,5 @@ class DPOTrainer(Trainer):
                 ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
             )
         finally:
-            if self.ref_model is None:
+            if self.ref_model is None and isinstance(ref_lm_head, BaseTunerLayer):
                 ref_lm_head.unmerge()
