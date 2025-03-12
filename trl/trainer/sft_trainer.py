@@ -464,7 +464,9 @@ class SFTTrainer(Trainer):
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
         if mode == "train":
-            self._total_train_tokens += self.accelerator.gather_for_metrics(inputs["attention_mask"]).sum().item()
+            self._total_train_tokens += (
+                self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
+            )
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
