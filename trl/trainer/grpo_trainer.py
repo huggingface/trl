@@ -789,6 +789,8 @@ class GRPOTrainer(Trainer):
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
+        print("prompts:" , len(prompts), " prompts_text", len(prompts_text), " prompts_input ", len(prompt_inputs), "prompt_ids ", len(prompt_ids), "prompt mask ", len(prompt_mask))
+
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
