@@ -439,9 +439,7 @@ class GRPOTrainer(Trainer):
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
 
-        print("----- Mert check use vllm")
         if self.use_vllm:
-            print("----- yes use vllm")
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
@@ -454,7 +452,7 @@ class GRPOTrainer(Trainer):
                 # External launcher mode: Assign vLLM to the current process's device
                 # we ignore vllm_device parameter ("auto"), because all devices will init vllm instance
                 vllm_device = f"{device_type}:{self.accelerator.process_index}"  
-                print("----- yes use vllm", vllm_device)
+                print("----- Using vllm via external launcher on device", vllm_device)
 
                 # Check that the requested device is available
                 if (
@@ -488,8 +486,13 @@ class GRPOTrainer(Trainer):
                     guided_decoding = None
 
                 # Sampling parameters
+                if self.args.num_generations % self.accelerator.num_processes != 0:
+                    raise ValueError(f"num_generations ({self.args.num_generations}) must be divisible by the number of processes ({self.accelerator.num_processes}).")
+
                 local_num_generations = self.args.num_generations // self.accelerator.num_processes
-                print("Check out new local num gen: ", local_num_generations , "for old num gen",  self.args.num_generations, " and no of gpus", self.accelerator.num_processes)
+                print("Check out new local num gen:", local_num_generations, 
+                    "for old num gen", self.args.num_generations, 
+                    "and no of gpus", self.accelerator.num_processes)
 
                 self.sampling_params = SamplingParams(
                     max_tokens=self.max_completion_length,
@@ -828,7 +831,7 @@ class GRPOTrainer(Trainer):
 
 
             else:
-                print("-----\n\n NOOOOOExternal launcher - so using old inference")
+                print("\n\n-----NOOOOO External launcher - so using old inference")
                 # First, have main process load weights if needed
                 if self.state.global_step != self._last_loaded_step:
                     self._move_model_to_vllm()
@@ -851,7 +854,7 @@ class GRPOTrainer(Trainer):
                         for output in outputs.outputs:
                             completion_ids.append(output.token_ids)
 
-                    print("Order prompts input len", len(ordered_set_of_prompts), " vs len of complketions", len(completion_ids))
+                    print("Order prompts input len", len(ordered_set_of_prompts), " vs len of completion_ids", len(completion_ids))
                 else:
                     completion_ids = [None] * len(all_prompts_text)
                 
@@ -868,8 +871,8 @@ class GRPOTrainer(Trainer):
 
                 # Pad the completions, and concatenate them with the prompts
                 completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-                print("---\n\n check length old completions: ", len(completion_ids))
-                print("---\n\n check length old prompts: ", len(prompt_ids))
+                print("\n\n --- check length old completions: ", len(completion_ids))
+                print("\n\n ---check length old prompts: ", len(prompt_ids))
                 completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
                 prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
