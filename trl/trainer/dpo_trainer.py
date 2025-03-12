@@ -1799,16 +1799,12 @@ class DPOTrainer(Trainer):
             ref_outputs = ref_base_model(
                 **ref_model_inputs
             )
-            
             ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
         
         try:
-            if self.ref_model is None:
-                ref_lm_head = self.model.get_output_embeddings()
-                if isinstance(ref_lm_head, BaseTunerLayer):
-                    ref_lm_head.merge()
-            else:
-                ref_lm_head = self.ref_model.get_output_embeddings()
+            ref_lm_head = ref_model.get_output_embeddings()
+            if isinstance(ref_lm_head, BaseTunerLayer):
+                ref_lm_head.merge()
 
             yield (
                 ref_hidden_states,
@@ -1816,5 +1812,5 @@ class DPOTrainer(Trainer):
                 ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
             )
         finally:
-            if self.ref_model is None and isinstance(ref_lm_head, BaseTunerLayer):
+            if isinstance(ref_lm_head, BaseTunerLayer):
                 ref_lm_head.unmerge()
