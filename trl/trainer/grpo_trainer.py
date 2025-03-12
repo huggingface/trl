@@ -850,8 +850,9 @@ class GRPOTrainer(Trainer):
                     # prompt individually.
                     print("In the main process, let's check all prompts size")
                     print("all_prompts_text", len(all_prompts_text))
-                    print("ordered size: ", len(ordered_set_of_prompts))
+                    
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                    print("ordered size: ", len(ordered_set_of_prompts))
                     with profiling_context(self, "vLLM.generate"):
                         all_outputs = self.llm.generate(
                             ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
