@@ -102,20 +102,6 @@ class GRPOConfig(TrainingArguments):
 
         use_sglang (`bool`, *optional*, defaults to `False`):
             Whether to use SGLang for generating completions. If set to `True`, a SGLang server must be running.
-<<<<<<< HEAD
-        sglang_server_url (`str` or `None`, *optional*, defaults to `None`):
-            The URL of the SGLang server (e.g. "http://localhost:30033"). Required if `use_sglang` is `True`.
-        sglang_device (`str`, *optional*, defaults to `"cuda:1"`):
-            GPU device to be used for SGLang generation if launching from this code. This is optional if the server is
-            managed externally.
-            Regex for vLLM guided decoding. If `None`, guided decoding is disabled.
-
-        > Parameters that control generation acceleration powered by SGLang
-
-        use_sglang (`bool`, *optional*, defaults to `False`):
-            Whether to use SGLang for rollout. If set to `True`, a SGLang engine will be used.
-=======
->>>>>>> 5ceab9b (Clean File Hierarchy)
         sglang_base_gpu_id (`int`, *optional*, defaults to `7`):
             Base GPU ID for SGLang engine initialization. If set to `None`, the last available GPU is used.
         sglang_mem_fraction_static (`float`, *optional*, defaults to `0.9`):
@@ -258,17 +244,12 @@ class GRPOConfig(TrainingArguments):
     )
     sglang_base_gpu_id: Optional[int] = field(
         default=6,
-        metadata={
-            "help": "Base GPU ID for SGLang engine initialization. If None, uses the last available GPU."
-        },
+        metadata={"help": "Base GPU ID for SGLang engine initialization. If None, uses the last available GPU."},
     )
     sglang_mem_fraction_static: float = field(
         default=0.9,
-        metadata={
-            "help": "Fraction of GPU memory reserved for static memory in SGLang."
-        },
+        metadata={"help": "Fraction of GPU memory reserved for static memory in SGLang."},
     )
-<<<<<<< HEAD
 
     # Parameters that control generation acceleration powered by SGLang
     use_sglang: Optional[bool] = field(
@@ -283,21 +264,15 @@ class GRPOConfig(TrainingArguments):
         default=0.9,
         metadata={"help": "Fraction of GPU memory reserved for static memory in SGLang."},
     )
-=======
->>>>>>> 5ceab9b (Clean File Hierarchy)
     checkpoint_path: Optional[str] = field(
         default=None,
         metadata={"help": "Path to the checkpoint for SGLang weight update."},
     )
-<<<<<<< HEAD
 
-=======
-    
->>>>>>> 5ceab9b (Clean File Hierarchy)
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,
-         metadata={
+        metadata={
             "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
             "`transformers.TrainingArguments`."
         },
@@ -342,11 +317,7 @@ class GRPOConfig(TrainingArguments):
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
-<<<<<<< HEAD
-        metadata={"help": "Whether to log completions during training."},
-=======
         metadata={"help": "Whether to log the completions during training."},
->>>>>>> 5ceab9b (Clean File Hierarchy)
     )
 
     def __getstate__(self):

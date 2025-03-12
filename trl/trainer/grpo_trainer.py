@@ -20,7 +20,6 @@ import sys
 import textwrap
 import time
 import warnings
-import requests
 from collections import defaultdict
 from typing import Any, Callable, Dict, Optional, Sized, Union
 from unittest.mock import patch
@@ -30,17 +29,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.utils.data
-import torch.distributed as dist
-import torch.multiprocessing as mp
-import torch.utils.data
 import transformers
-from accelerate.utils import (
-    broadcast_object_list,
-    gather,
-    gather_object,
-    is_peft_model,
-    set_seed,
-)
 from accelerate import PartialState
 from accelerate.utils import (
     broadcast_object_list,
@@ -73,8 +62,8 @@ from ..data_utils import (
     is_conversational,
     maybe_apply_chat_template,
 )
-from ..extras.profiling import profiling_context, profiling_decorator
-from ..import_utils import is_sglang_available, is_rich_available, is_vllm_available, is_sglang_available
+from ..extras.profiling import profiling_decorator
+from ..import_utils import is_rich_available, is_sglang_available, is_vllm_available
 from ..models import (
     create_reference_model,
     prepare_deepspeed,
@@ -83,15 +72,11 @@ from ..models import (
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
-    (
     generate_model_card,
-   
     get_comet_experiment_url,
-   
     pad,
-   
+    print_prompt_completions_sample,
     selective_log_softmax,
-),
 )
 
 
@@ -508,8 +493,6 @@ class RepeatRandomSampler(Sampler):
 
     def __init__(self, data_source: Sized, repeat_count: int, seed: Optional[int] = None):
         self.data_source = data_source
-        self.mini_repeat_count = mini_repeat_count
-        self.batch_size = batch_size
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
         self.seed = seed
@@ -1292,14 +1275,14 @@ class GRPOTrainer(Trainer):
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         # Determine process rank/index based on initialization mode
-        if hasattr(self, "_using_manual_distributed") and self._using_manual_distributed:
-            process_rank = dist.get_rank()
-            world_size = dist.get_world_size()
-            is_main_process = process_rank == 0
-        else:
-            process_rank = self.accelerator.process_index
-            world_size = self.accelerator.num_processes
-            is_main_process = self.accelerator.is_main_process
+        # if hasattr(self, "_using_manual_distributed") and self._using_manual_distributed:
+        #     # process_rank = dist.get_rank()
+        #     # world_size = dist.get_world_size()
+        #     # is_main_process = process_rank == 0
+        # else:
+        #     # process_rank = self.accelerator.process_index
+        #     # world_size = self.accelerator.num_processes
+        #     # is_main_process = self.accelerator.is_main_process
 
         # Get appropriate device
         mode = "eval" if self.control.should_evaluate else "train"
@@ -1682,6 +1665,7 @@ class GRPOTrainer(Trainer):
         return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+        mode = "eval" if self.control.should_evaluate else "train"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
@@ -1755,10 +1739,6 @@ class GRPOTrainer(Trainer):
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 5ceab9b (Clean File Hierarchy)
     def __del__(self):
         """Ensure proper cleanup when the trainer is destroyed."""
         if hasattr(self, "sglang_engine") and self.accelerator.is_main_process:
