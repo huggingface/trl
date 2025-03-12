@@ -32,6 +32,7 @@ import torch.multiprocessing as mp
 import torch.utils.data
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import torch.utils.data
 import transformers
 from accelerate.utils import (
     broadcast_object_list,
@@ -505,17 +506,7 @@ class RepeatRandomSampler(Sampler):
     ```
     """
 
-    def __init__(
-        self,
-        data_source: Sized,
-        mini_repeat_count: int,
-        batch_size: int = 1,
-        repeat_count: int = 1,
-        seed: Optional[int] = None,
-    ):
-    def __init__(
-        self, data_source: Sized, repeat_count: int, seed: Optional[int] = None
-    ):
+    def __init__(self, data_source: Sized, repeat_count: int, seed: Optional[int] = None):
         self.data_source = data_source
         self.mini_repeat_count = mini_repeat_count
         self.batch_size = batch_size
@@ -529,9 +520,7 @@ class RepeatRandomSampler(Sampler):
     def __iter__(self):
         indexes = [
             idx
-            for idx in torch.randperm(
-                self.num_samples, generator=self.generator
-            ).tolist()
+            for idx in torch.randperm(self.num_samples, generator=self.generator).tolist()
             for _ in range(self.repeat_count)
         ]
         return iter(indexes)
@@ -750,11 +739,7 @@ class GRPOTrainer(Trainer):
         if isinstance(model, str):
             model_id = model
             torch_dtype = model_init_kwargs.get("torch_dtype")
-            if (
-                isinstance(torch_dtype, torch.dtype)
-                or torch_dtype == "auto"
-                or torch_dtype is None
-            ):
+            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
                 pass  # torch_dtype is already a torch.dtype or "auto" or None
             elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
                 torch_dtype = getattr(torch, torch_dtype)
@@ -766,9 +751,7 @@ class GRPOTrainer(Trainer):
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
             model_init_kwargs["use_cache"] = (
-                False
-                if args.gradient_checkpointing
-                else model_init_kwargs.get("use_cache")
+                False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
             )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         else:
@@ -781,9 +764,7 @@ class GRPOTrainer(Trainer):
 
         if peft_config is not None:
             if not is_peft_available():
-                raise ImportError(
-                    "PEFT is required to use `peft_config`. Run `pip install peft`."
-                )
+                raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
             model = get_peft_model(model, peft_config)
 
         # Enable gradient checkpointing if requested
@@ -796,9 +777,7 @@ class GRPOTrainer(Trainer):
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
         elif is_deepspeed_zero3_enabled():
-            self.ref_model = AutoModelForCausalLM.from_pretrained(
-                model_id, **model_init_kwargs
-            )
+            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif is_peft_model(model):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
@@ -809,9 +788,7 @@ class GRPOTrainer(Trainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(
-                model.config._name_or_path, padding_side="left"
-            )
+            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -841,22 +818,14 @@ class GRPOTrainer(Trainer):
             reward_processing_classes = [reward_processing_classes]
         else:
             if len(reward_processing_classes) != len(reward_funcs):
-                raise ValueError(
-                    "The number of reward processing classes must match the number of reward functions."
-                )
+                raise ValueError("The number of reward processing classes must match the number of reward functions.")
 
-        for i, (reward_processing_class, reward_func) in enumerate(
-            zip(reward_processing_classes, reward_funcs)
-        ):
+        for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(
-                        reward_func.config._name_or_path
-                    )
+                    reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
                 if reward_processing_class.pad_token_id is None:
-                    reward_processing_class.pad_token = (
-                        reward_processing_class.eos_token
-                    )
+                    reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
@@ -869,9 +838,7 @@ class GRPOTrainer(Trainer):
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
-        self.max_completion_length = (
-            args.max_completion_length
-        )  # = |o_i| in the GRPO paper
+        self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.temperature = args.temperature
         self.use_vllm = args.use_vllm
@@ -912,11 +879,7 @@ class GRPOTrainer(Trainer):
         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
         num_processes = self.accelerator.num_processes
         global_batch_size = args.per_device_train_batch_size * num_processes
-        possible_values = [
-            n_gen
-            for n_gen in range(2, global_batch_size + 1)
-            if (global_batch_size) % n_gen == 0
-        ]
+        possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
         if self.num_generations not in possible_values:
             raise ValueError(
                 f"The global train batch size ({num_processes} x {args.per_device_train_batch_size}) must be evenly "
@@ -925,11 +888,7 @@ class GRPOTrainer(Trainer):
             )
         if self.args.eval_strategy != "no":
             global_batch_size = args.per_device_eval_batch_size * num_processes
-            possible_values = [
-                n_gen
-                for n_gen in range(2, global_batch_size + 1)
-                if (global_batch_size) % n_gen == 0
-            ]
+            possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
             if self.num_generations not in possible_values:
                 raise ValueError(
                     f"The global eval batch size ({num_processes} x {args.per_device_eval_batch_size}) must be evenly "
@@ -1041,10 +1000,7 @@ class GRPOTrainer(Trainer):
                     else:
                         vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
                 # Check that the requested device is available
-                if (
-                    vllm_device.split(":")[0] == "cuda"
-                    and int(vllm_device.split(":")[1]) >= torch.cuda.device_count()
-                ):
+                if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
                     raise ValueError(
                         f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
                         "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
@@ -1052,9 +1008,7 @@ class GRPOTrainer(Trainer):
                         f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
                     )
                 # Check that the requested device is not also used for training
-                if vllm_device in {
-                    f"cuda:{idx}" for idx in range(self.accelerator.num_processes)
-                }:
+                if vllm_device in {f"cuda:{idx}" for idx in range(self.accelerator.num_processes)}:
                     warnings.warn(
                         f"The requested device {vllm_device} is also being used for training. For higher throughput "
                         "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
@@ -1064,9 +1018,7 @@ class GRPOTrainer(Trainer):
                 # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) place the vLLM
                 # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
                 # setting (profiling_patch).
-                world_size_patch = patch(
-                    "torch.distributed.get_world_size", return_value=1
-                )
+                world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
                 profiling_patch = patch(
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling",
                     return_value=None,
@@ -1104,9 +1056,7 @@ class GRPOTrainer(Trainer):
 
                 # Guided decoding, if enabled
                 if args.vllm_guided_decoding_regex is not None:
-                    guided_decoding = GuidedDecodingParams(
-                        backend="outlines", regex=args.vllm_guided_decoding_regex
-                    )
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
                 else:
                     guided_decoding = None
 
@@ -1122,9 +1072,7 @@ class GRPOTrainer(Trainer):
                     repetition_penalty=args.repetition_penalty,
                 )
 
-            self._last_loaded_step = (
-                0  # tag to avoid useless loading during grad accumulation
-            )
+            self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
@@ -1156,22 +1104,14 @@ class GRPOTrainer(Trainer):
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
             else:
-                self.ref_model = self.accelerator.prepare_model(
-                    self.ref_model, evaluation_mode=True
-                )
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
-            self.add_callback(
-                SyncRefModelCallback(
-                    ref_model=self.ref_model, accelerator=self.accelerator
-                )
-            )
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
-                self.reward_funcs[i] = self.accelerator.prepare_model(
-                    reward_func, evaluation_mode=True
-                )
+                self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -1186,22 +1126,16 @@ class GRPOTrainer(Trainer):
         # identical prompts are distributed to different GPUs, allowing rewards to be computed and normalized correctly
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
-        return RepeatRandomSampler(
-            self.train_dataset, self.num_generations, seed=self.args.seed
-        )
+        return RepeatRandomSampler(self.train_dataset, self.num_generations, seed=self.args.seed)
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
         # Returns a sampler that ensures each prompt is repeated across multiple processes. This guarantees that
         # identical prompts are distributed to different GPUs, allowing rewards to be computed and normalized correctly
         # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
         # preventing discrepancies in group formation.
-        return RepeatRandomSampler(
-            eval_dataset, self.num_generations, seed=self.args.seed
-        )
+        return RepeatRandomSampler(eval_dataset, self.num_generations, seed=self.args.seed)
 
-    def _enable_gradient_checkpointing(
-        self, model: PreTrainedModel, args: GRPOConfig
-    ) -> PreTrainedModel:
+    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
         """Enables gradient checkpointing for the model."""
         # Ensure use_cache is disabled
         model.config.use_cache = False
@@ -1215,8 +1149,7 @@ class GRPOTrainer(Trainer):
 
         gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
         use_reentrant = (
-            "use_reentrant" not in gradient_checkpointing_kwargs
-            or gradient_checkpointing_kwargs["use_reentrant"]
+            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
         )
 
         if use_reentrant:
@@ -1336,15 +1269,10 @@ class GRPOTrainer(Trainer):
                 state_dict = unwrapped_model.state_dict()
                 # Remove base_model and base_layer prefixes
                 state_dict = {
-                    k.removeprefix("base_model.model.").replace(".base_layer", ""): v
-                    for k, v in state_dict.items()
+                    k.removeprefix("base_model.model.").replace(".base_layer", ""): v for k, v in state_dict.items()
                 }
                 # Remove values with adapter prefix (example: "_lora")
-                state_dict = {
-                    k: v
-                    for k, v in state_dict.items()
-                    if unwrapped_model.prefix not in k
-                }
+                state_dict = {k: v for k, v in state_dict.items() if unwrapped_model.prefix not in k}
                 # When module to save, remove its prefix and discard the original module
                 state_dict = {
                     k.replace("modules_to_save.default.", ""): v
@@ -1354,9 +1282,7 @@ class GRPOTrainer(Trainer):
             else:
                 state_dict = unwrapped_model.state_dict()
             if self.accelerator.is_main_process:
-                llm_model = (
-                    self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                )
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                 llm_model.load_weights(state_dict.items())
             # Unmerge the adapter to restore the model to its original state.
             # This must be done after loading weights to ensure they correspond to the merged state.
@@ -1393,10 +1319,7 @@ class GRPOTrainer(Trainer):
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         # Determine process rank/index based on initialization mode
-        if (
-            hasattr(self, "_using_manual_distributed")
-            and self._using_manual_distributed
-        ):
+        if hasattr(self, "_using_manual_distributed") and self._using_manual_distributed:
             process_rank = dist.get_rank()
             world_size = dist.get_world_size()
             is_main_process = process_rank == 0
@@ -1410,10 +1333,7 @@ class GRPOTrainer(Trainer):
 
         # Process prompts
         prompts = [x["prompt"] for x in inputs]
-        prompts_text = [
-            maybe_apply_chat_template(example, self.processing_class)["prompt"]
-            for example in inputs
-        ]
+        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
             prompts_text,
             return_tensors="pt",
@@ -1500,12 +1420,8 @@ class GRPOTrainer(Trainer):
             completion_ids = completion_ids[process_slice]
 
             # Prepare completion tensors
-            completion_ids = [
-                torch.tensor(ids, device=device) for ids in completion_ids
-            ]
-            completion_ids = pad(
-                completion_ids, padding_value=self.processing_class.pad_token_id
-            )
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         elif self.use_vllm:
             # First, have main process load weights if needed
@@ -1541,18 +1457,12 @@ class GRPOTrainer(Trainer):
             completion_ids = completion_ids[process_slice]
 
             # Pad the completions, and concatenate them with the prompts
-            completion_ids = [
-                torch.tensor(ids, device=device) for ids in completion_ids
-            ]
-            completion_ids = pad(
-                completion_ids, padding_value=self.processing_class.pad_token_id
-            )
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
-            with unwrap_model_for_generation(
-                self.model, self.accelerator
-            ) as unwrapped_model:
+            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
                     prompt_ids,
                     attention_mask=prompt_mask,
@@ -1566,21 +1476,15 @@ class GRPOTrainer(Trainer):
 
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
-        eos_idx = torch.full(
-            (is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device
-        )
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(
-            is_eos.size(0), -1
-        )
+        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
 
-        logits_to_keep = completion_ids.size(
-            1
-        )  # we only need to compute the logits for the completion tokens
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         with torch.no_grad():
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
@@ -1611,38 +1515,23 @@ class GRPOTrainer(Trainer):
                     )
 
         # Decode the generated completions
-        completions_text = self.processing_class.batch_decode(
-            completion_ids, skip_special_tokens=True
-        )
+        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
             for prompt, completion in zip(prompts, completions_text):
-                bootstrap = (
-                    prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
-                )
-                completions.append(
-                    [{"role": "assistant", "content": bootstrap + completion}]
-                )
+                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
 
-        rewards_per_func = torch.zeros(
-            len(prompts), len(self.reward_funcs), device=device
-        )
+        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
-            if isinstance(
-                reward_func, nn.Module
-            ):  # Module instead of PretrainedModel for compat with compiled models
+            if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
                 if is_conversational(inputs[0]):
-                    messages = [
-                        {"messages": p + c} for p, c in zip(prompts, completions)
-                    ]
-                    texts = [
-                        apply_chat_template(x, reward_processing_class)["text"]
-                        for x in messages
-                    ]
+                    messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+                    texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
                 else:
                     texts = [p + c for p, c in zip(prompts, completions)]
                 reward_inputs = reward_processing_class(
@@ -1654,42 +1543,28 @@ class GRPOTrainer(Trainer):
                 )
                 reward_inputs = super()._prepare_inputs(reward_inputs)
                 with torch.inference_mode():
-                    rewards_per_func[:, i] = reward_func(**reward_inputs).logits[
-                        :, 0
-                    ]  # Shape (B*G,)
+                    rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
             else:
                 # Repeat all input columns (but "prompt" and "completion") to match the number of generations
                 keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
-                reward_kwargs = {
-                    key: [example[key] for example in inputs] for key in keys
-                }
-                output_reward_func = reward_func(
-                    prompts=prompts, completions=completions, **reward_kwargs
-                )
-                rewards_per_func[:, i] = torch.tensor(
-                    output_reward_func, dtype=torch.float32, device=device
-                )
+                reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+                output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
+                rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
 
         # Apply weights to each reward function's output and sum
-        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(
-            dim=1
-        )
+        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
 
         # Normalize the rewards to compute the advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(
-            self.num_generations, dim=0
-        )
-        std_grouped_rewards = std_grouped_rewards.repeat_interleave(
-            self.num_generations, dim=0
-        )
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
@@ -1707,15 +1582,11 @@ class GRPOTrainer(Trainer):
 
         reward_per_func = rewards_per_func.mean(0)
         for i, reward_func in enumerate(self.reward_funcs):
-            if isinstance(
-                reward_func, nn.Module
-            ):  # Module instead of PretrainedModel for compat with compiled models
+            if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
                 reward_func_name = reward_func.config._name_or_path.split("/")[-1]
             else:
                 reward_func_name = reward_func.__name__
-            self._metrics[f"rewards/{reward_func_name}"].append(
-                reward_per_func[i].item()
-            )
+            self._metrics[f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
 
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
@@ -1756,9 +1627,7 @@ class GRPOTrainer(Trainer):
             "advantages": advantages,
         }
 
-    def compute_loss(
-        self, model, inputs, return_outputs=False, num_items_in_batch=None
-    ):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
         # Compute the per-token log probabilities for the model
@@ -1770,52 +1639,32 @@ class GRPOTrainer(Trainer):
         )
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(
-            1
-        )  # we only need to compute the logits for the completion tokens
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(
-            model, input_ids, attention_mask, logits_to_keep
-        )
+        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
             per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps)
-                - (ref_per_token_logps - per_token_logps)
-                - 1
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
 
         # Compute the loss
         advantages = inputs["advantages"]
-        per_token_loss = -torch.exp(
-            per_token_logps - per_token_logps.detach()
-        ) * advantages.unsqueeze(1)
+        per_token_loss = -torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
         loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
 
         # Log the metrics
-        completion_length = (
-            self.accelerator.gather_for_metrics(completion_mask.sum(1))
-            .float()
-            .mean()
-            .item()
-        )
+        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
         self._metrics["completion_length"].append(completion_length)
 
         if self.beta != 0.0:
-            mean_kl = (
-                (per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)
-            ).mean()
-            self._metrics["kl"].append(
-                self.accelerator.gather_for_metrics(mean_kl).mean().item()
-            )
+            mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+            self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
-        is_clipped = (per_token_loss1 < per_token_loss2).float()
-        clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
 
     def prediction_step(
@@ -1833,9 +1682,7 @@ class GRPOTrainer(Trainer):
         return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        metrics = {
-            key: sum(val) / len(val) for key, val in self._metrics.items()
-        }  # average the metrics
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
@@ -1869,9 +1716,7 @@ class GRPOTrainer(Trainer):
         if not self.is_world_process_zero():
             return
 
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(
-            self.model.config._name_or_path
-        ):
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
             base_model = self.model.config._name_or_path
         else:
             base_model = None
