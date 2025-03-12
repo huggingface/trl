@@ -472,7 +472,7 @@ class SFTTrainer(Trainer):
             if "cu_seq_lens_q" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["cu_seq_lens_q"][-1]).sum().item()
             else:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"]).sum().item()
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
