@@ -798,43 +798,34 @@ class GRPOTrainer(Trainer):
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
             if self.args.vllm_external_launcher:
-                print("-----\n\n External launcher - so using new inference")
-                # Each process runs its own vLLM instance
-                if self.state.global_step != self._last_loaded_step:
-                    self._move_model_to_vllm()
-                    self._last_loaded_step = self.state.global_step
+                print("-----\n\n External launcher - each GPU handles its own batch")
 
                 num_gpus = self.accelerator.num_processes  # Total GPUs used
-                gpu_rank = self.accelerator.process_index
+                gpu_rank = self.accelerator.process_index  # Current GPU ID
 
-                # Each process gets its own slice of prompts
-                local_prompts_text = prompts_text[gpu_rank::num_gpus] 
+                # First, make sure each GPU gets a fair share of prompts
+                local_batch_start = gpu_rank * len(prompts_text) // num_gpus
+                local_batch_end = (gpu_rank + 1) * len(prompts_text) // num_gpus
+                local_prompts_text = prompts_text[local_batch_start:local_batch_end]
 
-                with profiling_context(self, "vLLM.generate"):
-                    local_outputs = self.llm.generate(
-                        local_prompts_text, sampling_params=self.sampling_params, use_tqdm=False
-                    )
+                # Now, ensure each prompt gets `num_generations` completions
+                local_outputs = self.llm.generate(
+                    local_prompts_text, sampling_params=self.sampling_params, use_tqdm=False
+                )
 
-                # Extract completion token IDs
                 completion_ids = []
                 for outputs in local_outputs:
                     for output in outputs.outputs:
                         completion_ids.append(output.token_ids)
 
-                # Convert completion ids to tensors
-                # Convert to tensor
+                # Convert completions into PyTorch tensors
                 completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
                 completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
 
-                prompt_ids = prompt_ids[gpu_rank::num_gpus]
-                prompt_mask = prompt_mask[gpu_rank::num_gpus]
-                print("---\n\n check length new completions: ", len(completion_ids))
-                print("---\n\n check length new prompts: ",  len(prompt_ids))
-                
-                # Each GPU keeps its own `completion_ids`
+                # Ensure each GPU only keeps its own part of the prompts & completions
+                prompt_ids = prompt_ids[local_batch_start:local_batch_end]
+                prompt_mask = prompt_mask[local_batch_start:local_batch_end]
                 prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-                # prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-
 
             else:
                 print("\n\n-----NOOOOO External launcher - so using old inference")
