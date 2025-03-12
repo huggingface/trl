@@ -1151,13 +1151,14 @@ class DPOTrainer(Trainer):
             )
             hidden_states = decoder_outputs.last_hidden_state
             
-            ref_encoder_outputs = None
+            ref_encoder_hidden_states = None
             if not self.reference_free and self.ref_model is not None:
                 ref_encoder_outputs = self.ref_model.get_encoder()(
                     concatenated_batch["prompt_input_ids"],
                     attention_mask=concatenated_batch["prompt_attention_mask"],
                     return_dict=True,
                 )
+                ref_encoder_hidden_states = ref_encoder_outputs.last_hidden_state
                 # ref_decoder_outputs = self.ref_model.get_decoder()(
                 #     input_ids=decoder_input_ids,
                 #     attention_mask=concatenated_batch["completion_attention_mask"],
@@ -1172,6 +1173,7 @@ class DPOTrainer(Trainer):
                         attention_mask=concatenated_batch["prompt_attention_mask"],
                         return_dict=True,
                     )
+                    ref_encoder_hidden_states = ref_encoder_outputs.last_hidden_state
                     # ref_decoder_outputs = model.get_decoder()(
                     #     input_ids=decoder_input_ids,
                     #     attention_mask=concatenated_batch["completion_attention_mask"],
@@ -1183,7 +1185,7 @@ class DPOTrainer(Trainer):
             ref_model_inputs = {
                 "input_ids": decoder_input_ids,
                 "attention_mask": concatenated_batch["completion_attention_mask"],
-                "encoder_hidden_states": ref_encoder_outputs.last_hidden_state,
+                "encoder_hidden_states": ref_encoder_hidden_states,
                 "encoder_attention_mask": concatenated_batch["prompt_attention_mask"],
             }
             labels = concatenated_batch["completion_input_ids"]
