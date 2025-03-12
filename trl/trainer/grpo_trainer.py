@@ -439,22 +439,23 @@ class GRPOTrainer(Trainer):
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
 
+        print("----- Mert check use vllm")
         if self.use_vllm:
+            print("----- yes use vllm")
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
 
-            if self.accelerator.is_main_process:
-                vllm_device = self.args.vllm_device
-                device_type = PartialState().default_device.type
-                device_module = getattr(torch, device_type)
-                if vllm_device == "auto":
-                    if device_module.device_count() == 1:
-                        vllm_device = f"{device_type}:0"  # particular case when training with onyl 1 device: share it
-                    else:
-                        vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
+            device_type = PartialState().default_device.type
+            device_module = getattr(torch, device_type)
+            if self.args.vllm_external_launcher:
+                # External launcher mode: Assign vLLM to the current process's device
+                # we ignore vllm_device parameter ("auto"), because all devices will init vllm instance
+                vllm_device = f"{device_type}:{self.accelerator.process_index}"  
+                print("----- yes use vllm", vllm_device)
+
                 # Check that the requested device is available
                 if (
                     vllm_device.split(":")[0] == f"{device_type}"
@@ -466,52 +467,20 @@ class GRPOTrainer(Trainer):
                         "value lower than the number of GPUs available on your machine—typically, reducing it by one "
                         f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
                     )
-                # Check that the requested device is not also used for training
-                if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
-                    warnings.warn(
-                        f"The requested device {vllm_device} is also being used for training. For higher throughput "
-                        "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
-                        "If this is intentional, you may ignore this warning but should adjust "
-                        "`vllm_gpu_memory_utilization` accordingly."
-                    )
-                # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) place the vLLM
-                # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
-                # setting (profiling_patch).
-                world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
-                profiling_patch = patch(
-                    "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
+                
+                self.llm = LLM(
+                    model=model.name_or_path,
+                    device=vllm_device,
+                    gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                    dtype=self.args.vllm_dtype,
+                    # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
+                    # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
+                    # This is particularly useful here because we generate completions from the same prompts.
+                    enable_prefix_caching=self.args.vllm_enable_prefix_caching,
+                    max_model_len=self.args.vllm_max_model_len,
+                    # External launcher enables creating/colocating vllm instance per gpu
+                    distributed_executor_backend="external_launcher",
                 )
-
-                # For Ascend NPU (torch-npu), collective communication requires the establishment of a communication
-                # group, and different processes must hold the same group number. However, multiple process groups will
-                # be created internally within vLLM. This will cause the group id of the communication group on rank 0
-                # to be different from that of other ranks, causing backward to hang on because the communication
-                # domain cannot be established. So we need to patch it to make sure the group id of different ranks in
-                # the training phase are the same.
-                @contextlib.contextmanager
-                def new_group_context():
-                    new_group = torch.distributed.new_group
-                    try:
-                        torch.distributed.new_group = functools.partial(new_group, use_local_synchronization=True)
-                        torch.npu.mem_get_info = functools.partial(torch.npu.mem_get_info, device=vllm_device)
-                        yield
-                    finally:
-                        torch.distributed.new_group = new_group
-
-                new_group_patch = new_group_context() if device_type == "npu" else contextlib.nullcontext()
-                with world_size_patch, profiling_patch, new_group_patch:
-                    self.llm = LLM(
-                        model=model.name_or_path,
-                        device=vllm_device,
-                        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
-                        dtype=self.args.vllm_dtype,
-                        # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
-                        # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
-                        # This is particularly useful here because we generate completions from the same prompts.
-                        enable_prefix_caching=self.args.vllm_enable_prefix_caching,
-                        max_model_len=self.args.vllm_max_model_len,
-                    )
-
                 # Guided decoding, if enabled
                 if args.vllm_guided_decoding_regex is not None:
                     guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
@@ -519,23 +488,110 @@ class GRPOTrainer(Trainer):
                     guided_decoding = None
 
                 # Sampling parameters
+                local_num_generations = self.args.num_generations // self.accelerator.num_processes
+                print("Check out new local num gen: ", local_num_generations , "for old num gen",  self.args.num_generations, " and no of gpus", self.accelerator.num_processes)
+
                 self.sampling_params = SamplingParams(
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
-                    n=args.num_generations,
+                    n=local_num_generations,
                     temperature=args.temperature,
                     top_p=args.top_p,
                     top_k=-1 if args.top_k is None else args.top_k,
                     min_p=0.0 if args.min_p is None else args.min_p,
                     repetition_penalty=args.repetition_penalty,
                 )
+                self._last_loaded_step = 0
 
-            self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
+            else:
+                if self.accelerator.is_main_process:
+                    vllm_device = self.args.vllm_device
+                    if vllm_device == "auto":
+                        if device_module.device_count() == 1:
+                            vllm_device = f"{device_type}:0"  # particular case when training with onyl 1 device: share it
+                        else:
+                            vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
+                    # Check that the requested device is available
+                    if (
+                        vllm_device.split(":")[0] == f"{device_type}"
+                        and int(vllm_device.split(":")[1]) >= device_module.device_count()
+                    ):
+                        raise ValueError(
+                            f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
+                            "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
+                            "value lower than the number of GPUs available on your machine—typically, reducing it by one "
+                            f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
+                        )
+                    # Check that the requested device is not also used for training
+                    if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
+                        warnings.warn(
+                            f"The requested device {vllm_device} is also being used for training. For higher throughput "
+                            "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
+                            "If this is intentional, you may ignore this warning but should adjust "
+                            "`vllm_gpu_memory_utilization` accordingly."
+                        )
+                    # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) place the vLLM
+                    # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
+                    # setting (profiling_patch).
+                    world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
+                    profiling_patch = patch(
+                        "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
+                    )
 
-            # When using vLLM, the main process is responsible for loading the model weights. This can cause process
-            # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
-            # synchronize all processes after vLLM has been fully initialized.
-            self.accelerator.wait_for_everyone()
+                    # For Ascend NPU (torch-npu), collective communication requires the establishment of a communication
+                    # group, and different processes must hold the same group number. However, multiple process groups will
+                    # be created internally within vLLM. This will cause the group id of the communication group on rank 0
+                    # to be different from that of other ranks, causing backward to hang on because the communication
+                    # domain cannot be established. So we need to patch it to make sure the group id of different ranks in
+                    # the training phase are the same.
+                    @contextlib.contextmanager
+                    def new_group_context():
+                        new_group = torch.distributed.new_group
+                        try:
+                            torch.distributed.new_group = functools.partial(new_group, use_local_synchronization=True)
+                            torch.npu.mem_get_info = functools.partial(torch.npu.mem_get_info, device=vllm_device)
+                            yield
+                        finally:
+                            torch.distributed.new_group = new_group
+
+                    new_group_patch = new_group_context() if device_type == "npu" else contextlib.nullcontext()
+                    with world_size_patch, profiling_patch, new_group_patch:
+                        self.llm = LLM(
+                            model=model.name_or_path,
+                            device=vllm_device,
+                            gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                            dtype=self.args.vllm_dtype,
+                            # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
+                            # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
+                            # This is particularly useful here because we generate completions from the same prompts.
+                            enable_prefix_caching=self.args.vllm_enable_prefix_caching,
+                            max_model_len=self.args.vllm_max_model_len,
+                        )
+
+                    # Guided decoding, if enabled
+                    if args.vllm_guided_decoding_regex is not None:
+                        guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
+                    else:
+                        guided_decoding = None
+
+                    # Sampling parameters
+                    self.sampling_params = SamplingParams(
+                        max_tokens=self.max_completion_length,
+                        guided_decoding=guided_decoding,
+                        n=args.num_generations,
+                        temperature=args.temperature,
+                        top_p=args.top_p,
+                        top_k=-1 if args.top_k is None else args.top_k,
+                        min_p=0.0 if args.min_p is None else args.min_p,
+                        repetition_penalty=args.repetition_penalty,
+                    )
+
+                self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
+
+                # When using vLLM, the main process is responsible for loading the model weights. This can cause process
+                # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
+                # synchronize all processes after vLLM has been fully initialized.
+                self.accelerator.wait_for_everyone()
         else:
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
@@ -732,41 +788,90 @@ class GRPOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
-            # First, have main process load weights if needed
-            if self.state.global_step != self._last_loaded_step:
-                self._move_model_to_vllm()
-                self._last_loaded_step = self.state.global_step
+            if self.args.vllm_external_launcher:
+                print("-----\n\n External launcher - so using new inference")
+                # Each process runs its own vLLM instance
+                if self.state.global_step != self._last_loaded_step:
+                    self._move_model_to_vllm()
+                    self._last_loaded_step = self.state.global_step
 
-            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-            all_prompts_text = gather_object(prompts_text)
-            if self.accelerator.is_main_process:
-                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                # prompt individually.
-                ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                num_gpus = self.accelerator.num_processes  # Total GPUs used
+                gpu_rank = self.accelerator.process_index
+
+                # Each process gets its own slice of prompts
+                local_prompts_text = prompts_text[gpu_rank::num_gpus] 
+
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(
-                        ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
+                    local_outputs = self.llm.generate(
+                        local_prompts_text, sampling_params=self.sampling_params, use_tqdm=False
                     )
+
+                # Extract completion token IDs
                 completion_ids = []
-                for outputs in all_outputs:
+                for outputs in local_outputs:
                     for output in outputs.outputs:
                         completion_ids.append(output.token_ids)
-            else:
-                completion_ids = [None] * len(all_prompts_text)
-            # Broadcast the completions from the main process to all processes, ensuring each process receives its
-            # corresponding slice.
-            completion_ids = broadcast_object_list(completion_ids, from_process=0)
-            process_slice = slice(
-                self.accelerator.process_index * len(prompts),
-                (self.accelerator.process_index + 1) * len(prompts),
-            )
-            completion_ids = completion_ids[process_slice]
 
-            # Pad the completions, and concatenate them with the prompts
-            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+                # Convert completion ids to tensors
+                # Convert to tensor
+                completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+                completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+
+                prompt_ids = prompt_ids[gpu_rank::num_gpus]
+                prompt_mask = prompt_mask[gpu_rank::num_gpus]
+                print("---\n\n check length new completions: ", len(completion_ids))
+                print("---\n\n check length new prompts: ",  len(prompt_ids))
+                
+                # Each GPU keeps its own `completion_ids`
+                prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+                # prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+
+
+            else:
+                print("-----\n\n NOOOOOExternal launcher - so using old inference")
+                # First, have main process load weights if needed
+                if self.state.global_step != self._last_loaded_step:
+                    self._move_model_to_vllm()
+                    self._last_loaded_step = self.state.global_step
+
+                # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
+                all_prompts_text = gather_object(prompts_text)
+                print("All prompts text len", len(all_prompts_text))
+                if self.accelerator.is_main_process:
+                    # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
+                    # num_generations outputs for each one. This is faster than generating outputs for each duplicate
+                    # prompt individually.
+                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                    with profiling_context(self, "vLLM.generate"):
+                        all_outputs = self.llm.generate(
+                            ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
+                        )
+                    completion_ids = []
+                    for outputs in all_outputs:
+                        for output in outputs.outputs:
+                            completion_ids.append(output.token_ids)
+
+                    print("Order prompts input len", len(ordered_set_of_prompts), " vs len of complketions", len(completion_ids))
+                else:
+                    completion_ids = [None] * len(all_prompts_text)
+                
+                
+                # Broadcast the completions from the main process to all processes, ensuring each process receives its
+                # corresponding slice.
+                completion_ids = broadcast_object_list(completion_ids, from_process=0)
+                
+                process_slice = slice(
+                    self.accelerator.process_index * len(prompts),
+                    (self.accelerator.process_index + 1) * len(prompts),
+                )
+                completion_ids = completion_ids[process_slice]
+
+                # Pad the completions, and concatenate them with the prompts
+                completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+                print("---\n\n check length old completions: ", len(completion_ids))
+                print("---\n\n check length old prompts: ", len(prompt_ids))
+                completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+                prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
             with unwrap_model_for_generation(self.model_wrapped, self.accelerator) as unwrapped_model:
