@@ -386,8 +386,9 @@ class SFTTrainer(Trainer):
                 dataset = dataset.map(_func, batched=batched, **map_kwargs)
 
             # If the dataset is prompt-completion, convert it to language modeling type
-            if "prompt" in dataset.column_names and "completion" in dataset.column_names:
-                key = "messages" if is_conversational(dataset[0]) else "text"
+            first_example = next(iter(dataset))
+            if "prompt" in first_example.keys() and "completion" in first_example.keys():
+                key = "messages" if is_conversational(first_example) else "text"
 
                 def concat_prompt_completion(example):
                     return {key: example["prompt"] + example["completion"]}
@@ -398,19 +399,21 @@ class SFTTrainer(Trainer):
                 # Convert the dataset to ChatML if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+                column_names = next(iter(dataset)).keys()
                 dataset = dataset.map(
                     maybe_convert_to_chatml,
-                    remove_columns="conversations" if "conversations" in dataset.column_names else None,
+                    remove_columns="conversations" if "conversations" in column_names else None,
                     **map_kwargs,
                 )
 
                 # Apply the chat template if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+                column_names = next(iter(dataset)).keys()
                 dataset = dataset.map(
                     maybe_apply_chat_template,
                     fn_kwargs={"tokenizer": processing_class},
-                    remove_columns="messages" if "messages" in dataset.column_names else None,  # renamed to "text"
+                    remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                     **map_kwargs,
                 )
 
@@ -464,9 +467,13 @@ class SFTTrainer(Trainer):
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
         if mode == "train":
-            self._total_train_tokens += (
-                self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            )
+            # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
+            # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
+            if "cu_seq_lens_q" in inputs:
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["cu_seq_lens_q"][-1]).sum().item()
+            else:
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
+            self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
