@@ -1,11 +1,10 @@
 import os
-import sys
-import time
+from typing import Optional
+
+import sglang as sgl
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-import sglang as sgl
-from typing import Optional
 
 
 def setup_process(rank: int, world_size: int) -> None:
@@ -66,7 +65,7 @@ def initialize_sglang(rank: int, model_path: str) -> Optional[sgl.Engine]:
             mem_fraction_static=0.9,
         )
         return engine
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -100,7 +99,8 @@ def run_process(rank: int, world_size: int) -> None:
         # Run a test query on rank 0
         if rank == 0 and engine is not None:
             try:
-                result = engine.generate(
+                # Use _ for the result since we're not using it
+                _ = engine.generate(
                     sgl.Prompt("What is the capital of France?"),
                     sampling_params={"max_tokens": 50},
                 )

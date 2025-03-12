@@ -1,10 +1,11 @@
 import os
-from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
-import tempfile
-import torch
 import sys
 import traceback
+
+import torch
+from datasets import load_dataset
+
+from trl import GRPOConfig, GRPOTrainer
 
 
 def main():
@@ -13,20 +14,16 @@ def main():
     print(f"Available GPUs: {torch.cuda.device_count()}")
     for i in range(torch.cuda.device_count()):
         print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
-        print(
-            f"  Memory: {torch.cuda.get_device_properties(i).total_memory / 1e9:.2f} GB"
-        )
+        print(f"  Memory: {torch.cuda.get_device_properties(i).total_memory / 1e9:.2f} GB")
 
     # Use checkpoint directory within project path - TODO: change to your own path
     checkpoint_dir = os.path.join("/home/misc/jinpan/trl-jin", "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     # Load dataset
-    dataset = load_dataset(
-        "trl-internal-testing/zen", "standard_prompt_only", split="train"
-    )
+    dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
     print(f"Loaded dataset with {len(dataset)} examples")
-    
+
     # Assert dataset is not empty
     assert len(dataset) > 0, "Dataset is empty"
 
@@ -64,12 +61,10 @@ def main():
 
     # Clone parameters for verification after training
     previous_trainable_params = {
-        n: param.clone()
-        for n, param in trainer.model.named_parameters()
-        if param.requires_grad
+        n: param.clone() for n, param in trainer.model.named_parameters() if param.requires_grad
     }
     print(f"Captured {len(previous_trainable_params)} trainable parameters")
-    
+
     # Assert we have trainable parameters
     assert len(previous_trainable_params) > 0, "No trainable parameters found in model"
 
@@ -92,7 +87,7 @@ def main():
 
     # Assert that at least some parameters changed
     assert changed_params > 0, f"No parameters changed during training (out of {len(previous_trainable_params)})"
-    
+
     print(f"{changed_params}/{len(previous_trainable_params)} parameters changed during training")
     print("Test completed successfully")
 

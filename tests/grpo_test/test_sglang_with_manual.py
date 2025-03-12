@@ -1,12 +1,11 @@
 import os
-import sys
-import time
+from dataclasses import dataclass
+from typing import Optional
+
+import sglang as sgl
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-import sglang as sgl
-from dataclasses import dataclass
-from typing import Optional, Dict, Any, List
 
 
 @dataclass
@@ -139,7 +138,8 @@ def main() -> None:
     """Script entry point."""
     # Configuration
     config = GRPOConfig(
-        model_path="Qwen/Qwen2.5-0.5B-Instruct", num_gpus=3  # Use at most 3 GPUs
+        model_path="Qwen/Qwen2.5-0.5B-Instruct",
+        num_gpus=3,  # Use at most 3 GPUs
     )
 
     # Adjust num_gpus if needed

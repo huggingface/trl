@@ -227,21 +227,17 @@ class GRPOConfig(TrainingArguments):
     )
     sglang_base_gpu_id: Optional[int] = field(
         default=7,
-        metadata={
-            "help": "Base GPU ID for SGLang engine initialization. If None, uses the last available GPU."
-        },
+        metadata={"help": "Base GPU ID for SGLang engine initialization. If None, uses the last available GPU."},
     )
     sglang_mem_fraction_static: float = field(
         default=0.9,
-        metadata={
-            "help": "Fraction of GPU memory reserved for static memory in SGLang."
-        },
+        metadata={"help": "Fraction of GPU memory reserved for static memory in SGLang."},
     )
     checkpoint_path: Optional[str] = field(
         default=None,
         metadata={"help": "Path to the checkpoint for SGLang weight update."},
     )
-    
+
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,

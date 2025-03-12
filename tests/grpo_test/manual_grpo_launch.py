@@ -1,60 +1,49 @@
+import argparse
+import logging
 import os
 import sys
-import yaml
-import argparse
+
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import yaml
 from datasets import load_dataset
-from trl import GRPOTrainer, GRPOConfig
-import logging
+
+from trl import GRPOConfig, GRPOTrainer
+
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Manual distributed launcher for GRPO with SGLang"
-    )
-    parser.add_argument(
-        "--config_file", type=str, required=True, help="YAML config file path"
-    )
-    parser.add_argument(
-        "--model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Model to train"
-    )
+    parser = argparse.ArgumentParser(description="Manual distributed launcher for GRPO with SGLang")
+    parser.add_argument("--config_file", type=str, required=True, help="YAML config file path")
+    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct", help="Model to train")
     parser.add_argument(
         "--reward_model",
         type=str,
         default="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
         help="Reward model to use",
     )
-    parser.add_argument(
-        "--dataset", type=str, default="trl-internal-testing/zen", help="Dataset name"
-    )
+    parser.add_argument("--dataset", type=str, default="trl-internal-testing/zen", help="Dataset name")
     parser.add_argument(
         "--dataset_config",
         type=str,
         default="standard_prompt_only",
         help="Dataset config",
     )
-    parser.add_argument(
-        "--output_dir", type=str, default="./checkpoints", help="Output directory"
-    )
-    parser.add_argument(
-        "--mem_fraction", type=float, default=0.5, help="Memory fraction for SGLang"
-    )
+    parser.add_argument("--output_dir", type=str, default="./checkpoints", help="Output directory")
+    parser.add_argument("--mem_fraction", type=float, default=0.5, help="Memory fraction for SGLang")
 
     return parser.parse_args()
 
 
 def load_config(config_path):
     """Load configuration from YAML file."""
-    with open(config_path, "r") as f:
+    with open(config_path) as f:
         return yaml.safe_load(f)
 
 
@@ -74,9 +63,7 @@ def setup_environment(config):
     return min(world_size, torch.cuda.device_count())
 
 
-def worker_process(
-    rank, world_size, model, reward_model, dataset, config, mem_fraction
-):
+def worker_process(rank, world_size, model, reward_model, dataset, config, mem_fraction):
     """Worker function to run in each process."""
     try:
         # Set environment variables
@@ -93,9 +80,7 @@ def worker_process(
         # Set device for this process
         device = torch.device(f"cuda:{rank}")
         torch.cuda.set_device(device)
-        logger.info(
-            f"Process {rank}: Using device {device} ({torch.cuda.get_device_name(rank)})"
-        )
+        logger.info(f"Process {rank}: Using device {device} ({torch.cuda.get_device_name(rank)})")
 
         # Initialize distributed process group
         logger.info(f"Process {rank}: Initializing process group")
@@ -116,9 +101,7 @@ def worker_process(
 
                 # Use base_gpu_id = world_size to avoid conflicts with training GPUs
                 base_gpu_id = world_size
-                logger.info(
-                    f"Process {rank}: Using GPU {base_gpu_id} for SGLang engine"
-                )
+                logger.info(f"Process {rank}: Using GPU {base_gpu_id} for SGLang engine")
 
                 # Clean memory on the target GPU
                 with torch.cuda.device(base_gpu_id):
@@ -160,8 +143,8 @@ def worker_process(
         )
 
         # IMPORTANT: Set these attributes for manual distributed mode
-        setattr(training_args, "_using_manual_distributed", True)
-        setattr(training_args, "_sglang_engine", sglang_engine)
+        training_args._using_manual_distributed = True
+        training_args._sglang_engine = sglang_engine
 
         # Create trainer
         logger.info(f"Process {rank}: Creating trainer")
