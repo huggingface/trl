@@ -287,21 +287,23 @@ class GKDTrainer(SFTTrainer):
         which are then used for training instead of the original inputs.
         """
         if self.seq_kd:
-            with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
-                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
-                )
-            inputs["input_ids"] = new_input_ids
-            inputs["attention_mask"] = new_attention_mask
-            inputs["labels"] = new_labels
-        if random.random() <= self.lmbda:
-            with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
-                )
-            inputs["input_ids"] = new_input_ids
-            inputs["attention_mask"] = new_attention_mask
-            inputs["labels"] = new_labels
+            if random.random() <= self.lmbda:
+                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                    new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
+                        unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    )
+                inputs["input_ids"] = new_input_ids
+                inputs["attention_mask"] = new_attention_mask
+                inputs["labels"] = new_labels
+
+            else:
+                with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
+                    new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
+                        unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    )
+                inputs["input_ids"] = new_input_ids
+                inputs["attention_mask"] = new_attention_mask
+                inputs["labels"] = new_labels
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
