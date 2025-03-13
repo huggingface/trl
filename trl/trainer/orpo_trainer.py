@@ -844,12 +844,12 @@ class ORPOTrainer(Trainer):
         ).mean()
         metrics[f"{prefix}logps/rejected"] = self.accelerator.gather_for_metrics(policy_rejected_logps).detach().mean()
         metrics[f"{prefix}logps/chosen"] = self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean()
-        metrics[f"{prefix}logits/rejected"] = (
-            self.accelerator.gather_for_metrics(policy_rejected_logits.detach().mean()).mean()
-        )
-        metrics[f"{prefix}logits/chosen"] = (
-            self.accelerator.gather_for_metrics(policy_chosen_logits.detach().mean()).mean()
-        )
+        metrics[f"{prefix}logits/rejected"] = self.accelerator.gather_for_metrics(
+            policy_rejected_logits.detach().mean()
+        ).mean()
+        metrics[f"{prefix}logits/chosen"] = self.accelerator.gather_for_metrics(
+            policy_chosen_logits.detach().mean()
+        ).mean()
         metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean()
         metrics[f"{prefix}log_odds_ratio"] = self.accelerator.gather_for_metrics(log_odds_ratio).detach().mean()
         metrics[f"{prefix}log_odds_chosen"] = self.accelerator.gather_for_metrics(log_odds_chosen).detach().mean()
