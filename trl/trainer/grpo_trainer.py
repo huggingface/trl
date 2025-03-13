@@ -452,7 +452,7 @@ class GRPOTrainer(Trainer):
 
             device_type = PartialState().default_device.type
             device_module = getattr(torch, device_type)
-            if self.args.vllm_external_launcher:
+            if self.args.vllm_external_launcher: # no if-else
                 # External launcher mode: Assign vLLM to the current process's device
                 # we ignore vllm_device parameter ("auto"), because all devices will init vllm instance
                 vllm_device = f"{device_type}:{self.accelerator.process_index}"  
@@ -493,16 +493,17 @@ class GRPOTrainer(Trainer):
                 if self.args.num_generations % self.accelerator.num_processes != 0:
                     raise ValueError(f"num_generations ({self.args.num_generations}) must be divisible by the number of processes ({self.accelerator.num_processes}).")
 
-                local_num_generations = self.args.num_generations // self.accelerator.num_processes
+                local_num_generations = 1 # self.args.num_generations // self.accelerator.num_processes
                 print("Check out new local num gen:", local_num_generations, 
                     "for old num gen", self.args.num_generations, 
                     "and no of gpus", self.accelerator.num_processes)
 
+                # user batch 4, 16 no of generation, 8 devices = completions 
                 self.sampling_params = SamplingParams(
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
-                    n=local_num_generations,
-                    temperature=args.temperature,
+                    n=local_num_generations, # 1 - for every prompt - we get 1 completion = [8 batch * 8 device = 64 completion] 
+                     temperature=args.temperature,
                     top_p=args.top_p,
                     top_k=-1 if args.top_k is None else args.top_k,
                     min_p=0.0 if args.min_p is None else args.min_p,
@@ -800,17 +801,17 @@ class GRPOTrainer(Trainer):
             if self.args.vllm_external_launcher:
                 print("-----\n\n External launcher - each GPU handles its own batch")
 
-                num_gpus = self.accelerator.num_processes  # Total GPUs used
-                gpu_rank = self.accelerator.process_index  # Current GPU ID
+                # num_gpus = self.accelerator.num_processes  # Total GPUs used
+                # gpu_rank = self.accelerator.process_index  # Current GPU ID
 
-                # First, make sure each GPU gets a fair share of prompts
-                local_batch_start = gpu_rank * len(prompts_text) // num_gpus
-                local_batch_end = (gpu_rank + 1) * len(prompts_text) // num_gpus
-                local_prompts_text = prompts_text[local_batch_start:local_batch_end]
+                # # First, make sure each GPU gets a fair share of prompts
+                # local_batch_start = gpu_rank * len(prompts_text) // num_gpus
+                # local_batch_end = (gpu_rank + 1) * len(prompts_text) // num_gpus
+                # local_prompts_text = prompts_text[local_batch_start:local_batch_end]
 
                 # Now, ensure each prompt gets `num_generations` completions
                 local_outputs = self.llm.generate(
-                    local_prompts_text, sampling_params=self.sampling_params, use_tqdm=False
+                    prompts_text, sampling_params=self.sampling_params, use_tqdm=False
                 )
 
                 completion_ids = []
@@ -823,8 +824,8 @@ class GRPOTrainer(Trainer):
                 completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
 
                 # Ensure each GPU only keeps its own part of the prompts & completions
-                prompt_ids = prompt_ids[local_batch_start:local_batch_end]
-                prompt_mask = prompt_mask[local_batch_start:local_batch_end]
+                # prompt_ids = prompt_ids[local_batch_start:local_batch_end]
+                # prompt_mask = prompt_mask[local_batch_start:local_batch_end]
                 prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
 
             else:
