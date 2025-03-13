@@ -16,7 +16,6 @@ import dataclasses
 import os
 import warnings
 from collections import defaultdict
-from dataclasses import dataclass
 from typing import Any, Callable, Optional, Type, Union
 
 import torch
@@ -30,6 +29,8 @@ from transformers import (
     AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
+    DataCollatorForLanguageModeling,
+    DataCollatorWithFlattening,
     FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -37,23 +38,14 @@ from transformers import (
     Trainer,
     TrainingArguments,
     is_wandb_available,
-    DataCollatorForLanguageModeling,
-    DataCollatorWithFlattening,
 )
-
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
-from .utils import (
-    ConstantLengthDataset,
-    generate_model_card,
-    get_comet_experiment_url,
-    pad,
-    peft_module_casting_to_bf16,
-)
+from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
 
 
 if is_peft_available():
@@ -216,7 +208,7 @@ class SFTTrainer(Trainer):
                 warnings.warn(
                     "You are passing `packing=True` and `padding_free=True` which is not recommended. Please refer "
                     "to the documentation to understand why this is not recommended."
-                    )
+                )
             if model.config._attn_implementation != "flash_attention_2":
                 warnings.warn(
                     "Padding-free training is enabled, but the attention implementation is not set to "
@@ -486,10 +478,6 @@ class SFTTrainer(Trainer):
                     fn_kwargs={"max_length": args.max_length},
                     **map_kwargs,
                 )
-                if "truncate_ratio" in next(iter(dataset)).keys():
-                    truncate_ratios = dataset["truncate_ratio"]
-                    mean_truncate_ratio = sum(truncate_ratios) / len(truncate_ratios)
-                    print(f"Mean truncate ratio for {dataset_name} dataset: {mean_truncate_ratio:.2f}")
 
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
@@ -511,7 +499,9 @@ class SFTTrainer(Trainer):
             if "attention_mask" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             elif "position_ids" in inputs:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(torch.tensor(inputs["position_ids"].size(1))).sum().item()
+                num_tokens_in_batch = (
+                    self.accelerator.gather_for_metrics(torch.tensor(inputs["position_ids"].size(1))).sum().item()
+                )
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
             self._total_train_tokens += num_tokens_in_batch
