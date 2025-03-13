@@ -452,150 +452,75 @@ class GRPOTrainer(Trainer):
 
             device_type = PartialState().default_device.type
             device_module = getattr(torch, device_type)
-            if self.args.vllm_external_launcher: # no if-else
+            # Determine the device
+            if self.args.vllm_external_launcher:
                 # External launcher mode: Assign vLLM to the current process's device
-                # we ignore vllm_device parameter ("auto"), because all devices will init vllm instance
                 vllm_device = f"{device_type}:{self.accelerator.process_index}"  
                 print("----- Using vllm via external launcher on device", vllm_device)
+            else:
+                if self.accelerator.is_main_process:
+                    vllm_device = self.args.vllm_device
+                    if vllm_device == "auto":
+                        vllm_device = f"{device_type}:0" if device_module.device_count() == 1 else f"{device_type}:{self.accelerator.num_processes}"
+            
+            # Validate device availability
+            if (
+                vllm_device.split(":")[0] == f"{device_type}"
+                and int(vllm_device.split(":")[1]) >= device_module.device_count()
+            ):
+                raise ValueError(
+                    f"The requested device for vllm ({vllm_device}) is not available. Reduce `--num_processes` "
+                    f"to {device_module.device_count() - 1}."
+                )
+            
+            # Check that the requested device is not also used for training
+            if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
+                warnings.warn(
+                    f"The requested device {vllm_device} is also being used for training. For higher throughput "
+                    "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
+                    "If this is intentional, you may ignore this warning but should adjust "
+                    "`vllm_gpu_memory_utilization` accordingly."
+                )
 
-                # Check that the requested device is available
-                if (
-                    vllm_device.split(":")[0] == f"{device_type}"
-                    and int(vllm_device.split(":")[1]) >= device_module.device_count()
-                ):
-                    raise ValueError(
-                        f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
-                        "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
-                        "value lower than the number of GPUs available on your machine—typically, reducing it by one "
-                        f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
-                    )
-                
+            # Initialize LLM under ExitStack (only apply patches if not using external launcher)
+            with contextlib.ExitStack() as stack:
+                if not self.args.vllm_external_launcher:
+                    stack.enter_context(patch("torch.distributed.get_world_size", return_value=1))
+                    stack.enter_context(patch("vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None))
+
+                    if device_type == "npu":
+                        stack.enter_context(patch("torch.distributed.new_group", functools.partial(torch.distributed.new_group, use_local_synchronization=True)))
+                        stack.enter_context(patch("torch.npu.mem_get_info", functools.partial(torch.npu.mem_get_info, device=vllm_device)))
+
                 self.llm = LLM(
                     model=model.name_or_path,
                     device=vllm_device,
                     gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
                     dtype=self.args.vllm_dtype,
-                    # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
-                    # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
-                    # This is particularly useful here because we generate completions from the same prompts.
                     enable_prefix_caching=self.args.vllm_enable_prefix_caching,
                     max_model_len=self.args.vllm_max_model_len,
-                    # External launcher enables creating/colocating vllm instance per gpu
-                    distributed_executor_backend="external_launcher",
+                    distributed_executor_backend="external_launcher" if self.args.vllm_external_launcher else None,
                 )
-                # Guided decoding, if enabled
-                if args.vllm_guided_decoding_regex is not None:
-                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
-                else:
-                    guided_decoding = None
 
-                # Sampling parameters
-                if self.args.num_generations % self.accelerator.num_processes != 0:
-                    raise ValueError(f"num_generations ({self.args.num_generations}) must be divisible by the number of processes ({self.accelerator.num_processes}).")
-
-                local_num_generations = 1 # self.args.num_generations // self.accelerator.num_processes
-                print("Check out new local num gen:", local_num_generations, 
-                    "for old num gen", self.args.num_generations, 
-                    "and no of gpus", self.accelerator.num_processes)
-
-                # user batch 4, 16 no of generation, 8 devices = completions 
-                self.sampling_params = SamplingParams(
-                    max_tokens=self.max_completion_length,
-                    guided_decoding=guided_decoding,
-                    n=local_num_generations, # 1 - for every prompt - we get 1 completion = [8 batch * 8 device = 64 completion] 
-                     temperature=args.temperature,
-                    top_p=args.top_p,
-                    top_k=-1 if args.top_k is None else args.top_k,
-                    min_p=0.0 if args.min_p is None else args.min_p,
-                    repetition_penalty=args.repetition_penalty,
-                )
-                self._last_loaded_step = 0
-
+            # Guided decoding, if enabled
+            if args.vllm_guided_decoding_regex is not None:
+                guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
             else:
-                if self.accelerator.is_main_process:
-                    vllm_device = self.args.vllm_device
-                    if vllm_device == "auto":
-                        if device_module.device_count() == 1:
-                            vllm_device = f"{device_type}:0"  # particular case when training with onyl 1 device: share it
-                        else:
-                            vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
-                    # Check that the requested device is available
-                    if (
-                        vllm_device.split(":")[0] == f"{device_type}"
-                        and int(vllm_device.split(":")[1]) >= device_module.device_count()
-                    ):
-                        raise ValueError(
-                            f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
-                            "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
-                            "value lower than the number of GPUs available on your machine—typically, reducing it by one "
-                            f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
-                        )
-                    # Check that the requested device is not also used for training
-                    if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
-                        warnings.warn(
-                            f"The requested device {vllm_device} is also being used for training. For higher throughput "
-                            "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
-                            "If this is intentional, you may ignore this warning but should adjust "
-                            "`vllm_gpu_memory_utilization` accordingly."
-                        )
-                    # vLLM is not compatible with accelerate. So we need to patch it to make sure we can (1) place the vLLM
-                    # model on the desired device (world_size_patch) and (2) avoid a test that is not designed for our
-                    # setting (profiling_patch).
-                    world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
-                    profiling_patch = patch(
-                        "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
-                    )
+                guided_decoding = None
 
-                    # For Ascend NPU (torch-npu), collective communication requires the establishment of a communication
-                    # group, and different processes must hold the same group number. However, multiple process groups will
-                    # be created internally within vLLM. This will cause the group id of the communication group on rank 0
-                    # to be different from that of other ranks, causing backward to hang on because the communication
-                    # domain cannot be established. So we need to patch it to make sure the group id of different ranks in
-                    # the training phase are the same.
-                    @contextlib.contextmanager
-                    def new_group_context():
-                        new_group = torch.distributed.new_group
-                        try:
-                            torch.distributed.new_group = functools.partial(new_group, use_local_synchronization=True)
-                            torch.npu.mem_get_info = functools.partial(torch.npu.mem_get_info, device=vllm_device)
-                            yield
-                        finally:
-                            torch.distributed.new_group = new_group
+            self.sampling_params = SamplingParams(
+                max_tokens=self.max_completion_length,
+                guided_decoding=guided_decoding,
+                n=1 if self.args.vllm_external_launcher else args.num_generations, # vLLM on each GPU generates only 1 in external_launcher mode
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=-1 if args.top_k is None else args.top_k,
+                min_p=0.0 if args.min_p is None else args.min_p,
+                repetition_penalty=args.repetition_penalty,
+            )
 
-                    new_group_patch = new_group_context() if device_type == "npu" else contextlib.nullcontext()
-                    with world_size_patch, profiling_patch, new_group_patch:
-                        self.llm = LLM(
-                            model=model.name_or_path,
-                            device=vllm_device,
-                            gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
-                            dtype=self.args.vllm_dtype,
-                            # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
-                            # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
-                            # This is particularly useful here because we generate completions from the same prompts.
-                            enable_prefix_caching=self.args.vllm_enable_prefix_caching,
-                            max_model_len=self.args.vllm_max_model_len,
-                        )
-
-                    # Guided decoding, if enabled
-                    if args.vllm_guided_decoding_regex is not None:
-                        guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
-                    else:
-                        guided_decoding = None
-
-                    # Sampling parameters
-                    self.sampling_params = SamplingParams(
-                        max_tokens=self.max_completion_length,
-                        guided_decoding=guided_decoding,
-                        n=args.num_generations,
-                        temperature=args.temperature,
-                        top_p=args.top_p,
-                        top_k=-1 if args.top_k is None else args.top_k,
-                        min_p=0.0 if args.min_p is None else args.min_p,
-                        repetition_penalty=args.repetition_penalty,
-                    )
-
-                self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
-
+            self._last_loaded_step = 0  # Tag to avoid unnecessary loading during gradient accumulation
+            if not self.args.vllm_external_launcher:
                 # When using vLLM, the main process is responsible for loading the model weights. This can cause process
                 # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
                 # synchronize all processes after vLLM has been fully initialized.
