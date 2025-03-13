@@ -226,6 +226,12 @@ class SFTTrainer(Trainer):
                     "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
                     "attention mechanism can handle flattened sequences."
                 )
+            if args.per_device_train_batch_size == 1:
+                warnings.warn(
+                    "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
+                    "of 1 anneathilates the benefits of padding-free training. Please consider increasing the batch "
+                    "size to at least 2."
+                )
             data_collator = DataCollatorWithFlattening()
 
         if data_collator is None:
