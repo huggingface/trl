@@ -96,7 +96,7 @@ Packing may cause batch contamination, where adjacent sequences influence one an
 
 ## Padding-free
 
-A slightly different approach to reducing memory usage is padding-free batching. This method first samples a batch and then flattens only that batch into a single sequence. Similar to packing, this avoids padding, but here the sequences aren't truncated in the middle.
+Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
 
 <Tip warning={true}>
 
