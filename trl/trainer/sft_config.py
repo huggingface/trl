@@ -52,8 +52,6 @@ class SFTConfig(TrainingArguments):
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
         packing (`bool`, *optional*, defaults to `False`):
             Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define sequence length.
-        padding_free (`bool`, *optional*, defaults to `False`):
-            Whether to use padding-free.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
@@ -103,10 +101,6 @@ class SFTConfig(TrainingArguments):
             "help": "Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define "
             "sequence length."
         },
-    )
-    padding_free: bool = field(
-        default=False,
-        metadata={"help": "Whether to use padding-free."},
     )
     eval_packing: Optional[bool] = field(
         default=None,

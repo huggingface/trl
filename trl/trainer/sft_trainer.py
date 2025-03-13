@@ -16,7 +16,6 @@ import dataclasses
 import os
 import warnings
 from collections import defaultdict
-from dataclasses import dataclass
 from typing import Any, Callable, Optional, Type, Union
 
 import torch
@@ -30,6 +29,7 @@ from transformers import (
     AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
+    DataCollatorForLanguageModeling,
     FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -38,7 +38,6 @@ from transformers import (
     TrainingArguments,
     is_wandb_available,
 )
-from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
@@ -49,8 +48,7 @@ from .utils import (
     ConstantLengthDataset,
     generate_model_card,
     get_comet_experiment_url,
-    pad,
-    peft_module_casting_to_bf16,
+    peft_module_casting_to_bf16
 )
 
 
@@ -60,67 +58,6 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
-
-
-@dataclass
-class DataCollatorForLanguageModeling(DataCollatorMixin):
-    """
-    Data collator used for language modeling. Inputs are dynamically padded to the maximum length of a batch if they
-    are not all of the same length.
-
-    Args:
-        tokenizer ([`PreTrainedTokenizer`] or [`PreTrainedTokenizerFast`]):
-            Tokenizer used for encoding the data.
-        padding_free (`bool`, *optional*, defaults to `False`):
-            Whether to use padding-free training. If `True`, the input_ids and labels are flattened into a single
-            tensor and the position_ids are calculated accordingly.
-        return_tensors (`str`):
-           Type of Tensor to return. Allowable values are "np", "pt" and "tf".
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    padding_free: bool = False
-    return_tensors: str = "pt"
-
-    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        # Convert to tensor
-        input_ids = [torch.tensor(ex["input_ids"]) for ex in examples]
-        attention_mask = [torch.ones(len(ex["input_ids"]), dtype=torch.int) for ex in examples]
-        labels = [torch.tensor(ex["input_ids"]) for ex in examples]
-
-        outputs = {}
-        if self.padding_free:
-            # Flatten the input_ids and labels into a single tensor
-            position_ids = torch.cat([torch.arange(len(t)) for t in input_ids]).unsqueeze(0)
-            input_ids = torch.cat(input_ids).unsqueeze(0)
-            labels = torch.cat(labels).unsqueeze(0)
-            labels[position_ids == 0] = -100
-
-            # Calculate cumulative sequence lengths for queries and keys
-            flattened_position_ids = position_ids.flatten()
-            indices_q = torch.arange(flattened_position_ids.size(0), dtype=torch.int32)
-            starts_q = indices_q[flattened_position_ids == 0]
-            last_q = torch.tensor(flattened_position_ids.size(), dtype=torch.int32)
-            cu_seq_lens_q = torch.cat((starts_q, last_q)).unsqueeze(0)
-
-            # Determine maximum sequence lengths
-            max_length_k = torch.tensor([flattened_position_ids.max().item() + 1])
-
-            # Prepare outputs
-            outputs["input_ids"] = input_ids
-            outputs["position_ids"] = position_ids
-            outputs["labels"] = labels
-            outputs["cu_seq_lens_q"] = cu_seq_lens_q
-            outputs["cu_seq_lens_k"] = cu_seq_lens_q
-            outputs["max_length_k"] = max_length_k
-            outputs["max_length_q"] = max_length_k
-        else:
-            # Pad
-            outputs["input_ids"] = pad(input_ids, self.tokenizer.pad_token_id)
-            outputs["attention_mask"] = pad(attention_mask, 0)
-            outputs["labels"] = pad(labels, -100)
-
-        return outputs
 
 
 class SFTTrainer(Trainer):
@@ -269,7 +206,7 @@ class SFTTrainer(Trainer):
 
         # Data collator
         if data_collator is None:
-            data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, padding_free=args.padding_free)
+            data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -519,21 +456,13 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
 
                 def truncate(example, max_length):
-                    trunc_ratio = min(1.0, max_length / len(example["input_ids"]))
-                    output = {key: example[key][:max_length] for key in ["input_ids", "attention_mask"]}
-                    output["truncate_ratio"] = trunc_ratio
-                    return output
+                    return {key: example[key][:max_length] for key in ["input_ids", "attention_mask"]}
 
                 dataset = dataset.map(
                     truncate,
                     fn_kwargs={"max_length": args.max_length},
                     **map_kwargs,
                 )
-                if "truncate_ratio" in next(iter(dataset)).keys():
-                    truncate_ratios = dataset["truncate_ratio"]
-                    mean_truncate_ratio = sum(truncate_ratios) / len(truncate_ratios)
-                    print(f"Mean truncate ratio for {dataset_name} dataset: {mean_truncate_ratio:.2f}")
-
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
                 dataset = dataset.select_columns("input_ids")
@@ -551,12 +480,10 @@ class SFTTrainer(Trainer):
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
             # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
-            if "attention_mask" in inputs:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            elif "position_ids" in inputs:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(torch.tensor(inputs["position_ids"].size(1))).sum().item()
+            if "cu_seq_lens_q" in inputs:
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["cu_seq_lens_q"][-1]).sum().item()
             else:
-                raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
