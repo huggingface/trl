@@ -41,13 +41,13 @@ from .grpo_trainer import GRPOTrainer
 from .grpo_config import GRPOConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Load a small model for testing
-model_name = "Qwen/Qwen2.5-0.5B"  # Use a small model for quick testing
+
+model_name = "Qwen/Qwen2.5-0.5B"
 model = AutoModelForCausalLM.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 tokenizer.pad_token = tokenizer.eos_token
 
-# Initialize the trainer with minimal settings
+
 trainer = GRPOTrainer(
     model=model,
     reward_funcs=math_reward_func,
@@ -57,10 +57,10 @@ trainer = GRPOTrainer(
         output_dir="./output",
         per_device_train_batch_size=2,
         num_train_epochs=1,
-        max_steps=2,  # Just run a couple of steps for testing
+        max_steps=2, 
         logging_steps=1,
-        num_generations=2,  # Use a small number for testing
-        log_completions=True,  # To see the generated completions
+        num_generations=2,  
+        log_completions=True,  
     )
 )
 
