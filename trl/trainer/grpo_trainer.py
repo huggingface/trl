@@ -935,16 +935,26 @@ class GRPOTrainer(Trainer):
         # Calculate the sum of weights for valid rewards per sample
         valid_weights_sum = (reward_weights * reward_masks.float()).sum(dim=1, keepdim=True)
         
+        # Handle the case where a sample has no valid rewards
+        # Set valid_weights_sum to 1.0 to avoid division by zero
+        valid_weights_sum = torch.clamp(valid_weights_sum, min=1.0)
+        
         # Normalize the weights for valid rewards
-        # We assume at least one reward function is valid for each sample
         normalized_weights = reward_weights * reward_masks.float() / valid_weights_sum
         
         # Apply normalized weights to rewards
+        # For samples with no valid rewards, this will result in a reward of 0
         rewards = (rewards_per_func * normalized_weights).sum(dim=1)
+        
+        # Replace any NaN values with zeros (this should be redundant now but keeping as a safety measure)
+        rewards = torch.nan_to_num(rewards, nan=0.0)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        
+        # Replace any NaN values in the standard deviation with a small positive number
+        std_grouped_rewards = torch.nan_to_num(std_grouped_rewards, nan=1e-8)
 
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
