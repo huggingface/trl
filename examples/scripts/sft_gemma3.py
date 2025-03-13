@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from trl import SFTConfig, SFTTrainer
-from datasets import load_dataset
-from transformers import AutoProcessor, AutoModelForImageTextToText
-from trl.trainer.utils import pad
 import torch
+from datasets import load_dataset
+from transformers import AutoModelForImageTextToText, AutoProcessor
+
+from trl import SFTConfig, SFTTrainer
+from trl.trainer.utils import pad
 
 
 if __name__ == "__main__":

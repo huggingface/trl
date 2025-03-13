@@ -44,12 +44,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
-from .utils import (
-    ConstantLengthDataset,
-    generate_model_card,
-    get_comet_experiment_url,
-    peft_module_casting_to_bf16
-)
+from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
 
 
 if is_peft_available():
