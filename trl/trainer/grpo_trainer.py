@@ -458,7 +458,9 @@ class GRPOTrainer(Trainer):
                 if self.args.vllm_external_launcher:
                     # External launcher mode: Assign vLLM to the current process's device
                     vllm_device = f"{device_type}:{self.accelerator.process_index}"  
+                    print("---- Using external launcher - multi vllm")
                 else:
+                    print("---- Using single vllm")
                     vllm_device = self.args.vllm_device
                     if vllm_device == "auto":
                         # if self.args.vllm_external_launcher --> current device
@@ -736,8 +738,10 @@ class GRPOTrainer(Trainer):
 
             if self.args.vllm_external_launcher or self.accelerator.is_main_process:
                 if self.args.vllm_external_launcher:
+                    print("-- External launcher - work your own batch")
                     prompts_to_use = prompts_text  # Each GPU handles its own batch
                 else:
+                    print("-- No External launcher - work all batches")
                     prompts_to_use = all_prompts_text[::self.num_generations]  # Unique prompts for generation
 
                 # Generate completions
