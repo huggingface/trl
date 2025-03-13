@@ -221,8 +221,8 @@ class SFTTrainer(Trainer):
             if args.per_device_train_batch_size == 1:
                 warnings.warn(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
-                    "of 1 anneathilates the benefits of padding-free training. Please consider increasing the batch "
-                    "size to at least 2."
+                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "to at least 2."
                 )
             data_collator = DataCollatorWithFlattening()
 
