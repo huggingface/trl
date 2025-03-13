@@ -422,13 +422,7 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize(example, processing_class, dataset_text_field):
-                    processed = processing_class(text=example[dataset_text_field])
-                    # if it's a list of one element, extract the element
-                    processed = {
-                        key: val[0] if isinstance(val, list) and len(val) == 1 else val
-                        for key, val in processed.items()
-                    }
-                    return processed
+                    return processing_class(text=example[dataset_text_field])
 
                 dataset = dataset.map(
                     tokenize,
