@@ -72,7 +72,7 @@ class GRPOConfig(TrainingArguments):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
-        cache_implementation (`str`, *optional*, defaults to `None`):
+        cache_implementation (`str` or `None`, *optional*, defaults to `None`):
             Implementation of the cache method for faster generation when use_vllm is set to False.
 
         > Parameters that control generation acceleration powered by vLLM
