@@ -62,7 +62,7 @@ from ..data_utils import (
     is_conversational,
     maybe_apply_chat_template,
 )
-from ..extras.profiling import profiling_decorator
+from ..extras.profiling import profiling_context, profiling_decorator
 from ..import_utils import is_rich_available, is_sglang_available, is_vllm_available
 from ..models import (
     create_reference_model,
@@ -491,8 +491,17 @@ class RepeatRandomSampler(Sampler):
     ```
     """
 
-    def __init__(self, data_source: Sized, repeat_count: int, seed: Optional[int] = None):
+    def __init__(
+        self,
+        data_source: Sized,
+        mini_repeat_count: int,
+        batch_size: int = 1,
+        repeat_count: int = 1,
+        seed: Optional[int] = None,
+    ):
         self.data_source = data_source
+        self.mini_repeat_count = mini_repeat_count
+        self.batch_size = batch_size
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
         self.seed = seed
@@ -501,15 +510,25 @@ class RepeatRandomSampler(Sampler):
             self.generator.manual_seed(seed)
 
     def __iter__(self):
-        indexes = [
-            idx
-            for idx in torch.randperm(self.num_samples, generator=self.generator).tolist()
-            for _ in range(self.repeat_count)
-        ]
-        return iter(indexes)
+        # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
+        indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
 
-    def __len__(self):
-        return self.num_samples * self.repeat_count
+        #    [2, 4, 3, 1, 0, 6, 5]
+        # -> [[2, 4, 3], [1, 0, 6], [5]]  (batch_size = 3)
+        indexes = [indexes[i : i + self.batch_size] for i in range(0, len(indexes), self.batch_size)]
+
+        #    [[2, 4, 3], [1, 0, 6], [5]]
+        # -> [[2, 4, 3], [1, 0, 6]]
+        indexes = [chunk for chunk in indexes if len(chunk) == self.batch_size]
+
+        for chunk in indexes:
+            for _ in range(self.repeat_count):
+                for index in chunk:
+                    for _ in range(self.mini_repeat_count):
+                        yield index
+
+    def __len__(self) -> int:
+        return self.num_samples * self.mini_repeat_count * self.repeat_count
 
 
 class GRPOTrainer(Trainer):
@@ -697,7 +716,7 @@ class GRPOTrainer(Trainer):
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        args: GRPOConfig = None,
+        args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -826,6 +845,15 @@ class GRPOTrainer(Trainer):
         self.temperature = args.temperature
         self.use_vllm = args.use_vllm
         self.use_sglang = getattr(args, "use_sglang", False)  # Add backend selection flag
+
+        # Multi-step
+        self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
+        self.epsilon = args.epsilon
+        # Tracks the number of iterations (forward + backward passes), including those within a gradient accumulation cycle.
+        self._step = 0
+        # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
+        # `_get_train_sampler` and `_prepare_inputs`.
+        self._buffered_inputs = [None] * args.gradient_accumulation_steps
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
@@ -983,7 +1011,10 @@ class GRPOTrainer(Trainer):
                     else:
                         vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
                 # Check that the requested device is available
-                if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
+                if (
+                    vllm_device.split(":")[0] == f"{device_type}"
+                    and int(vllm_device.split(":")[1]) >= device_module.device_count()
+                ):
                     raise ValueError(
                         f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
                         "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
@@ -991,7 +1022,7 @@ class GRPOTrainer(Trainer):
                         f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
                     )
                 # Check that the requested device is not also used for training
-                if vllm_device in {f"cuda:{idx}" for idx in range(self.accelerator.num_processes)}:
+                if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
                     warnings.warn(
                         f"The requested device {vllm_device} is also being used for training. For higher throughput "
                         "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
@@ -1105,18 +1136,53 @@ class GRPOTrainer(Trainer):
             self._signature_columns = ["prompt"]
 
     def _get_train_sampler(self) -> Sampler:
-        # Returns a sampler that ensures each prompt is repeated across multiple processes. This guarantees that
-        # identical prompts are distributed to different GPUs, allowing rewards to be computed and normalized correctly
-        # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
-        # preventing discrepancies in group formation.
-        return RepeatRandomSampler(self.train_dataset, self.num_generations, seed=self.args.seed)
+        # Returns a sampler that
+        # 1. ensures each prompt is repeated across multiple processes. This guarantees that identical prompts are
+        #    distributed to different GPUs, allowing rewards to be computed and normalized correctly within each prompt
+        #    group. Using the same seed across processes ensures consistent prompt assignment, preventing discrepancies
+        #    in group formation.
+        # 2. repeats the batch multiple times to allow reusing generations across multiple updates. Refer to
+        #    _prepare_inputs to see how the generations are stored and reused.
+
+        # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
+        # second row shows the second sampled batch, and so on.
+        #
+        #                                     |     GPU 0     |     GPU 1     |     GPU 2    |
+        #
+        #               global_step   step     <───────>  num_generations=3
+        #                                      <───────────> per_device_train_batch_size=4
+        #                ▲   0          0      0   0   0   1   1   1   2   2   2   3   3   3  │
+        #  grad_accum=3  │   0          1      4   4   4   5   5   5   6   6   6   7   7   7  │ Generate completions for each prompt
+        #                ▼   0          2      8   8   8   9   9   9  10  10  10  11  11  11  │
+        #
+        #                    1          3      0   0   0   1   1   1   2   2   2   3   3   3  │ The sampled prompts are the same as in the first iteration
+        #                    1          4      4   4   4   5   5   5   6   6   6   7   7   7  │ Reuse the completions (here, once, because num_iterations=2)
+        #                    1          5      8   8   8   9   9   9  10  10  10  11  11  11  │
+        #
+        #                    2          6     12  12  12  13  13  13  14  14  14  15  15  15
+        #                    2          7     16  16  16  17  17  17  18  18  18  19  19  19
+        #                    2          8     20  20  20  21  21  21  22  22  22  23  23  23
+        #                                          ...
+        effective_batch_size = (
+            self.args.per_device_train_batch_size
+            * self.accelerator.num_processes
+            * self.args.gradient_accumulation_steps
+        )
+        return RepeatRandomSampler(
+            data_source=self.train_dataset,
+            mini_repeat_count=self.num_generations,
+            batch_size=effective_batch_size // self.num_generations,
+            repeat_count=self.num_iterations,
+            seed=self.args.seed,
+        )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
-        # Returns a sampler that ensures each prompt is repeated across multiple processes. This guarantees that
-        # identical prompts are distributed to different GPUs, allowing rewards to be computed and normalized correctly
-        # within each prompt group. Using the same seed across processes ensures consistent prompt assignment,
-        # preventing discrepancies in group formation.
-        return RepeatRandomSampler(eval_dataset, self.num_generations, seed=self.args.seed)
+        # See _get_train_sampler for an explanation of the sampler.
+        return RepeatRandomSampler(
+            data_source=eval_dataset,
+            mini_repeat_count=self.num_generations,
+            seed=self.args.seed,
+        )
 
     def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
         """Enables gradient checkpointing for the model."""
@@ -1239,11 +1305,10 @@ class GRPOTrainer(Trainer):
             traceback.print_exc()
             raise RuntimeError(f"Failed to update SGLang engine weights: {e}") from e
 
+    @profiling_decorator
     def _move_model_to_vllm(self):
         with unwrap_model_for_generation(
-            self.model,
-            self.accelerator,
-            gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+            self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
         ) as unwrapped_model:
             if is_compiled_module(unwrapped_model):
                 unwrapped_model = unwrapped_model._orig_mod
@@ -1274,17 +1339,6 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
-        # Determine process rank/index based on initialization mode
-        # if hasattr(self, "_using_manual_distributed") and self._using_manual_distributed:
-        #     # process_rank = dist.get_rank()
-        #     # world_size = dist.get_world_size()
-        #     # is_main_process = process_rank == 0
-        # else:
-        #     # process_rank = self.accelerator.process_index
-        #     # world_size = self.accelerator.num_processes
-        #     # is_main_process = self.accelerator.is_main_process
-
-        # Get appropriate device
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
             if self.state.global_step % self.num_iterations == 0:
@@ -1301,28 +1355,14 @@ class GRPOTrainer(Trainer):
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
-        # Determine process rank/index based on initialization mode
-        if hasattr(self, "_using_manual_distributed") and self._using_manual_distributed:
-            process_rank = dist.get_rank()
-            world_size = dist.get_world_size()
-            is_main_process = process_rank == 0
-        else:
-            process_rank = self.accelerator.process_index
-            world_size = self.accelerator.num_processes
-            is_main_process = self.accelerator.is_main_process
 
-        # Get appropriate device
         device = self.accelerator.device
 
         # Process prompts
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
-            prompts_text,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            add_special_tokens=False,
+            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = (
@@ -1418,12 +1458,11 @@ class GRPOTrainer(Trainer):
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually.
-                ordered_set_of_prompts = list(dict.fromkeys(all_prompts_text))
-                all_outputs = self.llm.generate(
-                    ordered_set_of_prompts,
-                    sampling_params=self.sampling_params,
-                    use_tqdm=False,
-                )
+                ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                with profiling_context(self, "vLLM.generate"):
+                    all_outputs = self.llm.generate(
+                        ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
+                    )
                 completion_ids = []
                 for outputs in all_outputs:
                     for output in outputs.outputs:
@@ -1445,7 +1484,7 @@ class GRPOTrainer(Trainer):
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
-            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+            with unwrap_model_for_generation(self.model_wrapped, self.accelerator) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
                     prompt_ids,
                     attention_mask=prompt_mask,
@@ -1512,27 +1551,30 @@ class GRPOTrainer(Trainer):
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
             if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
-                if is_conversational(inputs[0]):
-                    messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
-                    texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
-                else:
-                    texts = [p + c for p, c in zip(prompts, completions)]
-                reward_inputs = reward_processing_class(
-                    texts,
-                    return_tensors="pt",
-                    padding=True,
-                    padding_side="right",
-                    add_special_tokens=False,
-                )
-                reward_inputs = super()._prepare_inputs(reward_inputs)
-                with torch.inference_mode():
-                    rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+                reward_func_name = f"reward {reward_func.config._name_or_path.split('/')[-1]}"
             else:
-                # Repeat all input columns (but "prompt" and "completion") to match the number of generations
-                keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
-                reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
-                output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
-                rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+                reward_func_name = reward_func.__name__
+            with profiling_context(self, reward_func_name):
+                if isinstance(
+                    reward_func, nn.Module
+                ):  # Module instead of PretrainedModel for compat with compiled models
+                    if is_conversational(inputs[0]):
+                        messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+                        texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+                    else:
+                        texts = [p + c for p, c in zip(prompts, completions)]
+                    reward_inputs = reward_processing_class(
+                        text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                    )
+                    reward_inputs = super()._prepare_inputs(reward_inputs)
+                    with torch.inference_mode():
+                        rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+                else:
+                    # Repeat all input columns (but "prompt" and "completion") to match the number of generations
+                    keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
+                    reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+                    output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
+                    rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
@@ -1569,7 +1611,7 @@ class GRPOTrainer(Trainer):
                 reward_func_name = reward_func.config._name_or_path.split("/")[-1]
             else:
                 reward_func_name = reward_func.__name__
-            self._metrics[f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
+            self._metrics[mode][f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
 
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
@@ -1610,6 +1652,7 @@ class GRPOTrainer(Trainer):
             "advantages": advantages,
         }
 
+    @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
@@ -1635,19 +1678,28 @@ class GRPOTrainer(Trainer):
 
         # Compute the loss
         advantages = inputs["advantages"]
-        per_token_loss = -torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
+        # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
+        # _generate_and_score_completions) and use per_token_logps.detach() instead.
+        old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
+        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
         loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
 
         # Log the metrics
-        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
-        self._metrics["completion_length"].append(completion_length)
+        mode = "eval" if self.control.should_evaluate else "train"
 
         if self.beta != 0.0:
-            mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
-            self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
+            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
+        is_clipped = (per_token_loss1 < per_token_loss2).float()
+        clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
+        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
 
     def prediction_step(
@@ -1666,7 +1718,7 @@ class GRPOTrainer(Trainer):
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "eval" if self.control.should_evaluate else "train"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.

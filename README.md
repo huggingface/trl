@@ -25,6 +25,7 @@ TRL is a cutting-edge library designed for post-training foundation models using
 - **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer) and more.
 
 - **Efficient and scalable**: 
+
     - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like DDP and DeepSpeed.
     - Full integration with [`PEFT`](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
     - Integrates [Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
@@ -90,7 +91,7 @@ from trl import GRPOTrainer
 
 dataset = load_dataset("trl-lib/tldr", split="train")
 
-# Dummy reward function: count the number of unique caracteres in the completions
+# Dummy reward function: count the number of unique characteres in the completions
 def reward_num_unique_chars(completions, **kwargs):
     return [len(set(c)) for c in completions]
 
@@ -101,8 +102,6 @@ trainer = GRPOTrainer(
 )
 trainer.train()
 ```
-
-### `DPOTrainer`
 
 [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer) implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train [Llama 3](https://huggingface.co/papers/2407.21783) and many other models. Here is a basic example of how to use the `DPOTrainer`:
 
@@ -151,28 +150,16 @@ trainer = RewardTrainer(
 trainer.train()
 ```
 
-### `GRPOTrainer`
+## Command Line Interface (CLI)
 
-`GRPOTrainer` implements the [Group Relative Policy Optimization (GRPO) algorithm](https://huggingface.co/papers/2402.03300) that is more memory-efficient than PPO and was used to train [Deepseek AI's R1](https://huggingface.co/deepseek-ai/DeepSeek-R1).
+You can use the TRL Command Line Interface (CLI) to quickly get started with post-training methods like Supervised Fine-Tuning (SFT) or Direct Preference Optimization (DPO):
 
-```python
-from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
+**SFT:**
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: rewards completions that are close to 20 characters
-def reward_len(completions, **kwargs):
-    return [-abs(20 - len(completion)) for completion in completions]
-
-training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO", logging_steps=10)
-trainer = GRPOTrainer(
-    model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_len,
-    args=training_args,
-    train_dataset=dataset,
-)
-trainer.train()
+```bash
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --output_dir Qwen2.5-0.5B-SFT
 ```
 
 #### Using SGLang with GRPO
@@ -206,13 +193,13 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import DPOConfig, DPOTrainer
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
-trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, processing_class=tokenizer)
-trainer.train()
+```bash
+trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --dataset_name argilla/Capybara-Preferences \
+    --output_dir Qwen2.5-0.5B-DPO 
 ```
+
+Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
 
 ## Development
 

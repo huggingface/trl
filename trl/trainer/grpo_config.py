@@ -95,6 +95,9 @@ class GRPOConfig(TrainingArguments):
             If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
             `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
             context size, which might be much larger than the KV cache, leading to inefficiencies.
+        vllm_enable_prefix_caching (`bool`, *optional*, defaults to `True`):
+            Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the model and the hardware
+            support this feature.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None`, guided decoding is disabled.
 
@@ -116,7 +119,11 @@ class GRPOConfig(TrainingArguments):
             [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
-            speed.
+            speed, but may be numerically unstable for long training runs.
+        num_iterations (`int`, *optional*, defaults to `1`):
+            Number of iterations per batch (denoted as μ in the algorithm).
+        epsilon (`float`, *optional*, defaults to `0.2`):
+            Epsilon value for clipping.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -124,12 +131,12 @@ class GRPOConfig(TrainingArguments):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
-        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.9`):
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
             between the current policy and the previous reference policy during updates. The reference policy is
             updated according to the equation: `π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you
             must set `sync_ref_model=True`.
-        ref_model_sync_steps (`int`, *optional*, defaults to `64`):
+        ref_model_sync_steps (`int`, *optional*, defaults to `512`):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
@@ -173,10 +180,6 @@ class GRPOConfig(TrainingArguments):
             "must be divisible by this value."
         },
     )
-    temperature: Optional[float] = field(
-        default=0.9,
-        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
-    )
     max_completion_length: Optional[int] = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
@@ -188,6 +191,41 @@ class GRPOConfig(TrainingArguments):
             "generation, improving generation speed. However, disabling this option allows training models that "
             "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
             "is not compatible with vLLM generation."
+        },
+    )
+
+    # Parameters that control generation
+    temperature: float = field(
+        default=0.9,
+        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+    )
+    top_p: float = field(
+        default=1.0,
+        metadata={
+            "help": "Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. "
+            "Set to 1.0 to consider all tokens."
+        },
+    )
+    top_k: Optional[int] = field(
+        default=50,
+        metadata={
+            "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
+            "top-k-filtering is disabled."
+        },
+    )
+    min_p: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
+            "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={
+            "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
+            "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
+            "to repeat tokens."
         },
     )
 
@@ -230,6 +268,13 @@ class GRPOConfig(TrainingArguments):
             "help": "If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced "
             "`vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model "
             "context size, which might be much larger than the KV cache, leading to inefficiencies."
+        },
+    )
+    vllm_enable_prefix_caching: Optional[bool] = field(
+        default=True,
+        metadata={
+            "help": "Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the model and "
+            "the hardware support this feature."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
@@ -281,8 +326,16 @@ class GRPOConfig(TrainingArguments):
         default=0.04,
         metadata={
             "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
-            "training speed."
+            "training speed, but may be numerically unstable for long training runs."
         },
+    )
+    num_iterations: int = field(
+        default=1,
+        metadata={"help": "Number of iterations per batch (denoted as μ in the algorithm)."},
+    )
+    epsilon: float = field(
+        default=0.2,
+        metadata={"help": "Epsilon value for clipping."},
     )
     reward_weights: Optional[list[float]] = field(
         default=None,
@@ -299,7 +352,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     ref_model_mixup_alpha: float = field(
-        default=0.9,
+        default=0.6,
         metadata={
             "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
             "previous reference policy during updates. The reference policy is updated according to the equation: "
@@ -317,7 +370,10 @@ class GRPOConfig(TrainingArguments):
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
-        metadata={"help": "Whether to log the completions during training."},
+        metadata={
+            "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
+            "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
+        },
     )
 
     def __getstate__(self):
