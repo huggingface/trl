@@ -1497,6 +1497,7 @@ class SFTTrainerTester2(unittest.TestCase):
                 output_dir=tmp_dir,
                 padding_free=True,
                 model_init_kwargs={"attn_implementation": "flash_attention_2"},
+                bf16=True,  # flash_attention_2 only supports bf16 and fp16
                 report_to="none",
             )
             trainer = SFTTrainer(
