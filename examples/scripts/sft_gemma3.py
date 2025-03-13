@@ -18,9 +18,11 @@ Train Gemma-3 on the Codeforces COTS dataset.
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/sft_gemma3.py
 """
 
-from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText
+
+from trl import SFTConfig, SFTTrainer
+
 
 def main():
     # Load dataset
@@ -54,6 +56,7 @@ def main():
 
     # Push to hub
     trainer.push_to_hub(dataset_name="open-r1/codeforces-cots")
+
 
 if __name__ == "__main__":
     main()
