@@ -790,94 +790,48 @@ class GRPOTrainer(Trainer):
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
-        print("prompts:" , len(prompts), " prompts_text", len(prompts_text), " prompts_input ", len(prompt_inputs), "prompt_ids ", len(prompt_ids), "prompt mask ", len(prompt_mask))
-
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
-            if self.args.vllm_external_launcher:
-                print("-----\n\n External launcher - each GPU handles its own batch")
+            # First, have main process load weights if needed
+            if self.state.global_step != self._last_loaded_step:
+                self._move_model_to_vllm()
+                self._last_loaded_step = self.state.global_step
 
-                # num_gpus = self.accelerator.num_processes  # Total GPUs used
-                # gpu_rank = self.accelerator.process_index  # Current GPU ID
-
-                # # First, make sure each GPU gets a fair share of prompts
-                # local_batch_start = gpu_rank * len(prompts_text) // num_gpus
-                # local_batch_end = (gpu_rank + 1) * len(prompts_text) // num_gpus
-                # local_prompts_text = prompts_text[local_batch_start:local_batch_end]
-
-                # Now, ensure each prompt gets `num_generations` completions
-                local_outputs = self.llm.generate(
-                    prompts_text, sampling_params=self.sampling_params, use_tqdm=False
-                )
-
-                completion_ids = []
-                for outputs in local_outputs:
-                    for output in outputs.outputs:
-                        completion_ids.append(output.token_ids)
-
-                # Convert completions into PyTorch tensors
-                completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-                completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-
-                # Ensure each GPU only keeps its own part of the prompts & completions
-                # prompt_ids = prompt_ids[local_batch_start:local_batch_end]
-                # prompt_mask = prompt_mask[local_batch_start:local_batch_end]
-                prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-
-            else:
-                print("\n\n-----NOOOOO External launcher - so using old inference")
-                # First, have main process load weights if needed
-                if self.state.global_step != self._last_loaded_step:
-                    self._move_model_to_vllm()
-                    self._last_loaded_step = self.state.global_step
-
-                # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-                all_prompts_text = gather_object(prompts_text)
-                print("All prompts text len", len(all_prompts_text))
-                if self.accelerator.is_main_process:
-                    # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                    # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                    # prompt individually.
-                    print("In the main process, let's check all prompts size")
-                    print("all_prompts_text", len(all_prompts_text))
-                    
-                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-                    print("ordered size: ", len(ordered_set_of_prompts))
-                    with profiling_context(self, "vLLM.generate"):
-                        all_outputs = self.llm.generate(
-                            ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
-                        )
-                    print("all_outputs size: ", len(all_outputs))
-                    completion_ids = []
-                    for outputs in all_outputs:
-                        for output in outputs.outputs:
-                            completion_ids.append(output.token_ids)
-
-                    print("Order prompts input len", len(ordered_set_of_prompts), " vs len of completion_ids", len(completion_ids))
+            if self.args.vllm_external_launcher or self.accelerator.is_main_process:
+                if self.args.vllm_external_launcher:
+                    print("-----\n\n External launcher - each GPU handles its own batch")
+                    prompts_to_use = prompts_text  # Each GPU handles its own batch
                 else:
-                    completion_ids = [None] * len(all_prompts_text)
-                
-                
-                # Broadcast the completions from the main process to all processes, ensuring each process receives its
-                # corresponding slice.
+                    print("\n\n----- NO External launcher - using all prompts")
+                    all_prompts_text = gather_object(prompts_text)
+                    prompts_to_use = all_prompts_text[::self.num_generations]  # Unique prompts for generation
+
+                with profiling_context(self, "vLLM.generate"):
+                    all_outputs = self.llm.generate(
+                        prompts_to_use, sampling_params=self.sampling_params, use_tqdm=False
+                    )
+                completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+            else:
+                all_prompts_text = gather_object(prompts_text)
+                completion_ids = [None] * len(all_prompts_text)
+
+            if not self.args.vllm_external_launcher:
+                # Broadcast completions to all processes
                 completion_ids = broadcast_object_list(completion_ids, from_process=0)
-                
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
                 completion_ids = completion_ids[process_slice]
 
-                # Pad the completions, and concatenate them with the prompts
-                completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-                print("\n\n --- check length old completions: ", len(completion_ids))
-                print("\n\n ---check length old prompts: ", len(prompt_ids))
-                completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-                prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            # Pad the completions, and concatenate them with the prompts
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
             with unwrap_model_for_generation(self.model_wrapped, self.accelerator) as unwrapped_model:
