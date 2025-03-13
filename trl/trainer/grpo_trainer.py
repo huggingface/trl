@@ -14,18 +14,30 @@
 
 import contextlib
 import functools
+import logging
 import os
+import sys
 import textwrap
+import time
 import warnings
 from collections import defaultdict
-from typing import Any, Callable, Optional, Sized, Union
+from typing import Any, Callable, Dict, Optional, Sized, Union
 from unittest.mock import patch
 
+import sglang as sgl
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 import torch.utils.data
 import transformers
 from accelerate import PartialState
-from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
+from accelerate.utils import (
+    broadcast_object_list,
+    gather,
+    gather_object,
+    is_peft_model,
+    set_seed,
+)
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
@@ -45,10 +57,18 @@ from transformers import (
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import (
+    apply_chat_template,
+    is_conversational,
+    maybe_apply_chat_template,
+)
 from ..extras.profiling import profiling_context, profiling_decorator
-from ..import_utils import is_rich_available, is_vllm_available
-from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
+from ..import_utils import is_rich_available, is_sglang_available, is_vllm_available
+from ..models import (
+    create_reference_model,
+    prepare_deepspeed,
+    unwrap_model_for_generation,
+)
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
@@ -73,6 +93,354 @@ if is_wandb_available():
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
+# print("NCCL_DEBUG =", os.environ.get("NCCL_DEBUG"))
+# print("TORCH_DISTRIBUTED_DEBUG =", os.environ.get("TORCH_DISTRIBUTED_DEBUG"))
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+class SGLangDistributedManager:
+    """
+    Manages distributed training with SGLang integration to avoid conflicts between
+    distributed communication and model serving.
+
+    This class provides a robust interface for initializing SGLang in a separate process
+    while ensuring proper synchronization with PyTorch distributed training.
+    """
+
+    def __init__(
+        self,
+        model_path: str,
+        world_size: Optional[int] = None,
+        master_addr: str = "localhost",
+        master_port: str = "12355",
+        backend: str = "nccl",
+        timeout: int = 1800,
+        max_restarts: int = 3,
+    ):
+        """
+        Initialize the distributed manager.
+
+        Args:
+            model_path: Path to the model to load
+            world_size: Number of processes to spawn (default: auto-detect GPUs)
+            master_addr: Address for distributed coordination
+            master_port: Port for distributed coordination
+            backend: Distributed backend (nccl, gloo)
+            timeout: Timeout in seconds for distributed operations
+            max_restarts: Maximum number of restart attempts if processes fail
+        """
+        self.model_path = model_path
+        self.master_addr = master_addr
+        self.master_port = master_port
+        self.backend = backend
+        self.timeout = timeout
+        self.max_restarts = max_restarts
+
+        # Determine world size (number of processes)
+        if world_size is None:
+            self.world_size = torch.cuda.device_count()
+            logger.info(f"Auto-detected {self.world_size} GPUs")
+        else:
+            self.world_size = min(world_size, torch.cuda.device_count())
+            logger.info(f"Using {self.world_size} of {torch.cuda.device_count()} available GPUs")
+
+        # Track processes and initialization status
+        self.processes = []
+        self.initialized = False
+
+    def get_resource_info(self) -> Dict[int, Dict[str, Any]]:
+        """
+        Get information about available GPU resources.
+
+        Returns:
+            Dict mapping GPU IDs to resource information dictionaries
+        """
+        resources = {}
+        for i in range(torch.cuda.device_count()):
+            try:
+                # Get device properties
+                props = torch.cuda.get_device_properties(i)
+
+                # Get memory usage
+                torch.cuda.set_device(i)
+                torch.cuda.empty_cache()
+                mem_allocated = torch.cuda.memory_allocated(i)
+                mem_total = props.total_memory
+                mem_free = mem_total - mem_allocated
+
+                resources[i] = {
+                    "name": props.name,
+                    "total_memory": mem_total / (1024**3),  # Convert to GB
+                    "free_memory": mem_free / (1024**3),  # Convert to GB
+                    "allocated_memory": mem_allocated / (1024**3),  # Convert to GB
+                    "compute_capability": f"{props.major}.{props.minor}",
+                }
+            except Exception as e:
+                resources[i] = {"error": str(e)}
+
+        return resources
+
+    def select_best_gpu_for_sglang(self) -> int:
+        """
+        Select the best GPU for SGLang initialization based on available memory.
+
+        Returns:
+            int: GPU ID with the most available memory
+        """
+        resources = self.get_resource_info()
+
+        # First try to use a GPU not used for training (self.world_size and beyond)
+        candidate_gpus = list(range(self.world_size, torch.cuda.device_count()))
+
+        # If no additional GPUs, select from training GPUs based on memory
+        if not candidate_gpus:
+            candidate_gpus = list(range(torch.cuda.device_count()))
+
+        # Find GPU with most free memory
+        best_gpu = -1
+        max_free_memory = 0
+
+        for gpu_id in candidate_gpus:
+            if gpu_id in resources and "free_memory" in resources[gpu_id]:
+                free_memory = resources[gpu_id]["free_memory"]
+                if free_memory > max_free_memory:
+                    max_free_memory = free_memory
+                    best_gpu = gpu_id
+
+        # Default to the last GPU if we couldn't determine the best one
+        if best_gpu == -1:
+            best_gpu = torch.cuda.device_count() - 1
+
+        return best_gpu
+
+    def init_process_group(self, rank: int) -> None:
+        """
+        Initialize the distributed process group.
+
+        Args:
+            rank: Process rank
+        """
+        # Set environment variables
+        os.environ["MASTER_ADDR"] = self.master_addr
+        os.environ["MASTER_PORT"] = self.master_port
+        os.environ["RANK"] = str(rank)
+        os.environ["LOCAL_RANK"] = str(rank)
+        os.environ["WORLD_SIZE"] = str(self.world_size)
+
+        # Set NCCL environment variables for better stability
+        os.environ["NCCL_DEBUG"] = "INFO"
+        os.environ["TORCH_NCCL_BLOCKING_WAIT"] = "1"
+
+        # Set device for this process
+        torch.cuda.set_device(rank)
+
+        # Initialize process group
+        logger.info(f"[Rank {rank}] Initializing process group (backend={self.backend})")
+        try:
+            dist.init_process_group(
+                backend=self.backend,
+                init_method=f"tcp://{self.master_addr}:{self.master_port}",
+                world_size=self.world_size,
+                rank=rank,
+                timeout=torch.timedelta(seconds=self.timeout),
+            )
+            logger.info(f"[Rank {rank}] Process group initialized successfully")
+        except Exception as e:
+            logger.error(f"[Rank {rank}] Failed to initialize process group: {e}")
+            raise
+
+    def init_sglang_engine(self, rank: int, base_gpu_id: int, mem_fraction: float, random_seed: int) -> Optional[Any]:
+        """
+        Initialize SGLang engine on rank 0.
+
+        Args:
+            rank: Process rank
+            base_gpu_id: GPU ID for SGLang engine
+            mem_fraction: Memory fraction for static allocation
+            random_seed: Random seed for reproducibility
+
+        Returns:
+            Optional[Any]: SGLang engine if initialization succeeds, None otherwise
+        """
+        if rank != 0:
+            logger.info(f"[Rank {rank}] Skipping SGLang engine initialization (only rank 0 initializes)")
+            return None
+
+        logger.info(
+            f"[Rank {rank}] Initializing SGLang engine on GPU {base_gpu_id} with {mem_fraction} memory fraction"
+        )
+
+        try:
+            # Create engine with specified parameters
+            engine = sgl.Engine(
+                model_path=self.model_path,
+                base_gpu_id=base_gpu_id,
+                random_seed=random_seed,
+                mem_fraction_static=mem_fraction,
+            )
+
+            logger.info(f"[Rank {rank}] SGLang engine initialized successfully")
+            return engine
+
+        except Exception as e:
+            logger.error(f"[Rank {rank}] Failed to initialize SGLang engine: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return None
+
+    def cleanup(self, rank: int) -> None:
+        """
+        Clean up resources for process.
+
+        Args:
+            rank: Process rank
+        """
+        if dist.is_initialized():
+            dist.destroy_process_group()
+            logger.info(f"[Rank {rank}] Process group destroyed")
+
+    def worker_process(self, rank: int, train_fn: callable, sglang_config: Dict[str, Any], args: Any) -> None:
+        try:
+            # Initialize process group
+            self.init_process_group(rank)
+
+            # Initialize SGLang engine on rank 0
+            sglang_engine = None
+            if rank == 0:
+                sglang_engine = self.init_sglang_engine(
+                    rank=rank,
+                    base_gpu_id=sglang_config["base_gpu_id"],
+                    mem_fraction=sglang_config["mem_fraction"],
+                    random_seed=sglang_config["random_seed"],
+                )
+
+                # If SGLang initialization failed, we should abort
+                if sglang_engine is None:
+                    raise RuntimeError("SGLang engine initialization failed on rank 0")
+
+                # **** Initialize the model update process group ****
+                # Create a dedicated process group for online weight updates.
+                update_group = torch.distributed.new_group(backend=self.backend)
+                sglang_engine._model_update_group = update_group
+                if hasattr(sglang_engine, "model_runner"):
+                    sglang_engine.model_runner._model_update_group = update_group
+                logger.info(
+                    f"[Rank {rank}] Model update group initialized and assigned to SGLang engine and its ModelRunner."
+                )
+                # *************************************************************
+
+            # Set custom attributes on args
+            args._using_manual_distributed = True
+            args._sglang_engine = sglang_engine
+
+            # Synchronize processes after initialization
+            logger.info(f"[Rank {rank}] Waiting at synchronization barrier")
+            dist.barrier()
+            logger.info(f"[Rank {rank}] Passed synchronization barrier")
+
+            # Run training function
+            train_fn(args)
+
+            # Final synchronization
+            dist.barrier()
+            logger.info(f"[Rank {rank}] Training completed successfully")
+
+        except Exception as e:
+            logger.error(f"[Rank {rank}] Process failed with error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            sys.exit(1)
+        finally:
+            # Clean up resources
+            self.cleanup(rank)
+
+    def run(
+        self,
+        train_fn: callable,
+        args: Any,
+        sglang_config: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Launch distributed training with SGLang integration.
+
+        Args:
+            train_fn: Training function to run in each process
+            args: Arguments to pass to the training function
+            sglang_config: Configuration for SGLang engine (optional)
+        """
+        if self.initialized:
+            logger.warning("Distributed manager already initialized, skipping")
+            return
+
+        self.initialized = True
+
+        # Determine SGLang configuration
+        if sglang_config is None:
+            # Select best GPU for SGLang (different from training GPUs if possible)
+            base_gpu_id = self.select_best_gpu_for_sglang()
+
+            sglang_config = {
+                "base_gpu_id": base_gpu_id,
+                "mem_fraction": 0.9,
+                "random_seed": 42,
+            }
+
+        logger.info(f"Launching distributed training with {self.world_size} processes")
+        logger.info(f"SGLang engine will be initialized on GPU {sglang_config['base_gpu_id']}")
+
+        # Set multiprocessing start method
+        mp.set_start_method("spawn", force=True)
+
+        # Launch processes with retry logic
+        for attempt in range(self.max_restarts + 1):
+            try:
+                processes = []
+
+                for rank in range(self.world_size):
+                    p = mp.Process(
+                        target=self.worker_process,
+                        args=(rank, train_fn, sglang_config, args),
+                    )
+                    p.start()
+                    processes.append(p)
+
+                # Wait for all processes to complete
+                for p in processes:
+                    p.join()
+
+                # Check for failures
+                exit_codes = [p.exitcode for p in processes]
+                if any(code != 0 for code in exit_codes):
+                    failed_ranks = [rank for rank, code in enumerate(exit_codes) if code != 0]
+                    logger.error(f"Training failed on ranks: {failed_ranks}")
+                    raise RuntimeError(f"Training failed on ranks: {failed_ranks}")
+
+                # Success
+                logger.info("All processes completed successfully")
+                break
+
+            except Exception as e:
+                if attempt < self.max_restarts:
+                    logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying...")
+                    # Clean up before retry
+                    for p in processes:
+                        if p.is_alive():
+                            p.terminate()
+                    # Wait before retrying
+                    time.sleep(5)
+                else:
+                    logger.error(f"All {self.max_restarts} retry attempts failed. Giving up.")
+                    raise
 
 
 class RepeatRandomSampler(Sampler):
@@ -253,6 +621,97 @@ class GRPOTrainer(Trainer):
 
     _tag_names = ["trl", "grpo"]
 
+    @classmethod
+    def train_with_manual_distributed(
+        cls,
+        model: Union[str, PreTrainedModel],
+        reward_funcs: Union[RewardFunc, list[RewardFunc]],
+        args: GRPOConfig = None,
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
+        processing_class: Optional[PreTrainedTokenizerBase] = None,
+        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
+        callbacks: Optional[list[TrainerCallback]] = None,
+        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
+        peft_config: Optional["PeftConfig"] = None,
+    ) -> None:
+        """
+        Run GRPO training with manual distributed process management for SGLang.
+
+        This method uses a robust distributed manager to handle process initialization,
+        SGLang engine setup, and synchronization between processes, avoiding conflicts
+        between torch.distributed and SGLang.
+
+        Args:
+            model: Model ID or instance to train
+            reward_funcs: Reward functions for GRPO
+            args: Training configuration
+            train_dataset: Dataset for training
+            eval_dataset: Dataset for evaluation (optional)
+            processing_class: Tokenizer for processing inputs (optional)
+            reward_processing_classes: Tokenizers for reward functions (optional)
+            callbacks: Training callbacks (optional)
+            optimizers: Optimizer and scheduler (optional)
+            peft_config: PEFT configuration (optional)
+        """
+        # Process args if needed
+        if args is None:
+            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model_name.split("/")[-1]
+            args = GRPOConfig(f"{model_name}-GRPO")
+
+        # Store trainer kwargs as attribute on args
+        trainer_kwargs = {
+            "model": model,
+            "reward_funcs": reward_funcs,
+            "args": args,
+            "train_dataset": train_dataset,
+            "eval_dataset": eval_dataset,
+            "processing_class": processing_class,
+            "reward_processing_classes": reward_processing_classes,
+            "callbacks": callbacks,
+            "optimizers": optimizers,
+            "peft_config": peft_config,
+        }
+        args._trainer_kwargs = trainer_kwargs
+
+        # Get model path
+        model_path = model if isinstance(model, str) else model.config._name_or_path
+
+        # Configure SGLang
+        sglang_config = {
+            "base_gpu_id": getattr(args, "sglang_base_gpu_id", None),
+            "mem_fraction": getattr(args, "sglang_mem_fraction_static", 0.9),
+            "random_seed": getattr(args, "seed", 42),
+        }
+
+        # Define training function
+        def train_function(args):
+            # Retrieve trainer arguments
+            kwargs = args._trainer_kwargs
+
+            # Initialize trainer
+            trainer = cls(**kwargs)
+
+            # Run training
+            trainer.train()
+
+        # Create and run distributed manager
+        world_size = min(
+            torch.cuda.device_count(),
+            getattr(args, "num_processes", torch.cuda.device_count()),
+        )
+
+        manager = SGLangDistributedManager(
+            model_path=model_path,
+            world_size=world_size,
+            timeout=1800,  # 30 minutes timeout for operations
+            max_restarts=2,  # Allow 2 retry attempts
+        )
+
+        # Run training with distributed manager
+        manager.run(train_function, args, sglang_config)
+
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
@@ -266,6 +725,10 @@ class GRPOTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
     ):
+        # First, check if we're using manual distributed mode
+        self._using_manual_distributed = getattr(args, "_using_manual_distributed", False)
+        self._sglang_engine = getattr(args, "_sglang_engine", None)
+
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -381,6 +844,16 @@ class GRPOTrainer(Trainer):
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.temperature = args.temperature
         self.use_vllm = args.use_vllm
+        self.use_sglang = getattr(args, "use_sglang", False)  # Add backend selection flag
+
+        # Multi-step
+        self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
+        self.epsilon = args.epsilon
+        # Tracks the number of iterations (forward + backward passes), including those within a gradient accumulation cycle.
+        self._step = 0
+        # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
+        # `_get_train_sampler` and `_prepare_inputs`.
+        self._buffered_inputs = [None] * args.gradient_accumulation_steps
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
@@ -438,8 +911,90 @@ class GRPOTrainer(Trainer):
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
+        # print("[DEBUG] Seed set to", args.seed)
 
-        if self.use_vllm:
+        # Modified SGLang initialization
+        if self.use_sglang:
+            if not is_sglang_available():
+                raise ImportError(
+                    "SGLang is not available and `use_sglang` is set to True. "
+                    "please install sglang according to the docs."
+                )
+
+            # Log distributed environment variables for debugging
+            # print(f"[DEBUG] LOCAL_RANK: {os.environ.get('LOCAL_RANK')}")
+            # print(f"[DEBUG] RANK: {os.environ.get('RANK')}")
+            # print(f"[DEBUG] WORLD_SIZE: {os.environ.get('WORLD_SIZE')}")
+            # print(
+            #     f"[DEBUG] torch.distributed.is_initialized(): {torch.distributed.is_initialized()}"
+            # )
+
+            # If using manual distributed mode, the engine is already initialized
+            if self._using_manual_distributed:
+                if self.accelerator.is_main_process:
+                    # print(
+                    #     "[DEBUG] Using pre-initialized SGLang engine from manual distributed mode"
+                    # )
+                    self.sglang_engine = self._sglang_engine
+                    self.sglang_sampling_params = {
+                        "temperature": args.temperature,
+                        "max_new_tokens": self.max_completion_length,
+                    }
+            else:
+                # Original SGLang initialization code
+                local_device = torch.device(f"cuda:{self.accelerator.process_index}")
+                torch.cuda.set_device(local_device)
+                # print(
+                #     f"[DEBUG] Process rank {self.accelerator.process_index} set to device {local_device}"
+                # )
+
+                if torch.distributed.is_initialized():
+                    current_device = torch.cuda.current_device()
+                    # print(
+                    #     f"[DEBUG] Process rank {self.accelerator.process_index} calling torch.distributed.barrier() on device {current_device}"
+                    # )
+                    torch.distributed.barrier(device_ids=[current_device])
+                    # print(
+                    #     f"[DEBUG] Process rank {self.accelerator.process_index} passed torch.distributed.barrier()"
+                    # )
+
+                # Initialize SGLang engine in main process
+                if self.accelerator.is_main_process:
+                    base_gpu_id = args.sglang_base_gpu_id
+                    if base_gpu_id is None:
+                        base_gpu_id = self.accelerator.num_processes
+                    # print(
+                    #     f"[DEBUG] [Main Process] Initializing SGLang Engine with base_gpu_id = {base_gpu_id}"
+                    # )
+                    try:
+                        self.sglang_engine = sgl.Engine(
+                            model_path=model_id,
+                            base_gpu_id=base_gpu_id,
+                            random_seed=args.seed,
+                            mem_fraction_static=getattr(args, "sglang_mem_fraction_static", 0.9),
+                        )
+                        self.sglang_sampling_params = {
+                            "temperature": args.temperature,
+                            "max_new_tokens": self.max_completion_length,
+                        }
+                        # print(
+                        #     "[DEBUG] [Main Process] SGLang engine initialized successfully."
+                        # )
+                    except Exception as e:
+                        logger.error(f"[ERROR] [Main Process] Error initializing SGLang engine: {e}")
+                        import traceback
+
+                        traceback.print_exc()
+                        raise e
+
+                # print(
+                #     f"[DEBUG] Process rank {self.accelerator.process_index} calling accelerator.wait_for_everyone()"
+                # )
+                self.accelerator.wait_for_everyone()
+                # print(
+                #     f"[DEBUG] Process rank {self.accelerator.process_index} passed accelerator.wait_for_everyone()"
+                # )
+        elif self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
@@ -479,7 +1034,8 @@ class GRPOTrainer(Trainer):
                 # setting (profiling_patch).
                 world_size_patch = patch("torch.distributed.get_world_size", return_value=1)
                 profiling_patch = patch(
-                    "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
+                    "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling",
+                    return_value=None,
                 )
 
                 # For Ascend NPU (torch-npu), collective communication requires the establishment of a communication
@@ -654,7 +1210,11 @@ class GRPOTrainer(Trainer):
     @profiling_decorator
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
         # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-        logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
+        logits = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            logits_to_keep=logits_to_keep + 1,
+        ).logits
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
         input_ids = input_ids[:, -logits_to_keep:]
@@ -665,6 +1225,85 @@ class GRPOTrainer(Trainer):
         # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
         logits = logits / self.temperature
         return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
+
+    def _update_sglang_engine_weights(self):
+        """Update the SGLang engine weights from the current model."""
+        is_main = (
+            hasattr(self, "_using_manual_distributed")
+            and self._using_manual_distributed
+            and dist.get_rank() == 0
+            or not getattr(self, "_using_manual_distributed", False)
+            and self.accelerator.is_main_process
+        )
+
+        if not is_main:
+            return
+
+        try:
+            checkpoint = self.args.checkpoint_path
+
+            if checkpoint and os.path.exists(checkpoint):
+                # Case 1: Valid checkpoint path exists - update from disk
+                success, message = self.sglang_engine.update_weights_from_disk(checkpoint)
+                if not success:
+                    raise RuntimeError(f"Failed to update weights from {checkpoint}: {message}")
+                # print(
+                #     f"SGLang engine weights updated successfully from checkpoint: {checkpoint}"
+                # )
+            else:
+                # Case 2: No valid checkpoint path - use current model weights
+                # print(
+                #     "No valid checkpoint path provided. Using current model weights..."
+                # )
+
+                # Extract state dictionary from the model
+                with unwrap_model_for_generation(
+                    self.model,
+                    self.accelerator,
+                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                ) as unwrapped_model:
+                    if is_compiled_module(unwrapped_model):
+                        unwrapped_model = unwrapped_model._orig_mod
+
+                    # Handle PEFT models if applicable
+                    if is_peft_model(unwrapped_model):
+                        unwrapped_model.merge_adapter()
+                        state_dict = unwrapped_model.state_dict()
+                        state_dict = {
+                            k.removeprefix("base_model.model.").replace(".base_layer", ""): v
+                            for k, v in state_dict.items()
+                        }
+                        state_dict = {k: v for k, v in state_dict.items() if unwrapped_model.prefix not in k}
+                        state_dict = {
+                            k.replace("modules_to_save.default.", ""): v
+                            for k, v in state_dict.items()
+                            if "original_module" not in k
+                        }
+                    else:
+                        state_dict = unwrapped_model.state_dict()
+
+                # Use update_weights_from_tensor instead of creating a temporary file
+                named_tensors = list(state_dict.items())
+                try:
+                    success = self.sglang_engine.update_weights_from_tensor(named_tensors)
+                except Exception as err:
+                    logger.error(
+                        f"Warning: update_weights_from_tensor failed with error: {err}\n"
+                        "Falling back to current model state without update."
+                    )
+                    success = True  # Assume fallback is acceptable
+
+                if not success:
+                    raise RuntimeError("Failed to update weights from tensors")
+
+                logger.info("SGLang engine weights updated successfully from current model state")
+
+        except Exception as e:
+            logger.error(f"Error updating SGLang engine weights: {e}")
+            import traceback
+
+            traceback.print_exc()
+            raise RuntimeError(f"Failed to update SGLang engine weights: {e}") from e
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -716,21 +1355,98 @@ class GRPOTrainer(Trainer):
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
+
         device = self.accelerator.device
+
+        # Process prompts
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
             text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
-        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+        prompt_ids, prompt_mask = (
+            prompt_inputs["input_ids"],
+            prompt_inputs["attention_mask"],
+        )
 
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
-        # Generate completions using either vLLM or regular generation
-        if self.args.use_vllm:
+        if self.use_sglang:
+            # If the global step has advanced, update the SGLang engine weights
+            if self.state.global_step != getattr(self, "_last_loaded_step", -1) and is_main_process:
+                logger.info(
+                    f"[Rank {process_rank}] Updating SGLang engine weights at global step {self.state.global_step}"
+                )
+                self._update_sglang_engine_weights()
+                self._last_loaded_step = self.state.global_step
+
+            # Gather prompt texts from all processes
+            if self._using_manual_distributed:
+                # Use PyTorch distributed for manual mode
+                all_prompts = [None] * world_size
+                dist.all_gather_object(all_prompts, prompts_text)
+                all_prompts_text = []
+                for prompts in all_prompts:
+                    all_prompts_text.extend(prompts)
+            else:
+                # Use Accelerate for standard mode
+                all_prompts_text = gather_object(prompts_text)
+
+            logger.info(f"[Rank {process_rank}] Collected {len(all_prompts_text)} prompts for generation")
+
+            # Generate completions on the main process
+            if is_main_process:
+                logger.info(f"[Rank {process_rank}] Sending generation request to SGLang engine")
+                try:
+                    outputs = self.sglang_engine.generate(all_prompts_text, self.sglang_sampling_params)
+                    logger.info(f"[Rank {process_rank}] Received generation responses")
+                except Exception as e:
+                    logger.error(f"[Rank {process_rank}] Error during generation: {e}")
+                    import traceback
+
+                    traceback.print_exc()
+                    raise e
+
+                generated_texts = [output["text"] for output in outputs]
+                completion_ids = [self.processing_class.encode(text) for text in generated_texts]
+            else:
+                completion_ids = [None] * len(all_prompts_text)
+
+            # Broadcast completions to all processes
+            if self._using_manual_distributed:
+                # Use PyTorch distributed for manual mode
+                if is_main_process:
+                    # Convert tensors to lists for serialization
+                    completion_ids_list = [
+                        ids.tolist() if isinstance(ids, torch.Tensor) else ids for ids in completion_ids
+                    ]
+                    # Broadcast from rank 0
+                    dist.broadcast_object_list([completion_ids_list], src=0)
+                else:
+                    # Receive broadcast
+                    tmp_list = [None]
+                    dist.broadcast_object_list(tmp_list, src=0)
+                    completion_ids_list = tmp_list[0]
+                    completion_ids = completion_ids_list
+            else:
+                # Use Accelerate for standard mode
+                completion_ids = broadcast_object_list(completion_ids, from_process=0)
+
+            # Get the slice for this process
+            process_slice = slice(
+                process_rank * len(prompts),
+                (process_rank + 1) * len(prompts),
+            )
+            completion_ids = completion_ids[process_slice]
+
+            # Prepare completion tensors
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        elif self.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
@@ -770,7 +1486,9 @@ class GRPOTrainer(Trainer):
             # Regular generation path
             with unwrap_model_for_generation(self.model_wrapped, self.accelerator) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
-                    prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+                    prompt_ids,
+                    attention_mask=prompt_mask,
+                    generation_config=self.generation_config,
                 )
 
             # Compute prompt length and extract completion ids
@@ -804,12 +1522,18 @@ class GRPOTrainer(Trainer):
                 ref_per_token_logps = None
             elif self.ref_model is not None:
                 ref_per_token_logps = self._get_per_token_logps(
-                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                    self.ref_model,
+                    prompt_completion_ids,
+                    attention_mask,
+                    logits_to_keep,
                 )
             else:
                 with self.accelerator.unwrap_model(self.model).disable_adapter():
                     ref_per_token_logps = self._get_per_token_logps(
-                        self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                        self.model,
+                        prompt_completion_ids,
+                        attention_mask,
+                        logits_to_keep,
                     )
 
         # Decode the generated completions
@@ -935,7 +1659,10 @@ class GRPOTrainer(Trainer):
         # Compute the per-token log probabilities for the model
 
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        completion_ids, completion_mask = (
+            inputs["completion_ids"],
+            inputs["completion_mask"],
+        )
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
@@ -975,7 +1702,13 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
 
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
+    def prediction_step(
+        self,
+        model,
+        inputs,
+        prediction_loss_only,
+        ignore_keys: Optional[list[str]] = None,
+    ):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
@@ -1048,7 +1781,7 @@ class GRPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=(wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None),
             comet_url=get_comet_experiment_url(),
             trainer_name="GRPO",
             trainer_citation=citation,
@@ -1057,3 +1790,54 @@ class GRPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
+    def __del__(self):
+        """Ensure proper cleanup when the trainer is destroyed."""
+        if hasattr(self, "sglang_engine") and self.accelerator.is_main_process:
+            try:
+                self.sglang_engine.shutdown()
+                logger.info("SGLang engine shut down.")
+            except Exception as e:
+                logger.warning(f"Warning: Error shutting down SGLang engine: {e}")
+
+    def __getstate__(self):
+        """Custom state management for trainer serialization.
+
+        Ensures proper checkpoint saving by removing unpicklable SGLang objects.
+
+        Returns:
+            dict: Serializable state dictionary
+        """
+        state = self.__dict__.copy()
+
+        # Remove unpicklable SGLang engine and related ZMQ objects
+        if "_sglang_engine" in state:
+            del state["_sglang_engine"]
+
+        # Remove the sglang_engine from the args if present
+        # (this is a backup in case the config's __getstate__ isn't called)
+        if "args" in state and hasattr(state["args"], "_sglang_engine"):
+            args_copy = state["args"].__dict__.copy()
+            if "_sglang_engine" in args_copy:
+                del args_copy["_sglang_engine"]
+
+            # Create a new args object without the engine
+            from copy import deepcopy
+
+            state["args"] = deepcopy(state["args"])
+            state["args"].__dict__ = args_copy
+
+        return state
+
+    def __setstate__(self, state):
+        """Restore trainer state after deserialization.
+
+        Args:
+            state (dict): State dictionary to restore
+        """
+        self.__dict__.update(state)
+
+        # SGLang engine will need to be reinitialized if needed
+        # This happens automatically in training_step when using manual_distributed
+        if not hasattr(self, "_sglang_engine"):
+            self._sglang_engine = None

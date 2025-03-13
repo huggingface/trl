@@ -25,9 +25,11 @@ TRL is a cutting-edge library designed for post-training foundation models using
 - **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer) and more.
 
 - **Efficient and scalable**: 
-    - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like [DDP](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html) and [DeepSpeed](https://github.com/deepspeedai/DeepSpeed).
-    - Full integration with [🤗 PEFT](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
-    - Integrates [🦥 Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
+
+    - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like DDP and DeepSpeed.
+    - Full integration with [`PEFT`](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
+    - Integrates [Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
+    - Supports [SGLang](https://github.com/sgl-project/sglang) for accelerated inference and training, especially with GRPO.
 
 - **Command Line Interface (CLI)**: A simple interface lets you fine-tune with models without needing to write code.
 
@@ -89,7 +91,7 @@ from trl import GRPOTrainer
 
 dataset = load_dataset("trl-lib/tldr", split="train")
 
-# Dummy reward function: count the number of unique caracteres in the completions
+# Dummy reward function: count the number of unique characteres in the completions
 def reward_num_unique_chars(completions, **kwargs):
     return [len(set(c)) for c in completions]
 
@@ -100,8 +102,6 @@ trainer = GRPOTrainer(
 )
 trainer.train()
 ```
-
-### `DPOTrainer`
 
 [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer) implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train [Llama 3](https://huggingface.co/papers/2407.21783) and many other models. Here is a basic example of how to use the `DPOTrainer`:
 
@@ -162,7 +162,36 @@ trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
     --output_dir Qwen2.5-0.5B-SFT
 ```
 
-**DPO:**
+#### Using SGLang with GRPO
+
+TRL supports SGLang integration for accelerated inference and training with GRPO. SGLang provides optimized kernels for faster generation and training, particularly beneficial for reinforcement learning methods.
+
+To set up the environment with SGLang support:
+
+```bash
+# Execute the setup script to create environment with SGLang and FlashInfer
+./setup_env.sh
+source ~/.python/trl/bin/activate
+```
+
+To run a quick test of GRPO with SGLang:
+
+```bash
+# Navigate to the test directory
+cd tests/grpo_test
+python manual_grpo_launch.py --config_file=grpo_sgl_test.yaml
+```
+
+This integration significantly improves training throughput and enables faster experimentation with reinforcement learning approaches.
+
+### `DPOTrainer`
+
+`DPOTrainer` implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train Llama 3 and many other models. Here is a basic example of how to use the `DPOTrainer`:
+
+```python
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import DPOConfig, DPOTrainer
 
 ```bash
 trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \

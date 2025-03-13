@@ -99,7 +99,18 @@ class GRPOConfig(TrainingArguments):
             Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the model and the hardware
             support this feature.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+            Regex for vLLM guided decoding. If `None`, guided decoding is disabled.
+
+        > Parameters that control generation acceleration powered by SGLang
+
+        use_sglang (`bool`, *optional*, defaults to `False`):
+            Whether to use SGLang for generating completions. If set to `True`, a SGLang server must be running.
+        sglang_base_gpu_id (`int`, *optional*, defaults to `7`):
+            Base GPU ID for SGLang engine initialization. If set to `None`, the last available GPU is used.
+        sglang_mem_fraction_static (`float`, *optional*, defaults to `0.9`):
+            Fraction of GPU memory reserved for static memory in SGLang.
+        checkpoint_path (`str`, *optional*, defaults to `None`):
+            Path to the checkpoint for updating or initializing SGLang weights.
 
         > Parameters that control the training
 
@@ -251,7 +262,7 @@ class GRPOConfig(TrainingArguments):
             "determined based on the model configuration. Find the supported values in the vLLM documentation."
         },
     )
-    vllm_max_model_len: Optional[int] = field(
+    sglang_server_url: Optional[str] = field(
         default=None,
         metadata={
             "help": "If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced "
@@ -269,6 +280,38 @@ class GRPOConfig(TrainingArguments):
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+    )
+
+    # Parameters that control generation acceleration powered by SGLang
+    use_sglang: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to use SGLang for generating completions."},
+    )
+    sglang_base_gpu_id: Optional[int] = field(
+        default=6,
+        metadata={"help": "Base GPU ID for SGLang engine initialization. If None, uses the last available GPU."},
+    )
+    sglang_mem_fraction_static: float = field(
+        default=0.9,
+        metadata={"help": "Fraction of GPU memory reserved for static memory in SGLang."},
+    )
+
+    # Parameters that control generation acceleration powered by SGLang
+    use_sglang: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether to use SGLang for generating completions."},
+    )
+    sglang_base_gpu_id: Optional[int] = field(
+        default=7,
+        metadata={"help": "Base GPU ID for SGLang engine initialization. If None, uses the last available GPU."},
+    )
+    sglang_mem_fraction_static: float = field(
+        default=0.9,
+        metadata={"help": "Fraction of GPU memory reserved for static memory in SGLang."},
+    )
+    checkpoint_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to the checkpoint for SGLang weight update."},
     )
 
     # Parameters that control the training
@@ -332,3 +375,11 @@ class GRPOConfig(TrainingArguments):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
+
+    def __getstate__(self):
+        """Custom state management for pickling support."""
+        state = self.__dict__.copy()
+        # Remove unpicklable attributes (SGLang engine and ZMQ-related objects)
+        if "_sglang_engine" in state:
+            del state["_sglang_engine"]
+        return state

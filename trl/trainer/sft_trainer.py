@@ -399,6 +399,7 @@ class SFTTrainer(Trainer):
                 # Convert the dataset to ChatML if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+
                 column_names = next(iter(dataset)).keys()
                 dataset = dataset.map(
                     maybe_convert_to_chatml,
@@ -409,6 +410,7 @@ class SFTTrainer(Trainer):
                 # Apply the chat template if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+
                 column_names = next(iter(dataset)).keys()
                 dataset = dataset.map(
                     maybe_apply_chat_template,
@@ -474,6 +476,7 @@ class SFTTrainer(Trainer):
             else:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
+
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
