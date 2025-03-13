@@ -469,25 +469,25 @@ class GRPOTrainer(Trainer):
                         else:
                             vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
                 
-                # Check that the requested device is available
-                if (
-                    vllm_device.split(":")[0] == f"{device_type}"
-                    and int(vllm_device.split(":")[1]) >= device_module.device_count()
-                ):
-                    raise ValueError(
-                        f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
-                        "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
-                        "value lower than the number of GPUs available on your machine—typically, reducing it by one "
-                        f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
+                    # Check that the requested device is available
+                    if (
+                        vllm_device.split(":")[0] == f"{device_type}"
+                        and int(vllm_device.split(":")[1]) >= device_module.device_count()
+                    ):
+                        raise ValueError(
+                            f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
+                            "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
+                            "value lower than the number of GPUs available on your machine—typically, reducing it by one "
+                            f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
                     )
-                # Check that the requested device is not also used for training
-                if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
-                    warnings.warn(
-                        f"The requested device {vllm_device} is also being used for training. For higher throughput "
-                        "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
-                        "If this is intentional, you may ignore this warning but should adjust "
-                        "`vllm_gpu_memory_utilization` accordingly."
-                    )
+                    # Check that the requested device is not also used for training
+                    if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
+                        warnings.warn(
+                            f"The requested device {vllm_device} is also being used for training. For higher throughput "
+                            "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
+                            "If this is intentional, you may ignore this warning but should adjust "
+                            "`vllm_gpu_memory_utilization` accordingly."
+                        )
 
                 # Initialize LLM under ExitStack (only apply patches if not using external launcher)
                 with contextlib.ExitStack() as stack:
