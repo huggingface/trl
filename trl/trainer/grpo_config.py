@@ -219,6 +219,10 @@ class GRPOConfig(TrainingArguments):
             "to repeat tokens."
         },
     )
+    cache_implementation: Optional[str] = field(
+        default=None,
+        metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
+    )
 
     # Parameters that control generation acceleration powered by vLLM
     use_vllm: Optional[bool] = field(
