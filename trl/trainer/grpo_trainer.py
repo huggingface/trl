@@ -801,22 +801,24 @@ class GRPOTrainer(Trainer):
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
+            # Gather prompts only once if needed
+            all_prompts_text = gather_object(prompts_text) if not self.args.vllm_external_launcher else None
+
             if self.args.vllm_external_launcher or self.accelerator.is_main_process:
                 if self.args.vllm_external_launcher:
                     print("-----\n\n External launcher - each GPU handles its own batch")
                     prompts_to_use = prompts_text  # Each GPU handles its own batch
                 else:
                     print("\n\n----- NO External launcher - using all prompts")
-                    all_prompts_text = gather_object(prompts_text)
                     prompts_to_use = all_prompts_text[::self.num_generations]  # Unique prompts for generation
 
+                # Generate completions
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(
                         prompts_to_use, sampling_params=self.sampling_params, use_tqdm=False
                     )
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
             else:
-                all_prompts_text = gather_object(prompts_text)
                 completion_ids = [None] * len(all_prompts_text)
 
             if not self.args.vllm_external_launcher:
