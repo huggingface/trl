@@ -37,8 +37,10 @@ from transformers import (
     Trainer,
     TrainingArguments,
     is_wandb_available,
+    DataCollatorForLanguageModeling,
+    DataCollatorWithFlattening,
 )
-from transformers.data.data_collator import DataCollatorMixin
+
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
@@ -60,67 +62,6 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
-
-
-@dataclass
-class DataCollatorForLanguageModeling(DataCollatorMixin):
-    """
-    Data collator used for language modeling. Inputs are dynamically padded to the maximum length of a batch if they
-    are not all of the same length.
-
-    Args:
-        tokenizer ([`PreTrainedTokenizer`] or [`PreTrainedTokenizerFast`]):
-            Tokenizer used for encoding the data.
-        padding_free (`bool`, *optional*, defaults to `False`):
-            Whether to use padding-free training. If `True`, the input_ids and labels are flattened into a single
-            tensor and the position_ids are calculated accordingly.
-        return_tensors (`str`):
-           Type of Tensor to return. Allowable values are "np", "pt" and "tf".
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    padding_free: bool = False
-    return_tensors: str = "pt"
-
-    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        # Convert to tensor
-        input_ids = [torch.tensor(ex["input_ids"]) for ex in examples]
-        attention_mask = [torch.ones(len(ex["input_ids"]), dtype=torch.int) for ex in examples]
-        labels = [torch.tensor(ex["input_ids"]) for ex in examples]
-
-        outputs = {}
-        if self.padding_free:
-            # Flatten the input_ids and labels into a single tensor
-            position_ids = torch.cat([torch.arange(len(t)) for t in input_ids]).unsqueeze(0)
-            input_ids = torch.cat(input_ids).unsqueeze(0)
-            labels = torch.cat(labels).unsqueeze(0)
-            labels[position_ids == 0] = -100
-
-            # Calculate cumulative sequence lengths for queries and keys
-            flattened_position_ids = position_ids.flatten()
-            indices_q = torch.arange(flattened_position_ids.size(0), dtype=torch.int32)
-            starts_q = indices_q[flattened_position_ids == 0]
-            last_q = torch.tensor(flattened_position_ids.size(), dtype=torch.int32)
-            cu_seq_lens_q = torch.cat((starts_q, last_q)).unsqueeze(0)
-
-            # Determine maximum sequence lengths
-            max_length_k = torch.tensor([flattened_position_ids.max().item() + 1])
-
-            # Prepare outputs
-            outputs["input_ids"] = input_ids
-            outputs["position_ids"] = position_ids
-            outputs["labels"] = labels
-            outputs["cu_seq_lens_q"] = cu_seq_lens_q
-            outputs["cu_seq_lens_k"] = cu_seq_lens_q
-            outputs["max_length_k"] = max_length_k
-            outputs["max_length_q"] = max_length_k
-        else:
-            # Pad
-            outputs["input_ids"] = pad(input_ids, self.tokenizer.pad_token_id)
-            outputs["attention_mask"] = pad(attention_mask, 0)
-            outputs["labels"] = pad(labels, -100)
-
-        return outputs
 
 
 class SFTTrainer(Trainer):
@@ -268,8 +209,27 @@ class SFTTrainer(Trainer):
                     )
 
         # Data collator
+        if args.padding_free:
+            if data_collator is not None:
+                raise ValueError("Passing a custom data collator is not supported when using padding-free.")
+            if args.packing:
+                warnings.warn(
+                    "You are passing `packing=True` and `padding_free=True` which is not recommended. Please refer "
+                    "to the documentation to understand why this is not recommended."
+                    )
+            if model.config._attn_implementation != "flash_attention_2":
+                warnings.warn(
+                    "Padding-free training is enabled, but the attention implementation is not set to "
+                    "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
+                    "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
+                    "other implementations may lead to unexpected behavior. To ensure compatibility, set "
+                    "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
+                    "attention mechanism can handle flattened sequences."
+                )
+            data_collator = DataCollatorWithFlattening()
+
         if data_collator is None:
-            data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, padding_free=args.padding_free)
+            data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
