@@ -479,10 +479,7 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
 
                 def truncate(example, max_length):
-                    trunc_ratio = min(1.0, max_length / len(example["input_ids"]))
-                    output = {key: example[key][:max_length] for key in ["input_ids", "attention_mask"]}
-                    output["truncate_ratio"] = trunc_ratio
-                    return output
+                    return {key: example[key][:max_length] for key in ["input_ids", "attention_mask"]}
 
                 dataset = dataset.map(
                     truncate,
