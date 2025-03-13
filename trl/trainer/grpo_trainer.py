@@ -261,7 +261,7 @@ class GRPOTrainer(Trainer):
                   plus any additional columns in the dataset. It should return a list of rewards. For more details, see
                   [Using a custom reward function](#using-a-custom-reward-function).
                   
-                  Custom reward functions can also return None for the entire function call or for individual samples
+                  Custom reward functions can also return None
                   when the reward is not applicable to those samples. This is useful for multi-task training where
                   different reward functions apply to different types of samples. When a reward function returns None
                   for a sample, that reward function is excluded from the reward calculation for that sample, and the
