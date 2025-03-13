@@ -16,16 +16,31 @@ import sys
 import tempfile
 import unittest
 
+import numpy as np
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
+from datasets.features import Features, Image, Value
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft, require_torch_accelerator
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoModelForSequenceClassification,
+    AutoProcessor,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+)
+from transformers.testing_utils import (
+    require_bitsandbytes,
+    require_flash_attn,
+    require_peft,
+    require_torch_accelerator,
+)
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_vllm_available
 from trl.trainer.grpo_trainer import RepeatRandomSampler
+from trl.trainer.utils import get_kbit_device_map
 
 
 if is_peft_available():
@@ -877,3 +892,96 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_flash_attn
+    @require_bitsandbytes
+    @require_peft
+    @require_torch_accelerator
+    def test_vlm_training(self):
+        model_name = "HuggingFaceTB/SmolVLM-Instruct"
+
+        def data_gen(num_samples):
+            processor = AutoProcessor.from_pretrained(model_name)
+            conversation = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": "What is in the image?"},
+                    ],
+                },
+            ]
+            prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+            del processor
+
+            for _ in range(num_samples):
+                yield {
+                    "prompt": prompt,
+                    "image": np.random.uniform(low=0.0, high=255.0, size=(224, 224, 3)).astype(np.uint8),
+                }
+
+        dataset = Dataset.from_generator(
+            data_gen, gen_kwargs={"num_samples": 16}, features=Features(image=Image(), prompt=Value(dtype="string"))
+        )
+        # reduce memory requirements as much as possible
+        # TODO: 4-bit quant config breaks the test 😒
+        # `Base parameter base_model.model.model.vision_model.encoder.layers.0.self_attn.k_proj.weight has changed.`
+        # quantization_config = BitsAndBytesConfig(
+        #     load_in_4bit=True,
+        #     bnb_4bit_compute_dtype="bfloat16",
+        #     bnb_4bit_quant_type="nf4",
+        #     bnb_4bit_use_double_quant=True,
+        #     bnb_4bit_quant_storage="bfloat16",
+        # )
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+        )
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_name,
+            attn_implementation="flash_attention_2",
+            torch_dtype="float16",  # bfloat16",
+            device_map=get_kbit_device_map(),
+            quantization_config=quantization_config,
+        )
+
+        processor = AutoProcessor.from_pretrained(model_name)
+
+        def reward_func(prompts, completions, **kwargs):
+            # simple nonsensical reward
+            return [-((len(c) - 25) ** 2) + 100 for c in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_completion_length=32,
+                max_prompt_length=None,  # needs the full length to not cut off image tokens
+                report_to="none",
+            )
+            lora_config = LoraConfig(target_modules="model.text_model.*.(q_proj|v_proj)", task_type=None)
+            trainer = GRPOTrainer(
+                model=model,
+                processing_class=processor,
+                reward_funcs=[reward_func],
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
+
+            self.assertIsInstance(trainer.model, PeftModel)
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that only LoRA parameters have changed, base model parameters remain unchanged
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if "lora" in n.lower():  # LoRA parameters should change
+                    self.assertFalse(torch.equal(param, new_param), f"LoRA parameter {n} has not changed.")
+                else:  # Base model parameters should not change
+                    self.assertTrue(torch.equal(param, new_param), f"Base parameter {n} has changed.")
