@@ -449,75 +449,80 @@ class GRPOTrainer(Trainer):
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
+            
+            if self.accelerator.is_main_process or self.args.vllm_external_launcher:
 
-            device_type = PartialState().default_device.type
-            device_module = getattr(torch, device_type)
-            # Determine the device
-            if self.args.vllm_external_launcher:
-                # External launcher mode: Assign vLLM to the current process's device
-                vllm_device = f"{device_type}:{self.accelerator.process_index}"  
-                print("----- Using vllm via external launcher on device", vllm_device)
-            else:
-                if self.accelerator.is_main_process:
+                device_type = PartialState().default_device.type
+                device_module = getattr(torch, device_type)
+                # Determine the device
+                if self.args.vllm_external_launcher:
+                    # External launcher mode: Assign vLLM to the current process's device
+                    vllm_device = f"{device_type}:{self.accelerator.process_index}"  
+                else:
                     vllm_device = self.args.vllm_device
                     if vllm_device == "auto":
-                        vllm_device = f"{device_type}:0" if device_module.device_count() == 1 else f"{device_type}:{self.accelerator.num_processes}"
-            
-            # Validate device availability
-            if (
-                vllm_device.split(":")[0] == f"{device_type}"
-                and int(vllm_device.split(":")[1]) >= device_module.device_count()
-            ):
-                raise ValueError(
-                    f"The requested device for vllm ({vllm_device}) is not available. Reduce `--num_processes` "
-                    f"to {device_module.device_count() - 1}."
+                        # if self.args.vllm_external_launcher --> current device
+                        if device_module.device_count() == 1:
+                            vllm_device = f"{device_type}:0"  # particular case when training with onyl 1 device: share it
+                        else:
+                            vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
+                
+                # Check that the requested device is available
+                if (
+                    vllm_device.split(":")[0] == f"{device_type}"
+                    and int(vllm_device.split(":")[1]) >= device_module.device_count()
+                ):
+                    raise ValueError(
+                        f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
+                        "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
+                        "value lower than the number of GPUs available on your machine—typically, reducing it by one "
+                        f"is sufficient. In your case: `--num_processes {device_module.device_count() - 1}`."
+                    )
+                # Check that the requested device is not also used for training
+                if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
+                    warnings.warn(
+                        f"The requested device {vllm_device} is also being used for training. For higher throughput "
+                        "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
+                        "If this is intentional, you may ignore this warning but should adjust "
+                        "`vllm_gpu_memory_utilization` accordingly."
+                    )
+
+                # Initialize LLM under ExitStack (only apply patches if not using external launcher)
+                with contextlib.ExitStack() as stack:
+                    if not self.args.vllm_external_launcher:
+                        stack.enter_context(patch("torch.distributed.get_world_size", return_value=1))
+                        stack.enter_context(patch("vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None))
+
+                        if device_type == "npu":
+                            stack.enter_context(patch("torch.distributed.new_group", functools.partial(torch.distributed.new_group, use_local_synchronization=True)))
+                            stack.enter_context(patch("torch.npu.mem_get_info", functools.partial(torch.npu.mem_get_info, device=vllm_device)))
+
+                    self.llm = LLM(
+                        model=model.name_or_path,
+                        device=vllm_device,
+                        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                        dtype=self.args.vllm_dtype,
+                        enable_prefix_caching=self.args.vllm_enable_prefix_caching,
+                        max_model_len=self.args.vllm_max_model_len,
+                        distributed_executor_backend="external_launcher" if self.args.vllm_external_launcher else None,
+                    )
+
+                # Guided decoding, if enabled
+                if args.vllm_guided_decoding_regex is not None:
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
+                else:
+                    guided_decoding = None
+
+                self.sampling_params = SamplingParams(
+                    max_tokens=self.max_completion_length,
+                    guided_decoding=guided_decoding,
+                    n=1 if self.args.vllm_external_launcher else args.num_generations, # vLLM on each GPU generates only 1 in external_launcher mode
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    top_k=-1 if args.top_k is None else args.top_k,
+                    min_p=0.0 if args.min_p is None else args.min_p,
+                    repetition_penalty=args.repetition_penalty,
                 )
-            
-            # Check that the requested device is not also used for training
-            if vllm_device in {f"{device_type}:{idx}" for idx in range(self.accelerator.num_processes)}:
-                warnings.warn(
-                    f"The requested device {vllm_device} is also being used for training. For higher throughput "
-                    "and to avoid out-of-memory errors, it is recommended to use a dedicated device for vLLM. "
-                    "If this is intentional, you may ignore this warning but should adjust "
-                    "`vllm_gpu_memory_utilization` accordingly."
-                )
-
-            # Initialize LLM under ExitStack (only apply patches if not using external launcher)
-            with contextlib.ExitStack() as stack:
-                if not self.args.vllm_external_launcher:
-                    stack.enter_context(patch("torch.distributed.get_world_size", return_value=1))
-                    stack.enter_context(patch("vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None))
-
-                    if device_type == "npu":
-                        stack.enter_context(patch("torch.distributed.new_group", functools.partial(torch.distributed.new_group, use_local_synchronization=True)))
-                        stack.enter_context(patch("torch.npu.mem_get_info", functools.partial(torch.npu.mem_get_info, device=vllm_device)))
-
-                self.llm = LLM(
-                    model=model.name_or_path,
-                    device=vllm_device,
-                    gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
-                    dtype=self.args.vllm_dtype,
-                    enable_prefix_caching=self.args.vllm_enable_prefix_caching,
-                    max_model_len=self.args.vllm_max_model_len,
-                    distributed_executor_backend="external_launcher" if self.args.vllm_external_launcher else None,
-                )
-
-            # Guided decoding, if enabled
-            if args.vllm_guided_decoding_regex is not None:
-                guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
-            else:
-                guided_decoding = None
-
-            self.sampling_params = SamplingParams(
-                max_tokens=self.max_completion_length,
-                guided_decoding=guided_decoding,
-                n=1 if self.args.vllm_external_launcher else args.num_generations, # vLLM on each GPU generates only 1 in external_launcher mode
-                temperature=args.temperature,
-                top_p=args.top_p,
-                top_k=-1 if args.top_k is None else args.top_k,
-                min_p=0.0 if args.min_p is None else args.min_p,
-                repetition_penalty=args.repetition_penalty,
-            )
 
             self._last_loaded_step = 0  # Tag to avoid unnecessary loading during gradient accumulation
             if not self.args.vllm_external_launcher:
@@ -680,7 +685,7 @@ class GRPOTrainer(Trainer):
                 }
             else:
                 state_dict = unwrapped_model.state_dict()
-            if self.accelerator.is_main_process:
+            if self.accelerator.is_main_process or self.args.vllm_external_launcher:
                 llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                 llm_model.load_weights(state_dict.items())
             # Unmerge the adapter to restore the model to its original state.
@@ -731,10 +736,8 @@ class GRPOTrainer(Trainer):
 
             if self.args.vllm_external_launcher or self.accelerator.is_main_process:
                 if self.args.vllm_external_launcher:
-                    print("-----\n\n External launcher - each GPU handles its own batch")
                     prompts_to_use = prompts_text  # Each GPU handles its own batch
                 else:
-                    print("\n\n----- NO External launcher - using all prompts")
                     prompts_to_use = all_prompts_text[::self.num_generations]  # Unique prompts for generation
 
                 # Generate completions
@@ -891,7 +894,7 @@ class GRPOTrainer(Trainer):
             completions_to_log = gather_object(completions_text)
             rewards_to_log = rewards.tolist()
 
-            if self.accelerator.is_main_process:
+            if self.accelerator.is_main_process: #ToDo: What to report in external_launcher mode (report all vllms' stats)
                 if is_rich_available():
                     print_prompt_completions_sample(
                         prompts_to_log,
