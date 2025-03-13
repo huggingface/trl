@@ -822,7 +822,8 @@ class GRPOTrainer(Trainer):
                 completion_ids = [None] * len(all_prompts_text)
 
             if not self.args.vllm_external_launcher:
-                # Broadcast completions to all processes
+                # Broadcast the completions from the main process to all processes, ensuring each process receives its
+                # corresponding slice.
                 completion_ids = broadcast_object_list(completion_ids, from_process=0)
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
