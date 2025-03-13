@@ -548,6 +548,7 @@ class GRPOTrainer(Trainer):
                 top_k=args.top_k,
                 min_p=args.min_p,
                 repetition_penalty=args.repetition_penalty,
+                cache_implementation=args.cache_implementation,
             )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
