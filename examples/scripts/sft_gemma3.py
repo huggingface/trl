@@ -1,12 +1,28 @@
+# Copyright 2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Train Gemma-3 on the Codeforces COTS dataset.
 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/sft_gemma3.py
 """
 
-from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText
+
+from trl import SFTConfig, SFTTrainer
+
 
 def main():
     # Load dataset
@@ -40,6 +56,7 @@ def main():
 
     # Push to hub
     trainer.push_to_hub(dataset_name="open-r1/codeforces-cots")
+
 
 if __name__ == "__main__":
     main()
