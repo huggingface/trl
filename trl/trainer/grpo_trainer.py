@@ -189,6 +189,53 @@ class GRPOTrainer(Trainer):
     trainer.train()
     ```
 
+    Example with a mixed dataset and task-specific reward functions:
+
+    ```python
+    from datasets import load_dataset
+    from trl import GRPOTrainer
+
+    # Load a dataset that contains both math and coding problems
+    dataset = load_dataset("mixed-dataset", split="train")
+
+    # Math-specific reward function
+    def math_reward_func(prompts, completions, task_type, **kwargs):
+        rewards = []
+        for prompt, completion, task in zip(prompts, completions, task_type):
+            if task == "math":
+                # Calculate math-specific reward
+                correct = check_math_solution(prompt, completion)
+                reward = 1.0 if correct else -1.0
+                rewards.append(reward)
+            else:
+                # Return None for non-math tasks
+                rewards.append(None)
+        return rewards
+    
+    # Coding-specific reward function
+    def coding_reward_func(prompts, completions, task_type, **kwargs):
+        rewards = []
+        for prompt, completion, task in zip(prompts, completions, task_type):
+            if task == "coding":
+                # Calculate coding-specific reward
+                works = test_code_solution(prompt, completion)
+                reward = 1.0 if works else -1.0
+                rewards.append(reward)
+            else:
+                # Return None for non-coding tasks
+                rewards.append(None)
+        return rewards
+
+    # Use both task-specific reward functions
+    trainer = GRPOTrainer(
+        model="Qwen/Qwen2-0.5B-Instruct",
+        reward_funcs=[math_reward_func, coding_reward_func],
+        train_dataset=dataset,
+    )
+
+    trainer.train()
+    ```
+
     Args:
         model (`Union[str, PreTrainedModel]`):
             Model to be trained. Can be either:
@@ -213,6 +260,12 @@ class GRPOTrainer(Trainer):
                 - A custom reward function: The function is provided with the prompts and the generated completions,
                   plus any additional columns in the dataset. It should return a list of rewards. For more details, see
                   [Using a custom reward function](#using-a-custom-reward-function).
+                  
+                  Custom reward functions can also return None for the entire function call or for individual samples
+                  when the reward is not applicable to those samples. This is useful for multi-task training where
+                  different reward functions apply to different types of samples. When a reward function returns None
+                  for a sample, that reward function is excluded from the reward calculation for that sample, and the
+                  weights of the remaining reward functions are normalized accordingly.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
@@ -823,6 +876,9 @@ class GRPOTrainer(Trainer):
             completions = completions_text
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+        # Create a mask to track which samples received valid rewards from which functions
+        reward_masks = torch.zeros(len(prompts), len(self.reward_funcs), device=device, dtype=torch.bool)
+        
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
@@ -845,19 +901,46 @@ class GRPOTrainer(Trainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+                    # For model-based rewards, we assume all samples are valid
+                    reward_masks[:, i] = True
                 else:
                     # Repeat all input columns (but "prompt" and "completion") to match the number of generations
                     keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
                     reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                     output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
-                    rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+                    
+                    # Handle None values in the reward function output
+                    if output_reward_func is None:
+                        # If the entire function returns None, skip this reward function
+                        continue
+                    
+                    # Convert the output to a list if it's not already
+                    if not isinstance(output_reward_func, list):
+                        output_reward_func = [output_reward_func] * len(prompts)
+                    
+                    # Process each reward value
+                    for j, reward_value in enumerate(output_reward_func):
+                        if reward_value is not None:
+                            rewards_per_func[j, i] = torch.tensor(reward_value, dtype=torch.float32, device=device)
+                            reward_masks[j, i] = True
 
-        # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
-        # completions may be distributed across processes
+        # Gather the reward per function and the masks
         rewards_per_func = gather(rewards_per_func)
+        reward_masks = gather(reward_masks)
 
-        # Apply weights to each reward function's output and sum
-        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+        # Apply weights to each reward function's output and sum, but only for valid rewards
+        # First, normalize the weights for each sample based on which rewards are valid
+        reward_weights = self.reward_weights.to(device).unsqueeze(0)  # Shape: [1, num_funcs]
+        
+        # Calculate the sum of weights for valid rewards per sample
+        valid_weights_sum = (reward_weights * reward_masks.float()).sum(dim=1, keepdim=True)
+        
+        # Normalize the weights for valid rewards
+        # We assume at least one reward function is valid for each sample
+        normalized_weights = reward_weights * reward_masks.float() / valid_weights_sum
+        
+        # Apply normalized weights to rewards
+        rewards = (rewards_per_func * normalized_weights).sum(dim=1)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -881,13 +964,20 @@ class GRPOTrainer(Trainer):
         completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
         self._metrics[mode]["completion_length"].append(completion_length)
 
-        reward_per_func = rewards_per_func.mean(0)
+        # Calculate mean reward per function, but only for samples where the function was applied
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
                 reward_func_name = reward_func.config._name_or_path.split("/")[-1]
             else:
                 reward_func_name = reward_func.__name__
-            self._metrics[mode][f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
+            
+            # Only calculate mean for samples where this reward function was applied
+            valid_rewards = rewards_per_func[:, i][reward_masks[:, i]]
+            if len(valid_rewards) > 0:
+                self._metrics[mode][f"rewards/{reward_func_name}"].append(valid_rewards.mean().item())
+                # Also log the percentage of samples this reward function was applied to
+                coverage = reward_masks[:, i].float().mean().item() * 100
+                self._metrics[mode][f"coverage/{reward_func_name}"].append(coverage)
 
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
