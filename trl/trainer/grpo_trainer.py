@@ -14,6 +14,7 @@
 
 import contextlib
 import functools
+import inspect
 import os
 import textwrap
 import warnings
@@ -42,8 +43,9 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
+from transformers.data.data_collator import DataCollator
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
+from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -260,6 +262,7 @@ class GRPOTrainer(Trainer):
         args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
+        data_collator: DataCollator = lambda x: x,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
@@ -300,6 +303,14 @@ class GRPOTrainer(Trainer):
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
+
+        # some models (Smolvlm/Idefics3) don't support `logits_to_keep` argument and error out, if we pass it
+        # inspect the forward method, before we wrap the model
+        self.model_kwarg_keys = (
+            inspect.signature(model.forward).parameters.keys()
+            if not hasattr(model, "get_base_model")
+            else inspect.signature(model.get_base_model().forward).parameters.keys()
+        )
 
         if peft_config is not None:
             if not is_peft_available():
@@ -363,17 +374,15 @@ class GRPOTrainer(Trainer):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
                     reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
-                if reward_processing_class.pad_token_id is None:
-                    reward_processing_class.pad_token = reward_processing_class.eos_token
+                rc_pad_token_id = GRPOTrainer._get_from_processor_or_tokenizer(reward_processing_class, "pad_token_id")
+                if rc_pad_token_id is None:
+                    rc_eos_token = GRPOTrainer._get_from_processor_or_tokenizer(reward_processing_class, "eos_token")
+                    reward_processing_class.pad_token = rc_eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
         self.reward_processing_classes = reward_processing_classes
-
-        # Data collator
-        def data_collator(features):  # No data collation is needed in GRPO
-            return features
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
@@ -413,6 +422,26 @@ class GRPOTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # vlms are as of yet not recognized as mappable models in liger kernel, but the language model is applicable
+        # TODO: try again once merged: https://github.com/linkedin/Liger-Kernel/issues/573
+        if args.use_liger_kernel and is_liger_kernel_available() and args.liger_backbone_name is not None:
+            from liger_kernel.transformers import _apply_liger_kernel_to_instance
+
+            lm_member_name = args.liger_backbone_name
+            if (
+                isinstance(model, PreTrainedModel)
+                and (submodule := GRPOTrainer._get_nested_attr(model, lm_member_name)) is not None
+            ):
+                _apply_liger_kernel_to_instance(model=submodule)
+            elif (
+                hasattr(model, "get_base_model")
+                and isinstance(model.get_base_model(), PreTrainedModel)
+                and (submodule := GRPOTrainer._get_nested_attr(model.get_base_model(), lm_member_name)) is not None
+            ):
+                _apply_liger_kernel_to_instance(model=submodule)
+            else:
+                warnings.warn("The model is not an instance of PreTrainedModel. No liger kernels will be applied.")
 
         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
         num_processes = self.accelerator.num_processes
@@ -540,9 +569,9 @@ class GRPOTrainer(Trainer):
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
                 do_sample=True,
-                pad_token_id=processing_class.pad_token_id,
-                bos_token_id=processing_class.bos_token_id,
-                eos_token_id=processing_class.eos_token_id,
+                pad_token_id=GRPOTrainer._get_from_processor_or_tokenizer(processing_class, "pad_token_id"),
+                bos_token_id=GRPOTrainer._get_from_processor_or_tokenizer(processing_class, "bos_token_id"),
+                eos_token_id=GRPOTrainer._get_from_processor_or_tokenizer(processing_class, "eos_token_id"),
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
@@ -571,13 +600,28 @@ class GRPOTrainer(Trainer):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
+    @staticmethod
+    def _get_nested_attr(obj, attr, default=None):
+        """Retrieve nested attribute from an object."""
+        attributes = attr.split(".")
+        for attribute in attributes:
+            try:
+                obj = getattr(obj, attribute)
+            except AttributeError:
+                return default
+        return obj
+
+    @staticmethod
+    def _get_from_processor_or_tokenizer(processor, key):
+        return getattr(processor, key, None) or getattr(getattr(processor, "tokenizer", {}), key, None)
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
         # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt"]
+            self._signature_columns = ["prompt", "image"]
 
     def _get_train_sampler(self) -> Sampler:
         # Returns a sampler that
@@ -652,9 +696,12 @@ class GRPOTrainer(Trainer):
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
-    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
-        # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-        logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
+    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, **model_kwargs):
+        if "logits_to_keep" in self.model_kwarg_keys:
+            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+            model_kwargs.update({"logits_to_keep": logits_to_keep + 1})
+
+        logits = model(input_ids=input_ids, attention_mask=attention_mask, **model_kwargs).logits
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
 
         input_ids = input_ids[:, -logits_to_keep:]
@@ -713,21 +760,78 @@ class GRPOTrainer(Trainer):
             inputs = self._generate_and_score_completions(inputs)
         return inputs
 
+    def _prepare_inputs_for_reward_module(
+        self,
+        *,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        reward_processing_class: PreTrainedTokenizerBase,
+        prompts: list[str],
+        completions: list[str],
+        images=None,
+    ) -> dict[str, torch.Tensor | Any]:
+        if is_conversational(inputs[0]):
+            messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+            texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+        else:
+            texts = [p + c for p, c in zip(prompts, completions)]
+        if images is None:
+            reward_inputs = reward_processing_class(
+                text=texts,
+                return_tensors="pt",
+                padding=True,
+                padding_side="right",
+                add_special_tokens=False,
+            )
+        else:
+            reward_inputs = reward_processing_class(
+                images=images,
+                text=texts,
+                return_tensors="pt",
+                padding=True,
+                padding_side="right",
+                add_special_tokens=False,
+            )
+        reward_inputs = super()._prepare_inputs(reward_inputs)
+
+        return reward_inputs
+
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
         prompts = [x["prompt"] for x in inputs]
+        images = [x["image"] for x in inputs if "image" in x]
+        if len(images) == 0:
+            images = None
+        # either we have no images, or we have images and prompts
+        assert images is None or len(images) == len(prompts), "Images and prompts must have the same length"
+
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-        prompt_inputs = self.processing_class(
-            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        )
+
+        if images is None:
+            prompt_inputs = self.processing_class(
+                text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+            )
+        else:
+            prompt_inputs = self.processing_class(
+                text=prompts_text,
+                images=images,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
+            )
+
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+
+        # pixel_values, image_sizes,...
+        # inputs needed for vlm
+        remaining_prompt_inputs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
 
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
@@ -738,11 +842,19 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
+            all_images = gather_object(images) if images is not None else None
             if self.accelerator.is_main_process:
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually.
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                ordered_set_of_images = all_images[:: self.num_generations] if all_images is not None else None
+                # cf. https://docs.vllm.ai/en/stable/serving/multimodal_inputs.html#image
+                if ordered_set_of_images is not None:
+                    ordered_set_of_prompts = [
+                        {"multi_modal_data": {"image": image}, "prompt": prompt}
+                        for image, prompt in zip(ordered_set_of_images, ordered_set_of_prompts)
+                    ]
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(
                         ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=False
@@ -764,13 +876,19 @@ class GRPOTrainer(Trainer):
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            completion_ids = pad(
+                completion_ids,
+                padding_value=GRPOTrainer._get_from_processor_or_tokenizer(self.processing_class, "pad_token_id"),
+            )
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
             with unwrap_model_for_generation(self.model_wrapped, self.accelerator) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
-                    prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+                    prompt_ids,
+                    attention_mask=prompt_mask,
+                    generation_config=self.generation_config,
+                    **remaining_prompt_inputs,
                 )
 
             # Compute prompt length and extract completion ids
@@ -779,7 +897,7 @@ class GRPOTrainer(Trainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Mask everything after the first EOS token
-        is_eos = completion_ids == self.processing_class.eos_token_id
+        is_eos = completion_ids == GRPOTrainer._get_from_processor_or_tokenizer(self.processing_class, "eos_token_id")
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -795,7 +913,7 @@ class GRPOTrainer(Trainer):
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:
                 old_per_token_logps = self._get_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, **remaining_prompt_inputs
                 )
             else:
                 old_per_token_logps = None
@@ -834,15 +952,13 @@ class GRPOTrainer(Trainer):
                 if isinstance(
                     reward_func, nn.Module
                 ):  # Module instead of PretrainedModel for compat with compiled models
-                    if is_conversational(inputs[0]):
-                        messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
-                        texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
-                    else:
-                        texts = [p + c for p, c in zip(prompts, completions)]
-                    reward_inputs = reward_processing_class(
-                        text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                    reward_inputs = self._prepare_inputs_for_reward_module(
+                        inputs=inputs,
+                        reward_processing_class=reward_processing_class,
+                        prompts=prompts_text,
+                        completions=completions_text,
+                        images=images,
                     )
-                    reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
@@ -915,6 +1031,9 @@ class GRPOTrainer(Trainer):
                         "completion": completions_to_log,
                         "reward": rewards.tolist(),
                     }
+                    if images is not None:
+                        table["image"] = [wandb.Image(img) for img in gather_object(images)]
+
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
@@ -926,6 +1045,7 @@ class GRPOTrainer(Trainer):
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
             "advantages": advantages,
+            **remaining_prompt_inputs,
         }
 
     @profiling_decorator
@@ -940,7 +1060,12 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        # search for missing model kwargs in inputs by checking the model forward signature
+        remaining_kwargs = {k: inputs[k] for k in self.model_kwarg_keys if k in inputs}
+
+        per_token_logps = self._get_per_token_logps(
+            model, input_ids, attention_mask, logits_to_keep, **remaining_kwargs
+        )
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:

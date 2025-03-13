@@ -146,6 +146,14 @@ class GRPOConfig(TrainingArguments):
         },
     )
 
+    liger_backbone_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Which submodule (language backbone) to apply liger kernel to e.g. `model.text_model` in case of SmolVlm. "
+            "If None, the main model is used.",
+        },
+    )
+
     # Parameters that control the data preprocessing
     # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
     # additional columns to compute the reward
