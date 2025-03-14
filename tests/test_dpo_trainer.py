@@ -1242,7 +1242,32 @@ class DPOTrainerTester(unittest.TestCase):
 
         def dummy_compute_metrics(*args, **kwargs):
             return {"test": 0.0}
-          
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                do_eval=True,
+                eval_strategy="steps",
+                eval_steps=1,
+                per_device_eval_batch_size=2,
+                report_to="none",
+            )
+
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=ref_model,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                compute_metrics=dummy_compute_metrics,
+            )
+
+            trainer.train()
+
+            self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
+
     @require_liger_kernel
     @parameterized.expand([(0.1,), (0.5,)])
     def test_dpo_trainer_with_liger(self, beta):
@@ -1254,10 +1279,13 @@ class DPOTrainerTester(unittest.TestCase):
         3. Loss values are reasonable and finite
         4. Training works with both default and custom beta values
         """
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
+                do_eval=True,
+                eval_steps=1,
                 max_steps=3,
                 remove_unused_columns=False,
                 gradient_accumulation_steps=1,
@@ -1311,26 +1339,6 @@ class DPOTrainerTester(unittest.TestCase):
                 output = trainer.model(**model_inputs)
             self.assertIsNotNone(output)
             self.assertIsNone(output.loss)
-                do_eval=True,
-                eval_strategy="steps",
-                eval_steps=1,
-                per_device_eval_batch_size=2,
-                report_to="none",
-            )
-
-            trainer = DPOTrainer(
-                model=model,
-                ref_model=ref_model,
-                args=training_args,
-                processing_class=tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                compute_metrics=dummy_compute_metrics,
-            )
-
-            trainer.train()
-
-            self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
 
 
 @require_vision
