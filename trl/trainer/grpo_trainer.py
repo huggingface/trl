@@ -864,9 +864,6 @@ class GRPOTrainer(Trainer):
                     output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
                     
                     # Handle None values in the reward function output
-                    if output_reward_func is None:
-                        # If the entire function returns None, skip this reward function
-                        continue
                     
                     # Convert the output to a list if it's not already
                     if not isinstance(output_reward_func, list):
