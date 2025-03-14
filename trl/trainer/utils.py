@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import dataclasses
 import importlib.resources as pkg_resources
 import json
@@ -20,7 +21,7 @@ import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from importlib.metadata import version
-from typing import Any, Literal, Optional, Union
+from typing import Any, Generator, Literal, Optional, Union
 
 import datasets
 import numpy as np
@@ -50,6 +51,12 @@ from transformers.utils import (
     is_torch_npu_available,
     is_torch_xpu_available,
 )
+
+from contextlib import contextmanager
+
+if is_peft_available():
+    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 from ..trainer.model_config import ModelConfig
 
@@ -308,9 +315,9 @@ class DataCollatorForChatML:
         input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
         attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
         labels = [torch.tensor(label, dtype=torch.long) for label in labels]
-        input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
-        attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
-        labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
+        input_ids = pad(input_ids, padding_value=self.tokenizer.pad_token_id)
+        attention_mask = pad(attention_mask, padding_value=0)
+        labels = pad(labels, padding_value=self.ignore_index)
 
         prompts_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in prompts_input_ids]
         prompt_attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in prompt_attention_mask]
@@ -1647,3 +1654,81 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
         return mask
     else:
         return mask, *tensors
+
+@contextmanager
+def get_decoder_outputs_for_liger_loss(
+    model: torch.nn.Module,
+    ref_model: Optional[torch.nn.Module],
+    reference_free: bool,
+    is_encoder_decoder: bool,
+    base_model_attribute_name: str,
+    null_ref_context: contextlib.ContextDecorator,
+    ref_model_inputs: dict[str, Union[list, torch.LongTensor]],
+) -> Generator[Any, Any, Any]:
+    """
+    Get the decoder outputs for the Liger loss.
+
+    Args:
+        model (`torch.nn.Module`):
+            The model to get the decoder outputs for.
+        ref_model (`torch.nn.Module`):
+            The reference model to get the decoder outputs for.
+        reference_free (`bool`):
+            Whether the reference model is reference-free.
+        is_encoder_decoder (`bool`):
+            Whether the model is an encoder-decoder model.
+        base_model_attribute_name (`str`):
+            The attribute name of the base model in the reference model.
+        null_ref_context (`contextlib.ContextDecorator`):
+            The context manager for the reference model.
+        ref_model_inputs (`dict`):
+            The inputs to the reference model.  
+    
+    Yields:
+        `tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]`:
+            The decoder outputs for the Liger loss.
+            The tuple contains the following elements:
+            - `ref_hidden_states`: The hidden states of the reference model.
+            - `ref_lm_head_weight`: The weight of the reference model's language model head.
+            - `ref_lm_head_bias`: The bias of the reference model's language model head.
+    
+    """
+    if reference_free:
+        yield None, None, None
+        return
+        
+    if ref_model is None:
+        ref_model = model
+        context_manager = null_ref_context()
+    else:
+        from contextlib import nullcontext
+        context_manager = nullcontext()
+    
+    if is_encoder_decoder or hasattr(ref_model, "get_decoder"):
+        ref_base_model = ref_model.get_decoder()
+    else:
+        ref_base_model = getattr(ref_model, base_model_attribute_name, ref_model)
+            
+    with context_manager:
+        ref_outputs = ref_base_model(
+            **ref_model_inputs
+        )
+        ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
+    
+    try:
+        ref_lm_head = ref_model.get_output_embeddings()
+        if is_peft_available():
+            from peft.tuners.tuners_utils import BaseTunerLayer
+            if isinstance(ref_lm_head, BaseTunerLayer):
+                ref_lm_head.merge()
+
+        yield (
+            ref_hidden_states,
+            ref_lm_head.weight,
+            ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
+        )
+    finally:
+        if is_peft_available():
+            from peft.tuners.tuners_utils import BaseTunerLayer
+            if isinstance(ref_lm_head, BaseTunerLayer):
+                ref_lm_head.unmerge()

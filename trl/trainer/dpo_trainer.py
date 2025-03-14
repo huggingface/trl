@@ -69,9 +69,8 @@ from .utils import (
     pad,
     pad_to_length,
     peft_module_casting_to_bf16,
+    get_decoder_outputs_for_liger_loss,
 )
-
-from peft.tuners.tuners_utils import BaseTunerLayer
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
@@ -1265,7 +1264,15 @@ class DPOTrainer(Trainer):
         #     ref_weight = ref_lm_head.weight
         #     ref_bias = ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
         
-        with self.get_decoder_outputs_for_liger_loss(ref_model_inputs) as (ref_hidden_states, ref_weight, ref_bias):
+        with get_decoder_outputs_for_liger_loss(
+            model=self.model,
+            ref_model=self.ref_model,
+            reference_free=self.reference_free,
+            is_encoder_decoder=self.is_encoder_decoder,
+            base_model_attribute_name=self.args.base_model_attribute_name,
+            null_ref_context=self.null_ref_context,
+            ref_model_inputs=ref_model_inputs
+        ) as (ref_hidden_states, ref_weight, ref_bias):
             # Compute loss using Liger kernel
             loss_output = self.dpo_loss_fn(
                 lm_head.weight,
@@ -1775,44 +1782,3 @@ class DPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
-
-    @contextmanager
-    def get_decoder_outputs_for_liger_loss(
-        self,
-        ref_model_inputs: dict[str, Union[list, torch.LongTensor]],
-    ) -> tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        if self.reference_free:
-            yield None, None, None
-            return
-            
-        if self.ref_model is None:
-            ref_model = self.model
-            context_manager = self.null_ref_context()
-        else:
-            ref_model = self.ref_model
-            context_manager = nullcontext()
-        
-        if self.is_encoder_decoder or hasattr(ref_model, "get_decoder"):
-            ref_base_model = ref_model.get_decoder()
-        else:
-            ref_base_model = getattr(ref_model, self.args.base_model_attribute_name, ref_model)
-                
-        with context_manager:
-            ref_outputs = ref_base_model(
-                **ref_model_inputs
-            )
-            ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
-        
-        try:
-            ref_lm_head = ref_model.get_output_embeddings()
-            if isinstance(ref_lm_head, BaseTunerLayer):
-                ref_lm_head.merge()
-
-            yield (
-                ref_hidden_states,
-                ref_lm_head.weight,
-                ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
-            )
-        finally:
-            if isinstance(ref_lm_head, BaseTunerLayer):
-                ref_lm_head.unmerge()

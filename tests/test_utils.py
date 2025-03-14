@@ -31,6 +31,7 @@ from trl.trainer.utils import (
     generate_model_card,
     get_peft_config,
     pad,
+    get_decoder_outputs_for_liger_loss,
 )
 
 
@@ -451,3 +452,112 @@ class TestFlushLeft(unittest.TestCase):
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
 
         self.assertTrue(torch.equal(new_mask, expected_mask))
+
+
+class TestGetDecoderOutputsForLigerLoss(unittest.TestCase):
+    def test_reference_free(self):
+        """Test that when reference_free is True, the function yields None values."""
+        from trl.trainer.utils import get_decoder_outputs_for_liger_loss
+        from contextlib import nullcontext
+        
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        
+        inputs = tokenizer("Hello world", return_tensors="pt")
+        
+
+        with get_decoder_outputs_for_liger_loss(
+            model=model,
+            ref_model=model,
+            reference_free=True, 
+            is_encoder_decoder=False,
+            base_model_attribute_name="model",
+            null_ref_context=nullcontext,
+            ref_model_inputs=inputs
+        ) as (ref_hidden_states, ref_weight, ref_bias):
+            self.assertIsNone(ref_hidden_states)
+            self.assertIsNone(ref_weight)
+            self.assertIsNone(ref_bias)
+    
+    def test_with_ref_model(self):
+        """Test with a real reference model."""
+        from trl.trainer.utils import get_decoder_outputs_for_liger_loss
+        from contextlib import nullcontext
+        
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        
+        inputs = tokenizer("Hello world", return_tensors="pt")
+        
+        with get_decoder_outputs_for_liger_loss(
+            model=model,
+            ref_model=model, 
+            reference_free=False,
+            is_encoder_decoder=False,
+            base_model_attribute_name="model",
+            null_ref_context=nullcontext,
+            ref_model_inputs=inputs
+        ) as (ref_hidden_states, ref_weight, ref_bias):
+            
+            self.assertIsNotNone(ref_hidden_states)
+            self.assertIsNotNone(ref_weight)
+            
+            self.assertEqual(ref_hidden_states.shape[0], inputs["input_ids"].shape[0])  
+            self.assertEqual(ref_hidden_states.shape[1], inputs["input_ids"].shape[1] - 1) 
+            self.assertEqual(ref_hidden_states.shape[2], model.config.hidden_size)  
+            
+            self.assertEqual(ref_weight.shape[0], model.config.vocab_size)  
+            self.assertEqual(ref_weight.shape[1], model.config.hidden_size)  
+            
+            if ref_bias is not None:
+                self.assertEqual(ref_bias.shape[0], model.config.vocab_size)  
+
+    @require_peft
+    def test_with_peft_model(self):
+        """Test with a PEFT model that requires merge/unmerge operations."""
+        from trl.trainer.utils import get_decoder_outputs_for_liger_loss
+        from contextlib import nullcontext
+        from peft import get_peft_model
+        
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        
+        peft_config = LoraConfig(
+            r=8,
+            lora_alpha=16,
+            lora_dropout=0.1,
+            target_modules=["q_proj", "v_proj", "lm_head"],
+        )
+        peft_model = get_peft_model(model, peft_config)
+        
+        inputs = tokenizer("Hello, world!", return_tensors="pt")
+        input_ids = inputs["input_ids"]
+        
+        lm_head = peft_model.get_output_embeddings()
+        original_lm_head_weight = lm_head.base_layer.weight.clone()
+        
+        with get_decoder_outputs_for_liger_loss(
+            model=model,
+            ref_model=peft_model,
+            reference_free=False,
+            is_encoder_decoder=False,
+            base_model_attribute_name="model",
+            null_ref_context=nullcontext,
+            ref_model_inputs={"input_ids": input_ids}
+        ) as (ref_hidden_states, ref_weight, ref_bias):
+            self.assertEqual(ref_hidden_states.shape[0], input_ids.shape[0])
+            self.assertEqual(ref_hidden_states.shape[1], input_ids.shape[1] - 1) 
+            self.assertEqual(ref_hidden_states.shape[2], peft_model.config.hidden_size) 
+            
+            self.assertEqual(ref_weight.shape[0], peft_model.config.vocab_size) 
+            self.assertEqual(ref_weight.shape[1], peft_model.config.hidden_size) 
+            
+            if ref_bias is not None:
+                self.assertEqual(ref_bias.shape[0], peft_model.config.vocab_size)  
+        
+        restored_lm_head_weight = peft_model.get_output_embeddings().base_layer.weight
+        self.assertTrue(torch.equal(original_lm_head_weight, restored_lm_head_weight))
+
+    
