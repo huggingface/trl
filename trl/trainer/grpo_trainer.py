@@ -18,7 +18,7 @@ import os
 import textwrap
 import warnings
 from collections import defaultdict
-from typing import Any, Callable, Optional, Sized, Union, Generator
+from typing import Any, Callable, Generator, Optional, Sized, Union
 from unittest.mock import patch
 
 import torch
@@ -162,6 +162,7 @@ class RepeatRandomSampler(Sampler):
     def __len__(self) -> int:
         return self.num_samples * self.mini_repeat_count * self.repeat_count
 
+
 @contextlib.contextmanager
 def disable_gradient_checkpointing(model: PreTrainedModel) -> Generator[None, None, None]:
     """
@@ -176,6 +177,7 @@ def disable_gradient_checkpointing(model: PreTrainedModel) -> Generator[None, No
     model.base_model.gradient_checkpointing = False
     yield
     model.base_model.gradient_checkpointing = value
+
 
 class GRPOTrainer(Trainer):
     """
@@ -562,7 +564,6 @@ class GRPOTrainer(Trainer):
                 top_k=args.top_k,
                 min_p=args.min_p,
                 repetition_penalty=args.repetition_penalty,
-                use_cache=True,
                 cache_implementation=args.cache_implementation,
             )
 
