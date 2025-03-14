@@ -23,7 +23,6 @@ from copy import deepcopy
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 
-import joblib
 import numpy as np
 import pandas as pd
 import torch
@@ -56,6 +55,7 @@ from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
 from ..data_utils import maybe_apply_chat_template
+from ..import_utils import is_joblib_available
 from ..models import PreTrainedModelWrapper, create_reference_model
 from .bco_config import BCOConfig
 from .utils import (
@@ -79,6 +79,9 @@ if is_wandb_available():
 
 if is_sklearn_available():
     from sklearn.linear_model import LogisticRegression
+
+if is_joblib_available():
+    import joblib
 
 if is_deepspeed_available():
     import deepspeed
@@ -350,9 +353,9 @@ class BCOTrainer(Trainer):
         embedding_func: Optional[Callable] = None,
         embedding_tokenizer: Optional[PreTrainedTokenizerBase] = None,
     ):
-        if not is_sklearn_available():
+        if embedding_func is not None and not (is_sklearn_available() and is_joblib_available()):
             raise ImportError(
-                "BCOTrainer requires the scikit-learn library. Please install it with `pip install scikit-learn`."
+                "BCOTrainer with UDM requires the scikit-learn and joblib libraries. Please install it with `pip install scikit-learn joblib`."
             )
 
         if type(args) is TrainingArguments:
