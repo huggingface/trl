@@ -481,16 +481,27 @@ class GRPOTrainer(Trainer):
                             "`vllm_gpu_memory_utilization` accordingly."
                         )
 
-                # Initialize LLM under ExitStack (only apply patches if not using external launcher)
+                # Prepare a list of context managers
+                cmanagers = []
+
+                if not self.args.vllm_external_launcher:
+                    cmanagers.extend([
+                        functools.partial(patch, "torch.distributed.get_world_size", return_value=1),
+                        functools.partial(patch, "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None),
+                    ])
+
+                    if device_type == "npu":
+                        cmanagers.extend([
+                            functools.partial(patch, "torch.distributed.new_group", functools.partial(torch.distributed.new_group, use_local_synchronization=True)),
+                            functools.partial(patch, "torch.npu.mem_get_info", functools.partial(torch.npu.mem_get_info, device=vllm_device)),
+                        ])
+
+                # Initialize LLM under ExitStack (apply required patches accordingly)
                 with contextlib.ExitStack() as stack:
-                    if not self.args.vllm_external_launcher:
-                        stack.enter_context(patch("torch.distributed.get_world_size", return_value=1))
-                        stack.enter_context(patch("vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None))
+                    for cm in cmanagers:
+                        stack.enter_context(cm())
 
-                        if device_type == "npu":
-                            stack.enter_context(patch("torch.distributed.new_group", functools.partial(torch.distributed.new_group, use_local_synchronization=True)))
-                            stack.enter_context(patch("torch.npu.mem_get_info", functools.partial(torch.npu.mem_get_info, device=vllm_device)))
-
+                    # Initialize the LLM
                     self.llm = LLM(
                         model=model.name_or_path,
                         device=vllm_device,
