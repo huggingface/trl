@@ -870,10 +870,7 @@ class GRPOTrainer(Trainer):
                         output_reward_func = [output_reward_func] * len(prompts)
                     
                     # Convert None values to NaN
-                    output_reward_func = [
-                        torch.tensor(x, dtype=torch.float32, device=device) if x is not None else torch.tensor(float('nan'), device=device)
-                        for x in output_reward_func
-                    ]
+                    output_reward_func = [reward if reward is not None else torch.nan for x in output_reward_func]
                     
                     # Assign rewards to the tensor
                     for j, reward_value in enumerate(output_reward_func):
