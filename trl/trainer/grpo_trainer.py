@@ -274,18 +274,7 @@ class GRPOTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
     ):
-        # Validate reward_funcs
-        if reward_funcs is None or (isinstance(reward_funcs, list) and not reward_funcs):
-            warnings.warn("No valid reward functions provided. Training may not be effective without valid rewards.")
-            self.reward_funcs = []  # Set to an empty list to avoid further issues
-        elif isinstance(reward_funcs, str):
-            self.reward_funcs = [reward_funcs]  # Convert single string to list
-        elif callable(reward_funcs):
-            self.reward_funcs = [reward_funcs]  # Convert single callable to list
-        elif isinstance(reward_funcs, list):
-            self.reward_funcs = reward_funcs  # Already a list
-        else:
-            raise ValueError("Invalid type for reward_funcs. Must be a callable, a list of callables, or a string.")
+       
 
         # Args
         if args is None:
