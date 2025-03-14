@@ -216,6 +216,60 @@ You can test this function as follows:
 >>> reward_func(prompts=prompts, completions=completions, ground_truth=ground_truth)
 [1.0, 0.0]
 ```
+### Example 4:  Multiple reward functions
+
+Below is an example of using multiple reward functions in the GRPOTrainer. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
+
+```python
+from datasets import load_dataset
+from trl import GRPOTrainer
+
+# Load a dataset that contains both math and coding problems
+dataset = load_dataset("mixed-dataset", split="train")
+
+# Math-specific reward function
+def math_reward_func(prompts, completions, task_type, **kwargs):
+    rewards = []
+    for prompt, completion, task in zip(prompts, completions, task_type):
+        if task == "math":
+            # Calculate math-specific reward
+            correct = check_math_solution(prompt, completion)
+            reward = 1.0 if correct else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-math tasks
+            rewards.append(None)
+    return rewards
+    
+# Coding-specific reward function
+def coding_reward_func(prompts, completions, task_type, **kwargs):
+    rewards = []
+    for prompt, completion, task in zip(prompts, completions, task_type):
+        if task == "coding":
+            # Calculate coding-specific reward
+            works = test_code_solution(prompt, completion)
+            reward = 1.0 if works else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-coding tasks
+            rewards.append(None)
+    return rewards
+
+# Use both task-specific reward functions
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    reward_funcs=[math_reward_func, coding_reward_func],
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task_type` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None` and the GRPOTrainer will continue with the valid functions and tasks. This allows the GRPOTrainer to handle multiple reward functions with different applicability.
+
+Note that the GRPOTrainer will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
+
+
 
 #### Passing the reward function to the trainer
 

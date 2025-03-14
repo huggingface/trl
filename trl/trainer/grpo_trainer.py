@@ -188,52 +188,7 @@ class GRPOTrainer(Trainer):
 
     trainer.train()
     ```
-
-    Example with a mixed dataset and task-specific reward functions:
-
-    ```python
-    from datasets import load_dataset
-    from trl import GRPOTrainer
-
-    # Load a dataset that contains both math and coding problems
-    dataset = load_dataset("mixed-dataset", split="train")
-
-    # Math-specific reward function
-    def math_reward_func(prompts, completions, task_type, **kwargs):
-        rewards = []
-        for prompt, completion, task in zip(prompts, completions, task_type):
-            if task == "math":
-                # Calculate math-specific reward
-                correct = check_math_solution(prompt, completion)
-                reward = 1.0 if correct else -1.0
-                rewards.append(reward)
-            else:
-                # Return None for non-math tasks
-                rewards.append(None)
-        return rewards
-    
-    # Coding-specific reward function
-    def coding_reward_func(prompts, completions, task_type, **kwargs):
-        rewards = []
-        for prompt, completion, task in zip(prompts, completions, task_type):
-            if task == "coding":
-                # Calculate coding-specific reward
-                works = test_code_solution(prompt, completion)
-                reward = 1.0 if works else -1.0
-                rewards.append(reward)
-            else:
-                # Return None for non-coding tasks
-                rewards.append(None)
-        return rewards
-
-    # Use both task-specific reward functions
-    trainer = GRPOTrainer(
-        model="Qwen/Qwen2-0.5B-Instruct",
-        reward_funcs=[math_reward_func, coding_reward_func],
-        train_dataset=dataset,
-    )
-
-    trainer.train()
+    # End of Selection
     ```
 
     Args:
@@ -319,6 +274,19 @@ class GRPOTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
     ):
+        # Validate reward_funcs
+        if reward_funcs is None or (isinstance(reward_funcs, list) and not reward_funcs):
+            warnings.warn("No valid reward functions provided. Training may not be effective without valid rewards.")
+            self.reward_funcs = []  # Set to an empty list to avoid further issues
+        elif isinstance(reward_funcs, str):
+            self.reward_funcs = [reward_funcs]  # Convert single string to list
+        elif callable(reward_funcs):
+            self.reward_funcs = [reward_funcs]  # Convert single callable to list
+        elif isinstance(reward_funcs, list):
+            self.reward_funcs = reward_funcs  # Already a list
+        else:
+            raise ValueError("Invalid type for reward_funcs. Must be a callable, a list of callables, or a string.")
+
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -382,7 +350,6 @@ class GRPOTrainer(Trainer):
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
-        # Reward functions
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         for i, reward_func in enumerate(reward_funcs):
@@ -876,8 +843,7 @@ class GRPOTrainer(Trainer):
             completions = completions_text
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
-        # Create a mask to track which samples received valid rewards from which functions
-        reward_masks = torch.zeros(len(prompts), len(self.reward_funcs), device=device, dtype=torch.bool)
+        has_valid_rewards = torch.zeros(len(prompts), dtype=torch.bool, device=device)
         
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
@@ -901,8 +867,7 @@ class GRPOTrainer(Trainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-                    # For model-based rewards, we assume all samples are valid
-                    reward_masks[:, i] = True
+                        has_valid_rewards = has_valid_rewards | ~torch.isnan(rewards_per_func[:, i])
                 else:
                     # Repeat all input columns (but "prompt" and "completion") to match the number of generations
                     keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
@@ -918,36 +883,57 @@ class GRPOTrainer(Trainer):
                     if not isinstance(output_reward_func, list):
                         output_reward_func = [output_reward_func] * len(prompts)
                     
-                    # Process each reward value
+                    # Convert None values to NaN
+                    output_reward_func = [
+                        torch.tensor(x, dtype=torch.float32, device=device) if x is not None else torch.tensor(float('nan'), device=device)
+                        for x in output_reward_func
+                    ]
+                    
+                    # Assign rewards to the tensor
                     for j, reward_value in enumerate(output_reward_func):
-                        if reward_value is not None:
-                            rewards_per_func[j, i] = torch.tensor(reward_value, dtype=torch.float32, device=device)
-                            reward_masks[j, i] = True
+                        rewards_per_func[j, i] = reward_value
+                        if not torch.isnan(reward_value):
+                            has_valid_rewards[j] = True
 
-        # Gather the reward per function and the masks
+        # Check if any sample has no valid rewards
+        if not has_valid_rewards.all():
+            invalid_count = (~has_valid_rewards).sum().item()
+            warnings.warn(
+                f"Found {invalid_count} samples with no valid rewards. "
+                f"Please ensure at least one reward function returns valid rewards for each sample."
+            )
+
+        # If all reward functions return None for a given row, issue a detailed warning
+        if torch.isnan(rewards_per_func).all(dim=1).any():
+            nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()}
+            row_reward_kwargs["prompt"] = prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = completions[nan_row_idx]
+            warnings.warn(
+                f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
+                "Please ensure that at least one reward function returns a valid reward."
+            )
+
+        # Gather the rewards per function
         rewards_per_func = gather(rewards_per_func)
-        reward_masks = gather(reward_masks)
 
-        # Apply weights to each reward function's output and sum, but only for valid rewards
-        # First, normalize the weights for each sample based on which rewards are valid
+        # Apply weights to each reward function's output and sum
         reward_weights = self.reward_weights.to(device).unsqueeze(0)  # Shape: [1, num_funcs]
         
-        # Calculate the sum of weights for valid rewards per sample
-        valid_weights_sum = (reward_weights * reward_masks.float()).sum(dim=1, keepdim=True)
+        # Calculate weighted rewards, NaN values will be ignored in the sum
+        weighted_rewards = rewards_per_func * reward_weights
         
-        # Handle the case where a sample has no valid rewards
-        # Set valid_weights_sum to 1.0 to avoid division by zero
-        valid_weights_sum = torch.clamp(valid_weights_sum, min=1.0)
-        
-        # Normalize the weights for valid rewards
-        normalized_weights = reward_weights * reward_masks.float() / valid_weights_sum
-        
-        # Apply normalized weights to rewards
-        # For samples with no valid rewards, this will result in a reward of 0
-        rewards = (rewards_per_func * normalized_weights).sum(dim=1)
-        
-        # Replace any NaN values with zeros (this should be redundant now but keeping as a safety measure)
-        rewards = torch.nan_to_num(rewards, nan=0.0)
+        # Calculate the weighted sum, ignoring NaN values
+        rewards = torch.nansum(weighted_rewards, dim=1)
+
+        # Check if all rewards are NaN
+        if torch.isnan(rewards).all():
+            warnings.warn(
+                "No valid rewards found for any samples. All reward functions returned None. "
+                "Training will not be effective without valid rewards."
+            )
+            # Set all rewards to 0 to avoid NaN propagation
+            rewards = torch.zeros_like(rewards)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -981,12 +967,12 @@ class GRPOTrainer(Trainer):
             else:
                 reward_func_name = reward_func.__name__
             
-            # Only calculate mean for samples where this reward function was applied
-            valid_rewards = rewards_per_func[:, i][reward_masks[:, i]]
+            # Only calculate mean for samples where this reward function was applied (non-NaN values)
+            valid_rewards = rewards_per_func[:, i][~torch.isnan(rewards_per_func[:, i])]
             if len(valid_rewards) > 0:
                 self._metrics[mode][f"rewards/{reward_func_name}"].append(valid_rewards.mean().item())
                 # Also log the percentage of samples this reward function was applied to
-                coverage = reward_masks[:, i].float().mean().item() * 100
+                coverage = (~torch.isnan(rewards_per_func[:, i])).float().mean().item() * 100
                 self._metrics[mode][f"coverage/{reward_func_name}"].append(coverage)
 
         self._metrics[mode]["reward"].append(rewards.mean().item())
