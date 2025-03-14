@@ -832,8 +832,7 @@ class GRPOTrainer(Trainer):
             completions = completions_text
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
-        has_valid_rewards = torch.zeros(len(prompts), dtype=torch.bool, device=device)
-        
+
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
@@ -856,7 +855,6 @@ class GRPOTrainer(Trainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-                        has_valid_rewards = has_valid_rewards | ~torch.isnan(rewards_per_func[:, i])
                 else:
                     # Repeat all input columns (but "prompt" and "completion") to match the number of generations
                     keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
@@ -867,14 +865,6 @@ class GRPOTrainer(Trainer):
 
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
                         # End of Selection
-
-        # Check if any sample has no valid rewards
-        if not has_valid_rewards.all():
-            invalid_count = (~has_valid_rewards).sum().item()
-            warnings.warn(
-                f"Found {invalid_count} samples with no valid rewards. "
-                f"Please ensure at least one reward function returns valid rewards for each sample."
-            )
 
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
@@ -899,21 +889,9 @@ class GRPOTrainer(Trainer):
         # Calculate the weighted sum, ignoring NaN values
         rewards = torch.nansum(weighted_rewards, dim=1)
 
-        # Check if all rewards are NaN
-        if torch.isnan(rewards).all():
-            warnings.warn(
-                "No valid rewards found for any samples. All reward functions returned None. "
-                "Training will not be effective without valid rewards."
-            )
-            # Set all rewards to 0 to avoid NaN propagation
-            rewards = torch.zeros_like(rewards)
-
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-        
-        # Replace any NaN values in the standard deviation with a small positive number
-        std_grouped_rewards = torch.nan_to_num(std_grouped_rewards, nan=1e-8)
 
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
@@ -939,11 +917,9 @@ class GRPOTrainer(Trainer):
                 reward_func_name = reward_func.config._name_or_path.split("/")[-1]
             else:
                 reward_func_name = reward_func.__name__
-            
             # Only calculate mean for samples where this reward function was applied (non-NaN values)
-            mean_rewards = torch.nanmean(rewards_per_func[:, i])
-
-        self._metrics[mode][f"rewards/{reward_func_name}"].append(mean_rewards.mean().item())
+            mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}"].append(mean_rewards)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
