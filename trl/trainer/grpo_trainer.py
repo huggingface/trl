@@ -481,9 +481,8 @@ class GRPOTrainer(Trainer):
                             "`vllm_gpu_memory_utilization` accordingly."
                         )
 
-                # Prepare a list of context managers
+                # Prepare a list of context managers according to device type and vllm w/o external launcher
                 cmanagers = []
-
                 if not self.args.vllm_external_launcher:
                     cmanagers.extend([
                         functools.partial(patch, "torch.distributed.get_world_size", return_value=1),
@@ -501,7 +500,7 @@ class GRPOTrainer(Trainer):
                     for cm in cmanagers:
                         stack.enter_context(cm())
 
-                    # Initialize the LLM
+                    # Initialize the LLM (set distributed_executor_backend = external_launcher if requested)
                     self.llm = LLM(
                         model=model.name_or_path,
                         device=vllm_device,
