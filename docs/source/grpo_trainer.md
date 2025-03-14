@@ -228,7 +228,7 @@ from trl import GRPOTrainer
 dataset = load_dataset("mixed-dataset", split="train")
 
 # Math-specific reward function
-def math_reward_func(prompts, completions, task_type, **kwargs):
+def math_reward_func(prompts, completions, tasks, **kwargs):
     rewards = []
     for prompt, completion, task in zip(prompts, completions, task_type):
         if task == "math":
