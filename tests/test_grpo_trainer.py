@@ -472,7 +472,7 @@ class GRPOTrainerTester(unittest.TestCase):
         """Test that a valid math reward function is processed correctly while the code reward function returns None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def valid_reward_func(completions, **kwargs):
+        def applicable_reward_func(completions, **kwargs):
             """A valid reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
@@ -492,7 +492,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=[valid_reward_func, non_existing_reward_func],  # One valid, one invalid
+                reward_funcs=[applicable_reward_func, non_existing_reward_func],  # One valid, one invalid
                 args=training_args,
                 train_dataset=dataset,
             )

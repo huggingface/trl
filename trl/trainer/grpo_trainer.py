@@ -862,21 +862,13 @@ class GRPOTrainer(Trainer):
                     keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
                     reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                     output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
-                    
-                    # Handle None values in the reward function output
-                    
-                    # Convert the output to a list if it's not already
-                    if not isinstance(output_reward_func, list):
-                        output_reward_func = [output_reward_func] * len(prompts)
-                    
                     # Convert None values to NaN
-                    output_reward_func = [reward if reward is not None else torch.nan for x in output_reward_func]
+                    output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
                     
                     # Assign rewards to the tensor
                     for j, reward_value in enumerate(output_reward_func):
                         rewards_per_func[j, i] = reward_value
-                        if not torch.isnan(reward_value):
-                            has_valid_rewards[j] = True
+                        # End of Selection
 
         # Check if any sample has no valid rewards
         if not has_valid_rewards.all():
@@ -951,13 +943,9 @@ class GRPOTrainer(Trainer):
                 reward_func_name = reward_func.__name__
             
             # Only calculate mean for samples where this reward function was applied (non-NaN values)
-            valid_rewards = rewards_per_func[:, i][~torch.isnan(rewards_per_func[:, i])]
-            if len(valid_rewards) > 0:
-                self._metrics[mode][f"rewards/{reward_func_name}"].append(valid_rewards.mean().item())
-                # Also log the percentage of samples this reward function was applied to
-                coverage = (~torch.isnan(rewards_per_func[:, i])).float().mean().item() * 100
-                self._metrics[mode][f"coverage/{reward_func_name}"].append(coverage)
+            mean_rewards = torch.nanmean(rewards_per_func[:, i])
 
+        self._metrics[mode][f"rewards/{reward_func_name}"].append(mean_rewards.mean().item())
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
