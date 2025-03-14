@@ -1307,15 +1307,15 @@ class SFTTrainerTester(unittest.TestCase):
 # This new tester aims to replace the first one at some point
 class SFTTrainerTester2(unittest.TestCase):
     def test_train(self):
-        # Get the model and dataset
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(args=training_args, model=model, train_dataset=dataset)
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1350,7 +1350,7 @@ class SFTTrainerTester2(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(args=training_args, model=model, train_dataset=dataset)
+            trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1372,8 +1372,7 @@ class SFTTrainerTester2(unittest.TestCase):
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_non_chatml_conversational_data(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
+        # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Rename role/content to from/value to ensure SFT works with non-chatML conversational data
@@ -1385,7 +1384,9 @@ class SFTTrainerTester2(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(args=training_args, model=model, train_dataset=dataset)
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1401,10 +1402,9 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-    def test_sft_trainer_with_pretokenized_data(self):
-        # Get the model and dataset
+    def test_train_with_pretokenized_data(self):
+        # Get the dataset
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
@@ -1417,7 +1417,60 @@ class SFTTrainerTester2(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(args=training_args, model=model, train_dataset=tokenized_dataset)
+            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=tokenized_dataset)
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_train_with_iterable_dataset(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_train_with_padding_free(self):
+        # Get the dataset
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        response_template = "<|im_start|>assistant\n"
+        collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, padding_free=True)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset, data_collator=collator)
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
