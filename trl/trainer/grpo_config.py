@@ -338,3 +338,21 @@ class GRPOConfig(TrainingArguments):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
+
+    # reference model using OpenAI compatible api server
+    use_openai_compatible_server: bool = field(
+        default=False,
+        metadata={"help": "Whether to use openai compatible server."},
+    )
+    api_endpoint: str = field(
+        default=None,
+        metadata={"help": "Openai compatible server API endpoint."},
+    )
+    api_key: str = field(
+        default=None,
+        metadata={"help": "Openai compatible server API key."},
+    )
+    ref_model_name: str = field(
+        default=None,
+        metadata={"help": "Openai compatible server reference model name."},
+    )
