@@ -456,7 +456,6 @@ class GRPOTrainer(Trainer):
                 else:
                     vllm_device = self.args.vllm_device
                     if vllm_device == "auto":
-                        # if self.args.vllm_external_launcher --> current device
                         if device_module.device_count() == 1:
                             vllm_device = f"{device_type}:0"  # particular case when training with onyl 1 device: share it
                         else:
@@ -519,7 +518,7 @@ class GRPOTrainer(Trainer):
                     repetition_penalty=args.repetition_penalty,
                 )
 
-            self._last_loaded_step = 0  # Tag to avoid unnecessary loading during gradient accumulation
+            self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
             if not self.args.vllm_external_launcher:
                 # When using vLLM, the main process is responsible for loading the model weights. This can cause process
                 # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
@@ -726,7 +725,7 @@ class GRPOTrainer(Trainer):
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
-            # Gather prompts only once if needed
+            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process unless external launcher enabled
             all_prompts_text = gather_object(prompts_text) if not self.args.vllm_external_launcher else None
 
             if self.args.vllm_external_launcher or self.accelerator.is_main_process:
