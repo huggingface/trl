@@ -425,7 +425,7 @@ class SFTTrainer(Trainer):
                     processed = processing_class(text=example[dataset_text_field])
                     if (
                         processing_class.eos_token_id is not None
-                        and processing_class["input_ids"][-1] != processing_class.eos_token_id
+                        and processed["input_ids"][-1] != processing_class.eos_token_id
                     ):
                         processed["input_ids"] = processed["input_ids"] + [processing_class.eos_token_id]
                         processed["attention_mask"] = processed["attention_mask"] + [1]
