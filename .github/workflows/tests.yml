@@ -147,7 +147,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install accelerate==0.34.0
-          python -m pip install datasets==2.21.0
+          python -m pip install datasets==3.0.0
           python -m pip install transformers==4.46.0
           python -m pip install ".[dev]"
       - name: Test with pytest

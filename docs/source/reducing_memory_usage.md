@@ -44,7 +44,7 @@ training_args = DPOConfig(..., max_completion_length=...)
 </hfoption>
 <hfoption id="SFT">
 
-SFT truncation is applied to the input sequence via the `max_seq_length` parameter.
+SFT truncation is applied to the input sequence via the `max_length` parameter.
 
 <div class="flex justify-center">
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_input_ids.png" alt="Truncation input ids" width="600"/>
@@ -55,7 +55,7 @@ To set the truncation parameter, use the following code snippet:
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., max_seq_length=...)
+training_args = SFTConfig(..., max_length=...)
 ```
 
 </hfoption>
@@ -85,7 +85,7 @@ Packing eliminates padding, preserves all sequence information, and allows for f
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., packing=True, max_seq_length=512)
+training_args = SFTConfig(..., packing=True, max_length=512)
 ```
 
 <Tip warning={true}>

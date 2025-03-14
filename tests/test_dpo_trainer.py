@@ -270,7 +270,7 @@ class DPOTrainerTester(unittest.TestCase):
                 model=self.model,
                 ref_model=self.ref_model,
                 args=training_args,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
@@ -1075,7 +1075,7 @@ class DPOTrainerTester(unittest.TestCase):
             )
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
-    def test_dpo_trainer_use_num_logits_to_keep(self):
+    def test_dpo_trainer_use_logits_to_keep(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -1092,7 +1092,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
-                use_num_logits_to_keep=True,
+                use_logits_to_keep=True,
                 rpo_alpha=0.5,
                 report_to="none",
             )
@@ -1109,7 +1109,7 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-            training_args.use_num_logits_to_keep = False
+            training_args.use_logits_to_keep = False
             trainer2 = DPOTrainer(
                 model=model,
                 ref_model=None,
@@ -1232,6 +1232,17 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
+    def test_compute_metrics(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer.pad_token = tokenizer.eos_token
+
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        def dummy_compute_metrics(*args, **kwargs):
+            return {"test": 0.0}
+          
     @require_liger_kernel
     @parameterized.expand([(0.1,), (0.5,)])
     def test_dpo_trainer_with_liger(self, beta):
@@ -1300,6 +1311,26 @@ class DPOTrainerTester(unittest.TestCase):
                 output = trainer.model(**model_inputs)
             self.assertIsNotNone(output)
             self.assertIsNone(output.loss)
+                do_eval=True,
+                eval_strategy="steps",
+                eval_steps=1,
+                per_device_eval_batch_size=2,
+                report_to="none",
+            )
+
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=ref_model,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                compute_metrics=dummy_compute_metrics,
+            )
+
+            trainer.train()
+
+            self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
 
 
 @require_vision

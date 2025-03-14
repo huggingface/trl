@@ -58,7 +58,7 @@ class DPOConfig(TrainingArguments):
             this flag to `True`.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
-        use_num_logits_to_keep (`bool`, *optional*, defaults to `False`):
+        use_logits_to_keep (`bool`, *optional*, defaults to `False`):
             If `True`, only a specified number of logits are computed in the forward pass. This can be useful for
             saving memory and speeding up training by not computing the logits for all tokens, especially in
             scenarios when working with very long prompts where labels are ignored (-100).
@@ -71,14 +71,15 @@ class DPOConfig(TrainingArguments):
             Padding value to use. If `None`, the padding value of the tokenizer is used.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Padding value to use for labels.
-        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to usewhen the prompt is too long, either `keep_end` or `keep_start`.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt.
         max_completion_length (`int` or `None`, *optional*, defaults to `None`):
             Maximum length of the completion.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the full sequence (prompt + completion).
+        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
+            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            `"keep_start"`.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether forward passes are performed without padding by flattening all sequences in the batch
             into a single continuous sequence. This approach requires associating a `position_ids` vector to track
@@ -151,12 +152,12 @@ class DPOConfig(TrainingArguments):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
-        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.9`):
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
             between the current policy and the previous reference policy during updates. The reference policy is
             updated according to the equation: `π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you
             must set `sync_ref_model=True`.
-        ref_model_sync_steps (`int`, *optional*, defaults to `64`):
+        ref_model_sync_steps (`int`, *optional*, defaults to `512`):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
@@ -202,7 +203,7 @@ class DPOConfig(TrainingArguments):
         default=True,
         metadata={"help": "Whether to disable dropout in the model and reference model."},
     )
-    use_num_logits_to_keep: bool = field(
+    use_logits_to_keep: bool = field(
         default=False,
         metadata={
             "help": "If `True`, only a specified number of logits are computed in the forward pass. This can be "
@@ -224,13 +225,6 @@ class DPOConfig(TrainingArguments):
         default=-100,
         metadata={"help": "Padding value to use for labels."},
     )
-    truncation_mode: str = field(
-        default="keep_end",
-        metadata={
-            "help": "Truncation mode to use when the prompt is too long.",
-            "choices": ["keep_end", "keep_start"],
-        },
-    )
     max_prompt_length: Optional[int] = field(
         default=512,
         metadata={"help": "Maximum length of the prompt."},
@@ -242,6 +236,14 @@ class DPOConfig(TrainingArguments):
     max_length: Optional[int] = field(
         default=1024,
         metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
+    )
+    truncation_mode: str = field(
+        default="keep_end",
+        metadata={
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
+            "and `'keep_start'`.",
+            "choices": ["keep_end", "keep_start"],
+        },
     )
     padding_free: bool = field(
         default=False,
@@ -377,7 +379,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     ref_model_mixup_alpha: float = field(
-        default=0.9,
+        default=0.6,
         metadata={
             "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
             "previous reference policy during updates. The reference policy is updated according to the equation: "
@@ -385,7 +387,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     ref_model_sync_steps: int = field(
-        default=64,
+        default=512,
         metadata={
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
@@ -402,16 +404,18 @@ class DPOConfig(TrainingArguments):
     )
 
     # Deprecated parameters
-    is_encoder_decoder: Optional[bool] = field(
+    use_num_logits_to_keep: Optional[bool] = field(
         default=None,
-        metadata={"help": "Deprecated. This argument is not used anymore."},
+        metadata={"help": "Deprecated. Use `use_logits_to_keep` instead."},
     )
 
     def __post_init__(self):
-        if self.is_encoder_decoder is not None:
-            warnings.warn(
-                "The `is_encoder_decoder` parameter is deprecated will be removed in version 0.15. The trainer now "
-                "automatically determines if the model is an encoder-decoder, so you can safely remove it."
-            )
+        super().__post_init__()
 
-        return super().__post_init__()
+        if self.use_num_logits_to_keep is not None:
+            warnings.warn(
+                "`use_num_logits_to_keep` is deprecated and will be remove in version 0.17.0. Use "
+                "`use_logits_to_keep` instead.",
+                DeprecationWarning,
+            )
+            self.use_logits_to_keep = self.use_num_logits_to_keep

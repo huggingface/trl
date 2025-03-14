@@ -14,7 +14,7 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B) as the base model and the [RM-Gemma-2B model](https://huggingface.co/weqweasdas/RM-Gemma-2B) as the reward model. We use the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ingored!). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ignored!). You can view the data in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
@@ -23,32 +23,26 @@ This example demonstrates how to train a model using the GRPO method. We use the
   height="560px"
 ></iframe>
 
-Below is the script to train the model. We use PEFT to reduce the memory requirements.
+Below is the script to train the model.
 
 ```python
 # train_grpo.py
 from datasets import load_dataset
-from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
-# Load the dataset
 dataset = load_dataset("trl-lib/tldr", split="train")
 
-training_args = GRPOConfig(
-    output_dir="Qwen2-0.5B-GRPO",
-    learning_rate=1e-5,
-    logging_steps=10,
-    gradient_accumulation_steps=16,
-    max_completion_length=128,
-)
+# Define the reward function, which rewards completions that are close to 20 characters
+def reward_len(completions, **kwargs):
+    return [-abs(20 - len(completion)) for completion in completions]
+
+training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO", logging_steps=10)
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_model="weqweasdas/RM-Gemma-2B",
+    reward_funcs=reward_len,
     args=training_args,
     train_dataset=dataset,
-    peft_config=LoraConfig(task_type="CAUSAL_LM"),
 )
-
 trainer.train()
 ```
 
@@ -97,22 +91,158 @@ $$
 
 where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.  
 
-In the original paper, this formulation is generalized to account for multiple updates after each generation by leveraging the **clipped surrogate objective**:  
+In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:  
 
 $$
 \mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
 $$
 
 where  \\(\text{clip}(\cdot, 1 - \epsilon, 1 + \epsilon) \\) ensures that updates do not deviate excessively from the reference policy by bounding the policy ratio between  \\( 1 - \epsilon \\) and  \\( 1 + \epsilon \\).
-In TRL though, as in the original paper, we only do one update per generation, so we can simplify the loss to the first form.
+When  \\( \mu = 1 \\) (default in TRL), the clipped surrogate objective simplifies to the original objective.
 
 ## Logged metrics
 
 The GRPO Trainer logs the following metrics:
 
+- `completion_length`: The average completion length.
+- `reward/{reward_func_name}`: The reward computed by each reward function.
 - `reward`: The average reward.
 - `reward_std` : The average standard deviation within reward groups.
 - `kl` : The average KL divergence between the model and the reference model calculated on completions.
+
+## Customization
+
+## Speed up training with vLLM-powered generation  
+
+Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, pass `use_vllm=True` in the training arguments.  
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_vllm=True)
+```  
+
+For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).  
+
+### Using a custom reward function
+
+The [`GRPOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
+
+1. **Input arguments**:
+   - The function must accept the following as keyword arguments:
+     - `prompts` (contains the prompts),
+     - `completions` (contains the generated completions),
+     - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
+
+     The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
+   - Depending on the dataset format, the input will vary:
+     - For [standard format](dataset_formats#standard), `prompts` and `completions` will be lists of strings.
+     - For [conversational format](dataset_formats#conversational), `prompts` and `completions` will be lists of message dictionaries.
+
+2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
+
+#### Example 1: Reward longer completions
+
+Below is an example of a reward function for a standard format that rewards longer completions:
+
+```python
+def reward_func(completions, **kwargs):
+    """Reward function that gives higher scores to longer completions."""
+    return [float(len(completion)) for completion in completions]
+```
+
+You can test it as follows:
+
+```python
+>>> prompts = ["The sky is", "The sun is"]
+>>> completions = [" blue.", " in the sky."]
+>>> print(reward_func(prompts=prompts, completions=completions))
+[6.0, 12.0]
+```
+
+#### Example 2: Reward completions with specific format
+
+Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the _format reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+It is designed for conversational format, where prompts and completions consist of structured messages.
+
+```python
+import re
+
+def format_reward_func(completions, **kwargs):
+    """Reward function that checks if the completion has a specific format."""
+    pattern = r"^<think>.*?</think><answer>.*?</answer>$"
+    completion_contents = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, content) for content in completion_contents]
+    return [1.0 if match else 0.0 for match in matches]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = [
+...     [{"role": "assistant", "content": "What is the result of (1 + 2) * 4?"}],
+...     [{"role": "assistant", "content": "What is the result of (3 + 1) * 2?"}],
+... ]
+>>> completions = [
+...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
+...     [{"role": "assistant", "content": "The sum of 3 and 1 is 4, which we multiply by 2 to get 8. So (3 + 1) * 2 = 8."}],
+... ]
+>>> format_reward_func(prompts=prompts, completions=completions)
+[1.0, 0.0]
+```
+
+#### Example 3: Reward completions based on a reference
+
+Below is an example of a reward function that checks if the completion is correct. This example is inspired by the _accuracy reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+This example is designed for [standard format](dataset_formats#standard), where the dataset contains a column named `ground_truth`.
+
+```python
+import re
+
+def reward_func(completions, ground_truth, **kwargs):
+    # Regular expression to capture content inside \boxed{}
+    matches = [re.search(r"\\boxed\{(.*?)\}", completion) for completion in completions]
+    contents = [match.group(1) if match else "" for match in matches]
+    # Reward 1 if the content is the same as the ground truth, 0 otherwise
+    return [1.0 if c == gt else 0.0 for c, gt in zip(contents, ground_truth)]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = ["Problem: Solve the equation $2x + 3 = 7$. Solution:", "Problem: Solve the equation $3x - 5 = 10$."]
+>>> completions = [r" The solution is \boxed{2}.", r" The solution is \boxed{6}."]
+>>> ground_truth = ["2", "5"]
+>>> reward_func(prompts=prompts, completions=completions, ground_truth=ground_truth)
+[1.0, 0.0]
+```
+
+#### Passing the reward function to the trainer
+
+To use your custom reward function, pass it to the [`GRPOTrainer`] as follows:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    reward_funcs=reward_func,
+    ...,
+)
+```
+
+If you have multiple reward functions, you can pass them as a list:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    reward_funcs=[reward_func1, reward_func2],
+    ...,
+)
+```
+and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
+
+Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
 ## GRPOTrainer
 

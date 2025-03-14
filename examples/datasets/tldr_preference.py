@@ -83,7 +83,7 @@ The TL;DR dataset is a processed version of Reddit posts, specifically curated t
 - **Type**: [Preference](https://huggingface.co/docs/trl/main/dataset_formats#preference)
 
 Columns:
-- `"pompt"`: The unabridged Reddit post.
+- `"prompt"`: The unabridged Reddit post.
 - `"chosen"`: The concise "TL;DR" summary appended by the author.
 - `"rejected"`: An alternative summary or response that was not selected.
 
