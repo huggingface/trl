@@ -271,5 +271,5 @@ def prepare_fsdp(model, accelerator):
             "device_id": accelerator.device,
         }
         model = FSDP(model, **kwargs)
-        model.eval()
-        return model
+    model.eval()
+    return model
