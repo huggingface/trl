@@ -89,7 +89,7 @@ EXTRAS = {
     "mergekit": ["mergekit>=0.0.5.1"],
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],
-    "scikit": ["scikit-learn"],
+    "scikit": ["scikit-learn", "joblib"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
     "vllm": ["vllm>=0.7.1; sys_platform != 'win32'"],  # vllm is not available on Windows
     "vlm": ["Pillow"],
