@@ -422,7 +422,14 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize(example, processing_class, dataset_text_field):
-                    return processing_class(text=example[dataset_text_field])
+                    processed = processing_class(text=example[dataset_text_field])
+                    if (
+                        processing_class.eos_token_id is not None
+                        and processed["input_ids"][-1] != processing_class.eos_token_id
+                    ):
+                        processed["input_ids"] = processed["input_ids"] + [processing_class.eos_token_id]
+                        processed["attention_mask"] = processed["attention_mask"] + [1]
+                    return processed
 
                 dataset = dataset.map(
                     tokenize,
