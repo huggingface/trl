@@ -492,7 +492,10 @@ class GRPOTrainerTester(unittest.TestCase):
 
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=[applicable_reward_func, non_applicable_reward_func],  # One applicable, one non applicable
+                reward_funcs=[
+                    applicable_reward_func,
+                    non_applicable_reward_func,
+                ],  # One applicable, one non applicable
                 args=training_args,
                 train_dataset=dataset,
             )
