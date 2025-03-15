@@ -477,7 +477,7 @@ class GRPOTrainerTester(unittest.TestCase):
             return [float(len(completion)) for completion in completions]
 
         def non_applicable_reward_func(completions, **kwargs):
-            """An invalid reward function that returns None for all inputs."""
+            """A reward function that returns None for all inputs, as it is not applicable to this sample."""
             return [None] * len(completions)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
