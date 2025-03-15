@@ -188,8 +188,6 @@ class GRPOTrainer(Trainer):
 
     trainer.train()
     ```
-    # End of Selection
-    ```
 
     Args:
         model (`Union[str, PreTrainedModel]`):
