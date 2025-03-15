@@ -272,8 +272,6 @@ class GRPOTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
     ):
-       
-
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
