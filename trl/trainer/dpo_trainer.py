@@ -1135,6 +1135,9 @@ class DPOTrainer(Trainer):
         if "image_sizes" in concatenated_batch:
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
 
+        prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
+        completion_attention_mask = concatenated_batch["completion_attention_mask"]
+
         if self.is_encoder_decoder:
             # 1. Get encoder outputs
             encoder_outputs = model.get_encoder()(
@@ -1188,6 +1191,7 @@ class DPOTrainer(Trainer):
                     ref_hidden_states = ref_decoder_outputs.last_hidden_state
 
             labels = concatenated_batch["completion_input_ids"]
+            loss_mask = completion_attention_mask.bool()
         else:
             # For decoder-only models
             input_ids = torch.cat(
@@ -1197,6 +1201,37 @@ class DPOTrainer(Trainer):
                 (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]),
                 dim=1,
             )
+            # Mask the prompt but not the completion for the loss
+            loss_mask = torch.cat(
+                (torch.zeros_like(prompt_attention_mask), completion_attention_mask),
+                dim=1,
+            )
+
+            # Add padding-free training support
+            if self.padding_free:
+                input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
+                loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
+                position_ids = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
+                model_kwargs["position_ids"] = position_ids
+            else:
+                model_kwargs["attention_mask"] = attention_mask
+
+            # Add truncation support
+            if self.max_length is not None:
+                if self.truncation_mode == "keep_end":
+                    input_ids = input_ids[:, -self.max_length :]
+                    attention_mask = attention_mask[:, -self.max_length :]
+                    loss_mask = loss_mask[:, -self.max_length :]
+                elif self.truncation_mode == "keep_start":
+                    input_ids = input_ids[:, : self.max_length]
+                    attention_mask = attention_mask[:, : self.max_length]
+                    loss_mask = loss_mask[:, : self.max_length]
+
+            # Add logits_to_keep optimization
+            if self.use_logits_to_keep:
+                first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
+                logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1
+                model_kwargs["logits_to_keep"] = logits_to_keep
 
             # Get the base model outputs (before LM head)
             if hasattr(model, "get_decoder"):
@@ -1206,7 +1241,6 @@ class DPOTrainer(Trainer):
 
             outputs = base_model(
                 input_ids,
-                attention_mask=attention_mask,
                 use_cache=False,
                 **model_kwargs,
             )
@@ -1222,7 +1256,6 @@ class DPOTrainer(Trainer):
 
                 ref_outputs = ref_base_model(
                     input_ids,
-                    attention_mask=attention_mask,
                     use_cache=False,
                     **model_kwargs,
                 )
