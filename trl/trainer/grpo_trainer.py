@@ -211,14 +211,12 @@ class GRPOTrainer(Trainer):
                 keyword arguments in `args.model_init_kwargs`.
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
                 - A custom reward function: The function is provided with the prompts and the generated completions,
-                  plus any additional columns in the dataset. It should return a list of rewards. For more details, see
+                  plus any additional columns in the dataset. It should return a list of rewards. Custom reward
+                  functions can also return None when the reward is not applicable to those samples. This is useful for
+                  multi-task training where different reward functions apply to different types of samples. When a
+                  reward function returns None for a sample, that reward function is excluded from the reward
+                  calculation for that sample. For more details, see
                   [Using a custom reward function](#using-a-custom-reward-function).
-
-                  Custom reward functions can also return None
-                  when the reward is not applicable to those samples. This is useful for multi-task training where
-                  different reward functions apply to different types of samples. When a reward function returns None
-                  for a sample, that reward function is excluded from the reward calculation for that sample, and the
-                  weights of the remaining reward functions are normalized accordingly.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
