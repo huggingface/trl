@@ -251,8 +251,8 @@ def math_reward_func(prompts, completions, task, **kwargs):
 # Coding-specific reward function
 def coding_reward_func(prompts, completions, task, **kwargs):
     rewards = []
-    for prompt, completion, task in zip(prompts, completions, task_type):
-        if task == "coding":
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "coding":
             # Calculate coding-specific reward
             works = test_code_solution(prompt, completion)
             reward = 1.0 if works else -1.0
