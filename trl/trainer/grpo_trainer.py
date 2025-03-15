@@ -880,13 +880,7 @@ class GRPOTrainer(Trainer):
         rewards_per_func = gather(rewards_per_func)
 
         # Apply weights to each reward function's output and sum
-        reward_weights = self.reward_weights.to(device).unsqueeze(0)  # Shape: [1, num_funcs]
-        
-        # Calculate weighted rewards, NaN values will be ignored in the sum
-        weighted_rewards = rewards_per_func * reward_weights
-        
-        # Calculate the weighted sum, ignoring NaN values
-        rewards = torch.nansum(weighted_rewards, dim=1)
+        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
