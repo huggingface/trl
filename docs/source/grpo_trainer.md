@@ -225,7 +225,10 @@ from datasets import load_dataset
 from trl import GRPOTrainer
 
 # Load a dataset that contains both math and coding problems
-dataset = load_dataset("mixed-dataset", split="train")
+dataset = Dataset.from_list([
+{"prompt": "...", "task": "math"},
+...
+])
 
 # Math-specific reward function
 def math_reward_func(prompts, completions, tasks, **kwargs):
