@@ -224,7 +224,7 @@ Below is an example of using multiple reward functions in the [`GRPOTrainer`]. I
 from datasets import load_dataset
 from trl import GRPOTrainer
 
-# Load a dataset that contains both math and coding problems
+# Define a dataset that contains both math and coding problems
 dataset = Dataset.from_list([
 {"prompt": "...", "task": "math"},
 ...
