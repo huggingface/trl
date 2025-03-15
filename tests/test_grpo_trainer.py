@@ -473,7 +473,7 @@ class GRPOTrainerTester(unittest.TestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def applicable_reward_func(completions, **kwargs):
-            """A valid reward function that rewards longer completions."""
+            """A reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
         def non_applicable_reward_func(completions, **kwargs):
