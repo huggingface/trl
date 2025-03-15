@@ -860,7 +860,6 @@ class GRPOTrainer(Trainer):
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
 
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
-                    # End of Selection
 
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
