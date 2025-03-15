@@ -37,6 +37,8 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
 
         > Parameters that control the data preprocessing
 
@@ -153,6 +155,11 @@ class SFTConfig(TrainingArguments):
     use_liger: Optional[bool] = field(
         default=None,
         metadata={"help": "Deprecated. Use `use_liger_kernel` instead."},
+    )
+
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     def __post_init__(self):
