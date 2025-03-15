@@ -337,6 +337,7 @@ class GRPOTrainer(Trainer):
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
+        # Reward functions
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         for i, reward_func in enumerate(reward_funcs):
