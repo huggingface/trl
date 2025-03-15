@@ -872,7 +872,8 @@ class GRPOTrainer(Trainer):
                 "Please ensure that at least one reward function returns a valid reward."
             )
 
-        # Gather the rewards per function
+        # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
+        # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
 
         # Apply weights to each reward function's output and sum
