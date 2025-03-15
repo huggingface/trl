@@ -213,7 +213,7 @@ class GRPOTrainer(Trainer):
                 - A custom reward function: The function is provided with the prompts and the generated completions,
                   plus any additional columns in the dataset. It should return a list of rewards. For more details, see
                   [Using a custom reward function](#using-a-custom-reward-function).
-                  
+
                   Custom reward functions can also return None
                   when the reward is not applicable to those samples. This is useful for multi-task training where
                   different reward functions apply to different types of samples. When a reward function returns None
@@ -860,7 +860,7 @@ class GRPOTrainer(Trainer):
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
 
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
-                        # End of Selection
+                    # End of Selection
 
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
