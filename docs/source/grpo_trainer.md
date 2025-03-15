@@ -225,10 +225,14 @@ from datasets import Dataset
 from trl import GRPOTrainer
 
 # Define a dataset that contains both math and coding problems
-dataset = Dataset.from_list([
-{"prompt": "...", "task": "math"},
-...
-])
+dataset = Dataset.from_list(
+    [
+        {"prompt": "What is 2+2?", "task": "math"},
+        {"prompt": "Write a function that returns the sum of two numbers.", "task": "code"},
+        {"prompt": "What is 3*4?", "task": "math"},
+        {"prompt": "Write a function that returns the product of two numbers.", "task": "code"},
+    ]
+)
 
 # Math-specific reward function
 def math_reward_func(prompts, completions, tasks, **kwargs):
