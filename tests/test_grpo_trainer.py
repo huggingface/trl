@@ -476,7 +476,7 @@ class GRPOTrainerTester(unittest.TestCase):
             """A valid reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
-        def non_existing_reward_func(completions, **kwargs):
+        def non_applicable_reward_func(completions, **kwargs):
             """An invalid reward function that returns None for all inputs."""
             return [None] * len(completions)
 
