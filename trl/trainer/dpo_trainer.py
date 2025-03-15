@@ -50,7 +50,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
-from transformers.utils import is_peft_available, is_torch_xpu_available
+from transformers.utils import is_liger_kernel_available, is_peft_available, is_torch_xpu_available
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import PreTrainedModelWrapper, create_reference_model
@@ -75,12 +75,22 @@ from .utils import (
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
+
 
 if is_wandb_available():
     import wandb
 
 if is_deepspeed_available():
     import deepspeed
+
+
+def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int) -> torch.Tensor:
+    """Shift input ids one token to the right, and pad with pad_token_id"""
+    shifted_input_ids = input_ids.new_zeros(input_ids.shape)
+    shifted_input_ids[:, 1:] = input_ids[:, :-1].clone()
+    shifted_input_ids[:, 0] = decoder_start_token_id
 
 
 @dataclass
@@ -384,6 +394,17 @@ class DPOTrainer(Trainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        # Liger kernel
+        if args.use_liger_loss:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "You set `use_liger_loss=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
+            self.dpo_loss_fn = LigerFusedLinearDPOLoss(
+                ignore_index=args.label_pad_token_id, beta=args.beta, use_ref_model=not args.reference_free
+            )
 
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
@@ -1099,6 +1120,174 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
+    def _compute_loss_liger(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
+        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
+
+        model_kwargs = {}
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
+
+        # Add the pixel values and attention masks for vision models
+        if "pixel_values" in concatenated_batch:
+            model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
+        if "pixel_attention_mask" in concatenated_batch:
+            model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+        if "image_sizes" in concatenated_batch:
+            model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
+
+        if self.is_encoder_decoder:
+            # 1. Get encoder outputs
+            encoder_outputs = model.get_encoder()(
+                concatenated_batch["prompt_input_ids"],
+                attention_mask=concatenated_batch["prompt_attention_mask"],
+                return_dict=True,
+            )
+            # 2. Prepare decoder inputs
+            decoder_input_ids = shift_tokens_right(
+                concatenated_batch["completion_input_ids"], self.padding_value, model.config.decoder_start_token_id
+            )
+            # 3. Get decoder outputs
+            decoder_outputs = model.get_decoder()(
+                input_ids=decoder_input_ids,
+                attention_mask=concatenated_batch["completion_attention_mask"],
+                encoder_hidden_states=encoder_outputs.last_hidden_state,
+                encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
+                use_cache=False,
+            )
+            hidden_states = decoder_outputs.last_hidden_state
+
+            ref_hidden_states = None
+            if not self.reference_free and self.ref_model is not None:
+                ref_encoder_outputs = self.ref_model.get_encoder()(
+                    concatenated_batch["prompt_input_ids"],
+                    attention_mask=concatenated_batch["prompt_attention_mask"],
+                    return_dict=True,
+                )
+                ref_decoder_outputs = self.ref_model.get_decoder()(
+                    input_ids=decoder_input_ids,
+                    attention_mask=concatenated_batch["completion_attention_mask"],
+                    encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
+                    encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
+                    use_cache=False,
+                )
+                ref_hidden_states = ref_decoder_outputs.last_hidden_state
+            elif not self.reference_free:
+                with self.null_ref_context():
+                    ref_encoder_outputs = model.get_encoder()(
+                        concatenated_batch["prompt_input_ids"],
+                        attention_mask=concatenated_batch["prompt_attention_mask"],
+                        return_dict=True,
+                    )
+                    ref_decoder_outputs = model.get_decoder()(
+                        input_ids=decoder_input_ids,
+                        attention_mask=concatenated_batch["completion_attention_mask"],
+                        encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
+                        encoder_attention_mask=concatenated_batch["prompt_attention_mask"],
+                        use_cache=False,
+                    )
+                    ref_hidden_states = ref_decoder_outputs.last_hidden_state
+
+            labels = concatenated_batch["completion_input_ids"]
+        else:
+            # For decoder-only models
+            input_ids = torch.cat(
+                (concatenated_batch["prompt_input_ids"], concatenated_batch["completion_input_ids"]), dim=1
+            )
+            attention_mask = torch.cat(
+                (concatenated_batch["prompt_attention_mask"], concatenated_batch["completion_attention_mask"]),
+                dim=1,
+            )
+
+            # Get the base model outputs (before LM head)
+            if hasattr(model, "get_decoder"):
+                base_model = model.get_decoder()
+            else:
+                base_model = getattr(model, self.args.base_model_attribute_name, model)
+
+            outputs = base_model(
+                input_ids,
+                attention_mask=attention_mask,
+                use_cache=False,
+                **model_kwargs,
+            )
+            hidden_states = outputs.last_hidden_state[:, :-1]
+
+            # Get reference hidden states if needed
+            ref_hidden_states = None
+            if not self.reference_free and self.ref_model is not None:
+                if hasattr(self.ref_model, "get_decoder"):
+                    ref_base_model = self.ref_model.get_decoder()
+                else:
+                    ref_base_model = getattr(self.ref_model, self.args.base_model_attribute_name, self.ref_model)
+
+                ref_outputs = ref_base_model(
+                    input_ids,
+                    attention_mask=attention_mask,
+                    use_cache=False,
+                    **model_kwargs,
+                )
+                ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
+            elif not self.reference_free:
+                if hasattr(model, "get_decoder"):
+                    ref_base_model = model.get_decoder()
+                else:
+                    ref_base_model = getattr(model, self.args.base_model_attribute_name, model)
+                with self.null_ref_context():
+                    ref_outputs = ref_base_model(
+                        input_ids,
+                        attention_mask=attention_mask,
+                        use_cache=False,
+                        **model_kwargs,
+                    )
+                    ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
+
+            labels = input_ids[:, 1:]  # Shift right for casual LM
+
+        # Get the LM head
+        lm_head = model.get_output_embeddings()
+
+        # Get reference model weights if needed
+        ref_weight = None
+        ref_bias = None
+        if not self.reference_free:
+            if self.ref_model is not None:
+                ref_lm_head = self.ref_model.get_output_embeddings()
+            else:
+                with self.null_ref_context():
+                    ref_lm_head = model.get_output_embeddings()
+            ref_weight = ref_lm_head.weight
+            ref_bias = ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
+
+        # Compute loss using Liger kernel
+        loss_output = self.dpo_loss_fn(
+            lm_head.weight,
+            hidden_states,
+            labels,
+            bias=lm_head.bias if hasattr(lm_head, "bias") else None,
+            ref_input=ref_hidden_states if not self.reference_free else None,
+            ref_weight=ref_weight if not self.reference_free else None,
+            ref_bias=ref_bias if not self.reference_free else None,
+        )
+        (
+            loss,
+            (chosen_logps, rejected_logps, chosen_logits_mean, rejected_logits_mean, nll_loss, *aux_outputs),
+        ) = loss_output
+
+        output = {
+            "loss": loss,
+            "chosen_logps": chosen_logps,
+            "rejected_logps": rejected_logps,
+            "mean_chosen_logits": chosen_logits_mean,
+            "mean_rejected_logits": rejected_logits_mean,
+            "nll_loss": nll_loss,
+            "chosen_rewards": aux_outputs[0],
+            "rejected_rewards": aux_outputs[1],
+        }
+        if self.aux_loss_enabled:
+            output["aux_loss"] = outputs.aux_loss
+
+        return output
+
     def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
@@ -1240,8 +1429,8 @@ class DPOTrainer(Trainer):
 
         if self.args.rpo_alpha is not None:
             # Only use the chosen logits for the RPO loss
-            chosen_logits = logits[:num_examples]
-            chosen_labels = labels[:num_examples]
+            chosen_logits = logits[:num_examples, :-1] if not self.is_encoder_decoder else logits[:num_examples]
+            chosen_labels = labels[:num_examples, 1:] if not self.is_encoder_decoder else labels[:num_examples]
 
             # Compute the log probabilities of the labels
             output["nll_loss"] = F.cross_entropy(
@@ -1284,18 +1473,24 @@ class DPOTrainer(Trainer):
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
-        model_output = self.concatenated_forward(model, batch)
-
-        # if ref_chosen_logps and ref_rejected_logps in batch use them, otherwise use the reference model
-        if "ref_chosen_logps" in batch and "ref_rejected_logps" in batch:
-            ref_chosen_logps = batch["ref_chosen_logps"]
-            ref_rejected_logps = batch["ref_rejected_logps"]
+        if self.args.use_liger_loss and self.loss_type == "sigmoid":
+            model_output = self._compute_loss_liger(model, batch)
+            losses = model_output["loss"]
+            chosen_rewards = model_output["chosen_rewards"]
+            rejected_rewards = model_output["rejected_rewards"]
         else:
-            ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
+            model_output = self.concatenated_forward(model, batch)
 
-        losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-            model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
-        )
+            # if ref_chosen_logps and ref_rejected_logps in batch use them, otherwise use the reference model
+            if "ref_chosen_logps" in batch and "ref_rejected_logps" in batch:
+                ref_chosen_logps = batch["ref_chosen_logps"]
+                ref_rejected_logps = batch["ref_rejected_logps"]
+            else:
+                ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
+
+            losses, chosen_rewards, rejected_rewards = self.dpo_loss(
+                model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
+            )
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         if self.args.rpo_alpha is not None:
