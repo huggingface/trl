@@ -218,7 +218,7 @@ You can test this function as follows:
 ```
 ### Example 4: Multiple reward functions
 
-Below is an example of using multiple reward functions in the GRPOTrainer. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
+Below is an example of using multiple reward functions in the [`GRPOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
 
 ```python
 from datasets import load_dataset
