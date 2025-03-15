@@ -235,10 +235,10 @@ dataset = Dataset.from_list(
 )
 
 # Math-specific reward function
-def math_reward_func(prompts, completions, tasks, **kwargs):
+def math_reward_func(prompts, completions, task, **kwargs):
     rewards = []
-    for prompt, completion, task in zip(prompts, completions, task_type):
-        if task == "math":
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "math":
             # Calculate math-specific reward
             correct = check_math_solution(prompt, completion)
             reward = 1.0 if correct else -1.0
