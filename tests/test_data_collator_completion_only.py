@@ -93,7 +93,10 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         # check DataCollatorForCompletionOnlyLM using response template only
         self.tokenized_instruction = self.tokenizer.encode(self.instruction, add_special_tokens=False)
         self.collator = DataCollatorForCompletionOnlyLM(self.response_template, tokenizer=self.tokenizer)
-        encoded_instance = self.collator.torch_call([self.tokenized_instruction])
+
+        with self.assertWarns(UserWarning):  # it should raise a warning since the response_template isn't found
+            encoded_instance = self.collator.torch_call([self.tokenized_instruction])
+
         result = torch.all(encoded_instance["labels"] == -100)
         self.assertTrue(result, "Not all values in the tensor are -100.")
 
@@ -102,19 +105,20 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         self.collator = DataCollatorForCompletionOnlyLM(
             self.response_template, self.instruction_template, tokenizer=self.tokenizer
         )
-        encoded_instance = self.collator.torch_call([self.tokenized_instruction])
+        with self.assertWarns(UserWarning):  # it should raise a warning since the response_template isn't found
+            encoded_instance = self.collator.torch_call([self.tokenized_instruction])
         result = torch.all(encoded_instance["labels"] == -100)
         self.assertTrue(result, "Not all values in the tensor are -100.")
 
     def test_padding_free(self):
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         if tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token
             tokenizer.pad_token_id = tokenizer.eos_token_id
+
         inst1 = "### System: You are a helpful assistant.\n\n### User: How much is 2+2?\n\n### Assistant: 2+2 equals 4"
         inst2 = "### System: You are a honest and helpful assistant.\n\n### User: What is the answer of 22x22?\n\n### Assistant: 22x22 equals 484"
 
-        response_template = "\n\n### Assistant:"
+        response_template = "### Assistant:"
         collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer)
         collator_paddingfree = DataCollatorForCompletionOnlyLM(
             response_template, tokenizer=tokenizer, padding_free=True
@@ -157,7 +161,9 @@ class DataCollatorForCompletionOnlyLMTester(unittest.TestCase):
         batch = collator(tokenized_instruction)
 
         self.assertEqual(batch["position_ids"].tolist(), [[0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 6]])  # flat pos ids
-        self.assertEqual(batch["cu_seq_lens_q"].tolist(), [0, 6, 13])  # start idx of each seq + total number of tokens
-        self.assertEqual(batch["cu_seq_lens_k"].tolist(), [0, 6, 13])  # idem
-        self.assertEqual(batch["max_length_k"], 7)  # max length in batch, here 7 (second sequence)
-        self.assertEqual(batch["max_length_q"], 7)  # idem
+        self.assertEqual(
+            batch["cu_seq_lens_q"].tolist(), [[0, 6, 13]]
+        )  # start idx of each seq + total number of tokens
+        self.assertEqual(batch["cu_seq_lens_k"].tolist(), [[0, 6, 13]])  # idem
+        self.assertEqual(batch["max_length_k"], torch.tensor([7]))  # max length in batch, here 7 (second sequence)
+        self.assertEqual(batch["max_length_q"], torch.tensor([7]))  # idem
