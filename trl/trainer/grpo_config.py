@@ -233,6 +233,28 @@ class GRPOConfig(TrainingArguments):
             "(`pip install vllm`)."
         },
     )
+    use_remote_vllm: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to use external vLLM for generating completions (transfer params with NCCL). "
+            "Using an external vLLM is useful when you are training a very large model across multiple machines "
+            "If you choose this option, you will have to start the vLLM server manually, "
+            "but you are free to choose which machine and which GPU(s) to use for generation. "
+            "Warning: if set to `True`, `use_vllm` must be set to `False`!"
+        },
+    )
+    remote_vllm_ip_port: Optional[str] = field(
+        default="127.0.0.1:8000",
+        metadata={
+            "help": "Required when `use_remote_vllm`. The ip and port of the vLLM server. "
+        },
+    )
+    remote_vllm_num_gpus: Optional[int] = field(
+        default=1,
+        metadata={
+            "help": "Required when `use_remote_vllm`. How many GPUs are used by renmote vLLM (we need this only to compute NCCL world size). "
+        },
+    )
     vllm_device: Optional[str] = field(
         default="auto",
         metadata={
