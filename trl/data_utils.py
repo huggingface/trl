@@ -515,7 +515,7 @@ def pack_dataset(dataset: DatasetType, seq_length: int, map_kwargs: Optional[dic
                     dtype = column.offsets.type.to_pandas_dtype()  # np.int32 or np.int64
                     offsets = np.arange(0, num_elements + 1, seq_length, dtype=dtype)
                     if offsets[-1] != num_elements:
-                        offsets = np.concatenate([offsets, [num_elements]])
+                        offsets = np.concatenate((offsets, [num_elements]))
                     column = type(column).from_arrays(offsets, column.values)
                 packed_columns.append(column)
             return pa.Table.from_arrays(packed_columns, names=examples.column_names)
@@ -536,7 +536,7 @@ def truncate_dataset(
     dataset: DatasetType, max_length: int, map_kwargs: Optional[dict[str, Any]] = None
 ) -> DatasetType:
     r"""
-    Truncate sequences in a dataset to a specifed `max_length.
+    Truncate sequences in a dataset to a specifed `max_length`.
 
     Args:
         dataset (`Dataset` or `DatasetDict`):
@@ -563,7 +563,6 @@ def truncate_dataset(
      'attention_mask': [[0, 1], [0, 0], [1]]}
     ```
     """
-
     if map_kwargs is None:
         map_kwargs = {}
     if isinstance(dataset, Dataset):
