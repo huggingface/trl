@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from typing import Any, Callable, Optional, Sequence, TypeVar, Union
+import bisect
 
 from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizer
@@ -513,3 +514,90 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
         example["messages"] = example.pop("conversations")
 
     return example
+
+
+
+def find_largest_leq_k(ind_len_tuples, k):
+    valid = [(i, t[0]) for i, t in enumerate(ind_len_tuples) if t[0] <= k]
+    return max(valid, key=lambda x: x[1])[0] if valid else -1
+
+def greedy_knapsack(numbers: list[int], capacity: int) -> list[list]:
+    """
+    An efficient greedy algorithm with binary search for the knapsack problem.
+    Adapted from Llama Factory - https://github.com/hiyouga/LLaMA-Factory/blob/main/src/llamafactory/data/processor/processor_utils.py#L62
+    """
+    numbers = sorted(numbers, key=lambda x: x[0])  # sort numbers in ascending order for binary search
+    knapsacks = []
+
+    while numbers and (numbers[0][0] < capacity):
+        current_knapsack = []
+        remaining_capacity = capacity
+
+        while True:
+            index = find_largest_leq_k(numbers, remaining_capacity)
+            if index == -1:
+                break
+            remaining_capacity -= numbers[index][0]  # update the remaining capacity
+            current_knapsack.append(numbers.pop(index)[1])  # add the number to knapsack
+
+        knapsacks.append(current_knapsack)
+
+    return knapsacks, [[tup[1]] for tup in numbers]
+
+
+def pack_examples_smarter(examples: dict[str, list[list]], seq_length: int) -> dict[str, list[list]]:
+    """
+    Pack examples smartly into chunks of size `seq_length`.
+
+    Args:
+        examples (`dict[str, list[list]]`):
+            Dictionary of examples with keys as strings and values as lists of lists.
+        seq_length (`int`):
+            Maximum sequence length.
+
+    Returns:
+        `dict[str, list[list]]`: Dictionary of examples with keys as strings and values as lists of lists.
+
+    Example:
+
+    ```python
+    >>> from trl import pack_examples
+    >>> examples = {
+    ...     "input_ids": [[1, 2, 3, 4, 5, 6, 7], [8, 9, 10]],
+    ...     "attention_mask": [[0, 1, 1, 1, 1, 1, 1], [0, 0, 1]],
+    ... }
+    >>> pack_examples_smarter(examples, seq_length=4)
+    {'input_ids': [[1, 2, 3, 4], [8, 9, 10]], 'attention_mask': [[0, 1, 1, 1, 1], [0, 0, 1]]}
+    >>> pack_examples(examples, seq_length=4)
+    {'input_ids': [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]], 'attention_mask': [[0, 1, 1, 1], [1, 1, 1, 0], [0, 1]]}
+    ```
+    """
+    len_inputs = [(len(v), ind) for ind, v in enumerate(next(iter(examples.values())))]
+    knapsacks, larger_knapsacks = greedy_knapsack(len_inputs, seq_length)
+    
+    updated_examples = {k: [] for k in examples}
+    for knapsack in knapsacks:
+        temp_batch = {k: [] for k in examples}
+        for list_index in knapsack:
+            for k in examples:
+                temp_batch[k].extend(examples[k][list_index])
+        for k in examples:
+            updated_examples[k].append(temp_batch[k])
+
+    for knapsack in larger_knapsacks:
+        list_index = knapsack[0]
+        length = len(next(iter(examples.values()))[list_index])
+        num_chunks = (length + seq_length - 1) // seq_length 
+
+        for chunk_idx in range(num_chunks):
+            temp_batch = {k: [] for k in examples}
+            for k in examples:
+                start = chunk_idx * seq_length
+                end = start + seq_length
+                temp_batch[k].extend(examples[k][list_index][start:end])
+            for k in examples:
+                updated_examples[k].append(temp_batch[k])
+
+    return updated_examples
+
+
