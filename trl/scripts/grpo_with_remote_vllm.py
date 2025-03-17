@@ -23,10 +23,9 @@
     (4 GPUs for training)
 ---
     CUDA_VISIBLE_DEVICES='0,1,2,3' \
-    accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-        --num_processes=4 \
-        grpo_with_remote_vllm.py \
-        --model_name_or_path /mnt/data_cpfs/model_cache/modelscope/hub/Qwen/Qwen/Qwen2___5-7B-Instruct/ \
+    accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml --num_processes=4 \
+        trl/scripts/grpo_with_remote_vllm.py \
+        --model_name_or_path Qwen/Qwen2-7B-Instruct \
         --dataset_name "trl-internal-testing/zen" \
         --output_dir './mytests' \
         --bf16 \
@@ -36,19 +35,14 @@
     (2 GPUS for VLLM)
 ---
     CUDA_VISIBLE_DEVICES='4,5' \
-    REMOTE_VLLM_INIT_MODEL='/mnt/data_cpfs/model_cache/modelscope/hub/Qwen/Qwen/Qwen2___5-7B-Instruct/' \
+    REMOTE_VLLM_INIT_MODEL='Qwen/Qwen2-7B-Instruct' \
     REMOTE_VLLM_NCCL_LINK=True \
     REMOTE_VLLM_GPUS=2 \
     REMOTE_VLLM_GPU_FRAG=0.9 \
     REMOTE_VLLM_MAX_MODEL_LEN=4096 \
     REMOTE_VLLM_MAX_LORA_RANK=0 \\   # <--- never change this, even if you use lora
     REMOTE_VLLM_TEMPERATURE=0.9 REMOTE_VLLM_NUM_GENERATION=8 \
-    python3 /your/path/to/trl/extras/remote_vllm_helper.py
-
-
-
-
-
+    python3 trl/extras/remote_vllm_helper.py
 
 ------------------------------------------------------------------------------------------------------------
 2 machine       | 1 for training, 1 for VLLM      | using NCCL to deliver param updates
@@ -59,8 +53,7 @@
     (on machine 1, all 8 gpus for training)
 ---
     CUDA_VISIBLE_DEVICES='0,1,2,3,4,5,6,7' \
-    accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-        --num_processes=8 \
+    accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml --num_processes=8 \
         grpo_with_remote_vllm.py \
         --model_name_or_path /mnt/data_cpfs/model_cache/modelscope/hub/Qwen/Qwen/Qwen2___5-7B-Instruct/ \
         --dataset_name "trl-internal-testing/zen" \
@@ -76,7 +69,6 @@
     (on machine 2, 1 GPU for VLLM)
 ---
     >> the commandline will be `printed` by the MAIN TRAINING script.
-
 
 
 ------------------------------------------------------------------------------------------------------------
@@ -123,10 +115,7 @@ def len_reward(completions, **kwargs):
 
 def main(script_args, training_args, model_args):
     # Load the dataset
-    # dataset = load_dataset("/root/.cache/huggingface/hub/datasets--trl-internal-testing--zen")
-    dataset = load_dataset(
-        "/root/.cache/huggingface/hub/datasets--trl-internal-testing--zen/snapshots/47aee340f33dd6161e2baa618240b8514666c822/standard_prompt_only"
-    )
+    dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(

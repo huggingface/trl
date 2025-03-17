@@ -102,7 +102,7 @@ def stateless_init_process_group(master_address, master_port, rank, world_size, 
 
 
 class VllmRemoteClient:
-    def __init__(self, nccl_link=False, target=None, deploy_msg=None, num_gpu=None):
+    def __init__(self, nccl_link=False, target=None, master_port=51216, deploy_msg=None, num_gpu=None):
         self.url = f"http://{target}/api/request"
         self.remote_vllm_ip = target.split(":")[0]
         # client is not group master, so it must take the last position in world_size
@@ -114,7 +114,7 @@ class VllmRemoteClient:
         if self.nccl_link:
             self.model_update_group = stateless_init_process_group(
                 master_address=self.remote_vllm_ip,
-                master_port=ENV["MASTER_PORT"],
+                master_port=master_port,
                 rank=self.client_world_rank,
                 world_size=num_gpu + 1,
                 device=torch.device("cuda:0"),  # todo: this can cause problems
@@ -271,7 +271,8 @@ class VllmRemote:
         try:
             from vllm import SamplingParams
 
-            assert self.init_vllm_max_model_len == self.vllm_max_model_len
+            if self.init_vllm_max_model_len != self.vllm_max_model_len:
+                logger.warning(f"init_vllm_max_model_len {self.init_vllm_max_model_len} != vllm_max_model_len {self.vllm_max_model_len}")
             # assert self.current_lora_path is not None
             # Sampling parameters
             self.sampling_params = SamplingParams(
@@ -350,11 +351,11 @@ def parse_args():
         help="Host IP address (default: 127.0.0.1)",
     )
     parser.add_argument(
-        "--api-port", default=os.environ.get("REMOTE_VLLM_HTTP_API_PORT", "8000"), help="API port (default: 8000)"
+        "--api-port", default=int(os.environ.get("REMOTE_VLLM_HTTP_API_PORT", "8000")), help="API port (default: 8000)"
     )
     parser.add_argument(
         "--master-port",
-        default=os.environ.get("REMOTE_VLLM_MASTER_PORT", "51216"),
+        default=int(os.environ.get("REMOTE_VLLM_MASTER_PORT", "51216")),
         help="Master port (default: 51216)",
     )
     parser.add_argument(
