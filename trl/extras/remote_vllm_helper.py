@@ -4,21 +4,24 @@ Easy vllm with nccl link with training process, build for LLM researchers
 @Binary-Husky
 
 launch vllm fastapi server (infer + nccl link)
-    ```
-    REMOTE_VLLM_NCCL_LINK=True \
-    REMOTE_VLLM_GPUS=4 \
-    CUDA_VISIBLE_DEVICES="0,1,2,3" \
-    REMOTE_VLLM_INIT_MODEL=/mnt/data_cpfs/model_cache/modelscope/hub/Qwen/Qwen/QwQ-32B \
-    REMOTE_VLLM_GPU_FRAG=0.95 \
-    REMOTE_VLLM_MAX_MODEL_LEN=8192 \
-    REMOTE_VLLM_MAX_LORA_RANK=0 \
-    REMOTE_VLLM_TEMPERATURE=0.9 \
-    REMOTE_VLLM_NUM_GENERATION=1 \
-    python vllm_ops.py
+    ```bash
+    python trl/extras/remote_vllm_helper.py \
+        --host-ip 127.0.0.1 \
+        --master-port 51216 \
+        --api-port 8000 \
+        --nccl-link True \
+        --model-path Qwen/Qwen/QwQ-32B \
+        --dtype auto \
+        --max-model-len 8192 \
+        --num-gpus 4 \
+        --gpu-memory-utilization 0.95 \
+        --max-lora-rank 0 \
+        --temperature 0.9 \
+        --num-generations 1
     ```
 
 client demo (infer + nccl link)
-    ```
+    ```python
     from trl.extras.remote_vllm_helper import VllmRemoteClient
     self.remote_llm = VllmRemoteClient(nccl_link=True)
     self.remote_llm.update_attr(key="temperature", value=args.temperature)
@@ -51,45 +54,27 @@ client demo (infer + nccl link)
 
 """
 
-
+import argparse
+import logging
 import os
 import sys
+import threading
 import time
+
+import cloudpickle as pickle
+import requests
 import torch
 import uvicorn
-import requests
-import threading
-import cloudpickle as pickle
+from fastapi import FastAPI, HTTPException, Request, Response
+from vllm.lora.request import LoRARequest
+from vllm.worker.worker import Worker
 
-# from loguru import logger
-import logging
+
 logger = logging.getLogger(__name__)
 
-from vllm.worker.worker import Worker
-from vllm.lora.request import LoRARequest
-from fastapi import FastAPI, Request, Response, HTTPException
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
-ENV = {
-    "REMOTE_VLLM_HOST_IP": os.environ.get("REMOTE_VLLM_HOST_IP", "127.0.0.1"),
-    "API_PORT": os.environ.get("REMOTE_VLLM_HTTP_API_PORT", "8000"),
-    "MASTER_PORT": 51216,
-
-    "NCCL_LINK": os.environ.get("REMOTE_VLLM_NCCL_LINK", "False") == "True",
-
-    "MODEL_PATH": os.environ.get("REMOTE_VLLM_INIT_MODEL"),
-    "MAX_MODEL_LEN": int(os.environ.get("REMOTE_VLLM_MAX_MODEL_LEN", "8192")),
-
-    "NUM_GPUS": int(os.environ.get("REMOTE_VLLM_GPUS", "1")),
-    "GPU_MEMORY_UTILIZATION": float(os.environ.get("REMOTE_VLLM_GPU_FRAG", "0.9")),
-
-    "MAX_LORA_RANK": int(os.environ.get("REMOTE_VLLM_MAX_LORA_RANK", "0")),
-
-    "MAX_COMPLETION_LENGTH": 1024,  # can be override dynamically
-    "TEMPERATURE": float(os.environ.get("REMOTE_VLLM_TEMPERATURE", "0.7")),  # can be override dynamically
-    "NUM_GENERATIONS": int(os.environ.get("REMOTE_VLLM_NUM_GENERATION", "1"))  # can be override dynamically
-}
 
 def get_remote_vllm_script_file():
     return f"{sys.executable} {os.path.abspath(__file__)}"
@@ -100,7 +85,7 @@ def stateless_init_process_group(master_address, master_port, rank, world_size, 
     vLLM provides `StatelessProcessGroup` to create a process group
     without considering the global process group in torch.distributed.
     It is recommended to create `StatelessProcessGroup`, and then initialize
-    the data-plane communication (NCCL) between external (train processes) 
+    the data-plane communication (NCCL) between external (train processes)
     and vLLM workers.
     """
     logger.warning("master_address " + str(master_address))
@@ -110,47 +95,43 @@ def stateless_init_process_group(master_address, master_port, rank, world_size, 
     logger.warning("device " + str(device))
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.utils import StatelessProcessGroup
-    pg = StatelessProcessGroup.create(host=master_address,
-                                      port=master_port,
-                                      rank=rank,
-                                      world_size=world_size)
+
+    pg = StatelessProcessGroup.create(host=master_address, port=master_port, rank=rank, world_size=world_size)
     pynccl = PyNcclCommunicator(pg, device=device)
     return pynccl
 
 
-class VllmRemoteClient():
-
+class VllmRemoteClient:
     def __init__(self, nccl_link=False, target=None, deploy_msg=None, num_gpu=None):
-
-        self.url = f'http://{target}/api/request'
-        self.remote_vllm_ip = target.split(':')[0]
+        self.url = f"http://{target}/api/request"
+        self.remote_vllm_ip = target.split(":")[0]
         # client is not group master, so it must take the last position in world_size
         self.client_world_rank = int(num_gpu)
         if deploy_msg:
             logger.warning(deploy_msg)
-        logger.warning('create process_group')
+        logger.warning("create process_group")
         self.nccl_link = nccl_link
         if self.nccl_link:
             self.model_update_group = stateless_init_process_group(
                 master_address=self.remote_vllm_ip,
                 master_port=ENV["MASTER_PORT"],
                 rank=self.client_world_rank,
-                world_size=num_gpu + 1, 
-                device=torch.device("cuda:0")   # todo: this can cause problems
+                world_size=num_gpu + 1,
+                device=torch.device("cuda:0"),  # todo: this can cause problems
             )
-        logger.warning('create process_group done')
+        logger.warning("create process_group done")
 
         while True:
             try:
                 self.check_online()
                 break
-            except:
+            except Exception as e:
                 logger.warning(f"waiting for vllm connection ({self.url}).")
-
+                logger.warning(e)
                 time.sleep(1)
 
     def connect(self, method, kwargs):
-        serialized_req = pickle.dumps({'cmd': method, 'kwargs': kwargs})
+        serialized_req = pickle.dumps({"cmd": method, "kwargs": kwargs})
         logger.warning(f"vllm command ({method}) has been sent")
         response = requests.post(self.url, data=serialized_req)
         logger.warning(f"vllm command ({method}) response received")
@@ -161,31 +142,31 @@ class VllmRemoteClient():
     def generate(self, all_prompts_text):
         try:
             return self.connect("generate", {"all_prompts_text": all_prompts_text})
-        except:
+        except Exception:
             logger.exception("unable to generate")
 
     def update_lora_param(self, lora_path):
         try:
             return self.connect("update_lora_param", {"lora_path": lora_path})
-        except:
+        except Exception:
             logger.exception("unable to update_lora_param")
 
     def update_attr(self, key, value):
         try:
             return self.connect("update_attr", {"key": key, "value": value})
-        except:
+        except Exception:
             logger.exception("unable to update_attr")
 
     def get_model(self):
         try:
             return self.connect("get_model", {})
-        except:
+        except Exception:
             logger.exception("unable to get_model")
 
     def prepare_advanced_update_weight(self, name, dtype, shape):
         try:
             return self.connect("prepare_advanced_update_weight", {"name": name, "dtype": dtype, "shape": shape})
-        except:
+        except Exception:
             logger.exception("unable to prepare_advanced_update_weight")
 
     def advanced_update_param(self, name, p):
@@ -205,15 +186,16 @@ class VllmRemoteClient():
 class MyWorker(Worker):
     """
     The `MyWorker` class inherits from `Worker` to provide custom functions.
-    For simplicity, we define the `MyWorker` class in this self-contained 
-    script. Normally, we should define the `MyWorker` class in a separate 
-    file and pass the qualified name of the class to the `worker_cls` 
+    For simplicity, we define the `MyWorker` class in this self-contained
+    script. Normally, we should define the `MyWorker` class in a separate
+    file and pass the qualified name of the class to the `worker_cls`
     parameter.
     """
 
     def init_weight_update_group(self, master_address, master_port, rank_offset, world_size):
         logger.warning("worker init")
         from vllm.distributed.parallel_state import get_world_group
+
         rank = get_world_group().rank + rank_offset
         self.model_update_group = stateless_init_process_group(
             master_address,
@@ -236,10 +218,20 @@ class MyWorker(Worker):
         del weight
 
 
-class VllmRemote():
-    def __init__(self, name_or_path, vllm_device, vllm_gpu_memory_utilization, vllm_dtype, vllm_max_model_len,
-                max_completion_length, temperature, guided_decoding, num_generations):
+class VllmRemote:
+    def __init__(
+        self,
+        name_or_path,
+        vllm_gpu_memory_utilization,
+        vllm_dtype,
+        vllm_max_model_len,
+        max_completion_length,
+        temperature,
+        guided_decoding,
+        num_generations,
+    ):
         from vllm import LLM
+
         logger.warning(f"llm init tensor_parallel_size {ENV['NUM_GPUS']}")
         self.base_model_name_or_path = name_or_path
         self.llm = LLM(
@@ -251,6 +243,7 @@ class VllmRemote():
             worker_cls=MyWorker,
             enforce_eager=True,
             max_lora_rank=ENV["MAX_LORA_RANK"],
+            dtype=vllm_dtype,
         )
 
         logger.warning("llm init end")
@@ -268,13 +261,16 @@ class VllmRemote():
         if ENV["NCCL_LINK"]:
             rank_offset = 0
             world_size = ENV["NUM_GPUS"] + 1
-            logger.warning('create process_group')
-            self.llm.collective_rpc("init_weight_update_group", args=(self.master_address, self.master_port, rank_offset, world_size))
-            logger.warning('create process_group done')
+            logger.warning("create process_group")
+            self.llm.collective_rpc(
+                "init_weight_update_group", args=(self.master_address, self.master_port, rank_offset, world_size)
+            )
+            logger.warning("create process_group done")
 
     def generate(self, all_prompts_text):
         try:
             from vllm import SamplingParams
+
             assert self.init_vllm_max_model_len == self.vllm_max_model_len
             # assert self.current_lora_path is not None
             # Sampling parameters
@@ -288,19 +284,23 @@ class VllmRemote():
             ordered_set_of_prompts = list(dict.fromkeys(all_prompts_text))
             if self.current_lora_path:
                 all_outputs = self.llm.generate(
-                    ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=True,
-                    lora_request=LoRARequest("sql_adapter", self.lora_cnt, self.current_lora_path)
+                    ordered_set_of_prompts,
+                    sampling_params=self.sampling_params,
+                    use_tqdm=True,
+                    lora_request=LoRARequest("sql_adapter", self.lora_cnt, self.current_lora_path),
                 )
             else:
                 all_outputs = self.llm.generate(
-                    ordered_set_of_prompts, sampling_params=self.sampling_params, use_tqdm=True,
+                    ordered_set_of_prompts,
+                    sampling_params=self.sampling_params,
+                    use_tqdm=True,
                 )
             completion_ids = []
             for outputs in all_outputs:
                 for output in outputs.outputs:
                     completion_ids.append(output.token_ids)
             return completion_ids
-        except:
+        except Exception:
             logger.exception("find error")
 
     def update_param(self, state_dict):
@@ -309,46 +309,129 @@ class VllmRemote():
             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
             llm_model.load_weights(state_dict.items())
             logger.warning("remote: update parm complete")
-        except:
+        except Exception:
             logger.exception("find error")
 
     def get_model(self):
         try:
             logger.warning("remote: get_model")
             return self.base_model_name_or_path
-        except:
+        except Exception:
             logger.exception("find error")
-
 
     def update_attr(self, key, value):
         setattr(self, key, value)
 
     def update_lora_param(self, lora_path):
-        assert (ENV["MAX_LORA_RANK"] != 0)
+        assert ENV["MAX_LORA_RANK"] != 0
         try:
             import shutil
+
             if self.current_lora_path and self.current_lora_path != lora_path:
                 shutil.rmtree(self.current_lora_path)
-        except:
+        except Exception:
             pass
         self.current_lora_path = lora_path
         self.lora_cnt += 1
 
     def prepare_advanced_update_weight(self, name, dtype, shape):
-        assert (ENV["MAX_LORA_RANK"] == 0)
+        assert ENV["MAX_LORA_RANK"] == 0
         self.llm.collective_rpc("update_weight", args=(name, dtype, shape))
 
     def check_online(self, check_online):
         return True
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="vLLM Remote Server Configuration")
+    parser.add_argument(
+        "--host-ip",
+        default=os.environ.get("REMOTE_VLLM_HOST_IP", "127.0.0.1"),
+        help="Host IP address (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--api-port", default=os.environ.get("REMOTE_VLLM_HTTP_API_PORT", "8000"), help="API port (default: 8000)"
+    )
+    parser.add_argument(
+        "--master-port",
+        default=os.environ.get("REMOTE_VLLM_MASTER_PORT", "51216"),
+        help="Master port (default: 51216)",
+    )
+    parser.add_argument(
+        "--nccl-link",
+        type=lambda x: x.lower() == "true",
+        default=os.environ.get("REMOTE_VLLM_NCCL_LINK", "False") == "True",
+        help="Enable NCCL link (default: False)",
+    )
+    parser.add_argument(
+        "--model-path",
+        default=os.environ.get("REMOTE_VLLM_INIT_MODEL"),
+        required=not bool(os.environ.get("REMOTE_VLLM_INIT_MODEL")),
+        help="Path to the model",
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=int(os.environ.get("REMOTE_VLLM_MAX_MODEL_LEN", "8192")),
+        help="Maximum model length (default: 8192)",
+    )
+    parser.add_argument(
+        "--num-gpus",
+        type=int,
+        default=int(os.environ.get("REMOTE_VLLM_GPUS", "1")),
+        help="Number of GPUs (default: 1)",
+    )
+    parser.add_argument(
+        "--gpu-memory-utilization",
+        type=float,
+        default=float(os.environ.get("REMOTE_VLLM_GPU_FRAG", "0.9")),
+        help="GPU memory utilization (default: 0.9)",
+    )
+    parser.add_argument(
+        "--max-lora-rank",
+        type=int,
+        default=int(os.environ.get("REMOTE_VLLM_MAX_LORA_RANK", "0")),
+        help="Maximum LoRA rank (default: 0)",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=float(os.environ.get("REMOTE_VLLM_TEMPERATURE", "0.7")),
+        help="Temperature for sampling (default: 0.7)",
+    )
+    parser.add_argument(
+        "--num-generations",
+        type=int,
+        default=int(os.environ.get("REMOTE_VLLM_NUM_GENERATION", "1")),
+        help="Number of generations (default: 1)",
+    )
+
+    args = parser.parse_args()
+    return args
+
+
 if __name__ == "__main__":
+    args = parse_args()
+    ENV = {
+        "REMOTE_VLLM_HOST_IP": args.host_ip,
+        "API_PORT": args.api_port,
+        "MASTER_PORT": args.master_port,
+        "NCCL_LINK": args.nccl_link,
+        "MODEL_PATH": args.model_path,
+        "MAX_MODEL_LEN": args.max_model_len,
+        "NUM_GPUS": args.num_gpus,
+        "GPU_MEMORY_UTILIZATION": args.gpu_memory_utilization,
+        "MAX_LORA_RANK": args.max_lora_rank,
+        "MAX_COMPLETION_LENGTH": 1024,  # can be override dynamically
+        "TEMPERATURE": args.temperature,  # can be override dynamically
+        "NUM_GENERATIONS": args.num_generations,  # can be override dynamically
+    }
+
     request_lock = threading.Lock()
     app = FastAPI()
 
     vr = VllmRemote(
         ENV["MODEL_PATH"],
-        None,
         ENV["GPU_MEMORY_UTILIZATION"],
         "auto",
         vllm_max_model_len=ENV["MAX_MODEL_LEN"],
@@ -371,18 +454,15 @@ if __name__ == "__main__":
             try:
                 req_obj = pickle.loads(body)
             except Exception as e:
-                raise HTTPException(status_code=400, detail=f"unable to unpickle command: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"unable to unpickle command: {str(e)}") from e
 
             with request_lock:
                 logger.warning(req_obj["cmd"])
                 result = process_command(req_obj["cmd"], req_obj["kwargs"])
-                return Response(
-                    content=pickle.dumps(result),
-                    media_type="application/octet-stream"
-                )
+                return Response(content=pickle.dumps(result), media_type="application/octet-stream")
         except Exception as e:
             logger.warning(e)
-            raise HTTPException(status_code=500, detail=f"error when dealing with: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"error when dealing with: {str(e)}") from e
 
     def run_server():
         uvicorn.run(app, host="0.0.0.0", port=int(ENV["API_PORT"]), log_level="info")
