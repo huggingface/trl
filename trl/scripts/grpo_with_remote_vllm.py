@@ -35,14 +35,15 @@
     (2 GPUS for VLLM)
 ---
     CUDA_VISIBLE_DEVICES='4,5' \
-    REMOTE_VLLM_INIT_MODEL='Qwen/Qwen2-7B-Instruct' \
-    REMOTE_VLLM_NCCL_LINK=True \
-    REMOTE_VLLM_GPUS=2 \
-    REMOTE_VLLM_GPU_FRAG=0.9 \
-    REMOTE_VLLM_MAX_MODEL_LEN=4096 \
-    REMOTE_VLLM_MAX_LORA_RANK=0 \\   # <--- never change this, even if you use lora
-    REMOTE_VLLM_TEMPERATURE=0.9 REMOTE_VLLM_NUM_GENERATION=8 \
-    python3 trl/extras/remote_vllm_helper.py
+    python3 trl/extras/remote_vllm_helper.py \
+        --model-path Qwen/Qwen2-7B-Instruct \
+        --nccl-link True \
+        --dtype auto \
+        --max-model-len 4096 \
+        --num-gpus 2 \
+        --gpu-memory-utilization 0.9 \
+        --temperature 0.9 \
+        --num-generations 8
 
 ------------------------------------------------------------------------------------------------------------
 2 machine       | 1 for training, 1 for VLLM      | using NCCL to deliver param updates
@@ -55,14 +56,14 @@
     CUDA_VISIBLE_DEVICES='0,1,2,3,4,5,6,7' \
     accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml --num_processes=8 \
         grpo_with_remote_vllm.py \
-        --model_name_or_path /mnt/data_cpfs/model_cache/modelscope/hub/Qwen/Qwen/Qwen2___5-7B-Instruct/ \
+        --model_name_or_path Qwen/Qwen2-7B-Instruct \
         --dataset_name "trl-internal-testing/zen" \
         --output_dir './mytests' \
         --bf16 \
         --use_remote_vllm=True \
         --vllm_max_model_len 4096 \
         --remote_vllm_num_gpus=1 \
-        --remote_vllm_ip_port='22.6.225.225:8000'
+        --remote_vllm_ip_port='x.x.x.x:8000'
 
 ---
 (2) start VLLM script (do not run the commandline below, it's only a demo, the true commandline will be `printed` by the MAIN TRAINING script.):
@@ -85,7 +86,7 @@
         --main_process_ip="x.x.x.x" \
         --num_processes=16 \
         grpo_with_remote_vllm.py \
-        --model_name_or_path /mnt/data_cpfs/model_cache/modelscope/hub/Qwen/Qwen/Qwen2___5-7B-Instruct/ \
+        --model_name_or_path Qwen/Qwen2-7B-Instruct \
         --dataset_name "trl-internal-testing/zen" \
         --output_dir './mytests' \
         --bf16 \
