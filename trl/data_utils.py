@@ -513,9 +513,8 @@ def pack_dataset(dataset: DatasetType, seq_length: int, map_kwargs: Optional[dic
                         column = column.combine_chunks()
                     num_elements = len(column.values)
                     dtype = column.offsets.type.to_pandas_dtype()  # np.int32 or np.int64
-                    offsets = np.arange(0, num_elements + 1, seq_length, dtype=dtype)
-                    if offsets[-1] != num_elements:
-                        offsets = np.concatenate((offsets, [num_elements]))
+                    offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
+                    offsets = np.concatenate((offsets, [num_elements]))
                     column = type(column).from_arrays(offsets, column.values)
                 packed_columns.append(column)
             return pa.Table.from_arrays(packed_columns, names=examples.column_names)
