@@ -42,7 +42,13 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
-from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples, pack_examples_smarter
+from ..data_utils import (
+    is_conversational,
+    maybe_apply_chat_template,
+    maybe_convert_to_chatml,
+    pack_examples,
+    pack_examples_smarter,
+)
 from .sft_config import SFTConfig
 from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
 
@@ -358,7 +364,7 @@ class SFTTrainer(Trainer):
         packing: bool,
         formatting_func: Optional[Callable[[dict], str]],
         dataset_name: str,
-        pack_smart: bool = False
+        pack_smart: bool = False,
     ) -> Union[Dataset, IterableDataset]:
         # Convert the dataset to an IterableDataset if it is a ConstantLengthDataset
         if isinstance(dataset, ConstantLengthDataset):

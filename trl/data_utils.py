@@ -515,10 +515,10 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
     return example
 
 
-
 def find_largest_leq_k(ind_len_tuples, k):
     valid = [(i, t[0]) for i, t in enumerate(ind_len_tuples) if t[0] <= k]
     return max(valid, key=lambda x: x[1])[0] if valid else -1
+
 
 def greedy_knapsack(numbers: list[int], capacity: int) -> list[list]:
     """
@@ -573,7 +573,7 @@ def pack_examples_smarter(examples: dict[str, list[list]], seq_length: int) -> d
     """
     len_inputs = [(len(v), ind) for ind, v in enumerate(next(iter(examples.values())))]
     knapsacks, larger_knapsacks = greedy_knapsack(len_inputs, seq_length)
-    
+
     updated_examples = {k: [] for k in examples}
     for knapsack in knapsacks:
         temp_batch = {k: [] for k in examples}
@@ -586,7 +586,7 @@ def pack_examples_smarter(examples: dict[str, list[list]], seq_length: int) -> d
     for knapsack in larger_knapsacks:
         list_index = knapsack[0]
         length = len(next(iter(examples.values()))[list_index])
-        num_chunks = (length + seq_length - 1) // seq_length 
+        num_chunks = (length + seq_length - 1) // seq_length
 
         for chunk_idx in range(num_chunks):
             temp_batch = {k: [] for k in examples}
@@ -598,5 +598,3 @@ def pack_examples_smarter(examples: dict[str, list[list]], seq_length: int) -> d
                 updated_examples[k].append(temp_batch[k])
 
     return updated_examples
-
-
