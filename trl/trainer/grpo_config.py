@@ -245,9 +245,7 @@ class GRPOConfig(TrainingArguments):
     )
     remote_vllm_ip_port: Optional[str] = field(
         default="127.0.0.1:8000",
-        metadata={
-            "help": "Required when `use_remote_vllm`. The ip and port of the vLLM server. "
-        },
+        metadata={"help": "Required when `use_remote_vllm`. The ip and port of the vLLM server. "},
     )
     remote_vllm_num_gpus: Optional[int] = field(
         default=1,

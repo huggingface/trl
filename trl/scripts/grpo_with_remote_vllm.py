@@ -41,7 +41,7 @@
     REMOTE_VLLM_GPUS=2 \
     REMOTE_VLLM_GPU_FRAG=0.9 \
     REMOTE_VLLM_MAX_MODEL_LEN=4096 \
-    REMOTE_VLLM_MAX_LORA_RANK=0 \   # <--- never change this, even if you use lora
+    REMOTE_VLLM_MAX_LORA_RANK=0 \\   # <--- never change this, even if you use lora
     REMOTE_VLLM_TEMPERATURE=0.9 REMOTE_VLLM_NUM_GENERATION=8 \
     python3 /your/path/to/trl/extras/remote_vllm_helper.py
 
@@ -109,26 +109,24 @@
 
 """
 
-
 import argparse
-from dataclasses import dataclass, field
-from typing import Optional
 
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
 
+
 def len_reward(completions, **kwargs):
-    print(completions)
     return [len(completion) for completion in completions]
 
 
 def main(script_args, training_args, model_args):
     # Load the dataset
     # dataset = load_dataset("/root/.cache/huggingface/hub/datasets--trl-internal-testing--zen")
-    dataset = load_dataset("/root/.cache/huggingface/hub/datasets--trl-internal-testing--zen/snapshots/47aee340f33dd6161e2baa618240b8514666c822/standard_prompt_only")
-
+    dataset = load_dataset(
+        "/root/.cache/huggingface/hub/datasets--trl-internal-testing--zen/snapshots/47aee340f33dd6161e2baa618240b8514666c822/standard_prompt_only"
+    )
 
     # Load a pretrained model
     model = AutoModelForCausalLM.from_pretrained(
@@ -137,7 +135,6 @@ def main(script_args, training_args, model_args):
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
-
 
     # Initialize the GRPO trainer
     trainer = GRPOTrainer(

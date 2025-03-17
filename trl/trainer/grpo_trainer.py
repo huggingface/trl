@@ -25,6 +25,7 @@ import torch
 import torch.utils.data
 import transformers
 from accelerate import PartialState
+from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
@@ -45,9 +46,6 @@ from transformers import (
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
-from accelerate.logging import get_logger
-logger = get_logger(__name__)
-
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..import_utils import is_rich_available, is_vllm_available
@@ -61,6 +59,9 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
 )
+
+
+logger = get_logger(__name__)
 
 
 if is_peft_available():
@@ -545,18 +546,25 @@ class GRPOTrainer(Trainer):
         elif self.use_remote_vllm:
             if self.accelerator.is_main_process:
                 from trl.extras.remote_vllm_helper import VllmRemoteClient, get_remote_vllm_script_file
+
                 assert args.vllm_max_model_len is not None, "vllm_max_model_len must be set when using remote vllm"
                 # import pdb
-                remote_gpus = ','.join([str(i) for i in range(args.remote_vllm_num_gpus)])
-                deploy_msg = f"You have chosen to use a remote vllm to rollout completions. \n" \
-                f"Please run the vllm by running following command on the machine you selected ({args.remote_vllm_ip_port}): \n*******\n" \
-                f"CUDA_VISIBLE_DEVICES='{remote_gpus}' REMOTE_VLLM_INIT_MODEL='{self.model.name_or_path}' REMOTE_VLLM_NCCL_LINK=True REMOTE_VLLM_GPUS={args.remote_vllm_num_gpus} " \
-                f"REMOTE_VLLM_GPU_FRAG={args.vllm_gpu_memory_utilization} REMOTE_VLLM_MAX_MODEL_LEN={args.vllm_max_model_len} REMOTE_VLLM_MAX_LORA_RANK=0 REMOTE_VLLM_HOST_IP='0.0.0.0' " \
-                f"REMOTE_VLLM_TEMPERATURE={args.temperature} REMOTE_VLLM_NUM_GENERATION={args.num_generations} {get_remote_vllm_script_file()}\n*******\n"
-                f"Note: 1. It is OK to run this commandline even before training starts, "
-                f"2. you have to manually shut it down when the training is done, " \
-                f"because some may find it useful to preserve this remote VLLM instance for evaluation purposes."
-                self.vllm_with_nccl = VllmRemoteClient(nccl_link=True, target=args.remote_vllm_ip_port, deploy_msg=deploy_msg, num_gpu=args.remote_vllm_num_gpus)
+                remote_gpus = ",".join([str(i) for i in range(args.remote_vllm_num_gpus)])
+                deploy_msg = (
+                    f"You have chosen to use a remote vllm to rollout completions. \n"
+                    f"Please run the vllm by running following command on the machine you selected ({args.remote_vllm_ip_port}): \n*******\n"
+                    f"CUDA_VISIBLE_DEVICES='{remote_gpus}' REMOTE_VLLM_INIT_MODEL='{self.model.name_or_path}' REMOTE_VLLM_NCCL_LINK=True REMOTE_VLLM_GPUS={args.remote_vllm_num_gpus} "
+                    f"REMOTE_VLLM_GPU_FRAG={args.vllm_gpu_memory_utilization} REMOTE_VLLM_MAX_MODEL_LEN={args.vllm_max_model_len} REMOTE_VLLM_MAX_LORA_RANK=0 REMOTE_VLLM_HOST_IP='0.0.0.0' "
+                    f"REMOTE_VLLM_TEMPERATURE={args.temperature} REMOTE_VLLM_NUM_GENERATION={args.num_generations} {get_remote_vllm_script_file()}\n*******\n"
+                )
+                "Note: 1. It is OK to run this commandline even before training starts, "
+                "2. you have to manually shut it down when the training is done, because some may find it useful to preserve this remote VLLM instance for evaluation purposes."
+                self.vllm_with_nccl = VllmRemoteClient(
+                    nccl_link=True,
+                    target=args.remote_vllm_ip_port,
+                    deploy_msg=deploy_msg,
+                    num_gpu=args.remote_vllm_num_gpus,
+                )
                 self.vllm_with_nccl.update_attr(key="temperature", value=args.temperature)
                 self.vllm_with_nccl.update_attr(key="max_completion_length", value=self.max_completion_length)
                 self.vllm_with_nccl.update_attr(key="vllm_max_model_len", value=args.vllm_max_model_len)
@@ -696,32 +704,38 @@ class GRPOTrainer(Trainer):
         logits = logits / self.temperature
         return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
-
     @profiling_decorator
     def _move_model_to_remote_vllm(self):
         import deepspeed
         import tqdm
+
         assert self.use_remote_vllm
 
         try:
             zero_stage = self.accelerator.state.deepspeed_plugin.zero_stage
-        except:
+        except Exception:
             zero_stage = -1
 
         if zero_stage == 3 and (not is_peft_model(self.model)):
-            logger.warning('[_move_model_to_remote_vllm] This case (zero3) is well optimized.')
-            for name, param in tqdm.tqdm(self.model.named_parameters(), total=len(list(self.model.named_parameters()))):
-                with deepspeed.zero.GatheredParameters([param], enabled=self.accelerator.state.deepspeed_plugin.zero_stage == 3):
+            logger.warning("[_move_model_to_remote_vllm] This case (zero3) is well optimized.")
+            for name, param in tqdm.tqdm(
+                self.model.named_parameters(), total=len(list(self.model.named_parameters()))
+            ):
+                with deepspeed.zero.GatheredParameters(
+                    [param], enabled=self.accelerator.state.deepspeed_plugin.zero_stage == 3
+                ):
                     if self.accelerator.is_main_process:
-                        logger.debug(f'advanced_update_param {name}')
+                        logger.debug(f"advanced_update_param {name}")
                         weight = param.data
                         assert weight.shape == param.ds_shape
                         self.vllm_with_nccl.advanced_update_param(name, weight)
-                        logger.debug(f'advanced_update_param {name} completed')
+                        logger.debug(f"advanced_update_param {name} completed")
         # elif zero_stage == 3 and is_peft_model(self.model):
         #     # working in progress, currently using the non-zero3 path
         else:
-            logger.warning('[_move_model_to_remote_vllm] This case (non-zero3 / lora) is not well-optimized. In case of GPU OOM, switch to zero3.')
+            logger.warning(
+                "[_move_model_to_remote_vllm] This case (non-zero3 / lora) is not well-optimized. In case of GPU OOM, switch to zero3."
+            )
             with unwrap_model_for_generation(
                 self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
             ) as unwrapped_model:
@@ -732,7 +746,8 @@ class GRPOTrainer(Trainer):
                     state_dict = unwrapped_model.state_dict()
                     # Remove base_model and base_layer prefixes
                     state_dict = {
-                        k.removeprefix("base_model.model.").replace(".base_layer", ""): v for k, v in state_dict.items()
+                        k.removeprefix("base_model.model.").replace(".base_layer", ""): v
+                        for k, v in state_dict.items()
                     }
                     # Remove values with adapter prefix (example: "_lora")
                     state_dict = {k: v for k, v in state_dict.items() if unwrapped_model.prefix not in k}
@@ -746,16 +761,17 @@ class GRPOTrainer(Trainer):
                     state_dict = unwrapped_model.state_dict()
                 if self.accelerator.is_main_process:
                     for name, param in state_dict.items():
-                        logger.debug(f'advanced_update_param {name}')
+                        logger.debug(f"advanced_update_param {name}")
                         weight = param.data
                         self.vllm_with_nccl.advanced_update_param(name, weight)
-                        logger.debug(f'advanced_update_param {name} completed')
+                        logger.debug(f"advanced_update_param {name} completed")
                 # Unmerge the adapter to restore the model to its original state.
                 # This must be done after loading weights to ensure they correspond to the merged state.
                 if is_peft_model(unwrapped_model):
                     unwrapped_model.unmerge_adapter()
-        logger.warning('all param updated')
+        logger.warning("all param updated")
         import gc
+
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -874,7 +890,12 @@ class GRPOTrainer(Trainer):
                 for ids in completion_ids:
                     if len(ids) == 0:
                         raise RuntimeError("wrong num_generations")
-                logger.debug("Generated sample:" + str(ordered_set_of_prompts[0]) + "\n\n" + str(self.processing_class.batch_decode(completion_ids)[0]))
+                logger.debug(
+                    "Generated sample:"
+                    + str(ordered_set_of_prompts[0])
+                    + "\n\n"
+                    + str(self.processing_class.batch_decode(completion_ids)[0])
+                )
             else:
                 completion_ids = [None] * len(all_prompts_text)
             # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
