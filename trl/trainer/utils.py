@@ -229,11 +229,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         flattened_position_ids.size(), device=flattened_position_ids.device, dtype=torch.int32
                     ),
                 )
-            )
+            ).unsqueeze(0)
             batch["cu_seq_lens_k"] = batch["cu_seq_lens_q"]
 
             # Determine maximum sequence lengths to prevent graph breaks during further computations.
-            batch["max_length_k"] = flattened_position_ids.max().item() + 1
+            batch["max_length_k"] = torch.tensor([flattened_position_ids.max().item() + 1])
             batch["max_length_q"] = batch["max_length_k"]
 
         return batch
@@ -920,6 +920,7 @@ def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
         lora_dropout=model_args.lora_dropout,
         bias="none",
         use_rslora=model_args.use_rslora,
+        use_dora=model_args.use_dora,
         modules_to_save=model_args.lora_modules_to_save,
     )
 

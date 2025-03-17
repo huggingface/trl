@@ -30,6 +30,7 @@ from transformers import (
     BaseImageProcessor,
     DataCollator,
     DataCollatorForLanguageModeling,
+    DataCollatorWithFlattening,
     FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -40,7 +41,7 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
 from .sft_config import SFTConfig
@@ -50,9 +51,6 @@ from .utils import ConstantLengthDataset, generate_model_card, get_comet_experim
 if is_peft_available():
     import peft
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
-
-if is_liger_kernel_available():
-    from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 if is_wandb_available():
     import wandb
@@ -203,11 +201,37 @@ class SFTTrainer(Trainer):
                     )
 
         # Data collator
+        if args.padding_free:
+            if data_collator is not None:
+                raise ValueError("Passing a custom data collator is not supported when using padding-free.")
+            if args.packing:
+                warnings.warn(
+                    "You are passing `packing=True` and `padding_free=True` which is not recommended. Please refer "
+                    "to the documentation to understand why this is not recommended."
+                )
+            if model.config._attn_implementation != "flash_attention_2":
+                warnings.warn(
+                    "Padding-free training is enabled, but the attention implementation is not set to "
+                    "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
+                    "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
+                    "other implementations may lead to unexpected behavior. To ensure compatibility, set "
+                    "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
+                    "attention mechanism can handle flattened sequences."
+                )
+            if args.per_device_train_batch_size == 1:
+                warnings.warn(
+                    "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
+                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "to at least 2."
+                )
+            data_collator = DataCollatorWithFlattening()
+
         if data_collator is None:
             data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
         # Initialize the metrics
-        self._metrics = defaultdict(list)
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
 
         # Initialize the Trainer. Parent class will handle:
         # - DeepSpeed configuration (through create_accelerator_and_postprocess)
@@ -264,12 +288,7 @@ class SFTTrainer(Trainer):
             model_init_kwargs["use_cache"] = False
 
         # Create model
-        if args.use_liger:
-            if not is_liger_kernel_available():
-                raise ImportError("Please install Liger-kernel for use_liger=True")
-            model = AutoLigerKernelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+        model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
         return model
 
     def _prepare_peft_model(self, model: PreTrainedModel, peft_config: Any, args: SFTConfig) -> PreTrainedModel:
@@ -393,8 +412,9 @@ class SFTTrainer(Trainer):
                 dataset = dataset.map(_func, batched=batched, **map_kwargs)
 
             # If the dataset is prompt-completion, convert it to language modeling type
-            if "prompt" in dataset.column_names and "completion" in dataset.column_names:
-                key = "messages" if is_conversational(dataset[0]) else "text"
+            first_example = next(iter(dataset))
+            if "prompt" in first_example.keys() and "completion" in first_example.keys():
+                key = "messages" if is_conversational(first_example) else "text"
 
                 def concat_prompt_completion(example):
                     return {key: example["prompt"] + example["completion"]}
@@ -405,19 +425,21 @@ class SFTTrainer(Trainer):
                 # Convert the dataset to ChatML if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+                column_names = next(iter(dataset)).keys()
                 dataset = dataset.map(
                     maybe_convert_to_chatml,
-                    remove_columns="conversations" if "conversations" in dataset.column_names else None,
+                    remove_columns="conversations" if "conversations" in column_names else None,
                     **map_kwargs,
                 )
 
                 # Apply the chat template if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+                column_names = next(iter(dataset)).keys()
                 dataset = dataset.map(
                     maybe_apply_chat_template,
                     fn_kwargs={"tokenizer": processing_class},
-                    remove_columns="messages" if "messages" in dataset.column_names else None,  # renamed to "text"
+                    remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                     **map_kwargs,
                 )
 
@@ -426,7 +448,14 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize(example, processing_class, dataset_text_field):
-                    return processing_class(example[dataset_text_field])
+                    processed = processing_class(text=example[dataset_text_field])
+                    if (
+                        processing_class.eos_token_id is not None
+                        and processed["input_ids"][-1] != processing_class.eos_token_id
+                    ):
+                        processed["input_ids"] = processed["input_ids"] + [processing_class.eos_token_id]
+                        processed["attention_mask"] = processed["attention_mask"] + [1]
+                    return processed
 
                 dataset = dataset.map(
                     tokenize,
@@ -456,8 +485,9 @@ class SFTTrainer(Trainer):
                     fn_kwargs={"max_length": args.max_length},
                     **map_kwargs,
                 )
+
             # For Liger kernel, ensure only input_ids is present
-            if args.use_liger:
+            if args.use_liger_kernel:
                 dataset = dataset.select_columns("input_ids")
 
         return dataset
@@ -466,12 +496,26 @@ class SFTTrainer(Trainer):
         """
         Compute training loss and additionally compute token accuracies
         """
+        mode = "eval" if self.control.should_evaluate else "train"
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
+        if mode == "train":
+            # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
+            # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
+            if "attention_mask" in inputs:
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
+            elif "position_ids" in inputs:
+                num_tokens_in_batch = (
+                    self.accelerator.gather_for_metrics(torch.tensor(inputs["position_ids"].size(1))).sum().item()
+                )
+            else:
+                raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+            self._total_train_tokens += num_tokens_in_batch
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.args.use_liger:
+        if "labels" in inputs and not self.args.use_liger_kernel:
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
@@ -491,17 +535,19 @@ class SFTTrainer(Trainer):
             total_tokens = self.accelerator.gather_for_metrics(total_tokens)
 
             # Compute the mean token accuracy and log it
-            accuracy = (correct_tokens.sum() / total_tokens.sum()).item() if total_tokens.sum() > 0 else 0.0
-            self._metrics["mean_token_accuracy"].append(accuracy)
+            total_sum = total_tokens.sum()
+            accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
+        mode = "eval" if self.control.should_evaluate else "train"
+        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
-        if next(iter(logs.keys())).startswith("eval_"):
+        if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
         logs = {**logs, **metrics}
@@ -509,7 +555,7 @@ class SFTTrainer(Trainer):
             super().log(logs, start_time)
         else:  # transformers<=4.46
             super().log(logs)
-        self._metrics.clear()
+        self._metrics[mode].clear()
 
     def create_model_card(
         self,
