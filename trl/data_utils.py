@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from typing import Any, Callable, Optional, Sequence, TypeVar, Union
-import bisect
 
 from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizer
@@ -567,7 +566,7 @@ def pack_examples_smarter(examples: dict[str, list[list]], seq_length: int) -> d
     ...     "attention_mask": [[0, 1, 1, 1, 1, 1, 1], [0, 0, 1]],
     ... }
     >>> pack_examples_smarter(examples, seq_length=4)
-    {'input_ids': [[1, 2, 3, 4], [8, 9, 10]], 'attention_mask': [[0, 1, 1, 1, 1], [0, 0, 1]]}
+    {'input_ids': [[1, 2, 3, 4], [5, 6, 7] [8, 9, 10]], 'attention_mask': [[0, 1, 1, 1, 1], [1, 1, 1], [0, 0, 1]]}
     >>> pack_examples(examples, seq_length=4)
     {'input_ids': [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]], 'attention_mask': [[0, 1, 1, 1], [1, 1, 1, 0], [0, 1]]}
     ```
