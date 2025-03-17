@@ -19,7 +19,7 @@ launch vllm fastapi server (infer + nccl link)
 
 client demo (infer + nccl link)
     ```
-    from trl.vllm_ops import VllmRemoteClient
+    from trl.extras.remote_vllm_helper import VllmRemoteClient
     self.remote_llm = VllmRemoteClient(nccl_link=True)
     self.remote_llm.update_attr(key="temperature", value=args.temperature)
     self.remote_llm.update_attr(key="max_completion_length", value=self.max_completion_length)
