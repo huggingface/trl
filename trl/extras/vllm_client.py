@@ -29,14 +29,21 @@ class VLLMClient:
     weights in a distributed setting. Before using it, make sure to start the vLLM server with `trl vllm-serve`.
 
     Args:
-        server_address (`str`, *optional*, defaults to `"0.0.0.0:8000"`):
-            Address of the VLLM server to connect to.
+        host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            IP address of the vLLM server.
+        server_port (`int`, *optional*, defaults to `8000`):
+            Port number of the vLLM server.
+        group_port (`int`, *optional*, defaults to `51216`):
+            Port number for the weight update group.
 
     Examples:
         Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
 
         ```sh
-        trl vllm-serve --model Qwen/Qwen2.5-7B
+        $ trl vllm-serve --model Qwen/Qwen2.5-7B
+        ...
+        INFO:     Application startup complete.
+        INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
         ```
 
         Use the client to generate completions and update model weights:
@@ -45,17 +52,20 @@ class VLLMClient:
         >>> from trl.extras.vllm_client import VLLMClient
         >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
-        [[2980, 498, 1492, 752, 448, 264, 13027, 8645, 30, 358, 2776, 4460, 311, 3270, 264, 2025], [911, 7988, 1251, 382, 3838, 653, 498, 1618, 4325, 879, 2581, 20027, 264, 21428, 30, 362]]
+        [[2980, 498, 1492, 752, 448, 264, 13027, 8645, 30, 358, 2776, 4460, 311, 3270, 264, 2025],
+         [911, 7988, 1251, 382, 3838, 653, 498, 1618, 4325, 879, 2581, 20027, 264, 21428, 30, 362]]
 
         >>> from transformers import AutoModelForCausalLM
-        >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
+        >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B", device_map="cuda")
         >>> client.update_model_params(model)
         ```
     """
 
-    def __init__(self, server_address: str = "0.0.0.0:8000"):
+    def __init__(self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216):
         self.session = requests.Session()
-        self.server_address = server_address
+        self.host = host
+        self.server_port = server_port
+        self.group_port = group_port
         self.init_weight_update_group()
 
         # When the client object is deleted, close the weight update group
@@ -73,14 +83,14 @@ class VLLMClient:
             `list[list[int]]`:
                 List of lists of token IDs representing the model-generated completions for each prompt.
         """
-        url = f"http://{self.server_address}/generate/"
+        url = f"http://{self.host}:{self.server_port}/generate/"
         response = self.session.post(url, json={"prompts": prompts, "n": n, "max_tokens": max_tokens})
         if response.status_code == 200:
             return response.json()["completion_ids"]
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def init_weight_update_group(self, host: str = "0.0.0.0", port: int = 51216):
+    def init_weight_update_group(self):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
 
@@ -91,7 +101,7 @@ class VLLMClient:
                 Port to bind for communication.
         """
         # Get the tensor parallel size from the server
-        url = f"http://{self.server_address}/get_tensor_parallel_size/"
+        url = f"http://{self.host}:{self.server_port}/get_tensor_parallel_size/"
         response = requests.get(url)
         if response.status_code == 200:
             tensor_parallel_size = response.json()["tensor_parallel_size"]
@@ -102,13 +112,14 @@ class VLLMClient:
         self.rank = tensor_parallel_size  # The client's rank is the last process
 
         # Initialize weight update group
-        url = f"http://{self.server_address}/init_weight_update_group/"
-        response = self.session.post(url, json={"host": host, "port": port, "world_size": world_size})
+        url = f"http://{self.host}:{self.server_port}/init_weight_update_group/"
+        # In the server side, the host is set to 0.0.0.0
+        response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "world_size": world_size})
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         # Set up the communication group for weight broadcasting
-        pg = StatelessProcessGroup.create(host=host, port=port, rank=self.rank, world_size=world_size)
+        pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
         self.model_update_group = PyNcclCommunicator(pg, device="cuda:0")
 
     def update_named_param(self, name: str, weights: torch.Tensor):
@@ -122,7 +133,7 @@ class VLLMClient:
                 Tensor containing the updated weights.
         """
         dtype, shape = str(weights.dtype), tuple(weights.shape)
-        url = f"http://{self.server_address}/update_named_param/"
+        url = f"http://{self.host}:{self.server_port}/update_named_param/"
         response = self.session.post(url, json={"name": name, "dtype": dtype, "shape": shape})
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -146,7 +157,7 @@ class VLLMClient:
         """
         Closes the weight update group and cleans up the communication group.
         """
-        url = f"http://{self.server_address}/close_weight_update_group/"
+        url = f"http://{self.host}:{self.server_port}/close_weight_update_group/"
         response = self.session.post(url)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
