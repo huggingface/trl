@@ -60,10 +60,6 @@ if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
 
-if is_vllm_available():
-    from vllm import SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
-
 if is_wandb_available():
     import wandb
 
@@ -377,12 +373,16 @@ class GRPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.temperature = args.temperature
+        self.top_p = args.top_p
+        self.top_k = args.top_k
+        self.min_p = args.min_p
+        self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon = args.epsilon
-        # Tracks the number of iterations (forward + backward passes), including those within a gradient accumulation cycle.
+        # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
         # `_get_train_sampler` and `_prepare_inputs`.
@@ -445,23 +445,9 @@ class GRPOTrainer(Trainer):
 
             if self.accelerator.is_main_process:
                 self.vllm_client = VLLMClient(args.vllm_server_host, args.vllm_server_port)
-                # Guided decoding, if enabled
-                if args.vllm_guided_decoding_regex is not None:
-                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
-                else:
-                    guided_decoding = None
 
-                # Sampling parameters
-                self.sampling_params = SamplingParams(
-                    max_tokens=self.max_completion_length,
-                    guided_decoding=guided_decoding,
-                    n=args.num_generations,
-                    temperature=args.temperature,
-                    top_p=args.top_p,
-                    top_k=-1 if args.top_k is None else args.top_k,
-                    min_p=0.0 if args.min_p is None else args.min_p,
-                    repetition_penalty=args.repetition_penalty,
-                )
+            # vLLM specific sampling arguments
+            self.guided_decoding_regex = args.vllm_guided_decoding_regex
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
 
@@ -476,11 +462,11 @@ class GRPOTrainer(Trainer):
                 pad_token_id=processing_class.pad_token_id,
                 bos_token_id=processing_class.bos_token_id,
                 eos_token_id=processing_class.eos_token_id,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                top_k=args.top_k,
-                min_p=args.min_p,
-                repetition_penalty=args.repetition_penalty,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                top_k=self.top_k,
+                min_p=self.min_p,
+                repetition_penalty=self.repetition_penalty,
                 cache_implementation=args.cache_implementation,
             )
 
@@ -656,7 +642,15 @@ class GRPOTrainer(Trainer):
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                 with profiling_context(self, "vLLM.generate"):
                     completion_ids = self.vllm_client.generate(
-                        ordered_set_of_prompts, n=self.num_generations, max_tokens=self.max_completion_length
+                        prompts=ordered_set_of_prompts,
+                        n=self.num_generations,
+                        repetition_penalty=self.repetition_penalty,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        top_k=-1 if self.top_k is None else self.top_k,
+                        min_p=0.0 if self.min_p is None else self.min_p,
+                        max_tokens=self.max_completion_length,
+                        guided_decoding_regex=self.guided_decoding_regex,
                     )
             else:
                 completion_ids = [None] * len(all_prompts_text)
