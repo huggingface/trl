@@ -16,7 +16,7 @@ import argparse
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Optional, Sequence
 
 import torch
 import uvicorn
@@ -97,7 +97,6 @@ class WeightSyncWorker(Worker):
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
-
         if self.model_update_group is None:
             raise RuntimeError("Weight update group not initialized. Call `init_weight_update_group` first.")
 
@@ -140,6 +139,21 @@ class ScriptArguments:
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
             Port to run the server on.
+        gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
+            Ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV cache on the
+            device dedicated to generation powered by vLLM. Higher values will increase the KV cache size and thus
+            improve the model's throughput. However, if the value is too high, it may cause out-of-memory (OOM) errors
+            during initialization.
+        dtype (`str`, *optional*, defaults to `"auto"`):
+            Data type to use for vLLM generation. If set to `"auto"`, the data type will be automatically determined
+            based on the model configuration. Find the supported values in the vLLM documentation.
+        max_model_len (`int` or `None`, *optional*, defaults to `None`):
+            If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
+            `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
+            context size, which might be much larger than the KV cache, leading to inefficiencies.
+        enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
+            this feature.
     """
 
     model: str = field(metadata={"help": "Model name or path to load the model from."})
@@ -155,12 +169,50 @@ class ScriptArguments:
         default=8000,
         metadata={"help": "Port to run the server on."},
     )
+    gpu_memory_utilization: float = field(
+        default=0.9,
+        metadata={
+            "help": "Ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV "
+            "cache on the device dedicated to generation powered by vLLM. Higher values will increase the KV cache "
+            "size and thus improve the model's throughput. However, if the value is too high, it may cause "
+            "out-of-memory (OOM) errors during initialization."
+        },
+    )
+    dtype: str = field(
+        default="auto",
+        metadata={
+            "help": "Data type to use for vLLM generation. If set to 'auto', the data type will be automatically "
+            "determined based on the model configuration. Find the supported values in the vLLM documentation."
+        },
+    )
+    max_model_len: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced "
+            "`vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model "
+            "context size, which might be much larger than the KV cache, leading to inefficiencies."
+        },
+    )
+    enable_prefix_caching: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the "
+            "hardware support this feature."
+        },
+    )
 
 
 def main(script_args: ScriptArguments):
     llm = LLM(
         model=script_args.model,
         tensor_parallel_size=script_args.tensor_parallel_size,
+        gpu_memory_utilization=script_args.gpu_memory_utilization,
+        dtype=script_args.dtype,
+        # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
+        # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
+        # This is particularly useful here because we generate completions from the same prompts.
+        enable_prefix_caching=script_args.enable_prefix_caching,
+        max_model_len=script_args.max_model_len,
         worker_cls=WeightSyncWorker,
     )
 
@@ -288,11 +340,10 @@ def main(script_args: ScriptArguments):
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
-    dataclass_types = ScriptArguments
     if subparsers is not None:
-        parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=dataclass_types)
+        parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=ScriptArguments)
     else:
-        parser = TrlParser(dataclass_types)
+        parser = TrlParser(ScriptArguments)
     return parser
 
 
