@@ -539,7 +539,7 @@ class DPOTrainer(Trainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().local_main_process_first():
+        with PartialState().main_process_first():
             # Extract prompt if needed
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Extracting prompt in {dataset_name} dataset"
