@@ -506,6 +506,9 @@ class GRPOTrainer(Trainer):
                         device=vllm_device,
                         gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
                         dtype=self.args.vllm_dtype,
+                        # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
+                        # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
+                        # This is particularly useful here because we generate completions from the same prompts.
                         enable_prefix_caching=self.args.vllm_enable_prefix_caching,
                         max_model_len=self.args.vllm_max_model_len,
                         distributed_executor_backend="external_launcher" if self.args.vllm_external_launcher else None,
