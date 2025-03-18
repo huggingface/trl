@@ -21,9 +21,7 @@ import deepspeed
 import torch
 import torch.utils.data
 import transformers
-from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
-from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
