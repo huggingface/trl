@@ -272,7 +272,9 @@ class VllmRemote:
             from vllm import SamplingParams
 
             if self.init_vllm_max_model_len != self.vllm_max_model_len:
-                logger.warning(f"init_vllm_max_model_len {self.init_vllm_max_model_len} != vllm_max_model_len {self.vllm_max_model_len}")
+                logger.warning(
+                    f"init_vllm_max_model_len {self.init_vllm_max_model_len} != vllm_max_model_len {self.vllm_max_model_len}"
+                )
             # assert self.current_lora_path is not None
             # Sampling parameters
             self.sampling_params = SamplingParams(
@@ -324,7 +326,9 @@ class VllmRemote:
         setattr(self, key, value)
 
     def update_lora_param(self, lora_path):
-        assert ENV["MAX_LORA_RANK"] != 0
+        if ENV["MAX_LORA_RANK"] == 0:
+            raise ValueError("MAX_LORA_RANK must not be greater than 0 for update_lora_param")
+
         try:
             import shutil
 
@@ -336,7 +340,8 @@ class VllmRemote:
         self.lora_cnt += 1
 
     def prepare_advanced_update_weight(self, name, dtype, shape):
-        assert ENV["MAX_LORA_RANK"] == 0
+        if ENV["MAX_LORA_RANK"] != 0:
+            raise ValueError("MAX_LORA_RANK must be 0 for prepare_advanced_update_weight")
         self.llm.collective_rpc("update_weight", args=(name, dtype, shape))
 
     def check_online(self, check_online):
