@@ -13,11 +13,13 @@
 # limitations under the License.
 
 import atexit
+
 import requests
 import torch
+from torch import nn
 from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
 from vllm.distributed.utils import StatelessProcessGroup
-from torch import nn
+
 
 class VLLMClient:
     """
@@ -29,7 +31,7 @@ class VLLMClient:
     Args:
         server_address (`str`, *optional*, defaults to `"0.0.0.0:8000"`):
             Address of the VLLM server to connect to.
-    
+
     Examples:
         Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
 
@@ -149,6 +151,7 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
+
 # Example usage
 if __name__ == "__main__":
     client = VLLMClient()
@@ -159,6 +162,6 @@ if __name__ == "__main__":
 
     # Update model weights
     from transformers import AutoModelForCausalLM
+
     model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
     client.update_model_params(model)
-
