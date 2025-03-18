@@ -147,14 +147,14 @@ class TestGeneralizedJSDLoss(unittest.TestCase):
         # Case 1: beta = 1 (should be equivalent to KL(student || teacher))
         loss_beta_1 = GKDTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=1)
         expected_loss_beta_1 = F.kl_div(
-            F.log_softmax(student_logits, dim=-1), F.softmax(teacher_logits, dim=-1), reduction="batchmean"
+            F.log_softmax(teacher_logits, dim=-1), F.softmax(student_logits, dim=-1), reduction="batchmean"
         )
         self.assertAlmostEqual(loss_beta_1.item(), expected_loss_beta_1.item(), places=5)
 
         # Case 2: beta = 0 (should be equivalent to KL(teacher || student))
         loss_beta_0 = GKDTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=0)
         expected_loss_beta_0 = F.kl_div(
-            F.log_softmax(teacher_logits, dim=-1), F.softmax(student_logits, dim=-1), reduction="batchmean"
+            F.log_softmax(student_logits, dim=-1), F.softmax(teacher_logits, dim=-1), reduction="batchmean"
         )
         self.assertAlmostEqual(loss_beta_0.item(), expected_loss_beta_0.item(), places=5)
 

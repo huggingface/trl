@@ -2,27 +2,6 @@
 
 TRL is designed with modularity in mind so that users to be able to efficiently customize the training loop for their needs. Below are some examples on how you can apply and test different techniques.  Note: Although these examples use the DPOTrainer, the customization applies to most (if not all) trainers.
 
-## Train on multiple GPUs / nodes
-
-The trainers in TRL use 🤗 Accelerate to enable distributed training across multiple GPUs or nodes. To do so, first create an 🤗 Accelerate config file by running
-
-```bash
-accelerate config
-```
-
-and answering the questions according to your multi-gpu / multi-node setup. You can then launch distributed training by running:
-
-```bash
-accelerate launch your_script.py
-```
-
-We also provide config files in the [examples folder](https://github.com/huggingface/trl/tree/main/examples/accelerate_configs) that can be used as templates. To use these templates, simply pass the path to the config file when launching a job, e.g.:
-
-```shell
-accelerate launch --config_file=examples/accelerate_configs/multi_gpu.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
-```
-
-Refer to the [examples page](https://github.com/huggingface/trl/tree/main/examples) for more details.
 
 
 ## Use different optimizers and schedulers
