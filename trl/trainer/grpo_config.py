@@ -225,7 +225,7 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Parameters that control generation acceleration powered by vLLM
-    use_vllm: Optional[bool] = field(
+    use_vllm: bool = field(
         default=False,
         metadata={
             "help": "Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept "
@@ -233,64 +233,9 @@ class GRPOConfig(TrainingArguments):
             "(`pip install vllm`)."
         },
     )
-    use_remote_vllm: Optional[bool] = field(
-        default=False,
-        metadata={
-            "help": "Whether to use external vLLM for generating completions (transfer params with NCCL). "
-            "Using an external vLLM is useful when you are training a very large model across multiple machines "
-            "If you choose this option, you will have to start the vLLM server manually, "
-            "but you are free to choose which machine and which GPU(s) to use for generation. "
-            "Warning: if set to `True`, `use_vllm` must be set to `False`!"
-        },
-    )
-    remote_vllm_ip_port: Optional[str] = field(
-        default="127.0.0.1:8000",
-        metadata={"help": "Required when `use_remote_vllm`. The ip and port of the vLLM server. "},
-    )
-    remote_vllm_num_gpus: Optional[int] = field(
-        default=1,
-        metadata={
-            "help": "Required when `use_remote_vllm`. How many GPUs are used by renmote vLLM (we need this only to compute NCCL world size). "
-        },
-    )
-    vllm_device: Optional[str] = field(
-        default="auto",
-        metadata={
-            "help": "Device where vLLM generation will run, e.g. 'cuda:1'. If set to 'auto' (default), the system "
-            "will automatically select the next available GPU after the last one used for training. This assumes "
-            "that training has not already occupied all available GPUs."
-        },
-    )
-    vllm_gpu_memory_utilization: float = field(
-        default=0.9,
-        metadata={
-            "help": "Ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV "
-            "cache on the device dedicated to generation powered by vLLM. Higher values will increase the KV cache "
-            "size and thus improve the model's throughput. However, if the value is too high, it may cause "
-            "out-of-memory (OOM) errors during initialization."
-        },
-    )
-    vllm_dtype: Optional[str] = field(
-        default="auto",
-        metadata={
-            "help": "Data type to use for vLLM generation. If set to 'auto', the data type will be automatically "
-            "determined based on the model configuration. Find the supported values in the vLLM documentation."
-        },
-    )
-    vllm_max_model_len: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced "
-            "`vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model "
-            "context size, which might be much larger than the KV cache, leading to inefficiencies."
-        },
-    )
-    vllm_enable_prefix_caching: Optional[bool] = field(
-        default=True,
-        metadata={
-            "help": "Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the model and "
-            "the hardware support this feature."
-        },
+    vllm_server_address: str = field(
+        default="0.0.0.0:8000",
+        metadata={"help": "Address of the vLLM server to use for generating completions."},
     )
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
