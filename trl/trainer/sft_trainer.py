@@ -553,11 +553,6 @@ class SFTTrainer(Trainer):
         with self.activation_offload_context:
             return super().training_step(*args, **kwargs)
 
-    def prediction_step(self, *args, **kwargs):
-        """Override prediction step to add activation offloading context."""
-        with self.activation_offload_context:
-            return super().prediction_step(*args, **kwargs)
-
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "eval" if self.control.should_evaluate else "train"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
