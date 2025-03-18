@@ -26,6 +26,7 @@ from vllm import LLM, SamplingParams
 from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
 from vllm.distributed.parallel_state import get_world_group
 from vllm.distributed.utils import StatelessProcessGroup
+from vllm.sampling_params import GuidedDecodingParams
 from vllm.worker.worker import Worker
 
 from trl import TrlParser
@@ -237,8 +238,14 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
-        max_tokens: int = 16
         n: int = 1
+        repetition_penalty: float = 1.0
+        temperature: float = 1.0
+        top_p: float = 1.0
+        top_k: int = -1
+        min_p: float = 0.0
+        max_tokens: int = 16
+        guided_decoding_regex: Optional[str] = None
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
@@ -267,9 +274,22 @@ def main(script_args: ScriptArguments):
         ```
         """
 
+        # Guided decoding, if enabled
+        if request.guided_decoding_regex is not None:
+            guided_decoding = GuidedDecodingParams(backend="outlines", regex=request.guided_decoding_regex)
+        else:
+            guided_decoding = None
+
+        # Sampling parameters
         sampling_params = SamplingParams(
-            max_tokens=request.max_tokens,
             n=request.n,
+            repetition_penalty=request.repetition_penalty,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k,
+            min_p=request.min_p,
+            max_tokens=request.max_tokens,
+            guided_decoding=guided_decoding,
         )
         all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
