@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -290,33 +291,78 @@ class GRPOConfig(TrainingArguments):
     # Deprecated parameters
     vllm_device: Optional[str] = field(
         default=None,
-        metadata={"help": "Deprecated. You should now use a vLLM server."},
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.18. To use vLLM, start a vLLM "
+            "server with the `trl vllm-serve` command."
+        },
     )
     vllm_gpu_memory_utilization: Optional[float] = field(
         default=None,
         metadata={
-            "help": "This parameter is deprecated. To control the GPU memory utilization for vLLM, you should now "
-            "use the `gpu_memory_utilization` parameter in the vLLM server configuration."
+            "help": "This parameter is deprecated and will be removed in version 0.18. To control the GPU memory "
+            "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
+            "configuration."
         },
     )
     vllm_dtype: Optional[str] = field(
         default=None,
         metadata={
-            "help": "This parameter is deprecated. To control the data type for vLLM generation, you should now use "
-            "the `dtype` parameter in the vLLM server configuration."
+            "help": "This parameter is deprecated and will be removed in version 0.18. To control the data type for "
+            "vLLM generation, you should now use the `dtype` parameter in the vLLM server configuration."
         },
     )
     vllm_max_model_len: Optional[int] = field(
         default=None,
         metadata={
-            "help": "This parameter is deprecated. To control the `max_model_len` for vLLM, you should now use the "
-            "`max_model_len` parameter in the vLLM server configuration."
+            "help": "This parameter is deprecated and will be removed in version 0.18. To control the `max_model_len` "
+            "for vLLM, you should now use the `max_model_len` parameter in the vLLM server configuration."
         },
     )
     vllm_enable_prefix_caching: Optional[bool] = field(
         default=None,
         metadata={
-            "help": "This parameter is deprecated. To control prefix caching in vLLM, you should now use the "
-            "`enable_prefix_caching` parameter in the vLLM server configuration."
+            "help": "This parameter is deprecated and will be removed in version 0.18. To control prefix caching in "
+            "vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server configuration."
         },
     )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.vllm_device is not None:
+            warnings.warn(
+                "`vllm_device` is deprecated and will be removed in version 0.18.0. To use vLLM, start a vLLM server "
+                "with the `trl vllm-serve` command.",
+                DeprecationWarning,
+            )
+
+        if self.vllm_gpu_memory_utilization is not None:
+            warnings.warn(
+                "`vllm_gpu_memory_utilization` is deprecated and will be removed in v0.18. To control the GPU memory "
+                "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
+                "configuration.",
+                DeprecationWarning,
+            )
+
+        if self.vllm_dtype is not None:
+            warnings.warn(
+                "`vllm_dtype` is deprecated and will be removed in version 0.18.0. To control the data type for vLLM "
+                "generation, you should now use the `dtype` parameter in the vLLM server configuration.",
+                DeprecationWarning,
+            )
+
+        if self.vllm_max_model_len is not None:
+            warnings.warn(
+                "`vllm_max_model_len` is deprecated and will be removed in version 0.18.0. To control the "
+                "`max_model_len` for vLLM, you should now use the `max_model_len` parameter in the vLLM server "
+                "configuration.",
+                DeprecationWarning,
+            )
+
+        if self.vllm_enable_prefix_caching is not None:
+            warnings.warn(
+                "`vllm_enable_prefix_caching` is deprecated and will be removed in version 0.18.0. To control prefix "
+                "caching in vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server "
+                "configuration.",
+                DeprecationWarning,
+            )
