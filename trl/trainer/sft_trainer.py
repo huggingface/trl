@@ -390,7 +390,7 @@ class SFTTrainer(Trainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().local_main_process_first():
+        with PartialState().main_process_first():
             # Apply the formatting function if any
             if formatting_func is not None and is_processed:
                 warnings.warn(
