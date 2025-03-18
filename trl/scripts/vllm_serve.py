@@ -22,7 +22,7 @@ import torch
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI
 from pydantic import BaseModel
-from vllm import LLM
+from vllm import LLM, SamplingParams
 from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
 from vllm.distributed.parallel_state import get_world_group
 from vllm.distributed.utils import StatelessProcessGroup
@@ -185,6 +185,8 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
+        max_tokens: int = 16
+        n: int = 1
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
@@ -212,7 +214,12 @@ def main(script_args: ScriptArguments):
         {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
         ```
         """
-        all_outputs = llm.generate(request.prompts)
+
+        sampling_params = SamplingParams(
+            max_tokens=request.max_tokens,
+            n=request.n,
+        )
+        all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         return {"completion_ids": completion_ids}
 

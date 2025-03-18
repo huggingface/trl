@@ -61,7 +61,7 @@ class VLLMClient:
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_weight_update_group)
 
-    def generate(self, prompts: list[str]) -> list[str]:
+    def generate(self, prompts: list[str], n: int = 1, max_tokens: int = 16) -> list[str]:
         """
         Generates model completions for the provided prompts.
 
@@ -74,7 +74,7 @@ class VLLMClient:
                 List of lists of token IDs representing the model-generated completions for each prompt.
         """
         url = f"http://{self.server_address}/generate/"
-        response = self.session.post(url, json={"prompts": prompts})
+        response = self.session.post(url, json={"prompts": prompts, "n": n, "max_tokens": max_tokens})
         if response.status_code == 200:
             return response.json()["completion_ids"]
         else:
@@ -157,8 +157,8 @@ if __name__ == "__main__":
     client = VLLMClient()
 
     # Generate completions
-    responses = client.generate(["Hello, AI!", "Tell me a joke"])
-    print("Responses:", responses)
+    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32)
+    print("Responses:", responses)  # noqa
 
     # Update model weights
     from transformers import AutoModelForCausalLM
