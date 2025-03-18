@@ -58,12 +58,13 @@ from .utils import (
 )
 
 
-logger = get_logger(__name__)
-
-
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
+
+if is_vllm_available():
+    from vllm import SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
 
 if is_wandb_available():
     import wandb
@@ -445,7 +446,24 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.accelerator.is_main_process:
-                self.vllm_client = VLLMClient(args.vllm_server_address)
+                self.vllm_client = VLLMClient(args.vllm_server_host, args.vllm_server_port)
+                # Guided decoding, if enabled
+                if args.vllm_guided_decoding_regex is not None:
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
+                else:
+                    guided_decoding = None
+
+                # Sampling parameters
+                self.sampling_params = SamplingParams(
+                    max_tokens=self.max_completion_length,
+                    guided_decoding=guided_decoding,
+                    n=args.num_generations,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    top_k=-1 if args.top_k is None else args.top_k,
+                    min_p=0.0 if args.min_p is None else args.min_p,
+                    repetition_penalty=args.repetition_penalty,
+                )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
 
@@ -585,83 +603,11 @@ class GRPOTrainer(Trainer):
         return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
     @profiling_decorator
-    def _move_model_to_remote_vllm(self):
-        import deepspeed
-        import tqdm
-
-        assert self.use_remote_vllm
-
-        try:
-            zero_stage = self.accelerator.state.deepspeed_plugin.zero_stage
-        except Exception:
-            zero_stage = -1
-
-        if zero_stage == 3 and (not is_peft_model(self.model)):
-            logger.warning("[_move_model_to_remote_vllm] This case (zero3) is well optimized.")
-            for name, param in tqdm.tqdm(
-                self.model.named_parameters(), total=len(list(self.model.named_parameters()))
-            ):
-                with deepspeed.zero.GatheredParameters(
-                    [param], enabled=self.accelerator.state.deepspeed_plugin.zero_stage == 3
-                ):
-                    if self.accelerator.is_main_process:
-                        logger.debug(f"advanced_update_param {name}")
-                        weight = param.data
-                        assert weight.shape == param.ds_shape
-                        self.vllm_with_nccl.advanced_update_param(name, weight)
-                        logger.debug(f"advanced_update_param {name} completed")
-        # elif zero_stage == 3 and is_peft_model(self.model):
-        #     # working in progress, currently using the non-zero3 path
-        else:
-            logger.warning(
-                "[_move_model_to_remote_vllm] This case (non-zero3 / lora) is not well-optimized. In case of GPU OOM, switch to zero3."
-            )
-            with unwrap_model_for_generation(
-                self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-            ) as unwrapped_model:
-                if is_compiled_module(unwrapped_model):
-                    unwrapped_model = unwrapped_model._orig_mod
-                if is_peft_model(unwrapped_model):
-                    unwrapped_model.merge_adapter()
-                    state_dict = unwrapped_model.state_dict()
-                    # Remove base_model and base_layer prefixes
-                    state_dict = {
-                        k.removeprefix("base_model.model.").replace(".base_layer", ""): v
-                        for k, v in state_dict.items()
-                    }
-                    # Remove values with adapter prefix (example: "_lora")
-                    state_dict = {k: v for k, v in state_dict.items() if unwrapped_model.prefix not in k}
-                    # When module to save, remove its prefix and discard the original module
-                    state_dict = {
-                        k.replace("modules_to_save.default.", ""): v
-                        for k, v in state_dict.items()
-                        if "original_module" not in k
-                    }
-                else:
-                    state_dict = unwrapped_model.state_dict()
-                if self.accelerator.is_main_process:
-                    for name, param in state_dict.items():
-                        logger.debug(f"advanced_update_param {name}")
-                        weight = param.data
-                        self.vllm_with_nccl.advanced_update_param(name, weight)
-                        logger.debug(f"advanced_update_param {name} completed")
-                # Unmerge the adapter to restore the model to its original state.
-                # This must be done after loading weights to ensure they correspond to the merged state.
-                if is_peft_model(unwrapped_model):
-                    unwrapped_model.unmerge_adapter()
-        logger.warning("all param updated")
-        import gc
-
-        gc.collect()
-        torch.cuda.empty_cache()
-
-    @profiling_decorator
     def _move_model_to_vllm(self):
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin == 3
         for name, param in self.model.named_parameters():
-            deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-            with deepspeed.zero.GatheredParameters(
-                [param], enabled=deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-            ):
+            with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
                 if self.accelerator.is_main_process:
                     self.vllm_client.update_named_param(name, param.data)
 
