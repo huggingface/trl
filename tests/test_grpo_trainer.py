@@ -468,6 +468,51 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    def test_training_multiple_reward_funcs_with_None_output(self):
+        """Test that a valid math reward function is processed correctly while the code reward function returns None."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def applicable_reward_func(completions, **kwargs):
+            """A reward function that rewards longer completions."""
+            return [float(len(completion)) for completion in completions]
+
+        def non_applicable_reward_func(completions, **kwargs):
+            """A reward function that returns None for all inputs, as it is not applicable to this sample."""
+            return [None] * len(completions)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=32,
+                report_to="none",
+            )
+
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=[
+                    applicable_reward_func,
+                    non_applicable_reward_func,
+                ],  # One applicable, one non applicable
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {
+                n: param.clone() for n, param in trainer.model.named_parameters() if param.requires_grad
+            }
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
     def test_training_multiple_reward_funcs_with_weights(self):
         """Test that GRPOTrainer can handle multiple reward functions with weights."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
