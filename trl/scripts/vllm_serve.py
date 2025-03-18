@@ -85,9 +85,9 @@ class WeightSyncWorker(Worker):
         # The client process that sends updated weights has the highest rank (world_size - 1).
         self.client_rank = world_size - 1
 
-    def update_weights(self, name: str, dtype: torch.dtype, shape: Sequence[int]) -> None:
+    def update_named_param(self, name: str, dtype: torch.dtype, shape: Sequence[int]) -> None:
         """
-        Receives updated model weights from the client and applies them to the model.
+        Receives updated weights from the client process and updates the named parameter in the model.
 
         Args:
             name (`str`):
@@ -245,8 +245,8 @@ def main(script_args: ScriptArguments):
         dtype: str
         shape: list[int]
 
-    @app.post("/update_weights/")
-    def update_weights(request: UpdateWeightsRequest, background_tasks: BackgroundTasks):
+    @app.post("/update_named_param/")
+    def update_named_param(request: UpdateWeightsRequest, background_tasks: BackgroundTasks):
         """
         Updates the model weights with the provided tensor.
 
@@ -259,13 +259,13 @@ def main(script_args: ScriptArguments):
                 - `shape` (list of `int`): Shape of the weight
 
         """
-        # The function is called this way: update_weight(name="name", dtype=torch.float32, shape=(10, 10))
+        # The function is called this way: update_named_param(name="name", dtype=torch.float32, shape=(10, 10))
         # So with collect_rpc we need to call it this way:
-        # llm.collective_rpc("update_weight", args=("name", torch.float32, (10, 10)))
+        # llm.collective_rpc("update_named_param", args=("name", torch.float32, (10, 10)))
         # And with background_tasks.add_task we need to call it this way:
-        # background_tasks.add_task(llm.collective_rpc, "update_weight", args=("name", torch.float32, (10, 10)))
+        # background_tasks.add_task(llm.collective_rpc, "update_named_param", args=("name", torch.float32, (10, 10)))
         dtype = torch.__getattribute__(request.dtype.split(".")[-1])
-        background_tasks.add_task(llm.collective_rpc, "update_weights", args=(request.name, dtype, request.shape))
+        background_tasks.add_task(llm.collective_rpc, "update_named_param", args=(request.name, dtype, request.shape))
         return {"message": "Request received, initializing weight update group"}
 
     @app.post("/close_weight_update_group/")
