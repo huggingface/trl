@@ -341,7 +341,7 @@ def get_act_offloading_ctx_manager(
 ) -> Union[OffloadActivations, contextlib.nullcontext]:
     """
     Returns the activation offloading context manager for the model, which will be a null context if
-    `activation_offloading` is `False`.
+    `activation_offloading` is `False`. All but the last output Linear in every step will be offloaded.
 
     If activation offloading is enabled, we return the OffloadActivations context manager.
     If activation offloading is disabled, we return a NoOpManager context manager.
