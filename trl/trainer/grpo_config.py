@@ -111,8 +111,10 @@ class GRPOConfig(TrainingArguments):
             speed, but may be numerically unstable for long training runs.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
-        epsilon (`float`, *optional*, defaults to `0.2`):
-            Epsilon value for clipping.
+        epsilon_low (`float`, *optional*, defaults to `0.2`):
+            Lower-bound epsilon value for clipping.
+        epsilon_high (`float`, *optional*, defaults to `0.28`):
+            Upper-bound epsilon value for clipping.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
