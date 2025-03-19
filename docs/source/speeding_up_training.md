@@ -55,13 +55,14 @@ You can customize the server configuration by passing additional arguments.
 
 ```sh
 $ trl vllm-serve --help
-usage: trl vllm-serve [-h] --model MODEL [--tensor_parallel_size TENSOR_PARALLEL_SIZE] [--host HOST] [--port PORT]
-                      [--gpu_memory_utilization GPU_MEMORY_UTILIZATION] [--dtype DTYPE] [--max_model_len MAX_MODEL_LEN]
-                      [--enable_prefix_caching ENABLE_PREFIX_CACHING]
+usage: trl vllm-serve [-h] --model MODEL [--revision REVISION] [--tensor_parallel_size TENSOR_PARALLEL_SIZE] [--host HOST]
+                      [--port PORT] [--gpu_memory_utilization GPU_MEMORY_UTILIZATION] [--dtype DTYPE]
+                      [--max_model_len MAX_MODEL_LEN] [--enable_prefix_caching ENABLE_PREFIX_CACHING]
 
 options:
   -h, --help            show this help message and exit
   --model MODEL         Model name or path to load the model from. (default: None)
+  --revision REVISION   Revision to use for the model. If not specified, the default branch will be used. (default: None)
   --tensor_parallel_size TENSOR_PARALLEL_SIZE, --tensor-parallel-size TENSOR_PARALLEL_SIZE
                         Number of tensor parallel workers to use. (default: 1)
   --host HOST           Host address to run the server on. (default: 0.0.0.0)

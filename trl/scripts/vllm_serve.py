@@ -64,7 +64,7 @@ class WeightSyncWorker(Worker):
         communicate with vLLM workers without interfering with the global torch distributed group.
 
         Args:
-            host (`str`): 
+            host (`str`):
                 Hostname or IP address of the master node.
             port (int):
                 Port number to be used for communication.
@@ -134,6 +134,8 @@ class ScriptArguments:
     Args:
         model (`str`):
             Model name or path to load the model from.
+        revision (`str` or `None`, *optional*, defaults to `None`):
+            Revision to use for the model. If not specified, the default branch will be used.
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
@@ -158,6 +160,10 @@ class ScriptArguments:
     """
 
     model: str = field(metadata={"help": "Model name or path to load the model from."})
+    revision: Optional[str] = field(
+        default=None,
+        metadata={"help": "Revision to use for the model. If not specified, the default branch will be used."},
+    )
     tensor_parallel_size: int = field(
         default=1,
         metadata={"help": "Number of tensor parallel workers to use."},
@@ -206,6 +212,7 @@ class ScriptArguments:
 def main(script_args: ScriptArguments):
     llm = LLM(
         model=script_args.model,
+        revision=script_args.revision,
         tensor_parallel_size=script_args.tensor_parallel_size,
         gpu_memory_utilization=script_args.gpu_memory_utilization,
         dtype=script_args.dtype,
