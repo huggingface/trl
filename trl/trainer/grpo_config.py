@@ -296,14 +296,14 @@ class GRPOConfig(TrainingArguments):
     vllm_device: Optional[str] = field(
         default=None,
         metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18. To use vLLM, start a vLLM "
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To use vLLM, start a vLLM "
             "server with the `trl vllm-serve` command."
         },
     )
     vllm_gpu_memory_utilization: Optional[float] = field(
         default=None,
         metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18. To control the GPU memory "
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the GPU memory "
             "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
             "configuration."
         },
@@ -311,21 +311,22 @@ class GRPOConfig(TrainingArguments):
     vllm_dtype: Optional[str] = field(
         default=None,
         metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18. To control the data type for "
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the data type for "
             "vLLM generation, you should now use the `dtype` parameter in the vLLM server configuration."
         },
     )
     vllm_max_model_len: Optional[int] = field(
         default=None,
         metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18. To control the `max_model_len` "
-            "for vLLM, you should now use the `max_model_len` parameter in the vLLM server configuration."
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the "
+            "`max_model_len` for vLLM, you should now use the `max_model_len` parameter in the vLLM server "
+            "configuration."
         },
     )
     vllm_enable_prefix_caching: Optional[bool] = field(
         default=None,
         metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18. To control prefix caching in "
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control prefix caching in "
             "vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server configuration."
         },
     )
