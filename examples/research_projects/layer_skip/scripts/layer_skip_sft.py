@@ -5,9 +5,6 @@ from trl import SFTConfig, DataCollatorForCompletionOnlyLM
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 import torch
-from accelerate import Accelerator
-
-accelerator = Accelerator()
 
 
 def formatting_prompts_func(example):

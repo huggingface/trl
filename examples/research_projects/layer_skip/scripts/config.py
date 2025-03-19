@@ -1,5 +1,5 @@
-model_name = "unsloth/Llama-3.2-1B"
-tokenizer_name = "unsloth/Llama-3.2-1B"
+model_name = "unsloth/Llama-3.2-3B"
+tokenizer_name = "unsloth/Llama-3.2-3B"
 dataset_name = "WillHeld/top_v2"
 
 output_root_dir = "./checkpoints/"

@@ -50,7 +50,7 @@ if __name__ == "__main__":
     for i in range(1, 16):
         results.append(
             benchmark.Timer(
-                stmt="generate_assistant_tokens(model, assistant_early_exit, inputs)",
+                stmt="generate_assistant_tokens(model, inputs, assistant_early_exit)",
                 setup="from __main__ import generate_assistant_tokens",
                 globals={"model": model, "assistant_early_exit": i, "inputs": inputs},
                 num_threads=torch.get_num_threads(),
