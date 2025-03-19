@@ -589,7 +589,7 @@ class GRPOTrainer(Trainer):
     @profiling_decorator
     def _move_model_to_vllm(self):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin == 3
+        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         for name, param in self.model.named_parameters():
             with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
                 if self.accelerator.is_main_process:
