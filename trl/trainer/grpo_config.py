@@ -290,9 +290,13 @@ class GRPOConfig(TrainingArguments):
         default=1,
         metadata={"help": "Number of iterations per batch (denoted as μ in the algorithm)."},
     )
-    epsilon: float = field(
+    epsilon_low: float = field(
         default=0.2,
-        metadata={"help": "Epsilon value for clipping."},
+        metadata={"help": "lower-bound epsilon value for clipping."},
+    )
+    epsilon_high: float = field(
+    default=0.28,
+    metadata={"help": "upper-bound epsilon value for clipping."},
     )
     reward_weights: Optional[list[float]] = field(
         default=None,
