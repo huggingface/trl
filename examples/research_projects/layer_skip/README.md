@@ -1,3 +1,6 @@
+# LayerSkip Training Recipe
+Implements the training recipe as described in the [LayerSkip paper](https://arxiv.org/abs/2404.16710).
+
 ## Run training
 ```
 cd scripts

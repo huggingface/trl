@@ -13,7 +13,7 @@ def generate_tokens(model, inputs):
     return outputs
 
 
-def generate_assistant_tokens(model, inputs, assistant_early_exit):
+def generate_tokens_with_assistance(model, inputs, assistant_early_exit):
     outputs = model.generate(
         **inputs,
         assistant_early_exit=assistant_early_exit,
@@ -32,7 +32,7 @@ if __name__ == "__main__":
     prompt = "### Instruction: What are my alarms for the rest of the day?\n ### Response: "
 
     results = []
-    label = "Generation Speeds"
+    label = "Generation Times"
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
     results.append(
@@ -47,10 +47,10 @@ if __name__ == "__main__":
         ).blocked_autorange()
     )
 
-    for i in range(1, 16):
+    for i in range(1, model.config.num_hidden_layers):
         results.append(
             benchmark.Timer(
-                stmt="generate_assistant_tokens(model, inputs, assistant_early_exit)",
+                stmt="generate_tokens_with_assistance(model, inputs, assistant_early_exit)",
                 setup="from __main__ import generate_assistant_tokens",
                 globals={"model": model, "assistant_early_exit": i, "inputs": inputs},
                 num_threads=torch.get_num_threads(),
