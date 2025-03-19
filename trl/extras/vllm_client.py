@@ -43,7 +43,7 @@ class VLLMClient:
         group_port (`int`, *optional*, defaults to `51216`):
             Port number for the weight update group.
         connection_timeout (`float`, *optional*, defaults to `0.0`):
-            Total timeout duration in seconds to wait for the server to be up. If the server is not up after the 
+            Total timeout duration in seconds to wait for the server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
 
     Examples:
