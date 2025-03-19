@@ -112,7 +112,7 @@ The GRPO Trainer logs the following metrics:
 
 ## Customization
 
-## Speed up training with vLLM-powered generation
+### Speed up training with vLLM-powered generation
 
 Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, first start a vLLM server using the following command:
 
