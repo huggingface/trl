@@ -49,7 +49,7 @@ class VLLMClient:
     Examples:
         Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
 
-        ```sh
+        ```
         $ trl vllm-serve --model Qwen/Qwen2.5-7B
         ...
         INFO:     Application startup complete.
