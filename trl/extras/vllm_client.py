@@ -83,7 +83,7 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
-    ) -> list[str]:
+    ) -> list[list[str]]:
         """
         Generates model completions for the provided prompts.
 
