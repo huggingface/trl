@@ -66,7 +66,7 @@ class WeightSyncWorker(Worker):
         Args:
             host (`str`):
                 Hostname or IP address of the master node.
-            port (int):
+            port (`int`):
                 Port number to be used for communication.
             world_size (`int`):
                 Total number of participating processes in the update group.
