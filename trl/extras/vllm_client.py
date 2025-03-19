@@ -134,12 +134,6 @@ class VLLMClient:
     def init_communicator(self):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
-
-        Args:
-            host (`str`, *optional*, defaults to `"0.0.0.0"`):
-                Hostname or IP address to bind the weight update group.
-            port (`int`, *optional*, defaults to `51217`):
-                Port to bind for communication.
         """
         # Get the tensor parallel size from the server
         url = f"http://{self.host}:{self.server_port}/get_tensor_parallel_size/"
