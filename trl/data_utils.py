@@ -511,11 +511,13 @@ def pack_dataset(dataset: DatasetType, seq_length: int, map_kwargs: Optional[dic
                 if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
                     if isinstance(column, pa.ChunkedArray):
                         column = column.combine_chunks()
-                    num_elements = len(column.values)
-                    dtype = column.offsets.type.to_pandas_dtype()  # np.int32 or np.int64
+                    offsets, values = column.offsets, column.values
+                    values = values[offsets[0].as_py() : offsets[-1].as_py()]
+                    num_elements = len(values)
+                    dtype = offsets.type.to_pandas_dtype()  # np.int32 or np.int64
                     offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
                     offsets = np.concatenate((offsets, [num_elements]))
-                    column = type(column).from_arrays(offsets, column.values)
+                    column = type(column).from_arrays(offsets, values)
                 packed_columns.append(column)
             return pa.Table.from_arrays(packed_columns, names=examples.column_names)
 
