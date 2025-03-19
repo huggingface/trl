@@ -68,11 +68,11 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 
 ### Computing the advantage
 
-For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:  
+For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:
 
-$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$  
+$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
 
-This approach gives the method its name: **Group Relative Policy Optimization (GRPO)**.  
+This approach gives the method its name: **Group Relative Policy Optimization (GRPO)**.
 
 ### Estimating the KL divergence
 
@@ -83,15 +83,15 @@ $$
 
 ### Computing the loss
 
-The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:  
+The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:
 
 $$
 \mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
 $$
 
-where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.  
+where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.
 
-In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:  
+In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:
 
 $$
 \mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
@@ -112,17 +112,23 @@ The GRPO Trainer logs the following metrics:
 
 ## Customization
 
-## Speed up training with vLLM-powered generation  
+## Speed up training with vLLM-powered generation
 
-Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, pass `use_vllm=True` in the training arguments.  
+Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, first start a vLLM server using the following command:
+
+```bash
+trl vllm-serve --model <model_name>
+```
+
+and pass `use_vllm=True` in the training arguments.
 
 ```python
 from trl import GRPOConfig
 
 training_args = GRPOConfig(..., use_vllm=True)
-```  
+```
 
-For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).  
+For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
 ### Using a custom reward function
 
