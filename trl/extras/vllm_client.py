@@ -67,10 +67,10 @@ class VLLMClient:
         self.host = host
         self.server_port = server_port
         self.group_port = group_port
-        self.init_weight_update_group()
+        self.init_communicator()
 
         # When the client object is deleted, close the weight update group
-        atexit.register(self.close_weight_update_group)
+        atexit.register(self.close_communicator)
 
     def generate(
         self,
@@ -131,7 +131,7 @@ class VLLMClient:
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def init_weight_update_group(self):
+    def init_communicator(self):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
 
@@ -153,7 +153,7 @@ class VLLMClient:
         self.rank = tensor_parallel_size  # The client's rank is the last process
 
         # Initialize weight update group
-        url = f"http://{self.host}:{self.server_port}/init_weight_update_group/"
+        url = f"http://{self.host}:{self.server_port}/init_communicator/"
         # In the server side, the host is set to 0.0.0.0
         response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "world_size": world_size})
         if response.status_code != 200:
@@ -161,7 +161,7 @@ class VLLMClient:
 
         # Set up the communication group for weight broadcasting
         pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.model_update_group = PyNcclCommunicator(pg, device="cuda:0")
+        self.pynccl_comm = PyNcclCommunicator(pg, device="cuda:0")
 
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
@@ -180,7 +180,7 @@ class VLLMClient:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         # Broadcast the weights to the other processes
-        self.model_update_group.broadcast(weights, src=self.rank, stream=torch.cuda.current_stream())
+        self.pynccl_comm.broadcast(weights, src=self.rank, stream=torch.cuda.current_stream())
 
     def update_model_params(self, model: nn.Module):
         """
@@ -194,11 +194,11 @@ class VLLMClient:
             # Update each parameter individually
             self.update_named_param(name, param.data)
 
-    def close_weight_update_group(self):
+    def close_communicator(self):
         """
         Closes the weight update group and cleans up the communication group.
         """
-        url = f"http://{self.host}:{self.server_port}/close_weight_update_group/"
+        url = f"http://{self.host}:{self.server_port}/close_communicator/"
         response = self.session.post(url)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
