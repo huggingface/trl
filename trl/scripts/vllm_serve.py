@@ -227,6 +227,13 @@ def main(script_args: ScriptArguments):
     app = FastAPI()
 
     # Define the endpoints for the model server
+    @app.get("/health/")
+    def health():
+        """
+        Health check endpoint to verify that the server is running.
+        """
+        return {"status": "ok"}
+
     @app.get("/get_tensor_parallel_size/")
     def get_tensor_parallel_size():
         """

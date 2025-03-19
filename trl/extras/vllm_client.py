@@ -17,6 +17,7 @@ from typing import Optional
 
 import requests
 import torch
+from requests import ConnectionError
 from torch import nn
 from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
 from vllm.distributed.utils import StatelessProcessGroup
@@ -67,10 +68,24 @@ class VLLMClient:
         self.host = host
         self.server_port = server_port
         self.group_port = group_port
+        self.check_server()
         self.init_communicator()
+        atexit.register(self.close_communicator)  # when the client object is deleted, close the weight update group
 
-        # When the client object is deleted, close the weight update group
-        atexit.register(self.close_communicator)
+    def check_server(self):
+        """
+        Checks if the server is running and reachable.
+        """
+        url = f"http://{self.host}:{self.server_port}/health/"
+        try:
+            response = self.session.get(url)
+        except ConnectionError as exc:
+            raise ConnectionError(
+                f"The vLLM server can't be reached at {self.host}:{self.server_port}. Make sure the server is running "
+                "by running `trl vllm-serve`."
+            ) from exc
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def generate(
         self,
