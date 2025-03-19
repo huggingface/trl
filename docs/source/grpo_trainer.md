@@ -120,7 +120,7 @@ Generation is often the main bottleneck that makes training slow with online met
 trl vllm-serve --model <model_name>
 ```
 
-and pass `use_vllm=True` in the training arguments.
+Then, pass `use_vllm=True` in the training arguments and run the training script:
 
 ```python
 from trl import GRPOConfig
