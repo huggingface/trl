@@ -92,7 +92,7 @@ EXTRAS = {
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
     # vllm is not available on Windows
     # vllm 0.7.3 causes hanging while gathering. temporary pinning the version until the issue is resolved
-    "vllm": ["vllm==0.7.2; sys_platform != 'win32'", "cloudpickle", "uvicorn", "fastapi", "requests"],
+    "vllm": ["vllm==0.7.2; sys_platform != 'win32'", "uvicorn", "fastapi", "requests"],
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
