@@ -433,4 +433,10 @@ def get_act_offloading_ctx_manager(
             "an nn.Module."
         )
 
+    # Disable offloading for any Liger modules
+    for name, module in unwrapped_model.named_modules():
+        if "liger" in name.lower():
+            module.register_forward_pre_hook(lambda *args: noop_ctx.__enter__())
+            module.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
+
     return activations_handling_ctx
