@@ -113,8 +113,9 @@ class GRPOConfig(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        epsilon_high (`float`, *optional*, defaults to `None`):
-            Upper-bound epsilon value for clipping. If not specified, the upper bound is the same as the lower bound specified in argument `epsilon`. Paper [DAPO](https://arxiv.org/abs/2503.14476) recommends `0.28`.
+        epsilon_high (`float` or `None`, *optional*, defaults to `None`):
+            Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
+            specified in argument `epsilon`. Paper [DAPO](https://arxiv.org/abs/2503.14476) recommends `0.28`.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -296,10 +297,11 @@ class GRPOConfig(TrainingArguments):
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
     )
-    epsilon_high: float = field(
+    epsilon_high: Optional[float] = field(
         default=None,
         metadata={
-            "help": "Upper-bound epsilon value for clipping. If not specified, the upper bound is the same as the `epsilon`. DAPO Paper recommends `0.28` for upper bound."
+            "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
         },
     )
     reward_weights: Optional[list[float]] = field(
