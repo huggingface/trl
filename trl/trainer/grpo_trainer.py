@@ -388,7 +388,7 @@ class GRPOTrainer(Trainer):
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
-        self.epsilon_low = args.epsilon_low
+        self.epsilon = args.epsilon
         self.epsilon_high = args.epsilon_high
         # Tracks the number of iterations (forward + backward passes), including those within a gradient accumulation cycle.
         self._step = 0
@@ -975,7 +975,8 @@ class GRPOTrainer(Trainer):
         # _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        upper_bound = 1 + (self.epsilon_high if self.epsilon_high is not None else self.epsilon)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, upper_bound)
         per_token_loss1 = coef_1 * advantages.unsqueeze(1)
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
