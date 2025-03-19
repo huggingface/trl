@@ -211,7 +211,11 @@ class GRPOTrainer(Trainer):
                 keyword arguments in `args.model_init_kwargs`.
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
                 - A custom reward function: The function is provided with the prompts and the generated completions,
-                  plus any additional columns in the dataset. It should return a list of rewards. For more details, see
+                  plus any additional columns in the dataset. It should return a list of rewards. Custom reward
+                  functions can also return None when the reward is not applicable to those samples. This is useful for
+                  multi-task training where different reward functions apply to different types of samples. When a
+                  reward function returns None for a sample, that reward function is excluded from the reward
+                  calculation for that sample. For more details, see
                   [Using a custom reward function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
@@ -851,14 +855,28 @@ class GRPOTrainer(Trainer):
                     keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
                     reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                     output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
+                    # Convert None values to NaN
+                    output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
+        # If all reward functions return None for a given row, issue a detailed warning
+        if torch.isnan(rewards_per_func).all(dim=1).any():
+            nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()}
+            row_reward_kwargs["prompt"] = prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = completions[nan_row_idx]
+            warnings.warn(
+                f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
+                "Please ensure that at least one reward function returns a valid reward."
+            )
 
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
 
         # Apply weights to each reward function's output and sum
-        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -882,14 +900,15 @@ class GRPOTrainer(Trainer):
         completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
         self._metrics[mode]["completion_length"].append(completion_length)
 
-        reward_per_func = rewards_per_func.mean(0)
+        # Calculate mean reward per function, but only for samples where the function was applied
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
                 reward_func_name = reward_func.config._name_or_path.split("/")[-1]
             else:
                 reward_func_name = reward_func.__name__
-            self._metrics[mode][f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
-
+            # Only calculate mean for samples where this reward function was applied (non-NaN values)
+            mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}"].append(mean_rewards)
         self._metrics[mode]["reward"].append(rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
