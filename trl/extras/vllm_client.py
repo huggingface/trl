@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import atexit
+import logging
+import time
 from typing import Optional
 
 import requests
@@ -21,6 +23,9 @@ from requests import ConnectionError
 from torch import nn
 from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
 from vllm.distributed.utils import StatelessProcessGroup
+
+
+logger = logging.getLogger(__name__)
 
 
 class VLLMClient:
@@ -37,6 +42,9 @@ class VLLMClient:
             Port number of the vLLM server.
         group_port (`int`, *optional*, defaults to `51216`):
             Port number for the weight update group.
+        connection_timeout (`float`, *optional*, defaults to `0.0`):
+            Total timeout duration in seconds to wait for the server to be up. If the server is not up after the 
+            timeout, a `ConnectionError` is raised.
 
     Examples:
         Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
@@ -63,29 +71,50 @@ class VLLMClient:
         ```
     """
 
-    def __init__(self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216):
+    def __init__(
+        self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0
+    ):
         self.session = requests.Session()
         self.host = host
         self.server_port = server_port
         self.group_port = group_port
-        self.check_server()
+        self.check_server(connection_timeout)  # check server and fail after timeout
         self.init_communicator()
         atexit.register(self.close_communicator)  # when the client object is deleted, close the weight update group
 
-    def check_server(self):
+    def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
-        Checks if the server is running and reachable.
+        Check server availability with retries on failure, within a total timeout duration. If the server is not up
+        after the total timeout duration, raise a `ConnectionError`.
+
+        Args:
+            retry_interval (`float`, *optional*, defaults to `2.0`):
+                Interval in seconds between retries.
+            total_timeout (`float`, *optional*, defaults to `0.0`):
+                Total timeout duration in seconds.
         """
         url = f"http://{self.host}:{self.server_port}/health/"
-        try:
-            response = self.session.get(url)
-        except ConnectionError as exc:
-            raise ConnectionError(
-                f"The vLLM server can't be reached at {self.host}:{self.server_port}. Make sure the server is running "
-                "by running `trl vllm-serve`."
-            ) from exc
-        if response.status_code != 200:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        start_time = time.time()  # Record the start time
+
+        while True:
+            try:
+                response = requests.get(url)
+            except requests.exceptions.RequestException as exc:
+                # Check if the total timeout duration has passed
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= total_timeout:
+                    raise ConnectionError(
+                        f"The vLLM server can't be reached at {self.host}:{self.server_port} after {total_timeout} "
+                        "seconds. Make sure the server is running by running `trl vllm-serve`."
+                    ) from exc
+            else:
+                if response.status_code == 200:
+                    logger.info("Server is up!")
+                    return None
+
+            # Retry logic: wait before trying again
+            logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
+            time.sleep(retry_interval)
 
     def generate(
         self,
