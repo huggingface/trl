@@ -1737,7 +1737,7 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     table.add_column("Completion", style="bright_green")
     table.add_column("Reward", style="bold cyan", justify="right")
 
-    for prompt, completion, reward in zip(prompts, completions, rewards, strict=True):
+    for prompt, completion, reward in zip(prompts, completions, rewards):
         table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places
         table.add_section()  # Adds a separator between rows
 
