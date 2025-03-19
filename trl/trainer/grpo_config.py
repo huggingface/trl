@@ -297,8 +297,8 @@ class GRPOConfig(TrainingArguments):
         metadata={"help": "lower-bound epsilon value for clipping."},
     )
     epsilon_high: float = field(
-    default=0.28,
-    metadata={"help": "upper-bound epsilon value for clipping."},
+        default=0.28,
+        metadata={"help": "upper-bound epsilon value for clipping."},
     )
     reward_weights: Optional[list[float]] = field(
         default=None,
