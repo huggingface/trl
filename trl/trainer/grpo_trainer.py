@@ -897,8 +897,10 @@ class GRPOTrainer(Trainer):
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
 
-        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
-        self._metrics[mode]["completion_length"].append(completion_length)
+        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float()
+        self._metrics[mode]["completion_length"].append(completion_length.mean().item())
+        self._metrics[mode]["completion_length_max"].append(completion_length.max().item())
+        self._metrics[mode]["completion_length_min"].append(completion_length.min().item())
 
         # Calculate mean reward per function, but only for samples where the function was applied
         for i, reward_func in enumerate(self.reward_funcs):
