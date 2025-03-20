@@ -115,7 +115,7 @@ class GRPOConfig(TrainingArguments):
             Epsilon value for clipping.
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
-            specified in argument `epsilon`. Paper [DAPO](https://arxiv.org/abs/2503.14476) recommends `0.28`.
+            specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
