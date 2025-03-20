@@ -30,6 +30,7 @@ from transformers import (
     BaseImageProcessor,
     DataCollator,
     DataCollatorForLanguageModeling,
+    DataCollatorWithFlattening,
     FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -200,6 +201,31 @@ class SFTTrainer(Trainer):
                     )
 
         # Data collator
+        if args.padding_free:
+            if data_collator is not None:
+                raise ValueError("Passing a custom data collator is not supported when using padding-free.")
+            if args.packing:
+                warnings.warn(
+                    "You are passing `packing=True` and `padding_free=True` which is not recommended. Please refer "
+                    "to the documentation to understand why this is not recommended."
+                )
+            if model.config._attn_implementation != "flash_attention_2":
+                warnings.warn(
+                    "Padding-free training is enabled, but the attention implementation is not set to "
+                    "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
+                    "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
+                    "other implementations may lead to unexpected behavior. To ensure compatibility, set "
+                    "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
+                    "attention mechanism can handle flattened sequences."
+                )
+            if args.per_device_train_batch_size == 1:
+                warnings.warn(
+                    "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
+                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "to at least 2."
+                )
+            data_collator = DataCollatorWithFlattening()
+
         if data_collator is None:
             data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
 
@@ -364,7 +390,7 @@ class SFTTrainer(Trainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().local_main_process_first():
+        with PartialState().main_process_first():
             # Apply the formatting function if any
             if formatting_func is not None and is_processed:
                 warnings.warn(
@@ -422,7 +448,14 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize(example, processing_class, dataset_text_field):
-                    return processing_class(example[dataset_text_field])
+                    processed = processing_class(text=example[dataset_text_field])
+                    if (
+                        processing_class.eos_token_id is not None
+                        and processed["input_ids"][-1] != processing_class.eos_token_id
+                    ):
+                        processed["input_ids"] = processed["input_ids"] + [processing_class.eos_token_id]
+                        processed["attention_mask"] = processed["attention_mask"] + [1]
+                    return processed
 
                 dataset = dataset.map(
                     tokenize,
@@ -452,6 +485,7 @@ class SFTTrainer(Trainer):
                     fn_kwargs={"max_length": args.max_length},
                     **map_kwargs,
                 )
+
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
                 dataset = dataset.select_columns("input_ids")
@@ -469,10 +503,14 @@ class SFTTrainer(Trainer):
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
             # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
-            if "cu_seq_lens_q" in inputs:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["cu_seq_lens_q"][-1]).sum().item()
-            else:
+            if "attention_mask" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
+            elif "position_ids" in inputs:
+                num_tokens_in_batch = (
+                    self.accelerator.gather_for_metrics(torch.tensor(inputs["position_ids"].size(1))).sum().item()
+                )
+            else:
+                raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
