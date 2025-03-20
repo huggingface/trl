@@ -630,12 +630,14 @@ class QwenGRPOTrainer(Trainer):
 
                     completion_ids = generated_output['ids']
                     completion_messages = generated_output.get('messages', None)
-                    completion_mask = generated_output.get('completion_mask', None)
+                    completion_mask = generated_output.get('mask', None)
 
 
             else:
                 completion_ids = [None] * len(all_env_inputs)
                 completion_messages = [None] * len(all_env_inputs)
+                completion_mask = [None] * len(all_env_inputs)
+
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
             # corresponding slice.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
@@ -675,11 +677,6 @@ class QwenGRPOTrainer(Trainer):
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             raise ValueError("Attempted to generate with HF. Only supporting vllm now.")
-
-        if self.accelerator.is_main_process:
-            print("SHAPE CHECK")
-            print(completion_ids[0].shape)
-            print(completion_mask[0].shape)
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B*G, P+C)
