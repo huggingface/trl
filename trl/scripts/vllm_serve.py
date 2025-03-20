@@ -106,12 +106,10 @@ class WeightSyncWorker(Worker):
 
         # Use NCCL to broadcast the updated weights from the client (src) to all workers.
         self.pynccl_comm.broadcast(weight, src=self.client_rank, stream=torch.cuda.current_stream())
+        self.pynccl_comm.group.barrier()
 
         # Load the received weights into the model.
         self.model_runner.model.load_weights(weights=[(name, weight)])
-
-        # Explicitly delete the temporary weight tensor to free up memory.
-        del weight
 
     def close_communicator(self) -> None:
         """

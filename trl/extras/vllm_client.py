@@ -219,6 +219,7 @@ class VLLMClient:
 
         # Broadcast the weights to the other processes
         self.pynccl_comm.broadcast(weights, src=self.rank, stream=torch.cuda.current_stream())
+        self.pynccl_comm.group.barrier()
 
     def update_model_params(self, model: nn.Module):
         """
