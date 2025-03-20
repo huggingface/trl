@@ -651,16 +651,16 @@ class QwenGRPOTrainer(Trainer):
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.tokenizer.pad_token_id)
 
+            # broadcast and slice completion messages too.
+            completion_messages = broadcast_object_list(completion_messages, from_process=0)
+            completion_messages = completion_messages[process_slice]
+
             # Handle completion mask: broadcast from main process to all processes if available
             if completion_mask is not None:
                 # Broadcast the completion_mask from the main process to all processes
                 completion_mask = broadcast_object_list(completion_mask, from_process=0)
 
                 # Each process takes its corresponding slice based on process index
-                process_slice = slice(
-                    self.accelerator.process_index * len(inputs),
-                    (self.accelerator.process_index + 1) * len(inputs),
-                )
                 completion_mask = completion_mask[process_slice]
 
                 # Convert mask elements to tensors and move to correct device
@@ -709,7 +709,7 @@ class QwenGRPOTrainer(Trainer):
         if is_conversational(inputs[0]):
             completions = []
             for prompt, completion in zip(conversations, completions_text):
-                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                bootstrap = prompt[-1]["content"] if prompt[-1]["role"] == "assistant" else ""
                 if isinstance(bootstrap, list):
                     if len(bootstrap) > 1:
                         raise ValueError("Only one bootstrap is supported for now.")
@@ -724,6 +724,7 @@ class QwenGRPOTrainer(Trainer):
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
             if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
+                raise NotImplementedError("Models as reward functions are not supported yet.")
                 if is_conversational(inputs[0]):
                     messages = [{"messages": p + c} for p, c in zip(conversations, completions)]
                     texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
