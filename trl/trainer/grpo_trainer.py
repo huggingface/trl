@@ -594,13 +594,30 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _move_model_to_vllm(self):
+        # For PEFT models, we need to merge the adapter weights with the base model
+        if is_peft_model(self.model):
+            # Get the merged model
+            merged_model = self.model.merge_and_unload()
+        else:
+            merged_model = self.model
+
+        # Handle DeepSpeed ZeRO-3
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        for name, param in self.model.named_parameters():
+
+        # Update the weights in vLLM
+        for name, param in merged_model.named_parameters():
             with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
                 if self.accelerator.is_main_process:
                     self.vllm_client.update_named_param(name, param.data)
-        self.vllm_client.reset_prefix_cache()
+
+        # Reset the prefix cache after updating weights
+        if self.accelerator.is_main_process:
+            self.vllm_client.reset_prefix_cache()
+
+        # If we merged a PEFT model, clean up the merged model to free memory
+        if is_peft_model(self.model):
+            del merged_model
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
