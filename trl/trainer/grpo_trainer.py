@@ -849,8 +849,10 @@ class GRPOTrainer(Trainer):
                         text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
                     )
                     reward_inputs = super()._prepare_inputs(reward_inputs)
-                    with torch.inference_mode():
-                        rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+                    with torch.inference_mode(), unwrap_model_for_generation(
+                        reward_func, self.accelerator
+                    ) as unwrapped_reward_func:
+                        rewards_per_func[:, i] = unwrapped_reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
                     # Repeat all input columns (but "prompt" and "completion") to match the number of generations
                     keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
