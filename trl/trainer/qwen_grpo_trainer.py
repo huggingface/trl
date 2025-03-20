@@ -621,16 +621,21 @@ class QwenGRPOTrainer(Trainer):
                 if self.env is None:
                     raise ValueError("No environment provided. Only supporting envs now.")
                 else:
-                    completion_ids = self.env.generate(
+                    generated_output = self.env.generate(
                         conversations=all_conversations,
                         vlm_inputs=all_env_inputs,
                         vlm=self.vlm,
                         sampling_params=self.sampling_params,
                     )
 
+                    completion_ids = generated_output['ids']
+                    completion_messages = generated_output.get('messages', None)
+                    completion_mask = generated_output.get('completion_mask', None)
+
+
             else:
                 completion_ids = [None] * len(all_env_inputs)
-
+                completion_messages = [None] * len(all_env_inputs)
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
             # corresponding slice.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
@@ -640,16 +645,41 @@ class QwenGRPOTrainer(Trainer):
             )
             completion_ids = completion_ids[process_slice]
 
-            eos_idx = torch.tensor([len(ids) - 1 for ids in completion_ids], device=device)
-
             # Pad completion_ids to uniform length, mask from last output token (EOS)
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.tokenizer.pad_token_id)
-            sequence_indices = torch.arange(completion_ids.size(1), device=device).expand(completion_ids.size(0), -1)
-            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+            # Handle completion mask: broadcast from main process to all processes if available
+            if completion_mask is not None:
+                # Broadcast the completion_mask from the main process to all processes
+                completion_mask = broadcast_object_list(completion_mask, from_process=0)
+
+                # Each process takes its corresponding slice based on process index
+                process_slice = slice(
+                    self.accelerator.process_index * len(inputs),
+                    (self.accelerator.process_index + 1) * len(inputs),
+                )
+                completion_mask = completion_mask[process_slice]
+
+                # Convert mask elements to tensors and move to correct device
+                completion_mask = [torch.tensor(mask, device=device) for mask in completion_mask]
+                # Pad masks to uniform length
+                completion_mask = pad(completion_mask, padding_value=0)
+            else:
+                print("No completion mask provided. Computing mask based on EOS positions.")
+                # Fallback: compute mask based on EOS positions if not provided
+                eos_idx = torch.tensor([len(ids) - 1 for ids in completion_ids], device=device)
+                sequence_indices = torch.arange(completion_ids.size(1), device=device).expand(completion_ids.size(0), -1)
+                completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             raise ValueError("Attempted to generate with HF. Only supporting vllm now.")
+
+        if self.accelerator.is_main_process:
+            print("SHAPE CHECK")
+            print(completion_ids[0].shape)
+            print(completion_mask[0].shape)
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B*G, P+C)
@@ -717,6 +747,7 @@ class QwenGRPOTrainer(Trainer):
                 keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
                 reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                 reward_kwargs["prompts_text"] = prompts_text
+                reward_kwargs["completions_messages"] = completion_messages
                 output_reward_func = reward_func(prompts=conversations, completions=completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
