@@ -600,6 +600,7 @@ class GRPOTrainer(Trainer):
             with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
                 if self.accelerator.is_main_process:
                     self.vllm_client.update_named_param(name, param.data)
+        self.vllm_client.reset_prefix_cache()
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:

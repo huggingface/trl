@@ -43,7 +43,7 @@ class VLLMClient:
         group_port (`int`, *optional*, defaults to `51216`):
             Port number for the weight update group.
         connection_timeout (`float`, *optional*, defaults to `0.0`):
-            Total timeout duration in seconds to wait for the server to be up. If the server is not up after the 
+            Total timeout duration in seconds to wait for the server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
 
     Examples:
@@ -231,6 +231,15 @@ class VLLMClient:
         for name, param in model.named_parameters():
             # Update each parameter individually
             self.update_named_param(name, param.data)
+
+    def reset_prefix_cache(self):
+        """
+        Resets the prefix cache for the model.
+        """
+        url = f"http://{self.host}:{self.server_port}/reset_prefix_cache/"
+        response = self.session.post(url)
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):
         """
