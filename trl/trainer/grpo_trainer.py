@@ -916,10 +916,10 @@ class GRPOTrainer(Trainer):
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
             prompts_to_log = gather_object(prompts_text)
             completions_to_log = gather_object(completions_text)
-            rewards_to_log = rewards.tolist()
 
             if self.accelerator.is_main_process:
                 if is_rich_available():
+                    rewards_to_log = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).to('cpu')
                     print_prompt_completions_sample(
                         prompts_to_log,
                         completions_to_log,
