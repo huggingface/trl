@@ -52,6 +52,11 @@ class SFTConfig(TrainingArguments):
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
         packing (`bool`, *optional*, defaults to `False`):
             Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define sequence length.
+        padding_free (`bool`, *optional*, defaults to `False`):
+            Whether to perform forward passes without padding by flattening all sequences in the batch into a single
+            continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
+            supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
+            batch structure.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
@@ -100,6 +105,15 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define "
             "sequence length."
+        },
+    )
+    padding_free: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
+            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
+            "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
+            "handle the flattened batch structure."
         },
     )
     eval_packing: Optional[bool] = field(

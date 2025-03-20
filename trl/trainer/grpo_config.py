@@ -72,6 +72,8 @@ class GRPOConfig(TrainingArguments):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
+        cache_implementation (`str` or `None`, *optional*, defaults to `None`):
+            Implementation of the cache method for faster generation when use_vllm is set to False.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -113,6 +115,9 @@ class GRPOConfig(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
+        epsilon_high (`float` or `None`, *optional*, defaults to `None`):
+            Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
+            specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -225,6 +230,10 @@ class GRPOConfig(TrainingArguments):
             "to repeat tokens."
         },
     )
+    cache_implementation: Optional[str] = field(
+        default=None,
+        metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
+    )
 
     # Parameters that control generation acceleration powered by vLLM
     use_vllm: Optional[bool] = field(
@@ -301,6 +310,13 @@ class GRPOConfig(TrainingArguments):
     epsilon: float = field(
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
+    )
+    epsilon_high: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+        },
     )
     reward_weights: Optional[list[float]] = field(
         default=None,

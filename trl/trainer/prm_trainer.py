@@ -145,7 +145,7 @@ class PRMTrainer(Trainer):
             data_collator = DataCollatorForTokenClassification(processing_class, max_length=args.max_length)
 
         if "input_ids" not in train_dataset.column_names:
-            with PartialState().local_main_process_first():
+            with PartialState().main_process_first():
                 fn_kwargs = {
                     "tokenizer": processing_class,
                     "step_separator": args.step_separator,
