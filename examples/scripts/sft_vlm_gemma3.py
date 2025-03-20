@@ -20,9 +20,19 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
 
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
-from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig, get_peft_model
 from PIL import Image
+
+from trl import (
+    ModelConfig,
+    ScriptArguments,
+    SFTConfig,
+    SFTTrainer,
+    TrlParser,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
+)
 
 import torch
 
@@ -57,7 +67,10 @@ def process_vision_info(messages: list[dict]) -> list[Image.Image]:
 
 
 def main():
+    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
+    script_args, training_args, model_args = parser.parse_args_and_config()
     # Load dataset
+    '''
     train_dataset = load_dataset("HuggingFaceM4/ChartQA", split="train")
 
     def format_data(sample):
@@ -86,6 +99,7 @@ def main():
       ]
 
     train_dataset = [format_data(sample) for sample in train_dataset]
+    '''
 
     # BitsAndBytesConfig int-4 config
     bnb_config = BitsAndBytesConfig(
@@ -110,7 +124,7 @@ def main():
     )
 
     # Apply PEFT model adaptation
-    peft_model = get_peft_model(model, peft_config)
+    #peft_model = get_peft_model(model, peft_config)
 
     # Train model
     training_args = SFTConfig(
@@ -138,15 +152,19 @@ def main():
     training_args.remove_unused_columns = False # important for collator
 
     def collate_fn(examples):
+      print(examples)
       # Get the texts and images, and apply the chat template
-      texts = [
-          processor.apply_chat_template(example, tokenize=False) for example in examples
-      ]  # Prepare texts for processing
-      image_inputs = [process_vision_info(example)[0] for example in examples]  # Process the images to extract inputs
+      #texts = [
+      #    processor.apply_chat_template(example, tokenize=False) for example in examples
+      #]  # Prepare texts for processing
+      texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+      #images = [example["images"] for example in examples]
+      images = [img.convert("RGB") if img.mode == "RGBA" else img for example in examples for img in example["images"]]
+      #image_inputs = [process_vision_info(example)[0] for example in examples]  # Process the images to extract inputs
 
       # Tokenize the texts and process the images
       batch = processor(
-          text=texts, images=image_inputs, return_tensors="pt", padding=True
+          text=texts, images=images, return_tensors="pt", padding=True
       )  # Encode texts and images into tensors
 
       # The labels are the input_ids, and we mask the padding tokens in the loss computation
@@ -165,13 +183,34 @@ def main():
       batch["labels"] = labels
       return batch  # Return the prepared batch
 
+    '''
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        peft_config=peft_config,
+        #peft_config=peft_config,
+        peft_config=get_peft_config(model_args),
         processing_class=processor,
         data_collator=collate_fn,
+    )
+    '''
+
+    ################
+    # Dataset
+    ################
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+
+    ################
+    # Training
+    ################
+    trainer = SFTTrainer(
+        model=model,
+        args=training_args,
+        data_collator=collate_fn,
+        train_dataset=dataset[script_args.dataset_train_split],
+        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        processing_class=processor.tokenizer,
+        peft_config=get_peft_config(model_args),
     )
 
     trainer.train()
