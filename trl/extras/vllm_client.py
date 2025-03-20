@@ -232,6 +232,15 @@ class VLLMClient:
             # Update each parameter individually
             self.update_named_param(name, param.data)
 
+    def reset_prefix_cache(self):
+        """
+        Resets the prefix cache for the model.
+        """
+        url = f"http://{self.host}:{self.server_port}/reset_prefix_cache/"
+        response = self.session.post(url)
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
     def close_communicator(self):
         """
         Closes the weight update group and cleans up the communication group.

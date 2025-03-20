@@ -359,10 +359,16 @@ def main(script_args: ScriptArguments):
         # background_tasks.add_task(llm.collective_rpc, "update_named_param", args=("name", torch.float32, (10, 10)))
         dtype = torch.__getattribute__(request.dtype.split(".")[-1])
         background_tasks.add_task(llm.collective_rpc, "update_named_param", args=(request.name, dtype, request.shape))
-        # Reset the prefix cache after updating weights
-        background_tasks.add_task(lambda: llm.llm_engine.reset_prefix_cache())
 
         return {"message": "Request received, updating named parameter"}
+
+    @app.post("/reset_prefix_cache/")
+    def reset_prefix_cache():
+        """
+        Resets the prefix cache for the model.
+        """
+        success = llm.llm_engine.reset_prefix_cache()
+        return {"message": "Request received, resetting prefix cache status: " + str(success)}
 
     @app.post("/close_communicator/")
     def close_communicator():
