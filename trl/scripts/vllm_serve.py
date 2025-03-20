@@ -228,14 +228,14 @@ def main(script_args: ScriptArguments):
 
     # Define the endpoints for the model server
     @app.get("/health/")
-    def health():
+    async def health():
         """
         Health check endpoint to verify that the server is running.
         """
         return {"status": "ok"}
 
     @app.get("/get_tensor_parallel_size/")
-    def get_tensor_parallel_size():
+    async def get_tensor_parallel_size():
         """
         Retrieves the tensor parallel size from the LLM engine.
 
@@ -265,7 +265,7 @@ def main(script_args: ScriptArguments):
         completion_ids: list[list[int]]
 
     @app.post("/generate/", response_model=GenerateResponse)
-    def generate(request: GenerateRequest):
+    async def generate(request: GenerateRequest):
         """
         Generates completions for the provided prompts.
 
@@ -315,7 +315,7 @@ def main(script_args: ScriptArguments):
         world_size: int
 
     @app.post("/init_communicator/")
-    def init_communicator(request: InitCommunicatorRequest, background_tasks: BackgroundTasks):
+    async def init_communicator(request: InitCommunicatorRequest, background_tasks: BackgroundTasks):
         """
         Initializes the communicator for synchronizing model weights between a client and multiple server
         workers.
@@ -339,7 +339,7 @@ def main(script_args: ScriptArguments):
         shape: list[int]
 
     @app.post("/update_named_param/")
-    def update_named_param(request: UpdateWeightsRequest, background_tasks: BackgroundTasks):
+    async def update_named_param(request: UpdateWeightsRequest, background_tasks: BackgroundTasks):
         """
         Updates the model weights with the provided tensor.
 
@@ -363,7 +363,7 @@ def main(script_args: ScriptArguments):
         return {"message": "Request received, updating named parameter"}
 
     @app.post("/reset_prefix_cache/")
-    def reset_prefix_cache():
+    async def reset_prefix_cache():
         """
         Resets the prefix cache for the model.
         """
@@ -371,7 +371,7 @@ def main(script_args: ScriptArguments):
         return {"message": "Request received, resetting prefix cache status: " + str(success)}
 
     @app.post("/close_communicator/")
-    def close_communicator():
+    async def close_communicator():
         """
         Closes the weight update group and cleans up associated resources.
         """
