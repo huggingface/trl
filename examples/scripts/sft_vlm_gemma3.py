@@ -13,14 +13,27 @@
 # limitations under the License.
 
 """
-Train Gemma-3 on the Codeforces COTS dataset.
+Train Gemma-3 on the HuggingFaceH4/llava-instruct-mix-vsft dataset.
 
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/sft_gemma3.py
+accelerate launch 
+    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/sft_vlm_gemma3.py \
+    --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
+    --model_name_or_path google/gemma-3-4b-it \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 1 \
+    --output_dir gemma-3-4b-instruct-trl-sft-ChartQA \
+    --bf16 \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing \
+    --use_peft \
+    --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
 """
 
+import torch
+
 from datasets import load_dataset
-from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
-from peft import LoraConfig, get_peft_model
+from transformers import AutoModelForImageTextToText, AutoProcessor
 from PIL import Image
 
 from trl import (
@@ -34,133 +47,39 @@ from trl import (
     get_quantization_config,
 )
 
-import torch
-
-system_message = """You are a Vision Language Model specialized in interpreting visual data from chart images.
-Your task is to analyze the provided chart image and respond to queries with concise answers, usually a single word, number, or short phrase.
-The charts include a variety of types (e.g., line charts, bar charts) and contain colors, labels, and text.
-Focus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary."""
-
-
-def process_vision_info(messages: list[dict]) -> list[Image.Image]:
-    image_inputs = []
-    # Iterate through each conversation
-    for msg in messages:
-        # Get content (ensure it's a list)
-        content = msg.get("content", [])
-        if not isinstance(content, list):
-            content = [content]
-
-        # Check each content element for images
-        for element in content:
-            if isinstance(element, dict) and (
-                "image" in element or element.get("type") == "image"
-            ):
-                # Get the image and convert to RGB
-                if "image" in element:
-                    image = element["image"]
-                else:
-                    image = element
-                image_inputs.append(image.convert("RGB"))
-    return image_inputs
-
-
 
 def main():
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
-    # Load dataset
-    '''
-    train_dataset = load_dataset("HuggingFaceM4/ChartQA", split="train")
+    training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
+    training_args.remove_unused_columns = False
+    training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
-    def format_data(sample):
-      return [
-          {
-              "role": "system",
-              "content": [{"type": "text", "text": system_message}],
-          },
-          {
-              "role": "user",
-              "content": [
-                  {
-                      "type": "image",
-                      "image": sample["image"],
-                  },
-                  {
-                      "type": "text",
-                      "text": sample["query"],
-                  },
-              ],
-          },
-          {
-              "role": "assistant",
-              "content": [{"type": "text", "text": sample["label"][0]}],
-          },
-      ]
-
-    train_dataset = [format_data(sample) for sample in train_dataset]
-    '''
-
-    # BitsAndBytesConfig int-4 config
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True, bnb_4bit_use_double_quant=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16
+    ################
+    # Model, Tokenizer & Processor
+    ################
+    torch_dtype = (
+        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
+    )
+    quantization_config = get_quantization_config(model_args)
+    model_kwargs = dict(
+        revision=model_args.model_revision,
+        attn_implementation=model_args.attn_implementation,
+        torch_dtype=torch_dtype,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        quantization_config=quantization_config,
+    )
+    processor = AutoProcessor.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
 
-    # Load model
-    model_id = "google/gemma-3-4b-it"
-    #model = AutoModelForImageTextToText.from_pretrained(model_id, attn_implementation="eager")
-    model = AutoModelForImageTextToText.from_pretrained(model_id, torch_dtype=torch.bfloat16, quantization_config=bnb_config)
-    processor = AutoProcessor.from_pretrained("google/gemma-3-4b-it")
-
-    
-    # Configure LoRA
-    peft_config = LoraConfig(
-        lora_alpha=16,
-        lora_dropout=0.05,
-        r=8,
-        bias="none",
-        target_modules=["q_proj", "v_proj"],
-        task_type="CAUSAL_LM",
+    model = AutoModelForImageTextToText.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
-
-    # Apply PEFT model adaptation
-    #peft_model = get_peft_model(model, peft_config)
-
-    # Train model
-    training_args = SFTConfig(
-        output_dir="gemma-3-4b-instruct-trl-sft-ChartQA",
-        num_train_epochs=1,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=4,
-        gradient_checkpointing=True,
-        optim="adamw_torch_fused",
-        logging_steps=5,
-        save_strategy="epoch",
-        learning_rate=2e-4,
-        bf16=True,
-        max_grad_norm=0.3,
-        warmup_ratio=0.03,
-        lr_scheduler_type="constant",
-        push_to_hub=True,
-        report_to="tensorboard",
-        gradient_checkpointing_kwargs={
-            "use_reentrant": False
-        },
-        dataset_text_field="",
-        dataset_kwargs={"skip_prepare_dataset": True},
-    )
-    training_args.remove_unused_columns = False # important for collator
 
     def collate_fn(examples):
-      print(examples)
-      # Get the texts and images, and apply the chat template
-      #texts = [
-      #    processor.apply_chat_template(example, tokenize=False) for example in examples
-      #]  # Prepare texts for processing
       texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
-      #images = [example["images"] for example in examples]
       images = [img.convert("RGB") if img.mode == "RGBA" else img for example in examples for img in example["images"]]
-      #image_inputs = [process_vision_info(example)[0] for example in examples]  # Process the images to extract inputs
 
       # Tokenize the texts and process the images
       batch = processor(
@@ -183,18 +102,6 @@ def main():
       batch["labels"] = labels
       return batch  # Return the prepared batch
 
-    '''
-    trainer = SFTTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        #peft_config=peft_config,
-        peft_config=get_peft_config(model_args),
-        processing_class=processor,
-        data_collator=collate_fn,
-    )
-    '''
-
     ################
     # Dataset
     ################
@@ -215,8 +122,12 @@ def main():
 
     trainer.train()
 
-    # Push to hub
-    trainer.push_to_hub(dataset_name="open-r1/codeforces-cots")
+    # Save and push to hub
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        if trainer.accelerator.is_main_process:
+            processor.push_to_hub(training_args.hub_model_id)
 
 
 if __name__ == "__main__":
