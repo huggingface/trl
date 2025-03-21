@@ -604,7 +604,7 @@ class GRPOTrainer(Trainer):
 
         if is_peft_model(self.model):
             # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
-            # adapters in a sharded manner is not supported.  
+            # adapters in a sharded manner is not supported.
             with gather_if_zero3(list(self.model.parameters())):
                 self.model.merge_adapter()
 
