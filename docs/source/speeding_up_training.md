@@ -75,7 +75,7 @@ options:
   --dtype DTYPE         Data type to use for vLLM generation. If set to 'auto', the data type will be automatically determined based on
                         the model configuration. Find the supported values in the vLLM documentation. (default: auto)
   --max_model_len MAX_MODEL_LEN, --max-model-len MAX_MODEL_LEN
-                        If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
+                        If set, the `max_model_len` to use for vLLM. This can be useful when running with reduced
                         `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model context
                         size, which might be much larger than the KV cache, leading to inefficiencies. (default: None)
   --enable_prefix_caching ENABLE_PREFIX_CACHING, --enable-prefix-caching ENABLE_PREFIX_CACHING
