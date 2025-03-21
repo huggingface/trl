@@ -603,10 +603,11 @@ class GRPOTrainer(Trainer):
 
         if is_peft_model(self.model):
             if zero_stage_3:
+                # Gather all parameters before merging adapters when using ZeRO-3
                 context = deepspeed.zero.GatheredParameters(list(self.model.parameters()))
             else:
                 context = nullcontext()
-            # Gather all parameters before merging adapters when using ZeRO-3
+
             with context:
                 self.model.merge_adapter()
 
@@ -630,7 +631,7 @@ class GRPOTrainer(Trainer):
         else:
             # For non-PEFT models, simply gather and update parameters
             for name, param in self.model.named_parameters():
-                with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
+                with nullcontext() if not zero_stage_3 else deepspeed.zero.GatheredParameters([param]):
                     if self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
 
