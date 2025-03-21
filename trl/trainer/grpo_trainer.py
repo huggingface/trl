@@ -16,6 +16,7 @@ import os
 import textwrap
 import warnings
 from collections import defaultdict
+from contextlib import nullcontext
 from typing import Any, Callable, Optional, Sized, Union
 
 import torch
@@ -601,8 +602,13 @@ class GRPOTrainer(Trainer):
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
 
         if is_peft_model(self.model):
-            # Gather all parameters before merging adapters when using ZeRO-3
-            with deepspeed.zero.GatheredParameters(list(self.model.parameters()), enabled=zero_stage_3):
+            if zero_stage_3:
+                # Gather all parameters before merging adapters when using ZeRO-3
+                context = deepspeed.zero.GatheredParameters(list(self.model.parameters()))
+            else:
+                context = nullcontext()
+
+            with context:
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
@@ -619,23 +625,19 @@ class GRPOTrainer(Trainer):
                     if self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
 
-                # Reset cache on main process
-                if self.accelerator.is_main_process:
-                    self.vllm_client.reset_prefix_cache()
-
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather and update parameters
             for name, param in self.model.named_parameters():
-                with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
+                with nullcontext() if not zero_stage_3 else deepspeed.zero.GatheredParameters([param]):
                     if self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
 
-            # Reset cache on main process
-            if self.accelerator.is_main_process:
-                self.vllm_client.reset_prefix_cache()
+        # Reset cache on main process
+        if self.accelerator.is_main_process:
+            self.vllm_client.reset_prefix_cache()
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
