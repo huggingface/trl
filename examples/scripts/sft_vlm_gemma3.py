@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Train Gemma-3 on the HuggingFaceH4/llava-instruct-mix-vsft dataset.
+Train Gemma-3 on the HuggingFaceH4/llava-instruct-mix-vsft dataset (single-image).
 
 accelerate launch 
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
@@ -22,18 +22,42 @@ accelerate launch
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
-    --output_dir gemma-3-4b-instruct-trl-sft-ChartQA \
+    --output_dir gemma-3-4b-it-trl-sft-ChartQA \
     --bf16 \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
+
+Train Gemma-3 on the FanqingM/MMIU-Benchmark dataset (multi-image).
+
+accelerate launch 
+    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/sft_vlm_gemma3.py \
+    --dataset_name FanqingM/MMIU-Benchmark \
+    --dataset_train_split test \
+    --model_name_or_path google/gemma-3-4b-it \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 1 \
+    --output_dir gemma-3-4b-it-trl-sft-MMIU-Benchmark \
+    --bf16 \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing \
+    --use_peft \
+    --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
+
+
+Train Gemma-3 on the HuggingFaceM4/OBELICS dataset (image-interleaving).
+
 """
 
 import torch
+import zipfile
+import os
 
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict
 from transformers import AutoModelForImageTextToText, AutoProcessor
+from huggingface_hub import hf_hub_download, list_repo_files
 from PIL import Image
 
 from trl import (
@@ -46,6 +70,64 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+
+# For multi-image example
+def process_vision_info(messages: list[dict]) -> list[Image.Image]:
+    image_inputs = []
+    # Iterate through each conversation
+    for msg in messages:
+        # Get content (ensure it's a list)
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            content = [content]
+
+        # Check each content element for images
+        for element in content:
+            if isinstance(element, dict) and (
+                "image" in element or element.get("type") == "image"
+            ):
+                # Get the image and convert to RGB
+                if "image" in element:
+                    image = element["image"]
+                else:
+                    image = element
+                image_inputs.append(image.convert("RGB"))
+    return image_inputs
+
+# For multi-image example
+def format_data(sample):
+    return [
+        {"role": "system", "content": [{"type": "text", "text": sample['context']}]},
+        {
+            "role": "user",
+            "content": [{"type": "image", "image": Image.open(img).convert("RGB")} for img in sample['input_image_path']]
+                      + [{"type": "text", "text": sample["question"]}],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": sample["output"]}]},
+    ]
+
+
+# For multi-image example
+def prepare_dataset(dataset, dataset_name, dataset_train_split):
+    dataset = DatasetDict({
+        "test": dataset["test"].select(range(100))
+    })
+    all_files = list_repo_files(dataset_name, repo_type="dataset")
+    zip_files = [f for f in all_files if f.endswith(".zip")]
+
+    for zip_filename in zip_files:
+        zip_path = hf_hub_download(repo_id=dataset_name, filename=zip_filename, repo_type="dataset")
+        extract_folder = zip_filename.replace(".zip", "")
+        os.makedirs(extract_folder, exist_ok=True)
+
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(extract_folder)
+
+    dataset = [format_data(sample) for sample in dataset[dataset_train_split]]
+    dataset = DatasetDict({
+        "test": dataset
+    })
+    return dataset
 
 
 def main():
@@ -78,34 +160,40 @@ def main():
     )
 
     def collate_fn(examples):
-      texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
-      images = [img.convert("RGB") if img.mode == "RGBA" else img for example in examples for img in example["images"]]
+        if 'messages' in examples[0]: # single-image
+            texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+            images = [img.convert("RGB") if img.mode == "RGBA" else img for example in examples for img in example["images"]]
+        else: # multi-image
+            texts = [processor.apply_chat_template(example, tokenize=False) for example in examples]
+            images = [process_vision_info(example) for example in examples]
 
-      # Tokenize the texts and process the images
-      batch = processor(
-          text=texts, images=images, return_tensors="pt", padding=True
-      )  # Encode texts and images into tensors
+        # Tokenize the texts and process the images
+        batch = processor(
+        text=texts, images=images, return_tensors="pt", padding=True
+        )  # Encode texts and images into tensors
 
-      # The labels are the input_ids, and we mask the padding tokens in the loss computation
-      labels = batch["input_ids"].clone()  # Clone input IDs for labels
-      # Mask image tokens
-      image_token_id = [
-          processor.tokenizer.convert_tokens_to_ids(
-              processor.tokenizer.special_tokens_map["boi_token"]
-          )
-      ]
-      # Mask tokens for not being used in the loss computation
-      labels[labels == processor.tokenizer.pad_token_id] = -100
-      labels[labels == image_token_id] = -100
-      labels[labels == 262144] = -100
+        # The labels are the input_ids, and we mask the padding tokens in the loss computation
+        labels = batch["input_ids"].clone()  # Clone input IDs for labels
+        # Mask image tokens
+        image_token_id = [
+            processor.tokenizer.convert_tokens_to_ids(
+                processor.tokenizer.special_tokens_map["boi_token"]
+            )
+        ]
+        # Mask tokens for not being used in the loss computation
+        labels[labels == processor.tokenizer.pad_token_id] = -100
+        labels[labels == image_token_id] = -100
+        labels[labels == 262144] = -100
 
-      batch["labels"] = labels
-      return batch  # Return the prepared batch
+        batch["labels"] = labels
+        return batch  # Return the prepared batch
 
     ################
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    if script_args.dataset_name == 'FanqingM/MMIU-Benchmark':
+        dataset = prepare_dataset(dataset, script_args.dataset_name, script_args.dataset_train_split)     
 
     ################
     # Training
