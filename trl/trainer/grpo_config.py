@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -80,26 +81,13 @@ class GRPOConfig(TrainingArguments):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept unused for
             training, as vLLM will require one for generation. vLLM must be installed (`pip install vllm`).
-        vllm_device (`str`, *optional*, defaults to `"auto"`):
-            Device where vLLM generation will run, e.g. `"cuda:1"`. If set to `"auto"` (default), the system will
-            automatically select the next available GPU after the last one used for training. This assumes that
-            training has not already occupied all available GPUs. If only one device is available, the device will be
-            shared between both training and vLLM.
-        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
-            Ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV cache on the
-            device dedicated to generation powered by vLLM. Higher values will increase the KV cache size and thus
-            improve the model's throughput. However, if the value is too high, it may cause out-of-memory (OOM) errors
-            during initialization.
-        vllm_dtype (`str`, *optional*, defaults to `"auto"`):
-            Data type to use for vLLM generation. If set to `"auto"`, the data type will be automatically determined
-            based on the model configuration. Find the supported values in the vLLM documentation.
-        vllm_max_model_len (`int` or `None`, *optional*, defaults to `None`):
-            If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
-            `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
-            context size, which might be much larger than the KV cache, leading to inefficiencies.
-        vllm_enable_prefix_caching (`bool`, *optional*, defaults to `True`):
-            Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the model and the hardware
-            support this feature.
+        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            Host of the vLLM server to connect to.
+        vllm_server_port (`int`, *optional*, defaults to `8000`):
+            Port of the vLLM server to connect to.
+        vllm_server_timeout (`float`, *optional*, defaults to `120.0`):
+            Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
+            timeout, a `ConnectionError` is raised.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
@@ -228,51 +216,26 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Parameters that control generation acceleration powered by vLLM
-    use_vllm: Optional[bool] = field(
+    use_vllm: bool = field(
         default=False,
         metadata={
-            "help": "Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept "
-            "unused for training, as vLLM will require one for generation. vLLM must be installed "
-            "(`pip install vllm`)."
+            "help": "Whether to use vLLM for generating completions. If set to `True`, ensure that a vLLM server is "
+            "running. To run the server, install vLLM (`pip install vllm`) and run `trl vllm-serve`."
         },
     )
-    vllm_device: Optional[str] = field(
-        default="auto",
-        metadata={
-            "help": "Device where vLLM generation will run, e.g. 'cuda:1'. If set to 'auto' (default), the system "
-            "will automatically select the next available GPU after the last one used for training. This assumes "
-            "that training has not already occupied all available GPUs."
-        },
+    vllm_server_host: str = field(
+        default="0.0.0.0",
+        metadata={"help": "Host of the vLLM server to connect to."},
     )
-    vllm_gpu_memory_utilization: float = field(
-        default=0.9,
-        metadata={
-            "help": "Ratio (between 0 and 1) of GPU memory to reserve for the model weights, activations, and KV "
-            "cache on the device dedicated to generation powered by vLLM. Higher values will increase the KV cache "
-            "size and thus improve the model's throughput. However, if the value is too high, it may cause "
-            "out-of-memory (OOM) errors during initialization."
-        },
+    vllm_server_port: int = field(
+        default=8000,
+        metadata={"help": "Port of the vLLM server to connect to."},
     )
-    vllm_dtype: Optional[str] = field(
-        default="auto",
+    vllm_server_timeout: float = field(
+        default=120.0,
         metadata={
-            "help": "Data type to use for vLLM generation. If set to 'auto', the data type will be automatically "
-            "determined based on the model configuration. Find the supported values in the vLLM documentation."
-        },
-    )
-    vllm_max_model_len: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced "
-            "`vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model "
-            "context size, which might be much larger than the KV cache, leading to inefficiencies."
-        },
-    )
-    vllm_enable_prefix_caching: Optional[bool] = field(
-        default=True,
-        metadata={
-            "help": "Whether to enable prefix caching in vLLM. If set to `True` (default), ensure that the model and "
-            "the hardware support this feature."
+            "help": "Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up "
+            "after the timeout, a `ConnectionError` is raised."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
@@ -348,3 +311,83 @@ class GRPOConfig(TrainingArguments):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
+
+    # Deprecated parameters
+    vllm_device: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To use vLLM, start a vLLM "
+            "server with the `trl vllm-serve` command."
+        },
+    )
+    vllm_gpu_memory_utilization: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the GPU memory "
+            "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
+            "configuration."
+        },
+    )
+    vllm_dtype: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the data type for "
+            "vLLM generation, you should now use the `dtype` parameter in the vLLM server configuration."
+        },
+    )
+    vllm_max_model_len: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the "
+            "`max_model_len` for vLLM, you should now use the `max_model_len` parameter in the vLLM server "
+            "configuration."
+        },
+    )
+    vllm_enable_prefix_caching: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control prefix caching in "
+            "vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server configuration."
+        },
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.vllm_device is not None:
+            warnings.warn(
+                "`vllm_device` is deprecated and will be removed in version 0.18.0. To use vLLM, start a vLLM server "
+                "with the `trl vllm-serve` command.",
+                DeprecationWarning,
+            )
+
+        if self.vllm_gpu_memory_utilization is not None:
+            warnings.warn(
+                "`vllm_gpu_memory_utilization` is deprecated and will be removed in v0.18. To control the GPU memory "
+                "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
+                "configuration.",
+                DeprecationWarning,
+            )
+
+        if self.vllm_dtype is not None:
+            warnings.warn(
+                "`vllm_dtype` is deprecated and will be removed in version 0.18.0. To control the data type for vLLM "
+                "generation, you should now use the `dtype` parameter in the vLLM server configuration.",
+                DeprecationWarning,
+            )
+
+        if self.vllm_max_model_len is not None:
+            warnings.warn(
+                "`vllm_max_model_len` is deprecated and will be removed in version 0.18.0. To control the "
+                "`max_model_len` for vLLM, you should now use the `max_model_len` parameter in the vLLM server "
+                "configuration.",
+                DeprecationWarning,
+            )
+
+        if self.vllm_enable_prefix_caching is not None:
+            warnings.warn(
+                "`vllm_enable_prefix_caching` is deprecated and will be removed in version 0.18.0. To control prefix "
+                "caching in vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server "
+                "configuration.",
+                DeprecationWarning,
+            )

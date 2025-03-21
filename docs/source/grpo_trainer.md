@@ -68,11 +68,11 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 
 ### Computing the advantage
 
-For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:  
+For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:
 
-$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$  
+$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
 
-This approach gives the method its name: **Group Relative Policy Optimization (GRPO)**.  
+This approach gives the method its name: **Group Relative Policy Optimization (GRPO)**.
 
 ### Estimating the KL divergence
 
@@ -83,15 +83,15 @@ $$
 
 ### Computing the loss
 
-The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:  
+The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:
 
 $$
 \mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
 $$
 
-where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.  
+where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.
 
-In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:  
+In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:
 
 $$
 \mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
@@ -112,17 +112,103 @@ The GRPO Trainer logs the following metrics:
 
 ## Customization
 
-## Speed up training with vLLM-powered generation  
+### Speed up training with vLLM-powered generation
 
-Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, pass `use_vllm=True` in the training arguments.  
+Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, first install the package with
+
+```shell
+pip install trl[vllm]
+```
+
+Then, start the vLLM server with the desired model:
+
+```bash
+trl vllm-serve --model <model_name>
+```
+
+Then, pass `use_vllm=True` in the training arguments and run the training script:
 
 ```python
 from trl import GRPOConfig
 
 training_args = GRPOConfig(..., use_vllm=True)
-```  
+```
 
-For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).  
+For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
+
+### GRPO at scale: train a 70B+ Model on multiple nodes
+
+When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
+
+- **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such model. For more details, see [DeepSpeed Integration](deepspeed_integration).
+- **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
+- **vLLM**: See the previous section on how to use vLLM to speed up generation.
+
+Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
+
+```sh
+#!/bin/bash
+#SBATCH --nodes=5
+#SBATCH --gres=gpu:8
+
+# Get the list of allocated nodes
+NODELIST=($(scontrol show hostnames $SLURM_JOB_NODELIST))
+
+# Assign the first 4 nodes for training and the 5th node for vLLM
+TRAIN_NODES="${NODELIST[@]:0:4}"  # Nodes 0, 1, 2, 3 for training
+VLLM_NODE="${NODELIST[4]}"  # Node 4 for vLLM
+
+# Run training on the first 4 nodes (Group 1)
+srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
+     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+     --num_processes 32 \
+     --num_machines 4 \
+     --main_process_ip ${NODELIST[0]} \
+     --machine_rank $SLURM_PROCID \
+     --rdzv_backend c10d \
+     train_grpo.py \
+     --server_ip $VLLM_NODE &
+
+# Run vLLM server on the 5th node (Group 2)
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+
+wait
+```
+
+```python
+import argparse
+
+from datasets import load_dataset
+from trl import GRPOTrainer, GRPOConfig
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--vllm_server_host", type=str, default="", help="The server IP")
+    args = parser.parse_args()
+
+    # Example dataset from TLDR
+    dataset = load_dataset("trl-lib/tldr", split="train")
+
+    # Dummy reward function: count the number of unique characters in the completions
+    def reward_num_unique_chars(completions, **kwargs):
+        return [len(set(c)) for c in completions]
+
+    training_args = GRPOConfig(
+        output_dir="Qwen2.5-72B-GRPO",
+        per_device_train_batch_size=4,
+        bf16=True,
+        gradient_checkpointing=True,
+        logging_steps=10,
+        use_vllm=True,
+        vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
+    )
+
+    trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer.train()
+
+if __name__=="__main__":
+    main()
+```
 
 ### Using a custom reward function
 
@@ -247,7 +333,7 @@ def math_reward_func(prompts, completions, task, **kwargs):
             # Return None for non-math tasks
             rewards.append(None)
     return rewards
-    
+
 # Coding-specific reward function
 def coding_reward_func(prompts, completions, task, **kwargs):
     rewards = []
