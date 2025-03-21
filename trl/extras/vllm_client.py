@@ -33,7 +33,7 @@ class VLLMClient:
     A client class to interact with a vLLM server.
 
     This class provides methods to generate completions, initialize and manage weight update groups, and update model
-    weights in a distributed setting. Before using it, make sure to start the vLLM server with `trl vllm-serve`.
+    weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
 
     Args:
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
