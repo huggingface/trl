@@ -453,13 +453,15 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.accelerator.is_main_process:
-                self.vllm_client = VLLMClient(args.vllm_server_host, args.vllm_server_port, args.vllm_server_timeout)
+                self.vllm_client = VLLMClient(host=args.vllm_server_host, server_port=args.vllm_server_port, connection_timeout=args.vllm_server_timeout)
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
-
+            # when using lora, the initial model may be slightly different from the one in vllm
+            # so we force loading the model once at the beginning of training
+            self.vllm_never_synced_before = True
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
             # synchronize all processes after vLLM has been fully initialized.
@@ -602,6 +604,11 @@ class GRPOTrainer(Trainer):
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
 
+        # Zero3 + peft + very_large_model special combination
+        if zero_stage_3 and is_peft_model(self.model):
+            self._move_model_to_vllm_especially_for_zero3_plus_peft()
+            return  # early return
+
         if is_peft_model(self.model):
             # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
             # adapters in a sharded manner is not supported.
@@ -633,6 +640,80 @@ class GRPOTrainer(Trainer):
                         self.vllm_client.update_named_param(name, param.data)
 
         # Reset cache on main process
+        if self.accelerator.is_main_process:
+            self.vllm_client.reset_prefix_cache()
+        return
+
+    def _move_model_to_vllm_especially_for_zero3_plus_peft(self):
+        """
+        Why this special method is needed for the special (zero3 + peft + very_large_model) combination? Why this combination is very nasty?
+
+            1. `model.merge_adapter()` must be executed after `unwrap_model_for_generation`
+            2. `unwrap_model_for_generation` can cause GPU OOM if model is very large
+            3. Usually, GPU OOM can be resolve by setting `gather_deepspeed3_params=False`
+            4. But guess what? `gather_deepspeed3_params=False` cause error for `model.merge_adapter()`
+
+        So, we rewrite the `merge_adapter` code, to avoid GPU OOM, we have to merge the adapter module by module. The basic idea is:
+
+            1. We first deal with lora weights only
+            2. Then we deal with whatever params that are left behind
+        """
+        from peft.tuners.tuners_utils import BaseTunerLayer, onload_layer
+
+        # Update the weights in vLLM. When using DeepSpeed ZeRO Stage 3, we need to gather the parameters before updating the weights.
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        warning = "This special `_move_model_to_vllm` is designed only for zero3 + peft + very_large_model. Only a nasty problem needs a nasty solution like this."
+        if not zero_stage_3 or not is_peft_model(self.model):
+            raise RuntimeError(warning)
+
+        parameter_to_transfer_map_id_name = {id(param): name for name, param in self.model.named_parameters()}
+        # 1. We first deal with lora weights only, it is very very nasty 😂
+        for module in self.model.modules():
+            # This return not only leaf modules, but also the parent module
+            if isinstance(module, BaseTunerLayer):
+                # do not know what this `onload_layer` thing does, but it seems important
+                with onload_layer(module):
+                    # get all the parameters of this small module
+                    param_list_of_this_small_module = [param for relative_name, param in module.named_parameters()]
+                    with deepspeed.zero.GatheredParameters(param_list_of_this_small_module) if zero_stage_3 else nullcontext():
+                        # we must `GatheredParameters` before module.merge
+                        module.merge(adapter_names=None)
+                        for relative_name, param in module.named_parameters():
+                            param_python_id = id(param)
+                            # get the absolute name of the parameter
+                            # absolute_name = f"{module.prefix}.{relative_name}"
+                            absolute_name = parameter_to_transfer_map_id_name[param_python_id]  # f"{module.prefix}.{relative_name}"
+                            # one less weight to worry about
+                            parameter_to_transfer_map_id_name.pop(param_python_id)
+                            # only the main process is responsible for transferring weights
+                            if self.accelerator.is_main_process:
+                                # When using PEFT, we need to recover the original parameter name and discard some parameters
+                                absolute_name = absolute_name.removeprefix("base_model.model.").replace(".base_layer", "")
+                                if self.model.prefix in absolute_name:
+                                    continue
+                                # When module to save, remove its prefix and discard the original module
+                                if "original_module" in absolute_name:
+                                    continue
+                                absolute_name = absolute_name.replace("modules_to_save.default.", "")
+                                # Finally it is time to be transferred. 🌟
+                                # print(f"Transferring: {absolute_name}")
+                                self.vllm_client.update_named_param(absolute_name, param.data)
+                        # and of course, we must unmerge before exit `GatheredParameters`
+                        module.unmerge()
+        # 2. Then we deal with whatever params that are left behind
+        remaining_param_list = [(name, param) for name, param in self.model.named_parameters() if name in parameter_to_transfer_map_id_name.values()]
+        for name, param in remaining_param_list:
+            # print(f"Transferring Part2: {name}")
+            with deepspeed.zero.GatheredParameters([param]) if zero_stage_3 else nullcontext():
+                if self.accelerator.is_main_process:
+                    name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                    if self.model.prefix in name: raise RuntimeError("Something must be wrong because we assume lora-related weights are already transferred.")
+                    if "original_module" in name: raise RuntimeError("Something must be wrong because we assume lora-related weights are already transferred.")
+                    if ("modules_to_save.default." in name): raise RuntimeError("Something must be wrong because we assume lora-related weights are already transferred.")
+                    self.vllm_client.update_named_param(name, param.data)
+
+        # Reset the prefix cache after updating weights
         if self.accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
 
@@ -670,7 +751,8 @@ class GRPOTrainer(Trainer):
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
             # First, have main process load weights if needed
-            if self.state.global_step != self._last_loaded_step:
+            if self.state.global_step != self._last_loaded_step or self.vllm_never_synced_before:
+                self.vllm_never_synced_before = False
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 

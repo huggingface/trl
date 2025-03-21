@@ -1691,7 +1691,7 @@ def selective_log_softmax(logits, index):
     return per_token_logps
 
 
-def print_prompt_completions_sample(prompts: list[str], completions: list[str], rewards: list[int], step: int) -> None:
+def print_prompt_completions_sample(prompts: list[str], completions: list[str], rewards: list[int], step: int, max_display_rows=2) -> None:
     """
     Print out a sample of model completions to the console.
 
@@ -1737,7 +1737,21 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     table.add_column("Completion", style="bright_green")
     table.add_column("Reward", style="bold cyan", justify="right")
 
-    for prompt, completion, reward in zip(prompts, completions, rewards):
+    n_rows = len(prompts)
+
+    for i, prompt, completion, reward in zip(range(n_rows), prompts, completions, rewards):
+        if i >= (max_display_rows - 1):
+            if i == n_rows-1:
+                # last row, always print normally
+                ...
+            elif i == max_display_rows - 1:
+                # not last row, print ellipsis and average reward
+                prompt = "..."
+                completion = "..."
+                reward = sum(rewards) / n_rows
+            else:
+                # skip all other rows because of the max_display_rows limitation
+                continue
         table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places
         table.add_section()  # Adds a separator between rows
 
