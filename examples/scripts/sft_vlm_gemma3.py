@@ -15,7 +15,7 @@
 """
 Train Gemma-3 on the HuggingFaceH4/llava-instruct-mix-vsft dataset (single-image).
 
-accelerate launch 
+accelerate launch
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/sft_vlm_gemma3.py \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
@@ -31,7 +31,7 @@ accelerate launch
 
 Train Gemma-3 on the FanqingM/MMIU-Benchmark dataset (multi-image).
 
-accelerate launch 
+accelerate launch
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/sft_vlm_gemma3.py \
     --dataset_name FanqingM/MMIU-Benchmark \
