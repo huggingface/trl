@@ -600,15 +600,12 @@ class GRPOTrainer(Trainer):
         # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
 
         if is_peft_model(self.model):
-            if zero_stage_3:
-                # Gather all parameters before merging adapters when using ZeRO-3
-                context = deepspeed.zero.GatheredParameters(list(self.model.parameters()))
-            else:
-                context = nullcontext()
-
-            with context:
+            # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
+            # adapters in a sharded manner is not supported.  
+            with gather_if_zero3(list(self.model.parameters())):  
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
@@ -629,9 +626,9 @@ class GRPOTrainer(Trainer):
                 self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
         else:
-            # For non-PEFT models, simply gather and update parameters
+            # For non-PEFT models, simply gather and update each parameter individually.
             for name, param in self.model.named_parameters():
-                with nullcontext() if not zero_stage_3 else deepspeed.zero.GatheredParameters([param]):
+                with gather_if_zero3([param]):
                     if self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
 
