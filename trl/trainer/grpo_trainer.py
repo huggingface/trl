@@ -16,7 +16,6 @@ import os
 import textwrap
 import warnings
 from collections import defaultdict
-from contextlib import nullcontext
 from typing import Any, Callable, Optional, Sized, Union
 
 import torch
@@ -606,7 +605,7 @@ class GRPOTrainer(Trainer):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         for name, param in self.model.named_parameters():
-            with deepspeed.zero.GatheredParameters([param]) if zero_stage_3 else nullcontext():
+            with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
                 if self.accelerator.is_main_process:
                     # When using PEFT, we need to recover the original parameter name and discard some parameters
                     if is_peft_model(self.model):
