@@ -602,13 +602,10 @@ class GRPOTrainer(Trainer):
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
 
         if is_peft_model(self.model):
-            if zero_stage_3:
-                # Gather all parameters before merging adapters when using ZeRO-3
-                context = deepspeed.zero.GatheredParameters(list(self.model.parameters()))
-            else:
-                context = nullcontext()
-
-            with context:
+            # Gather all parameters before merging adapters when using ZeRO-3
+            with (
+                nullcontext() if not zero_stage_3 else deepspeed.zero.GatheredParameters(list(self.model.parameters()))
+            ):
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
