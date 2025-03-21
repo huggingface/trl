@@ -21,8 +21,15 @@ import requests
 import torch
 from requests import ConnectionError
 from torch import nn
-from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
-from vllm.distributed.utils import StatelessProcessGroup
+
+from ..import_utils import is_vllm_available
+
+
+if is_vllm_available():
+    from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
+    from vllm.distributed.utils import StatelessProcessGroup
+else:
+    raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
 
 
 logger = logging.getLogger(__name__)
