@@ -45,10 +45,6 @@ accelerate launch
     --gradient_checkpointing \
     --use_peft \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
-
-
-Train Gemma-3 on the HuggingFaceM4/OBELICS dataset (image-interleaving).
-
 """
 
 import torch
@@ -74,19 +70,15 @@ from trl import (
 # For multi-image example
 def process_vision_info(messages: list[dict]) -> list[Image.Image]:
     image_inputs = []
-    # Iterate through each conversation
     for msg in messages:
-        # Get content (ensure it's a list)
         content = msg.get("content", [])
         if not isinstance(content, list):
             content = [content]
 
-        # Check each content element for images
         for element in content:
             if isinstance(element, dict) and (
                 "image" in element or element.get("type") == "image"
             ):
-                # Get the image and convert to RGB
                 if "image" in element:
                     image = element["image"]
                 else:
@@ -94,8 +86,9 @@ def process_vision_info(messages: list[dict]) -> list[Image.Image]:
                 image_inputs.append(image.convert("RGB"))
     return image_inputs
 
+
 # For multi-image example
-def format_data(sample):
+def format_data(sample: dict[str, any]) -> list[dict[str, any]]:
     return [
         {"role": "system", "content": [{"type": "text", "text": sample['context']}]},
         {
@@ -108,10 +101,7 @@ def format_data(sample):
 
 
 # For multi-image example
-def prepare_dataset(dataset, dataset_name, dataset_train_split):
-    dataset = DatasetDict({
-        "test": dataset["test"].select(range(100))
-    })
+def prepare_dataset(dataset: DatasetDict, dataset_name: str, dataset_train_split: str) -> DatasetDict:
     all_files = list_repo_files(dataset_name, repo_type="dataset")
     zip_files = [f for f in all_files if f.endswith(".zip")]
 
@@ -123,9 +113,8 @@ def prepare_dataset(dataset, dataset_name, dataset_train_split):
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(extract_folder)
 
-    dataset = [format_data(sample) for sample in dataset[dataset_train_split]]
     dataset = DatasetDict({
-        "test": dataset
+        "test": [format_data(sample) for sample in dataset[dataset_train_split]]
     })
     return dataset
 
