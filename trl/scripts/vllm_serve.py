@@ -149,7 +149,7 @@ class ScriptArguments:
             Data type to use for vLLM generation. If set to `"auto"`, the data type will be automatically determined
             based on the model configuration. Find the supported values in the vLLM documentation.
         max_model_len (`int` or `None`, *optional*, defaults to `None`):
-            If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced
+            If set, the `max_model_len` to use for vLLM. This can be useful when running with reduced
             `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
             context size, which might be much larger than the KV cache, leading to inefficiencies.
         enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
@@ -193,7 +193,7 @@ class ScriptArguments:
     max_model_len: Optional[int] = field(
         default=None,
         metadata={
-            "help": "If set, the `max_model_len` to use for vLLM. This could be useful when running with reduced "
+            "help": "If set, the `max_model_len` to use for vLLM. This can be useful when running with reduced "
             "`vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model "
             "context size, which might be much larger than the KV cache, leading to inefficiencies."
         },

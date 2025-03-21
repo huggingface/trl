@@ -28,8 +28,6 @@ from ..import_utils import is_vllm_available
 if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.utils import StatelessProcessGroup
-else:
-    raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +79,8 @@ class VLLMClient:
     def __init__(
         self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0
     ):
+        if not is_vllm_available():
+            raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
         self.session = requests.Session()
         self.host = host
         self.server_port = server_port
