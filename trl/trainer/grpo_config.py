@@ -85,6 +85,9 @@ class GRPOConfig(TrainingArguments):
             Host of the vLLM server to connect to.
         vllm_server_port (`int`, *optional*, defaults to `8000`):
             Port of the vLLM server to connect to.
+        vllm_server_timeout (`float`, *optional*, defaults to `120.0`):
+            Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
+            timeout, a `ConnectionError` is raised.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
@@ -227,6 +230,13 @@ class GRPOConfig(TrainingArguments):
     vllm_server_port: int = field(
         default=8000,
         metadata={"help": "Port of the vLLM server to connect to."},
+    )
+    vllm_server_timeout: float = field(
+        default=120.0,
+        metadata={
+            "help": "Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up "
+            "after the timeout, a `ConnectionError` is raised."
+        },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
