@@ -454,7 +454,9 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.accelerator.is_main_process:
-                self.vllm_client = VLLMClient(args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout)
+                self.vllm_client = VLLMClient(
+                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
+                )
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
