@@ -47,14 +47,14 @@ accelerate launch
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
 """
 
-import torch
-import zipfile
 import os
+import zipfile
 
-from datasets import load_dataset, DatasetDict
-from transformers import AutoModelForImageTextToText, AutoProcessor
+import torch
+from datasets import DatasetDict, load_dataset
 from huggingface_hub import hf_hub_download, list_repo_files
 from PIL import Image
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from trl import (
     ModelConfig,
@@ -67,6 +67,7 @@ from trl import (
     get_quantization_config,
 )
 
+
 # For multi-image example
 def process_vision_info(messages: list[dict]) -> list[Image.Image]:
     image_inputs = []
@@ -76,9 +77,7 @@ def process_vision_info(messages: list[dict]) -> list[Image.Image]:
             content = [content]
 
         for element in content:
-            if isinstance(element, dict) and (
-                "image" in element or element.get("type") == "image"
-            ):
+            if isinstance(element, dict) and ("image" in element or element.get("type") == "image"):
                 if "image" in element:
                     image = element["image"]
                 else:
@@ -90,11 +89,13 @@ def process_vision_info(messages: list[dict]) -> list[Image.Image]:
 # For multi-image example
 def format_data(sample: dict[str, any]) -> list[dict[str, any]]:
     return [
-        {"role": "system", "content": [{"type": "text", "text": sample['context']}]},
+        {"role": "system", "content": [{"type": "text", "text": sample["context"]}]},
         {
             "role": "user",
-            "content": [{"type": "image", "image": Image.open(img).convert("RGB")} for img in sample['input_image_path']]
-                      + [{"type": "text", "text": sample["question"]}],
+            "content": [
+                {"type": "image", "image": Image.open(img).convert("RGB")} for img in sample["input_image_path"]
+            ]
+            + [{"type": "text", "text": sample["question"]}],
         },
         {"role": "assistant", "content": [{"type": "text", "text": sample["output"]}]},
     ]
@@ -113,9 +114,7 @@ def prepare_dataset(dataset: DatasetDict, dataset_name: str, dataset_train_split
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(extract_folder)
 
-    dataset = DatasetDict({
-        "test": [format_data(sample) for sample in dataset[dataset_train_split]]
-    })
+    dataset = DatasetDict({"test": [format_data(sample) for sample in dataset[dataset_train_split]]})
     return dataset
 
 
@@ -149,25 +148,25 @@ def main():
     )
 
     def collate_fn(examples):
-        if 'messages' in examples[0]: # single-image
+        if "messages" in examples[0]:  # single-image
             texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
-            images = [img.convert("RGB") if img.mode == "RGBA" else img for example in examples for img in example["images"]]
-        else: # multi-image
+            images = [
+                img.convert("RGB") if img.mode == "RGBA" else img for example in examples for img in example["images"]
+            ]
+        else:  # multi-image
             texts = [processor.apply_chat_template(example, tokenize=False) for example in examples]
             images = [process_vision_info(example) for example in examples]
 
         # Tokenize the texts and process the images
         batch = processor(
-        text=texts, images=images, return_tensors="pt", padding=True
+            text=texts, images=images, return_tensors="pt", padding=True
         )  # Encode texts and images into tensors
 
         # The labels are the input_ids, and we mask the padding tokens in the loss computation
         labels = batch["input_ids"].clone()  # Clone input IDs for labels
         # Mask image tokens
         image_token_id = [
-            processor.tokenizer.convert_tokens_to_ids(
-                processor.tokenizer.special_tokens_map["boi_token"]
-            )
+            processor.tokenizer.convert_tokens_to_ids(processor.tokenizer.special_tokens_map["boi_token"])
         ]
         # Mask tokens for not being used in the loss computation
         labels[labels == processor.tokenizer.pad_token_id] = -100
@@ -181,8 +180,8 @@ def main():
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-    if script_args.dataset_name == 'FanqingM/MMIU-Benchmark':
-        dataset = prepare_dataset(dataset, script_args.dataset_name, script_args.dataset_train_split)     
+    if script_args.dataset_name == "FanqingM/MMIU-Benchmark":
+        dataset = prepare_dataset(dataset, script_args.dataset_name, script_args.dataset_train_split)
 
     ################
     # Training
