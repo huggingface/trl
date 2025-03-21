@@ -114,10 +114,13 @@ The GRPO Trainer logs the following metrics:
 
 ### Speed up training with vLLM-powered generation
 
-Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, first install the package with 
+Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, first install the package with
 
 ```shell
-pip install "vllm==0.7.2"
+pip install trl[vllm]
+```
+
+Then, start the vLLM server with the desired model:
 
 ```bash
 trl vllm-serve --model <model_name>
@@ -182,7 +185,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--vllm_server_host", type=str, default="", help="The server IP")
     args = parser.parse_args()
-    
+
     # Example dataset from TLDR
     dataset = load_dataset("trl-lib/tldr", split="train")
 
@@ -330,7 +333,7 @@ def math_reward_func(prompts, completions, task, **kwargs):
             # Return None for non-math tasks
             rewards.append(None)
     return rewards
-    
+
 # Coding-specific reward function
 def coding_reward_func(prompts, completions, task, **kwargs):
     rewards = []
