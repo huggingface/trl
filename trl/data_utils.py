@@ -15,6 +15,7 @@
 from typing import Any, Callable, Optional, Sequence, TypeVar, Union
 
 from datasets import Dataset, DatasetDict
+from itertools import chain
 from transformers import PreTrainedTokenizerBase
 
 
@@ -460,7 +461,7 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     ```
     """
     # Join  all the values into a single list
-    examples = {k: sum(v, []) for k, v in examples.items()}
+    examples = {k: list(chain.from_iterable(v)) for k, v in examples.items()}
     # Split the values into chunks of size seq_length
     examples = {k: [v[i : i + seq_length] for i in range(0, len(v), seq_length)] for k, v in examples.items()}
     return examples
