@@ -19,18 +19,32 @@ from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 import torch
-import uvicorn
-from fastapi import BackgroundTasks, FastAPI
-from pydantic import BaseModel
-from vllm import LLM, SamplingParams
-from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
-from vllm.distributed.parallel_state import get_world_group
-from vllm.distributed.utils import StatelessProcessGroup
-from vllm.sampling_params import GuidedDecodingParams
-from vllm.worker.worker import Worker
 
 from trl import TrlParser
+from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
 
+
+if is_fastapi_available():
+    from fastapi import BackgroundTasks, FastAPI
+
+
+if is_pydantic_available():
+    from pydantic import BaseModel
+
+
+if is_uvicorn_available():
+    import uvicorn
+
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
+    from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
+    from vllm.distributed.parallel_state import get_world_group
+    from vllm.distributed.utils import StatelessProcessGroup
+    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.worker.worker import Worker
+else:
+    Worker = object
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +64,11 @@ class WeightSyncWorker(Worker):
     """
 
     def __init__(self, *args, **kwargs):
+        if not is_vllm_available():
+            raise ImportError(
+                "vLLM is required to use the WeightSyncWorker. Please install it using `pip install vllm`."
+            )
+
         super().__init__(*args, **kwargs)
 
         # The following attributes are initialized when `init_communicator` method is called.
@@ -208,6 +227,24 @@ class ScriptArguments:
 
 
 def main(script_args: ScriptArguments):
+    if not is_fastapi_available():
+        raise ImportError(
+            "FastAPI is required to run the vLLM serve script. Please install it using `pip install fastapi`."
+        )
+
+    if not is_pydantic_available():
+        raise ImportError(
+            "Pydantic is required to run the vLLM serve script. Please install it using `pip install pydantic`."
+        )
+
+    if not is_uvicorn_available():
+        raise ImportError(
+            "Uvicorn is required to run the vLLM serve script. Please install it using `pip install uvicorn`."
+        )
+
+    if not is_vllm_available():
+        raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
+
     llm = LLM(
         model=script_args.model,
         revision=script_args.revision,

@@ -17,12 +17,15 @@ import logging
 import time
 from typing import Optional
 
-import requests
 import torch
-from requests import ConnectionError
 from torch import nn
 
-from ..import_utils import is_vllm_available
+from ..import_utils import is_requests_available, is_vllm_available
+
+
+if is_requests_available():
+    import requests
+    from requests import ConnectionError
 
 
 if is_vllm_available():
@@ -79,8 +82,11 @@ class VLLMClient:
     def __init__(
         self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0
     ):
+        if not is_requests_available():
+            raise ImportError("requests is not installed. Please install it with `pip install requests`.")
         if not is_vllm_available():
             raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
+
         self.session = requests.Session()
         self.host = host
         self.server_port = server_port
