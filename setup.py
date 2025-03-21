@@ -89,6 +89,7 @@ EXTRAS = {
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],
     "scikit": ["scikit-learn"],
+    "bco": ["scikit-learn", "joblib"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
     # vllm is not available on Windows
     # vllm 0.7.3 causes hanging while gathering. temporary pinning the version until the issue is resolved
