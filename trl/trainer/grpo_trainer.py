@@ -596,37 +596,46 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _move_model_to_vllm(self):
-        # For PEFT models, we need to merge the adapter weights with the base model and later unmerge them.
-        if is_peft_model(self.model):
-            self.model.merge_adapter()
-
-        # Update the weights in vLLM. When using DeepSpeed ZeRO Stage 3, we need to gather the parameters before
-        # updating the weights.
+        # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        for name, param in self.model.named_parameters():
-            with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
-                if self.accelerator.is_main_process:
-                    # When using PEFT, we need to recover the original parameter name and discard some parameters
-                    if is_peft_model(self.model):
-                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        if self.model.prefix in name:
-                            continue
-                        # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
-                            continue
-                        name = name.replace("modules_to_save.default.", "")
 
-                    # Update the named parameter in vLLM
-                    self.vllm_client.update_named_param(name, param.data)
-
-        # Reset the prefix cache after updating weights
-        if self.accelerator.is_main_process:
-            self.vllm_client.reset_prefix_cache()
-
-        # We can unmerge the adapter weights after updating the weights in vLLM
         if is_peft_model(self.model):
-            self.model.unmerge_adapter()
+            # Gather all parameters before merging adapters when using ZeRO-3
+            with deepspeed.zero.GatheredParameters(list(self.model.parameters()), enabled=zero_stage_3):
+                self.model.merge_adapter()
+
+                # Update vLLM weights while parameters are gathered
+                for name, param in self.model.named_parameters():
+                    # When using PEFT, we need to recover the original parameter name and discard some parameters
+                    name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                    if self.model.prefix in name:
+                        continue
+                    # When module to save, remove its prefix and discard the original module
+                    if "original_module" in name:
+                        continue
+                    name = name.replace("modules_to_save.default.", "")
+
+                    if self.accelerator.is_main_process:
+                        self.vllm_client.update_named_param(name, param.data)
+
+                # Reset cache on main process
+                if self.accelerator.is_main_process:
+                    self.vllm_client.reset_prefix_cache()
+
+                # Unmerge adapters while parameters are still gathered
+                self.model.unmerge_adapter()
+                # Parameters will automatically be repartitioned when exiting the context
+        else:
+            # For non-PEFT models, simply gather and update parameters
+            for name, param in self.model.named_parameters():
+                with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
+                    if self.accelerator.is_main_process:
+                        self.vllm_client.update_named_param(name, param.data)
+
+            # Reset cache on main process
+            if self.accelerator.is_main_process:
+                self.vllm_client.reset_prefix_cache()
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
