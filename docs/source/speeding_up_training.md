@@ -60,7 +60,7 @@ usage: trl vllm-serve [-h] --model MODEL [--revision REVISION] [--tensor_paralle
                       [--max_model_len MAX_MODEL_LEN] [--enable_prefix_caching ENABLE_PREFIX_CACHING]
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help            Show this help message and exit
   --model MODEL         Model name or path to load the model from. (default: None)
   --revision REVISION   Revision to use for the model. If not specified, the default branch will be used. (default: None)
   --tensor_parallel_size TENSOR_PARALLEL_SIZE, --tensor-parallel-size TENSOR_PARALLEL_SIZE
