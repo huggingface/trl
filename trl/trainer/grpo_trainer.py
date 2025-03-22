@@ -14,11 +14,10 @@
 
 import os
 import textwrap
-import warnings
 from collections import defaultdict
-from contextlib import nullcontext
 from typing import Any, Callable, Optional, Sized, Union
 
+import deepspeed
 import torch
 import torch.utils.data
 import transformers
@@ -44,7 +43,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_deepspeed_available, is_rich_available, is_vllm_available
+from ..import_utils import is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -57,11 +56,8 @@ from .utils import (
 )
 
 
-if is_deepspeed_available():
-    import deepspeed
-
 if is_peft_available():
-    from peft import PeftConfig, get_peft_model
+    from peft import PeftConfig, get_peft_model,get_peft_config
 
 
 if is_wandb_available():
@@ -273,6 +269,11 @@ class GRPOTrainer(Trainer):
             model_name = model_name.split("/")[-1]
             args = GRPOConfig(f"{model_name}-GRPO")
 
+        if peft_config:
+            self.lora_config=peft_config
+        elif is_peft_model(model):
+            self.lora_config=model.peft_config["default"]
+
         # Models
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
@@ -389,8 +390,7 @@ class GRPOTrainer(Trainer):
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
-        self.epsilon_low = args.epsilon
-        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.epsilon = args.epsilon
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
@@ -407,7 +407,6 @@ class GRPOTrainer(Trainer):
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._total_train_tokens = 0
         self.log_completions = args.log_completions
 
         super().__init__(
@@ -454,9 +453,7 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.accelerator.is_main_process:
-                self.vllm_client = VLLMClient(
-                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
-                )
+                self.vllm_client = VLLMClient(args.vllm_server_host, args.vllm_server_port)
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
@@ -599,45 +596,20 @@ class GRPOTrainer(Trainer):
         return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
 
     @profiling_decorator
-    def _move_model_to_vllm(self):
-        # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
+    def _move_lora_to_vllm(self):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
-
-        if is_peft_model(self.model):
-            # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
-            # adapters in a sharded manner is not supported.
-            with gather_if_zero3(list(self.model.parameters())):
-                self.model.merge_adapter()
-
-                # Update vLLM weights while parameters are gathered
-                for name, param in self.model.named_parameters():
-                    # When using PEFT, we need to recover the original parameter name and discard some parameters
-                    name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                    if self.model.prefix in name:
-                        continue
-                    # When module to save, remove its prefix and discard the original module
-                    if "original_module" in name:
-                        continue
-                    name = name.replace("modules_to_save.default.", "")
-
-                    if self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
-
-                # Unmerge adapters while parameters are still gathered
-                self.model.unmerge_adapter()
-                # Parameters will automatically be repartitioned when exiting the context
-        else:
-            # For non-PEFT models, simply gather and update each parameter individually.
-            for name, param in self.model.named_parameters():
-                with gather_if_zero3([param]):
-                    if self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
-
-        # Reset cache on main process
         if self.accelerator.is_main_process:
-            self.vllm_client.reset_prefix_cache()
+            self.vllm_client.update_lora_params(self.model,self.lora_config) 
+
+    @profiling_decorator
+    def _move_model_to_vllm(self):
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        for name, param in self.model.named_parameters():
+            with deepspeed.zero.GatheredParameters([param], enabled=zero_stage_3):
+                if self.accelerator.is_main_process:
+                    self.vllm_client.update_named_param(name, param.data)
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
@@ -674,15 +646,15 @@ class GRPOTrainer(Trainer):
         if self.args.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
-                self._move_model_to_vllm()
+                if is_peft_model(self.model):
+                    self._move_lora_to_vllm()
+                else:
+                    self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
-                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                # prompt individually.
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                 with profiling_context(self, "vLLM.generate"):
                     completion_ids = self.vllm_client.generate(
@@ -713,9 +685,7 @@ class GRPOTrainer(Trainer):
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
-            with unwrap_model_for_generation(
-                self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-            ) as unwrapped_model:
+            with unwrap_model_for_generation(self.model_wrapped, self.accelerator) as unwrapped_model:
                 prompt_completion_ids = unwrapped_model.generate(
                     prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                 )
@@ -839,10 +809,6 @@ class GRPOTrainer(Trainer):
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
 
-        if mode == "train":
-            self._total_train_tokens += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
-
         completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
         self._metrics[mode]["completion_length"].append(completion_length)
 
@@ -921,7 +887,7 @@ class GRPOTrainer(Trainer):
         # _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
         per_token_loss1 = coef_1 * advantages.unsqueeze(1)
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
