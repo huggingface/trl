@@ -44,6 +44,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
+from ..models import get_act_offloading_ctx_manager
 from .sft_config import SFTConfig
 from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
 
@@ -262,6 +263,12 @@ class SFTTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             **super_init_kwargs,
+        )
+
+        # Initialize activation offloading context
+        self.activation_offload_context = get_act_offloading_ctx_manager(
+            model=self.model,
+            activation_offloading=self.args.activation_offloading,
         )
 
         # Add tags for models that have been loaded with the correct transformers version
@@ -540,6 +547,11 @@ class SFTTrainer(Trainer):
             self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
+
+    def training_step(self, *args, **kwargs):
+        """Override training step to add activation offloading context."""
+        with self.activation_offload_context:
+            return super().training_step(*args, **kwargs)
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "eval" if self.control.should_evaluate else "train"
