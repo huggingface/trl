@@ -17,7 +17,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
-from vllm_patch import (
+from ..scripts.vllm_patch import (
     LoRARequest as PatchedLoRARequest,
     WorkerLoRAManager as PatchedWorkerLoRAManager,
     LRUCacheWorkerLoRAManager as PatchedLRUCacheWorkerLoRAManager,
