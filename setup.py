@@ -91,8 +91,7 @@ EXTRAS = {
     "scikit": ["scikit-learn"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
     # vllm is not available on Windows
-    # vllm 0.7.3 causes hanging while gathering. temporary pinning the version until the issue is resolved
-    "vllm": ["vllm==0.7.2; sys_platform != 'win32'"],
+    "vllm": ["vllm>=0.7.0; sys_platform != 'win32'", "fastapi", "pydantic", "requests", "uvicorn"],
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
