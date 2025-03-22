@@ -109,6 +109,12 @@ class GRPOConfig(TrainingArguments):
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
+        scale_rewards (`bool`, *optional*, defaults to `True`):
+            Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), the rewards
+            are normalized by the standard deviation, ensuring they have unit variance. If `False`, no scaling is
+            applied. The [Dr. GRPO](https://github.com/sail-sg/understand-r1-zero/blob/main/understand-r1-zero.pdf)
+            paper recommends not scaling the rewards, as scaling by the standard deviation introduces a question-level
+            difficulty bias.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
@@ -278,6 +284,15 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Weights for each reward function. Must match the number of reward functions. If `None`, all "
             "rewards are weighted equally with weight `1.0`."
+        },
+    )
+    scale_rewards: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), "
+            "the rewards are normalized by the standard deviation, ensuring they have unit variance. If `False`, no "
+            "scaling is applied. The Dr. GRPO paper recommends not scaling the rewards, as scaling by the standard "
+            "deviation introduces a question-level difficulty bias."
         },
     )
     sync_ref_model: bool = field(
