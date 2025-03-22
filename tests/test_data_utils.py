@@ -397,7 +397,7 @@ class ExtractPromptTester(unittest.TestCase):
 
 
 class TestPackExamples(unittest.TestCase):
-    def test_pack_examples_larger_chunks(self):
+    def test_larger_chunks(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
@@ -410,7 +410,7 @@ class TestPackExamples(unittest.TestCase):
         result = pack_examples(examples, seq_length)
         self.assertEqual(result, expected_output)
 
-    def test_pack_examples_smaller_chunks(self):
+    def test_smaller_chunks(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
@@ -423,7 +423,23 @@ class TestPackExamples(unittest.TestCase):
         result = pack_examples(examples, seq_length)
         self.assertEqual(result, expected_output)
 
-    def test_pack_with_dataset(self):
+    def test_with_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 3
+        expected_output = {
+            "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
+        }
+        dataset = dataset.map(pack_examples, batched=True, fn_kwargs={"seq_length": seq_length})
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+
+class TestPackDataset(unittest.TestCase):
+    def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
@@ -437,7 +453,7 @@ class TestPackExamples(unittest.TestCase):
         dataset = pack_dataset(dataset, seq_length)
         self.assertEqual(dataset.to_dict(), expected_output)
 
-    def test_pack_with_iterable_dataset(self):
+    def test_with_iterable_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
@@ -454,7 +470,7 @@ class TestPackExamples(unittest.TestCase):
 
 
 class TestTruncateExamples(unittest.TestCase):
-    def test_truncate_with_dataset(self):
+    def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
@@ -468,7 +484,7 @@ class TestTruncateExamples(unittest.TestCase):
         dataset = truncate_dataset(dataset, max_length)
         self.assertEqual(dataset.to_dict(), expected_output)
 
-    def test_truncate_with_iterable_dataset(self):
+    def test_with_iterable_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
@@ -482,6 +498,22 @@ class TestTruncateExamples(unittest.TestCase):
         dataset = truncate_dataset(dataset, max_length)
         num_examples = len(examples[next(iter(examples))])
         self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+    def test_with_extra_column(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+            "my_column": ["a", "b", "c"],
+        }
+        dataset = Dataset.from_dict(examples)
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+            "my_column": ["a", "b", "c"],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        self.assertEqual(dataset.to_dict(), expected_output)
 
 
 class TestMaybeConvertToChatML(unittest.TestCase):
