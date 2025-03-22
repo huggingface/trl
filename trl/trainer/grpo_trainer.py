@@ -820,15 +820,15 @@ class GRPOTrainer(Trainer):
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
-        # Center the rewards by subtracting the mean reward per group
+        # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = rewards - mean_grouped_rewards
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
 
-        # Scale the rewards by the standard deviation of the rewards per group
+        # Normalize the rewards to compute the advantages
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        advantages = rewards - mean_grouped_rewards
         if self.args.scale_rewards:
-            std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-            std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
             advantages = advantages / (std_grouped_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
