@@ -589,7 +589,7 @@ class BCOTrainer(Trainer):
         # issued.
         model.warnings_issued["estimate_tokens"] = True
 
-        with PartialState().local_main_process_first():
+        with PartialState().main_process_first():
             # Apply the chat template if needed
             train_dataset = train_dataset.map(
                 maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
@@ -1385,12 +1385,13 @@ class BCOTrainer(Trainer):
             return (loss.detach(), None, None)
 
         # logits for the chosen and rejected samples from model
-        logits_dict = {
-            "eval_logits/chosen": metrics["logits/chosen"],
-            "eval_logits/rejected": metrics["logits/rejected"],
-        }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
+        logits_dict = {}
+        if "logits/chosen_sum" in metrics:
+            logits_dict["eval_logits/chosen"] = metrics["logits/chosen_sum"]
+        if "logits/rejected_sum" in metrics:
+            logits_dict["eval_logits/rejected"] = metrics["logits/rejected_sum"]
+        logits = [v for k, v in logits_dict.items() if k not in ignore_keys]
+        logits = torch.tensor(logits, device=self.accelerator.device)
         labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)

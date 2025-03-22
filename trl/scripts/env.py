@@ -22,7 +22,7 @@ from transformers import is_bitsandbytes_available
 from transformers.utils import is_liger_kernel_available, is_openai_available, is_peft_available
 
 from .. import __version__
-from ..import_utils import is_deepspeed_available, is_diffusers_available, is_llm_blender_available
+from ..import_utils import is_deepspeed_available, is_diffusers_available, is_llm_blender_available, is_vllm_available
 from .utils import get_git_commit_hash
 
 
@@ -47,6 +47,7 @@ def print_env():
     info = {
         "Platform": platform.platform(),
         "Python version": platform.python_version(),
+        "TRL version": f"{__version__}+{commit_hash[:7]}" if commit_hash else __version__,
         "PyTorch version": version("torch"),
         "CUDA device(s)": ", ".join(devices) if torch.cuda.is_available() else "not available",
         "Transformers version": version("transformers"),
@@ -54,7 +55,6 @@ def print_env():
         "Accelerate config": accelerate_config_str,
         "Datasets version": version("datasets"),
         "HF Hub version": version("huggingface_hub"),
-        "TRL version": f"{__version__}+{commit_hash[:7]}" if commit_hash else __version__,
         "bitsandbytes version": version("bitsandbytes") if is_bitsandbytes_available() else "not installed",
         "DeepSpeed version": version("deepspeed") if is_deepspeed_available() else "not installed",
         "Diffusers version": version("diffusers") if is_diffusers_available() else "not installed",
@@ -62,6 +62,7 @@ def print_env():
         "LLM-Blender version": version("llm_blender") if is_llm_blender_available() else "not installed",
         "OpenAI version": version("openai") if is_openai_available() else "not installed",
         "PEFT version": version("peft") if is_peft_available() else "not installed",
+        "vLLM version": version("vllm") if is_vllm_available() else "not installed",
     }
 
     info_str = "\n".join([f"- {prop}: {val}" for prop, val in info.items()])

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, Union
 
 from accelerate.utils import is_deepspeed_available
+from packaging import version
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
@@ -141,6 +142,8 @@ def remove_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer.parameter_offload
     elif model.optimizer is not None:
         optimizer_offload = model.optimizer
+    else:
+        raise RuntimeError("The model optimizer is None, which is not yet supported.")
 
     for param in iter_params(optimizer_offload.module, recurse=True):
         param.ds_active_sub_modules.clear()
@@ -170,7 +173,13 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         optimizer_offload = model.optimizer.parameter_offload
     elif model.optimizer is not None:
         optimizer_offload = model.optimizer
-    optimizer_offload._register_hooks_recursively(optimizer_offload.module)
+    else:
+        raise RuntimeError("The model optimizer is None, which is not yet supported.")
+    if version.parse(deepspeed.__version__) >= version.parse("0.16.4"):
+        # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
+        optimizer_offload._register_deepspeed_module(optimizer_offload.module)
+    else:
+        optimizer_offload._register_hooks_recursively(optimizer_offload.module)
 
 
 @contextmanager
@@ -243,5 +252,33 @@ def prepare_deepspeed(model, accelerator):
     if stage != 3:
         config_kwargs["zero_optimization"]["stage"] = 0
     model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
+    model.eval()
+    return model
+
+
+def prepare_fsdp(model, accelerator):
+    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
+    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
+
+    # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
+    # don't wrap it again
+    if not isinstance(model, FSDP):
+        accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
+        fsdp_plugin = accelerator.state.fsdp_plugin
+        kwargs = {
+            "sharding_strategy": fsdp_plugin.sharding_strategy,
+            "cpu_offload": fsdp_plugin.cpu_offload,
+            "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
+            "mixed_precision": fsdp_plugin.mixed_precision_policy,
+            "sync_module_states": fsdp_plugin.sync_module_states,
+            "backward_prefetch": fsdp_plugin.backward_prefetch,
+            "forward_prefetch": fsdp_plugin.forward_prefetch,
+            "use_orig_params": fsdp_plugin.use_orig_params,
+            "param_init_fn": fsdp_plugin.param_init_fn,
+            "ignored_modules": fsdp_plugin.ignored_modules,
+            "limit_all_gathers": fsdp_plugin.limit_all_gathers,
+            "device_id": accelerator.device,
+        }
+        model = FSDP(model, **kwargs)
     model.eval()
     return model

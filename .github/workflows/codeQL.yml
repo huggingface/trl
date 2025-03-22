@@ -1,0 +1,26 @@
+name: "CodeQL Analysis - Workflows"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: "Analyze GitHub Workflows"
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Initialize CodeQL"
+        uses: github/codeql-action/init@v2
+        with:
+          languages: "yaml"
+          queries: +security-and-quality, ./.github/codeql/custom-queries.qls
+
+      - name: "Perform CodeQL Analysis"
+        uses: github/codeql-action/analyze@v2

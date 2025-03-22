@@ -15,7 +15,7 @@
 from typing import Any, Callable, Optional, Sequence, TypeVar, Union
 
 from datasets import Dataset, DatasetDict
-from transformers import PreTrainedTokenizer
+from transformers import PreTrainedTokenizerBase
 
 
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
@@ -64,7 +64,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
 def apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     tools: Optional[list[Union[dict, Callable]]] = None,
 ) -> dict[str, str]:
     r"""
@@ -165,7 +165,7 @@ def apply_chat_template(
 
 def maybe_apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     tools: Optional[list[Union[dict, Callable]]] = None,
 ) -> dict[str, str]:
     r"""
@@ -185,7 +185,7 @@ def maybe_apply_chat_template(
 
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
             messages, where each message is a dictionary with keys `"role"` and `"content"`.
-        tokenizer (`PreTrainedTokenizer`):
+        tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer to apply the chat template with.
         tools (`list[Union[dict, Callable]]` or `None`, *optional*, defaults to `None`):
             A list of tools (callable functions) that will be accessible to the model.

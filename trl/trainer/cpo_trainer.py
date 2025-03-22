@@ -325,7 +325,7 @@ class CPOTrainer(Trainer):
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
-        with PartialState().local_main_process_first():
+        with PartialState().main_process_first():
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(
@@ -917,8 +917,8 @@ class CPOTrainer(Trainer):
             "eval_logits/chosen": metrics["eval_logits/chosen"],
             "eval_logits/rejected": metrics["eval_logits/rejected"],
         }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
+        logits = [v for k, v in logits_dict.items() if k not in ignore_keys]
+        logits = torch.tensor(logits, device=self.accelerator.device)
         labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
