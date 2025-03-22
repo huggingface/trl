@@ -15,8 +15,8 @@
 from typing import Any, Callable, Optional, Sequence, TypeVar, Union
 
 from datasets import Dataset, DatasetDict
-from itertools import chain
 from transformers import PreTrainedTokenizerBase
+from itertools import chain
 
 
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
