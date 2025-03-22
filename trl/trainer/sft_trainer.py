@@ -43,7 +43,13 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
+from ..data_utils import (
+    is_conversational,
+    maybe_apply_chat_template,
+    maybe_convert_to_chatml,
+    pack_dataset,
+    truncate_dataset,
+)
 from .sft_config import SFTConfig
 from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
 
@@ -470,22 +476,11 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
-                dataset = dataset.map(
-                    pack_examples, batched=True, fn_kwargs={"seq_length": args.max_length}, **map_kwargs
-                )
+                dataset = pack_dataset(dataset, args.max_length, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-
-                def truncate(example, max_length):
-                    return {key: example[key][:max_length] for key in ["input_ids", "attention_mask"]}
-
-                dataset = dataset.map(
-                    truncate,
-                    fn_kwargs={"max_length": args.max_length},
-                    **map_kwargs,
-                )
-
+                dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
                 dataset = dataset.select_columns("input_ids")
