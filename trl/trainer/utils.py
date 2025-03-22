@@ -1691,6 +1691,30 @@ def selective_log_softmax(logits, index):
     return per_token_logps
 
 
+def simplify_repeated(completion: str, threshold: int = 100) -> str:
+    """
+    Detect repeated lines in a multi-line string and simplify it if repetitions exceed the threshold.
+
+    Parameters:
+        completion (str): The input multi-line string.
+        threshold (int): The maximum allowed repetition count for any line (default is 100).
+
+    Returns:
+        str: If any line repeats more than the threshold, returns a simplified string; otherwise, returns the original string.
+    """
+    # Split the string into lines and strip leading/trailing whitespace from each line
+    parts = [part.strip() for part in completion.split('\n')]
+    # Use Counter to count occurrences of each line
+    counter = Counter(parts)
+    # Check if any line repeats more than the threshold
+    for part, count in counter.items():
+        if count > threshold:
+            # If a line repeats more than the threshold, return the simplified string
+            return completion[:threshold] + f"[repetition exceeds {threshold} times]"
+    # If no line repeats more than the threshold, return the original string
+    return completion
+
+
 def print_prompt_completions_sample(prompts: list[str], completions: list[str], rewards: list[int], step: int) -> None:
     """
     Print out a sample of model completions to the console.
@@ -1738,7 +1762,7 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     table.add_column("Reward", style="bold cyan", justify="right")
 
     for prompt, completion, reward in zip(prompts, completions, rewards):
-        table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places
+        table.add_row(Text(prompt), Text(simplify_repeated(completion=completion)), f"{reward:.2f}")  # Formatting reward to 2 decimal places
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
