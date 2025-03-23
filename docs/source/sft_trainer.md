@@ -73,11 +73,8 @@ model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
 tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
 
 def formatting_prompts_func(example):
-    output_texts = []
-    for i in range(len(example['instruction'])):
-        text = f"### Question: {example['instruction'][i]}\n ### Answer: {example['output'][i]}"
-        output_texts.append(text)
-    return output_texts
+    text = f"### Question: {example['instruction']}\n ### Answer: {example['output']}"
+    return text
 
 response_template = " ### Answer:"
 collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer)
@@ -246,11 +243,8 @@ Let us assume your dataset has two fields, `question` and `answer`. Therefore yo
 ```python
 ...
 def formatting_prompts_func(example):
-    output_texts = []
-    for i in range(len(example['question'])):
-        text = f"### Question: {example['question'][i]}\n ### Answer: {example['answer'][i]}"
-        output_texts.append(text)
-    return output_texts
+    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
+    return text
 
 trainer = SFTTrainer(
     model,
