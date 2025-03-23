@@ -35,3 +35,11 @@
 ## pack_examples
 
 [[autodoc]] pack_examples
+
+## pack_dataset
+
+[[autodoc]] pack_dataset
+
+## truncate_dataset
+
+[[autodoc]] truncate_dataset

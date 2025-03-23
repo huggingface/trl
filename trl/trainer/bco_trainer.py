@@ -589,7 +589,7 @@ class BCOTrainer(Trainer):
         # issued.
         model.warnings_issued["estimate_tokens"] = True
 
-        with PartialState().local_main_process_first():
+        with PartialState().main_process_first():
             # Apply the chat template if needed
             train_dataset = train_dataset.map(
                 maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
