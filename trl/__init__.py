@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.16.0.dev0"
+__version__ = "0.17.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -29,7 +29,9 @@ _import_structure = {
         "maybe_convert_to_chatml",
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
+        "pack_dataset",
         "pack_examples",
+        "truncate_dataset",
         "unpair_preference_dataset",
     ],
     "environment": ["TextEnvironment", "TextHistory"],
@@ -130,7 +132,9 @@ if TYPE_CHECKING:
         maybe_convert_to_chatml,
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
+        pack_dataset,
         pack_examples,
+        truncate_dataset,
         unpair_preference_dataset,
     )
     from .environment import TextEnvironment, TextHistory
