@@ -102,13 +102,18 @@ When  \\( \mu = 1 \\) (default in TRL), the clipped surrogate objective simplifi
 
 ## Logged metrics
 
-The GRPO Trainer logs the following metrics:
-
-- `completion_length`: The average completion length.
-- `reward/{reward_func_name}`: The reward computed by each reward function.
-- `reward`: The average reward.
-- `reward_std` : The average standard deviation within reward groups.
-- `kl` : The average KL divergence between the model and the reference model calculated on completions.
+- `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `completion_length`: The average length of generated completions.
+- `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
+- `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
+- `reward`: The overall average reward after applying reward weights.
+- `reward_std`: The standard deviation of the overall reward within each batch after applying reward weights.
+- `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
+- `clip_ratio`: The fraction of tokens where the PPO objective is clipped to stay within the trust region:
+$$
+\text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right)
+$$
+A higher value means more tokens were affected by clipping, limiting how much the policy can change.
 
 ## Customization
 
