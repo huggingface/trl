@@ -1745,7 +1745,7 @@ def print_prompt_completions_sample(
     if num_samples is not None:
         if num_samples >= len(prompts):
             num_samples = None
-        if num_samples <= 0:
+        elif num_samples <= 0:
             return
 
     # Subsample data if num_samples is specified
