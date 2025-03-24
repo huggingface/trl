@@ -89,6 +89,7 @@ EXTRAS = {
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],
     "scikit": ["scikit-learn"],
+    "bco": ["scikit-learn", "joblib"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
     # vllm is not available on Windows
     "vllm": ["vllm>=0.7.0; sys_platform != 'win32'", "fastapi", "pydantic", "requests", "uvicorn"],
