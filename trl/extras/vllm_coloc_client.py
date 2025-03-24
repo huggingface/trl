@@ -17,6 +17,7 @@ import torch
 import warnings
 from .vllm_proxy import BaseVLLMClient
 from vllm import SamplingParams, LLM
+from vllm.sampling_params import GuidedDecodingParams
 
 from accelerate import PartialState
 
@@ -102,6 +103,11 @@ class VLLMColocationClient(BaseVLLMClient):
             `list[list[int]]`:
                 List of lists of token IDs representing the model-generated completions for each prompt.
         """
+        if guided_decoding_regex is not None:
+            guided_decoding = GuidedDecodingParams(backend="outlines", regex=guided_decoding_regex)
+        else:
+            guided_decoding = None
+
         sampling_params = SamplingParams(
             n=1, # vLLM on each GPU generates only 1 in vllm_colocation mode
             repetition_penalty=repetition_penalty,
@@ -110,8 +116,7 @@ class VLLMColocationClient(BaseVLLMClient):
             top_k=top_k,
             min_p=min_p,
             max_tokens=max_tokens,
-            guided_decoding_regex=guided_decoding_regex,
-            
+            guided_decoding=guided_decoding,
         )
         
         all_outputs = self.llm.generate(
