@@ -20,7 +20,7 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft, require_torch_accelerator
+from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
@@ -548,8 +548,10 @@ class GRPOTrainerTester(unittest.TestCase):
 
             # Check that training logs contain both reward metrics
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIn("rewards/reward_func1", trainer.state.log_history[-1])
-            self.assertIn("rewards/reward_func2", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func1/mean", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func1/std", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func2/mean", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func2/std", trainer.state.log_history[-1])
 
             # Check that the params have changed
             for n, param in previous_trainable_params.items():
@@ -631,7 +633,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
-    @require_torch_accelerator
+    @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm(self):
         """Test that training works with vLLM for generation."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -645,8 +647,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
-                vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
-                vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
             )
             trainer = GRPOTrainer(
                 model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny is too small for vLLM
@@ -761,7 +761,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
-    @require_torch_accelerator
+    @unittest.skip("We should add a mock for the vLLM server.")
     @require_peft
     def test_training_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
@@ -778,8 +778,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
-                vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
-                vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
             )
             lora_config = LoraConfig(
                 target_modules="all-linear",
@@ -810,7 +808,7 @@ class GRPOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
     @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
-    @require_torch_accelerator
+    @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_guided_decoding(self):
         """Test that training works with vLLM for generation with guided decoding."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -824,8 +822,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
-                vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
-                vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
                 vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
             )
             trainer = GRPOTrainer(
@@ -883,7 +879,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
-    @require_torch_accelerator
+    @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -897,8 +893,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
-                vllm_device="cuda:0",  # will raise a warning, but allows this test to work with only one GPU
-                vllm_gpu_memory_utilization=0.5,  # reduce since because we use the same device for training and vllm
                 top_p=0.9,
                 top_k=10,
                 min_p=0.01,
@@ -907,6 +901,37 @@ class GRPOTrainerTester(unittest.TestCase):
 
             trainer = GRPOTrainer(
                 model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_no_scale_rewards(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                scale_rewards=False,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
