@@ -1691,9 +1691,11 @@ def selective_log_softmax(logits, index):
     return per_token_logps
 
 
-def print_prompt_completions_sample(prompts: list[str], completions: list[str], rewards: list[int], step: int) -> None:
+def print_prompt_completions_sample(
+    prompts: list[str], completions: list[str], rewards: dict[str, list[float]], step: int
+) -> None:
     """
-    Print out a sample of model completions to the console.
+    Print out a sample of model completions to the console with multiple reward metrics.
 
     This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
     during training. It requires the `rich` library to be installed.
@@ -1703,8 +1705,8 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
             List of prompts.
         completions (`list[str]`):
             List of completions corresponding to the prompts.
-        reward (`list[float]`):
-            List of rewards corresponding to the completions.
+        rewards (`dict[str, list[float]]`):
+            Dictionary where keys are reward names and values are lists of rewards.
         step (`int`):
             Current training step number, used in the output title.
 
@@ -1713,32 +1715,32 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     >>> from trl.trainer.utils import print_prompt_completions_sample
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
-    >>> rewards = [0.12345, 0.68789]
+    >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
     >>> print_prompt_completions_sample(prompts, completions, rewards, 42)
-    ╭─────────────── Step 42 ────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Reward ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │   0.12 │ │
-    │ ├────────────┼──────────────┼────────┤ │
-    │ │ The sun is │  in the sky. │   0.68 │ │
-    │ └────────────┴──────────────┴────────┘ │
-    ╰────────────────────────────────────────╯
+    ╭────────────────────── Step 42 ───────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
+    │ └────────────┴──────────────┴─────────────┴────────┘ │
+    ╰──────────────────────────────────────────────────────╯
     ```
     """
-    if not is_rich_available():
-        raise ImportError("This feature requires `rich` to be installed. Please install it first: `pip install rich`")
-
     console = Console()
     table = Table(show_header=True, header_style="bold white", expand=True)
 
     # Add columns
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
-    table.add_column("Reward", style="bold cyan", justify="right")
+    for reward_name in rewards.keys():
+        table.add_column(reward_name, style="bold cyan", justify="right")
 
-    for prompt, completion, reward in zip(prompts, completions, rewards):
-        table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places
+    # Iterate over data
+    for i in range(len(prompts)):
+        reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]
+        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values)
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
