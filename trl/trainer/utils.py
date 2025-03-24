@@ -1692,7 +1692,7 @@ def selective_log_softmax(logits, index):
 
 
 def print_prompt_completions_sample(
-    prompts: list[str], completions: list[str], rewards: list[int], step: int, num_samples: Optional[int] = None
+    prompts: list[str], completions: list[str], rewards: list[int], step: int, num_samples: int = None
 ) -> None:
     """
     Print out a sample of model completions to the console.
@@ -1733,25 +1733,24 @@ def print_prompt_completions_sample(
     if not is_rich_available():
         raise ImportError("This feature requires `rich` to be installed. Please install it first: `pip install rich`")
 
+    console = Console()
+    table = Table(show_header=True, header_style="bold white", expand=True)
+
+    # Add columns
+    table.add_column("Prompt", style="bright_yellow")
+    table.add_column("Completion", style="bright_green")
+    table.add_column("Reward", style="bold cyan", justify="right")
+
     # Subsample data if num_samples is specified
-    num_samples = min(len(prompts), num_samples) if num_samples is not None else None
-    if num_samples is not None and num_samples > 0:
-        console = Console()
-        table = Table(show_header=True, header_style="bold white", expand=True)
-
-        # Add columns
-        table.add_column("Prompt", style="bright_yellow")
-        table.add_column("Completion", style="bright_green")
-        table.add_column("Reward", style="bold cyan", justify="right")
-
+    if num_samples is not None and 0 < num_samples < len(prompts):
         indices = random.sample(range(len(prompts)), num_samples)
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = [rewards[i] for i in indices]
 
-        for prompt, completion, reward in zip(prompts, completions, rewards):
-            table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places
-            table.add_section()  # Adds a separator between rows
+    for prompt, completion, reward in zip(prompts, completions, rewards):
+        table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places
+        table.add_section()  # Adds a separator between rows
 
-        panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
-        console.print(panel)
+    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
+    console.print(panel)
