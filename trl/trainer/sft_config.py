@@ -133,26 +133,38 @@ class SFTConfig(TrainingArguments):
     # Deprecated parameters
     dataset_batch_size: Optional[int] = field(
         default=None,
-        metadata={"help": "Deprecated. You can safely remove this parameter from your configuration."},
+        metadata={
+            "help": "This parameter is deprecated and will be remove in version 0.18.0. You can safely remove this "
+            "parameter from your configuration."
+        },
     )
     num_of_sequences: Optional[int] = field(
         default=None,
         metadata={
-            "help": "Deprecated. Use `max_length` instead, which specifies the maximum length of the tokenized "
-            "sequence, unlike `num_of_sequences`, which referred to string sequences."
+            "help": "This parameter is deprecated and will be remove in version 0.18.0. Use `max_length` instead, "
+            "which specifies the maximum length of the tokenized sequence, unlike `num_of_sequences`, which referred "
+            "to string sequences."
         },
     )
     chars_per_token: Optional[float] = field(
         default=None,
-        metadata={"help": "Deprecated. If you want to customize the packing length, use `max_length`."},
+        metadata={
+            "help": "This parameter is deprecated and will be remove in version 0.18.0. If you want to customize the "
+            "packing length, use `max_length`."
+        },
     )
     max_seq_length: Optional[int] = field(
         default=None,
-        metadata={"help": "Deprecated. Use `max_length` instead."},
+        metadata={
+            "help": "This parameter is deprecated and will be remove in version 0.20.0. Use `max_length` instead."
+        },
     )
     use_liger: Optional[bool] = field(
         default=None,
-        metadata={"help": "Deprecated. Use `use_liger_kernel` instead."},
+        metadata={
+            "help": "This parameter is deprecated and will be remove in version 0.18.0. Use `use_liger_kernel` "
+            "instead."
+        },
     )
 
     def __post_init__(self):
@@ -168,8 +180,8 @@ class SFTConfig(TrainingArguments):
         if self.num_of_sequences is not None:
             warnings.warn(
                 "`num_of_sequences` is deprecated and will be remove in version 0.18.0. Use `max_length` instead, "
-                "which specifies the maximum length of the tokenized sequence, unlike `num_of_sequences`, which r"
-                "eferred to string sequences.",
+                "which specifies the maximum length of the tokenized sequence, unlike `num_of_sequences`, which "
+                "referred to string sequences.",
                 DeprecationWarning,
             )
 
