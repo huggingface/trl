@@ -1,10 +1,11 @@
 import config
+import torch
 from custom_trainer import LayerSkipSFTTrainer
 
-from trl import SFTConfig, DataCollatorForCompletionOnlyLM
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
-import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from trl import SFTConfig, DataCollatorForCompletionOnlyLM
 
 
 def formatting_prompts_func(example):
