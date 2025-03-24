@@ -134,7 +134,7 @@ class GRPOConfig(TrainingArguments):
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
-        num_completions_to_print (`int`, *optional*, defaults to `None`):
+        num_completions_to_print (`int` or `None`, *optional*, defaults to `None`):
             Number of completions to print with `rich`. If `None`, all completions are logged.
     """
 
@@ -412,6 +412,3 @@ class GRPOConfig(TrainingArguments):
                 "configuration.",
                 DeprecationWarning,
             )
-
-        if self.num_completions_to_print == 0:
-            raise ValueError("`num_completions_to_log` must be `None` or greater than 0")

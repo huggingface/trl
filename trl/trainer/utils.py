@@ -1709,8 +1709,8 @@ def print_prompt_completions_sample(
             List of rewards corresponding to the completions.
         step (`int`):
             Current training step number, used in the output title.
-        num_samples (`int`, *optional*):
-            Number of random samples to display. If None, all items will be displayed.
+        num_samples (`int` or `None`, *optional*, defaults to `None`):
+            Number of random samples to display. If `None` (default), all items will be displayed.
 
     Example:
     ```python
@@ -1742,7 +1742,7 @@ def print_prompt_completions_sample(
     table.add_column("Reward", style="bold cyan", justify="right")
 
     # Subsample data if num_samples is specified
-    if num_samples is not None and num_samples < len(prompts):
+    if num_samples is not None and 0 < num_samples < len(prompts):
         indices = random.sample(range(len(prompts)), num_samples)
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
