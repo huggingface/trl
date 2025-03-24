@@ -888,7 +888,9 @@ class GRPOTrainer(Trainer):
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
             prompts_to_log = gather_object(prompts_text)
             completions_to_log = gather_object(completions_text)
-            rewards_to_log = {reward_func_name: rewards_per_func[:, i] for i, reward_func_name in enumerate(reward_func_names)}
+            rewards_to_log = {
+                reward_func_name: rewards_per_func[:, i] for i, reward_func_name in enumerate(reward_func_names)
+            }
 
             if self.accelerator.is_main_process:
                 if is_rich_available():
