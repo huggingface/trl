@@ -122,14 +122,12 @@ class VLLMColocationClient(BaseVLLMClient):
         all_outputs = self.llm.generate(
             prompts, sampling_params=sampling_params, use_tqdm=False
         )
-        print("\n\n\n---- all out", all_outputs)
         completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-        print("\n\n\n---- completion out",completion_ids)
         return completion_ids
 
     def reset_prefix_cache(self):
         """
         Resets the prefix cache for the model.
         """
-        self.llm.engine.reset_prefix_cache()
+        self.llm.reset()
 
