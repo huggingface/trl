@@ -19,7 +19,6 @@ from .vllm_proxy import BaseVLLMClient
 from vllm import SamplingParams, LLM
 
 from accelerate import PartialState
-from profiling import profiling_context
 
 class VLLMColocationClient(BaseVLLMClient):
     def __init__(self, accelerator, args, model):
@@ -114,10 +113,10 @@ class VLLMColocationClient(BaseVLLMClient):
             guided_decoding_regex=guided_decoding_regex,
             
         )
-        with profiling_context(self, "vLLM.generate"):
-            all_outputs = self.llm.generate(
-                prompts, sampling_params=sampling_params, use_tqdm=False
-            )
+        
+        all_outputs = self.llm.generate(
+            prompts, sampling_params=sampling_params, use_tqdm=False
+        )
         completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
         return completion_ids
 
