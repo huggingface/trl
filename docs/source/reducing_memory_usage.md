@@ -136,6 +136,15 @@ When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Onl
 If you encounter this issue, you can disable the gathering of model weights for generation by setting the following parameter:
 
 <hfoptions id="ds3_gather_for_generation">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., ds3_gather_for_generation=False)
+```
+
+</hfoption>
 <hfoption id="Online DPO">
 
 ```python
