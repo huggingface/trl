@@ -697,7 +697,7 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process (if colocated, work on your own batch)
             all_prompts_text = prompts_text if self.args.vllm_colocation else gather_object(prompts_text) 
-            if self.accelerator.is_main_process:
+            if self.accelerator.is_main_process or self.args.vllm_colocation:
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually (if colocated, work on your own batch).
