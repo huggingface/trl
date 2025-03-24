@@ -91,6 +91,12 @@ $$
 
 where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.
 
+<Tip>
+
+Note that compared to the original formulation in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300), we don't scale by  \\(frac{1}{|o_i|} \\) because it was shown in the paper [Dr. GRPO](https://github.com/sail-sg/understand-r1-zero/blob/main/understand-r1-zero.pdf) that this introduces a response-level length bias.
+
+</Tip>
+
 In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:
 
 $$
