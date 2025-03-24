@@ -1741,8 +1741,15 @@ def print_prompt_completions_sample(
     table.add_column("Completion", style="bright_green")
     table.add_column("Reward", style="bold cyan", justify="right")
 
+    # Some basic input validation
+    if num_samples is not None:
+        if num_samples >= len(prompts):
+            num_samples = None
+        if num_samples <= 0:
+            return
+
     # Subsample data if num_samples is specified
-    if num_samples is not None and 0 < num_samples < len(prompts):
+    if num_samples is not None:
         indices = random.sample(range(len(prompts)), num_samples)
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
