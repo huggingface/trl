@@ -42,7 +42,7 @@ class BaseVLLMClient(ABC):
         pass
 
 def get_vllm_client(args, accelerator, model) -> BaseVLLMClient:
-    from .vllm_colocation_client import VLLMColocationClient
+    from .vllm_coloc_client import VLLMColocationClient
     from .vllm_client import VLLMClient
 
     if args.vllm_colocation:
