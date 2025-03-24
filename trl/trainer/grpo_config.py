@@ -90,6 +90,10 @@ class GRPOConfig(TrainingArguments):
             timeout, a `ConnectionError` is raised.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_colocation (`bool`, *optional*, defaults to `False`):
+            Whether to use colocated vLLM execution via external launcher. If set to `True`, vLLM will be 
+            initialized in **all processes**, each assigned to its respective device. This allows multi-GPU 
+            or multi-node execution with vLLM's external launcher, enabling improved large-scale inference.
 
         > Parameters that control the training
 
@@ -247,6 +251,14 @@ class GRPOConfig(TrainingArguments):
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+    )
+    vllm_colocation: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to use colocated vLLM execution via external launcher. If set to `True`, vLLM will be "
+                    "initialized in all processes, each assigned to its respective device. This enables optimized "
+                    "multi-GPU inference."
+        },
     )
 
     # Parameters that control the training
