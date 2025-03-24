@@ -129,5 +129,5 @@ class VLLMColocationClient(BaseVLLMClient):
         """
         Resets the prefix cache for the model.
         """
-        self.llm.reset()
+        self.llm.reset_prefix_cache()
 
