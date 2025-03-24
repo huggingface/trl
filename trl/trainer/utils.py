@@ -1691,7 +1691,9 @@ def selective_log_softmax(logits, index):
     return per_token_logps
 
 
-def print_prompt_completions_sample(prompts: list[str], completions: list[str], rewards: list[int], step: int) -> None:
+def print_prompt_completions_sample(
+    prompts: list[str], completions: list[str], rewards: list[int], step: int, num_samples: int = None
+) -> None:
     """
     Print out a sample of model completions to the console.
 
@@ -1707,6 +1709,8 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
             List of rewards corresponding to the completions.
         step (`int`):
             Current training step number, used in the output title.
+        num_samples (`int`, *optional*):
+            Number of random samples to display. If None, all items will be displayed.
 
     Example:
     ```python
@@ -1736,6 +1740,13 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
     table.add_column("Reward", style="bold cyan", justify="right")
+
+    # Subsample data if num_samples is specified
+    if num_samples is not None and num_samples < len(prompts):
+        indices = random.sample(range(len(prompts)), num_samples)
+        prompts = [prompts[i] for i in indices]
+        completions = [completions[i] for i in indices]
+        rewards = [rewards[i] for i in indices]
 
     for prompt, completion, reward in zip(prompts, completions, rewards):
         table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places

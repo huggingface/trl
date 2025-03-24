@@ -134,6 +134,8 @@ class GRPOConfig(TrainingArguments):
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
+        num_completions_to_log (`int`, *optional*, defaults to `None`):
+            Number of completions to log. If `None`, all completions are logged.
     """
 
     # Parameters that control the model and reference model
@@ -325,6 +327,10 @@ class GRPOConfig(TrainingArguments):
             "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
+    )
+    num_completions_to_log: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of completions to log. If `None`, all completions are logged."},
     )
 
     # Deprecated parameters
