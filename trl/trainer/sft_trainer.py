@@ -410,7 +410,7 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
 
-                batched = isinstance(formatting_func(next(iter(dataset))), list)
+                batched = isinstance(formatting_func(dataset), list)
 
                 def _func(example):
                     return {"text": formatting_func(example)}
