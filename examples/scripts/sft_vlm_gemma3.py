@@ -47,6 +47,7 @@ accelerate launch
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
 """
 
+import io
 import os
 import zipfile
 
@@ -82,23 +83,34 @@ def process_vision_info(messages: list[dict]) -> list[Image.Image]:
                     image = element["image"]
                 else:
                     image = element
-                image_inputs.append(image.convert("RGB"))
+                if image is not None:
+                    image = Image.open(io.BytesIO(image["bytes"]))
+                    image_inputs.append(image.convert("RGB"))
     return image_inputs
 
 
-# For multi-image example
-def format_data(sample: dict[str, any]) -> list[dict[str, any]]:
-    return [
-        {"role": "system", "content": [{"type": "text", "text": sample["context"]}]},
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": Image.open(img).convert("RGB")} for img in sample["input_image_path"]
+def format_data(samples: dict[str, any]) -> dict[str, list]:
+    formatted_samples = {"messages": []}
+    for cont in range(len(samples["question"])):
+        images = []
+        for img_path in samples["input_image_path"][cont]:
+            try:
+                with open(img_path, "rb") as f:
+                    img_bytes = f.read()
+                image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                images.append({"type": "image", "image": image})
+            except Exception as e:
+                print(f"Error processing image {img_path}: {e}")
+                continue
+
+        formatted_samples["messages"].append(
+            [
+                {"role": "system", "content": [{"type": "text", "text": samples["context"][cont]}]},
+                {"role": "user", "content": images + [{"type": "text", "text": samples["question"][cont]}]},
+                {"role": "assistant", "content": [{"type": "text", "text": samples["output"][cont]}]},
             ]
-            + [{"type": "text", "text": sample["question"]}],
-        },
-        {"role": "assistant", "content": [{"type": "text", "text": sample["output"]}]},
-    ]
+        )
+    return formatted_samples
 
 
 # For multi-image example
@@ -114,7 +126,7 @@ def prepare_dataset(dataset: DatasetDict, dataset_name: str, dataset_train_split
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(extract_folder)
 
-    dataset = DatasetDict({"test": [format_data(sample) for sample in dataset[dataset_train_split]]})
+    dataset = dataset.map(format_data, batched=True, batch_size=4)
     return dataset
 
 
@@ -148,14 +160,13 @@ def main():
     )
 
     def collate_fn(examples):
-        if "messages" in examples[0]:  # single-image
-            texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+        texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+        if "images" in examples[0]:  # single-image
             images = [
                 img.convert("RGB") if img.mode == "RGBA" else img for example in examples for img in example["images"]
             ]
         else:  # multi-image
-            texts = [processor.apply_chat_template(example, tokenize=False) for example in examples]
-            images = [process_vision_info(example) for example in examples]
+            images = [process_vision_info(example["messages"]) for example in examples]
 
         # Tokenize the texts and process the images
         batch = processor(
