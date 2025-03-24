@@ -21,6 +21,7 @@ jobs:
   check_code_quality:
     name: Check code quality
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,6 +43,7 @@ jobs:
         os: ['ubuntu-latest', 'windows-latest']
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python ${{ matrix.python-version }}
@@ -72,6 +74,7 @@ jobs:
   tests_dev:
     name: Tests with dev dependencies
     runs-on: 'ubuntu-latest'
+    if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python 3.12
@@ -104,6 +107,7 @@ jobs:
   tests_wo_optional_deps:
     name: Tests without optional dependencies
     runs-on: 'ubuntu-latest'
+    if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python 3.12
@@ -133,6 +137,7 @@ jobs:
   tests_min_versions:
     name: Tests with minimum versions
     runs-on: 'ubuntu-latest'
+    if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python 3.12
