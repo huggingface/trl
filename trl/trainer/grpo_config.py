@@ -412,3 +412,6 @@ class GRPOConfig(TrainingArguments):
                 "configuration.",
                 DeprecationWarning,
             )
+
+        if self.num_completions_to_log == 0:
+            raise ValueError("`num_completions_to_log` must be `None` or greater than 0")
