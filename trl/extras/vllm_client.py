@@ -21,7 +21,7 @@ import torch
 from torch import nn
 
 from ..import_utils import is_requests_available, is_vllm_available
-from .vllm_proxy import BaseVLLMClient
+from .vllm_base import BaseVLLMClient
 
 if is_requests_available():
     import requests

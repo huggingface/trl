@@ -12,39 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from abc import ABC, abstractmethod
-from typing import Optional
-import torch
-
-class BaseVLLMClient(ABC):
-
-    @abstractmethod
-    def generate(
-        self,
-        prompts: list[str],
-        n: int = 1,
-        repetition_penalty: float = 1.0,
-        temperature: float = 1.0,
-        top_p: float = 1.0,
-        top_k: int = -1,
-        min_p: float = 0.0,
-        max_tokens: int = 16,
-        guided_decoding_regex: Optional[str] = None,
-    ) -> list[list[str]]:
-        pass
-
-    @abstractmethod
-    def update_named_param(self, name: str, weights: torch.Tensor):
-        pass
-
-    @abstractmethod
-    def reset_prefix_cache(self):
-        pass
+from .vllm_base import BaseVLLMClient
+from .vllm_client import VLLMClient
+from .vllm_coloc_client import VLLMColocationClient
 
 def get_vllm_client(args, accelerator, model) -> BaseVLLMClient:
-    from .vllm_coloc_client import VLLMColocationClient
-    from .vllm_client import VLLMClient
-
     if args.vllm_colocation:
         return VLLMColocationClient(accelerator, args, model)
     else:

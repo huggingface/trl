@@ -15,7 +15,8 @@
 from typing import Optional
 import torch
 import warnings
-from .vllm_proxy import BaseVLLMClient
+from .vllm_base import BaseVLLMClient
+
 from vllm import SamplingParams, LLM
 from vllm.sampling_params import GuidedDecodingParams
 

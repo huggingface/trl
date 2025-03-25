@@ -474,7 +474,10 @@ class GRPOTrainer(Trainer):
                 )
 
             self.vllm_client = None
+            print("args here", self.args)
+            print("coloc arg", self.args.vllm_colocation)
             if self.accelerator.is_main_process or self.args.vllm_colocation:
+                print("-----\n\n\n\nInitializing now!!!!")
                 self.vllm_client = get_vllm_client(self.args, self.accelerator, model)
 
             print("-----\n\n\n\nVLLM client initialized!")
