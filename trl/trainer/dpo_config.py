@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional, Union
@@ -385,20 +384,3 @@ class DPOConfig(TrainingArguments):
             "Comet during evaluation."
         },
     )
-
-    # Deprecated parameters
-    use_num_logits_to_keep: Optional[bool] = field(
-        default=None,
-        metadata={"help": "Deprecated. Use `use_logits_to_keep` instead."},
-    )
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        if self.use_num_logits_to_keep is not None:
-            warnings.warn(
-                "`use_num_logits_to_keep` is deprecated and will be remove in version 0.17.0. Use "
-                "`use_logits_to_keep` instead.",
-                DeprecationWarning,
-            )
-            self.use_logits_to_keep = self.use_num_logits_to_keep
