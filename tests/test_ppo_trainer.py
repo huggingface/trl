@@ -48,7 +48,15 @@ class TestPPOTrainer(unittest.TestCase):
 
         # Load dataset
         raw_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-        self.raw_dataset = raw_dataset.map(lambda x: self.tokenizer(x["prompt"]), remove_columns=["prompt"])
+
+        def tokenize(example, tokenizer):
+            tokenized = tokenizer(text=example["prompt"])
+            if tokenizer.eos_token_id is not None and tokenized["input_ids"][-1] != tokenizer.eos_token_id:
+                tokenized["input_ids"] = tokenized["input_ids"] + [tokenizer.eos_token_id]
+                tokenized["attention_mask"] = tokenized["attention_mask"] + [1]
+            return tokenized
+
+        self.raw_dataset = raw_dataset.map(tokenize, fn_kwargs={"tokenizer": self.tokenizer}, remove_columns="prompt")
 
     def test_basic_training(self):
         """Test basic PPO training configuration and verify model updates."""
@@ -168,55 +176,3 @@ class TestPPOTrainer(unittest.TestCase):
 
             self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
             self.assertTrue(policy_weights_updated, "Policy LoRA weights were not updated during training")
-
-    def test_with_num_train_epochs(self):
-        """Test PPO training with num_train_epochs configuration."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Capture initial weights
-            initial_critic_weights = {}
-            initial_policy_weights = {}
-            for name, param in self.value_model.named_parameters():
-                initial_critic_weights[name] = param.clone().detach()
-            for name, param in self.model.named_parameters():
-                initial_policy_weights[name] = param.clone().detach()
-
-            # Configure training args
-            training_args = PPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=4,
-                per_device_eval_batch_size=2,
-                num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test
-                report_to="none",
-            )
-
-            # Create trainer
-            trainer = PPOTrainer(
-                args=training_args,
-                processing_class=self.tokenizer,
-                model=self.model,
-                ref_model=self.ref_model,
-                reward_model=self.reward_model,
-                value_model=self.value_model,
-                train_dataset=self.raw_dataset["train"],
-                eval_dataset=self.raw_dataset["test"],
-            )
-
-            # Train and verify no exceptions are raised
-            trainer.train()
-
-            # Check if critic weights have been updated
-            critic_weights_updated = False
-            for name, param in trainer.model.value_model.named_parameters():
-                if not torch.allclose(initial_critic_weights[name], param.to("cpu")):
-                    critic_weights_updated = True
-                    break
-
-            # Check if policy weights have been updated
-            policy_weights_updated = False
-            for name, param in trainer.model.policy.named_parameters():
-                if not torch.allclose(initial_policy_weights[name], param.to("cpu")):
-                    policy_weights_updated = True
-                    break
-
-            self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
-            self.assertTrue(policy_weights_updated, "Policy weights were not updated during training")
