@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import argparse
+import ctypes
 import logging
 import os
 from dataclasses import dataclass, field
@@ -35,8 +36,19 @@ if is_pydantic_available():
 if is_uvicorn_available():
     import uvicorn
 
+# When no GPU is available, importing 'Worker' from 'vllm.worker.worker' fails with the following error:
+# libcuda.so.1: cannot open shared object file: No such file or directory.
+# To prevent this error, we check if libcuda is available before importing 'Worker'. While this check is not
+# crucial—since vLLM and TRL are not intended to run without a GPU—it helps avoid errors when running CI on a machine
+# without a GPU.
+try:
+    ctypes.CDLL("libcuda.so.1")
+except OSError:
+    libcuda_available = False
+else:
+    libcuda_available = True
 
-if is_vllm_available():
+if is_vllm_available() and libcuda_available:
     from vllm import LLM, SamplingParams
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
