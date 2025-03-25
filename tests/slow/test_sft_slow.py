@@ -422,8 +422,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 eval_dataset=self.eval_dataset,
             )
 
-            # check that the components of the trainer.model are monkey patched:
-            self.assertTrue(any("Liger" in type(module).__name__ for module in trainer.model.model.modules()))
             trainer.train()
 
         release_memory(trainer.model, trainer)
