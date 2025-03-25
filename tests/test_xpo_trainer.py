@@ -21,7 +21,8 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import XPOConfig, XPOTrainer, is_llm_blender_available
+from trl import XPOConfig, XPOTrainer
+from trl.import_utils import is_llm_blender_available
 
 from .testing_utils import RandomPairwiseJudge
 

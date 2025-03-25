@@ -21,7 +21,8 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available, is_vllm_available
+from trl import OnlineDPOConfig, OnlineDPOTrainer
+from trl.import_utils import is_llm_blender_available, is_vllm_available
 
 from .testing_utils import RandomPairwiseJudge
 
