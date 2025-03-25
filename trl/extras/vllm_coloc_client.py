@@ -24,7 +24,6 @@ from accelerate import PartialState
 
 class VLLMColocationClient(BaseVLLMClient):
     def __init__(self, accelerator, args, model):
-        ## ToDo: get accelerator and other things - to offload if/else from trainer to the clients
         self.args = args
         self.accelerator = accelerator
         self.model = model
