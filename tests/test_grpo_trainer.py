@@ -548,8 +548,10 @@ class GRPOTrainerTester(unittest.TestCase):
 
             # Check that training logs contain both reward metrics
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIn("rewards/reward_func1", trainer.state.log_history[-1])
-            self.assertIn("rewards/reward_func2", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func1/mean", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func1/std", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func2/mean", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func2/std", trainer.state.log_history[-1])
 
             # Check that the params have changed
             for n, param in previous_trainable_params.items():
