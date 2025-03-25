@@ -17,6 +17,7 @@ import itertools
 import tempfile
 import unittest
 
+import pytest
 import torch
 from accelerate.utils.memory import release_memory
 from datasets import load_dataset
@@ -41,6 +42,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
+@pytest.mark.slow
 @require_torch_accelerator
 class SFTTrainerSlowTester(unittest.TestCase):
     def setUp(self):

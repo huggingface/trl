@@ -21,3 +21,8 @@ extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 known-first-party = ["trl"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+]
