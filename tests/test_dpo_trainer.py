@@ -479,7 +479,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
-                dataset_num_proc=5,
+                dataset_num_proc=2,
                 report_to="none",
             )
 
