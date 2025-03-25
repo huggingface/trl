@@ -19,9 +19,14 @@ import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft
+from transformers.utils import is_peft_available
 
 from trl import PPOConfig, PPOTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
+
+if is_peft_available():
+    from peft import LoraConfig
 
 
 class TestPPOTrainer(unittest.TestCase):
@@ -37,12 +42,9 @@ class TestPPOTrainer(unittest.TestCase):
             self.tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
         # Add reward and value models as in ppo.py
-        self.value_model = AutoModelForSequenceClassification.from_pretrained(
-            self.model_id, trust_remote_code=True, num_labels=1
-        )
-        self.reward_model = AutoModelForSequenceClassification.from_pretrained(
-            self.model_id, trust_remote_code=True, num_labels=1
-        )
+        reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        self.value_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
+        self.reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
 
         # Load dataset
         raw_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -64,10 +66,8 @@ class TestPPOTrainer(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=4,
                 per_device_eval_batch_size=2,
+                num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test
                 report_to="none",
-                missing_eos_penalty=1.0,
-                vf_coef=1.0,  # Increase value function coefficient
-                num_ppo_epochs=4,  # Increase number of PPO epochs
             )
 
             # Create trainer
@@ -105,8 +105,6 @@ class TestPPOTrainer(unittest.TestCase):
     @require_peft
     def test_peft_training(self):
         """Test PPO training with PEFT configuration and verify model updates."""
-        from peft import LoraConfig
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Capture initial weights
             initial_critic_weights = {}
@@ -121,8 +119,8 @@ class TestPPOTrainer(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=4,
                 per_device_eval_batch_size=2,
+                num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test
                 report_to="none",
-                missing_eos_penalty=1.0,
             )
 
             # Configure PEFT
@@ -187,8 +185,8 @@ class TestPPOTrainer(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=4,
                 per_device_eval_batch_size=2,
+                num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test
                 report_to="none",
-                missing_eos_penalty=1.0,
             )
 
             # Create trainer
