@@ -428,6 +428,7 @@ class GRPOTrainer(Trainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
+        self.num_completions_to_print = args.num_completions_to_print
 
         super().__init__(
             model=model,
@@ -893,6 +894,7 @@ class GRPOTrainer(Trainer):
                         completions_to_log,
                         rewards_to_log,
                         self.state.global_step,
+                        self.num_completions_to_print,
                     )
                 if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
                     import pandas as pd
