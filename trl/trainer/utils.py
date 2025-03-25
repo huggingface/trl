@@ -1692,7 +1692,7 @@ def selective_log_softmax(logits, index):
 
 
 def print_prompt_completions_sample(
-    prompts: list[str], completions: list[str], rewards: dict[str, list[float]], step: int
+    prompts: list[str], completions: list[str], rewards: dict[str, list[float]], step: int, num_samples: int = None
 ) -> None:
     """
     Print out a sample of model completions to the console with multiple reward metrics.
@@ -1709,6 +1709,8 @@ def print_prompt_completions_sample(
             Dictionary where keys are reward names and values are lists of rewards.
         step (`int`):
             Current training step number, used in the output title.
+        num_samples (`int` or `None`, *optional*, defaults to `None`):
+            Number of random samples to display. If `None` (default), all items will be displayed.
 
     Example:
     ```python
@@ -1737,9 +1739,22 @@ def print_prompt_completions_sample(
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
 
-    # Iterate over data
+    # Some basic input validation
+    if num_samples is not None:
+        if num_samples >= len(prompts):
+            num_samples = None
+        elif num_samples <= 0:
+            return
+
+    # Subsample data if num_samples is specified
+    if num_samples is not None:
+        indices = random.sample(range(len(prompts)), num_samples)
+        prompts = [prompts[i] for i in indices]
+        completions = [completions[i] for i in indices]
+        rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
+
     for i in range(len(prompts)):
-        reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]
+        reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
         table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values)
         table.add_section()  # Adds a separator between rows
 
