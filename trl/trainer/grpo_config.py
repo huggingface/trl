@@ -354,7 +354,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     vllm_gpu_memory_utilization: Optional[float] = field(
-        default=None,
+        default=0.3,
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the GPU memory "
             "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
@@ -377,7 +377,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     vllm_enable_prefix_caching: Optional[bool] = field(
-        default=None,
+        default=False,
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.18.0. To control prefix caching in "
             "vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server configuration."
