@@ -48,5 +48,5 @@ def get_vllm_client(args, accelerator, model) -> BaseVLLMClient:
     if args.vllm_colocation:
         return VLLMColocationClient(accelerator, args, model)
     else:
-        return VLLMClient(args.vllm_server_host, args.vllm_server_port, args.vllm_server_timeout)
+        return VLLMClient(args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout)
 
