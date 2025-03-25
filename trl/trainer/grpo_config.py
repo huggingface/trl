@@ -362,7 +362,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     vllm_dtype: Optional[str] = field(
-        default="auto",
+        default=None,
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the data type for "
             "vLLM generation, you should now use the `dtype` parameter in the vLLM server configuration."
