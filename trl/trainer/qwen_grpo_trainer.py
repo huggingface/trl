@@ -675,6 +675,33 @@ class QwenGRPOTrainer(Trainer):
                 completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+
+            # Handle the potential new images generated from the environment (tool) in completion_messages
+            new_images = []
+            for i, completion_message in enumerate(completion_messages):
+                if completion_message is not None:
+                    for message in completion_message:
+                        for content in message["content"]:
+                            if content.get("type", None) == "image":
+                                new_images.append(content["image"])
+
+            if len(new_images) > 0:
+                # use the processor to get pixel_values and image_grid_thw for the new images
+                new_images_info = self.processing_class(
+                    text='',
+                    images=new_images,
+                    return_tensors='pt',
+                    padding=True,
+                )
+                new_pixel_values = new_images_info["pixel_values"]
+                new_image_grid_thw = new_images_info["image_grid_thw"]
+
+                # Concatenate the new pixel_values and image_grid_thw with the existing ones
+                # make sure pixel_values and new_pixel_values are on the same device. same for image_grid_thw and new_image_grid_thw
+                new_pixel_values = new_pixel_values.to(device)
+                new_image_grid_thw = new_image_grid_thw.to(device)
+                pixel_values = torch.cat([pixel_values, new_pixel_values], dim=0)
+                image_grid_thw = torch.cat([image_grid_thw, new_image_grid_thw], dim=0)            
         else:
             raise ValueError("Attempted to generate with HF. Only supporting vllm now.")
 
