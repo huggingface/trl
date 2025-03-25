@@ -18,7 +18,9 @@ from .vllm_coloc_client import VLLMColocationClient
 
 def get_vllm_client(args, accelerator, model) -> BaseVLLMClient:
     if args.vllm_colocation:
+        print("\n\n\n\nColoc client !")
         return VLLMColocationClient(accelerator, args, model)
     else:
+        print("\n\n\n\nOld client !")
         return VLLMClient(args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout)
 
