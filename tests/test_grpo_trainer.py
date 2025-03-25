@@ -24,8 +24,9 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.import_utils import is_vllm_available
 from trl.trainer.grpo_trainer import RepeatRandomSampler
+
+from .testing_utils import require_vllm
 
 
 if is_peft_available():
@@ -632,7 +633,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm(self):
         """Test that training works with vLLM for generation."""
@@ -760,7 +761,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     @require_peft
     def test_training_vllm_and_peft(self):
@@ -807,7 +808,7 @@ class GRPOTrainerTester(unittest.TestCase):
                     # We expect the peft params to be different (except for the base layer)
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_guided_decoding(self):
         """Test that training works with vLLM for generation with guided decoding."""
@@ -878,7 +879,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
