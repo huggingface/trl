@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
@@ -667,6 +668,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    @pytest.mark.slow
     @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")  # compiling seems to be broken on Windows
     def test_training_torch_compile(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
