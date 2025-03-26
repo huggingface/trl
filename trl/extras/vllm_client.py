@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from abc import ABC, abstractmethod
 import atexit
 import logging
 import time
@@ -35,14 +34,17 @@ if is_vllm_available():
     from vllm import SamplingParams, LLM
 
 from accelerate import Accelerator
+from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 
 logger = logging.getLogger(__name__)
 
 # abstract base class. All vllm clients must
 # implement these methods
-class BaseVLLMClient(ABC):
+class VLLMNoopClient:
 
-    @abstractmethod
+    def __init__(self, process_index: int):
+        self.process_index = process_index
+
     def generate(
         self,
         prompts: list[str],
@@ -55,17 +57,32 @@ class BaseVLLMClient(ABC):
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
     ) -> list[list[str]]:
-        pass
+        orig_size = len(prompts)
+        prompts = gather_object(prompts) 
+        completion_ids = [None] * len(prompts)
+        return self._broadcast_and_slice(completion_ids, orig_size)
 
-    @abstractmethod
     def update_named_param(self, name: str, weights: torch.Tensor):
         pass
 
-    @abstractmethod
     def reset_prefix_cache(self):
         pass
 
-class VLLMClient(BaseVLLMClient):
+    def _gather(self, prompts):
+        return gather_object(prompts) 
+
+    def _broadcast_and_slice(self, completion_ids: list, slice_size: int):
+        # Broadcast the completions from the main process to all processes, ensuring each process receives its
+        # corresponding slice
+
+        completion_ids = broadcast_object_list(completion_ids, from_process=0)
+        process_slice = slice(
+            self.process_index * slice_size,
+            (self.process_index + 1) * slice_size,
+        )
+        return completion_ids[process_slice]
+
+class VLLMClient(VLLMNoopClient):
     """
     A client class to interact with a vLLM server.
 
@@ -109,13 +126,17 @@ class VLLMClient(BaseVLLMClient):
     """
 
     def __init__(
-        self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0
+        self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0,
+        distributed: bool = False
     ):
+        super().__init__(process_index=0)
+
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
         if not is_vllm_available():
             raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
 
+        self.distributed = distributed
         self.session = requests.Session()
         self.host = host
         self.server_port = server_port
@@ -197,6 +218,16 @@ class VLLMClient(BaseVLLMClient):
             `list[list[int]]`:
                 List of lists of token IDs representing the model-generated completions for each prompt.
         """
+
+        if self.distributed:
+            orig_size = len(prompts)
+            prompts = self._gather(prompts) 
+
+        # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
+        # num_generations outputs for each one. This is faster than generating outputs for each duplicate
+        # prompt individually 
+        prompts = prompts[::n]
+
         url = f"http://{self.host}:{self.server_port}/generate/"
         response = self.session.post(
             url,
@@ -213,9 +244,14 @@ class VLLMClient(BaseVLLMClient):
             },
         )
         if response.status_code == 200:
-            return response.json()["completion_ids"]
+            completion_ids = response.json()["completion_ids"]
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+        if self.distributed:
+            completion_ids = self._broadcast_and_slice(completion_ids, orig_size)
+
+        return completion_ids
 
     def init_communicator(self):
         """
@@ -294,25 +330,8 @@ class VLLMClient(BaseVLLMClient):
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
 
-# Example usage
-if __name__ == "__main__":
-    from vllm import SamplingParams
 
-    client = VLLMClient()
-
-    # Generate completions
-    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
-    print("Responses:", responses)  # noqa
-
-    # Update model weights
-    from transformers import AutoModelForCausalLM
-
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
-    client.update_model_params(model)
-
-
-
-class VLLMColocationClient(BaseVLLMClient):
+class VLLMColocationClient:
     def __init__(self, args: GRPOConfig, model, vllm_device):
         self.args: GRPOConfig = args
         self.model = model
@@ -407,9 +426,30 @@ class VLLMColocationClient(BaseVLLMClient):
         self.llm.reset_prefix_cache()
 
 # build appropriate client according to config
-def get_vllm_client(args: GRPOConfig, model, accelerator: Accelerator) -> BaseVLLMClient:
+def get_vllm_client(args: GRPOConfig, model, accelerator: Accelerator) -> VLLMNoopClient:
     if args.vllm_colocation:
         return VLLMColocationClient(args, model, accelerator.device)
-    else:
-        return VLLMClient(args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout)
+    elif accelerator.is_main_process:
+        return VLLMClient(
+            args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout,
+            distributed=accelerator.num_processes > 1,
+        )
+    return VLLMNoopClient(accelerator.process_index)
+    
+
+# Example usage for VLLMCLient
+if __name__ == "__main__":
+    from vllm import SamplingParams
+
+    client = VLLMClient()
+
+    # Generate completions
+    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
+    print("Responses:", responses)  # noqa
+
+    # Update model weights
+    from transformers import AutoModelForCausalLM
+
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
+    client.update_model_params(model)
 
