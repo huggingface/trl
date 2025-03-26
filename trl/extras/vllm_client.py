@@ -32,15 +32,26 @@ if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm import SamplingParams, LLM
+    from vllm.sampling_params import GuidedDecodingParams
 
 from accelerate import Accelerator
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 
 logger = logging.getLogger(__name__)
 
-# abstract base class. All vllm clients must
-# implement these methods
-class VLLMNoopClient:
+class VLLMNoOpClient:
+    """
+    A no-op vLLM client used in distributed training when the process is neither the main process
+    nor running in vLLM colocation mode.
+
+    This stub client ensures compatibility in distributed setups without performing actual
+    inference or model updates. 
+
+    Methods like `generate` and `update_named_param` are implemented as no-ops or return default
+    values to maintain consistent interfaces across processes.
+
+    This class should only be used internally by `get_vllm_client`.
+    """
 
     def __init__(self, process_index: int):
         self.process_index = process_index
@@ -82,7 +93,7 @@ class VLLMNoopClient:
         )
         return completion_ids[process_slice]
 
-class VLLMClient(VLLMNoopClient):
+class VLLMClient(VLLMNoOpClient):
     """
     A client class to interact with a vLLM server.
 
@@ -329,9 +340,20 @@ class VLLMClient(VLLMNoopClient):
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-
-
 class VLLMColocationClient:
+    """
+    A client class to interact with vLLM processes colocated with the training process.
+
+    This client bypasses remote communication and directly interacts with the in-process vLLM engine.
+    It supports weight updates and text generation functionalities similar to `VLLMClient`, but is optimized
+    for scenarios where vLLM is running in the same process or node as training.
+
+    Args:
+        args (`GRPOConfig`): Configuration object containing vLLM parameters.
+        model (`transformers.PreTrainedModel`): The model being used.
+        vllm_device (`torch.device` or `str`): Device on which the model is loaded (e.g., "cuda:0").
+    """
+
     def __init__(self, args: GRPOConfig, model, vllm_device):
         self.args: GRPOConfig = args
         self.model = model
@@ -345,8 +367,8 @@ class VLLMColocationClient:
             enable_prefix_caching=self.args.vllm_enable_prefix_caching,
             max_model_len=self.args.vllm_max_model_len,
             distributed_executor_backend="external_launcher",
-            hf_overrides = {
-                'max_position_embeddings': self.args.vllm_max_model_len
+            hf_overrides = { 
+                'max_position_embeddings': self.args.vllm_max_model_len # model config reflects model length just for consistency (vllm == 0.8.2)
             },
         )
         
@@ -402,6 +424,12 @@ class VLLMColocationClient:
             `list[list[int]]`:
                 List of lists of token IDs representing the model-generated completions for each prompt.
         """
+        # Guided decoding, if enabled
+        if guided_decoding_regex is not None:
+            guided_decoding = GuidedDecodingParams(backend="outlines", regex=guided_decoding_regex)
+        else:
+            guided_decoding = None
+
         sampling_params = SamplingParams(
             n=1, # vLLM on each GPU generates only 1 in vllm_colocation mode
             repetition_penalty=repetition_penalty,
@@ -410,7 +438,7 @@ class VLLMColocationClient:
             top_k=top_k,
             min_p=min_p,
             max_tokens=max_tokens,
-            guided_decoding=guided_decoding_regex,
+            guided_decoding=guided_decoding,
         )
         
         all_outputs = self.llm.generate(
@@ -425,8 +453,23 @@ class VLLMColocationClient:
         """
         self.llm.reset_prefix_cache()
 
-# build appropriate client according to config
-def get_vllm_client(args: GRPOConfig, model, accelerator: Accelerator) -> VLLMNoopClient:
+def get_vllm_client(args: GRPOConfig, model, accelerator: Accelerator) -> VLLMNoOpClient:
+    """
+    Returns the appropriate vLLM client based on the current configuration.
+
+    This function acts as a proxy to initialize and return the correct vLLM client type:
+    - If colocation is enabled, it returns `VLLMColocationClient`, which interacts directly with 
+      the colocated vLLM process for faster integration.
+    - If running in the main process (non-colocated mode), it returns `VLLMClient`, which communicates
+      with an external vLLM server.
+    - If not the main process and colocation is disabled, it returns a base client (`VLLMNoOpClient`)
+      for compatibility in distributed settings.
+
+    Args:
+        args (`GRPOConfig`): Configuration object containing flags for colocation, server host, port, etc.
+        model (`transformers.PreTrainedModel`): The model to use, passed only for the colocated client.
+        accelerator (`Accelerator`): Hugging Face `Accelerator` object that helps with multi-GPU training.
+    """
     if args.vllm_colocation:
         return VLLMColocationClient(args, model, accelerator.device)
     elif accelerator.is_main_process:
@@ -434,8 +477,7 @@ def get_vllm_client(args: GRPOConfig, model, accelerator: Accelerator) -> VLLMNo
             args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout,
             distributed=accelerator.num_processes > 1,
         )
-    return VLLMNoopClient(accelerator.process_index)
-    
+    return VLLMNoOpClient(accelerator.process_index)
 
 # Example usage for VLLMCLient
 if __name__ == "__main__":

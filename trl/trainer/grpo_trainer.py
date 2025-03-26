@@ -484,7 +484,7 @@ class GRPOTrainer(Trainer):
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
-            # synchronize all processes after vLLM has been fully initialized (if colocated, no need to wait).
+            # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
         else:
             self.generation_config = GenerationConfig(
