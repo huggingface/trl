@@ -952,19 +952,13 @@ class GRPOTrainer(Trainer):
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
-        if self.args.scale_rewards:
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
-        else:
-            loss = (per_token_loss * completion_mask).sum() / self.max_completion_length
+        loss = torch.mean(torch.sum(per_token_loss * completion_mask, dim=-1)) / self.max_completion_length
 
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
 
         if self.beta != 0.0:
-            if self.args.scale_rewards:
-                mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
-            else:
-                mean_kl = (per_token_kl * completion_mask).sum() / self.max_completion_length
+            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
         is_clipped = (coef_1 < (1 - self.epsilon_low)) | (coef_1 > (1 + self.epsilon_high))
