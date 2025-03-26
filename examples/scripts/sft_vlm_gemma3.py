@@ -25,7 +25,6 @@ accelerate launch \
     --output_dir gemma-3-4b-it-trl-sft-ChartQA \
     --bf16 \
     --torch_dtype bfloat16 \
-    --gradient_checkpointing \
     --use_peft \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
 
@@ -42,7 +41,6 @@ accelerate launch \
     --output_dir gemma-3-4b-it-trl-sft-MMIU-Benchmark \
     --bf16 \
     --torch_dtype bfloat16 \
-    --gradient_checkpointing \
     --use_peft \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
 """
@@ -126,7 +124,7 @@ def prepare_dataset(dataset: DatasetDict, dataset_name: str, dataset_train_split
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(extract_folder)
 
-    dataset = dataset.map(format_data, batched=True, batch_size=4)
+    dataset = dataset.map(format_data, batched=True, batch_size=4, num_proc=16)
     return dataset
 
 
