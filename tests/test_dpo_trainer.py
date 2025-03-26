@@ -1240,7 +1240,7 @@ class DPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 do_eval=True,
                 eval_strategy="steps",
-                eval_steps=1,
+                eval_steps=3,
                 per_device_eval_batch_size=2,
                 report_to="none",
             )
