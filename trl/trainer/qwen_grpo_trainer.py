@@ -228,8 +228,6 @@ class QwenGRPOTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
         shuffle_dataset: bool = True,
-        limit_image_per_prompt: int = 1,
-        limit_video_per_prompt: int = 0,
     ):
         # Args
         if args is None:
@@ -441,7 +439,7 @@ class QwenGRPOTrainer(Trainer):
                         enable_prefix_caching=True,
                         max_model_len=self.args.vllm_max_model_len,
                         # Setting this to 1 as we only have one image per prompt for now. Setting it longer requires more resources, which is wasteful until we need it.
-                        limit_mm_per_prompt={"image": limit_image_per_prompt, "video": limit_video_per_prompt},
+                        limit_mm_per_prompt={"image": self.args.limit_image_per_prompt, "video": self.args.limit_video_per_prompt},
                     )
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,

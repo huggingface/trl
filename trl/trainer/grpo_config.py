@@ -249,3 +249,11 @@ class GRPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to log the completions during training."},
     )
+    limit_image_per_prompt: int = field(
+        default=1,
+        metadata={"help": "Limit the number of images per prompt for vllm generation."},
+    )
+    limit_video_per_prompt: int = field(
+        default=0,
+        metadata={"help": "Limit the number of videos per prompt for vllm generation."},
+    )
