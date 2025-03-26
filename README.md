@@ -1,3 +1,16 @@
+# TRL Fork: Agent-In-The-Loop Reinforcement Trainer (AITLRT)
+
+This fork enhances the TRL (Transformer Reinforcement Learning) library with agentic capabilities, focusing on training and reinforcing multi-turn coding agents:
+
+- **OpenAI-Compatible vLLM Endpoint**: Drop-in replacement for OpenAI API enabling seamless integration with existing tools and agents
+- **Direct Agent Integration**: Use existing agent scaffolding and applications directly in the training loop without modification
+- **Enterprise-Ready Solutions**: Leverage production-ready agentic frameworks rather than building custom implementations
+- **Parallel Agent Execution**: Run multiple instances of the same agent architecture in parallel during training
+
+For original TRL documentation, see below.
+
+---
+
 # TRL - Transformer Reinforcement Learning
 
 <div style="text-align: center">

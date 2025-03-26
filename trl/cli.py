@@ -25,8 +25,8 @@ from .scripts.grpo import make_parser as make_grpo_parser
 from .scripts.kto import make_parser as make_kto_parser
 from .scripts.sft import make_parser as make_sft_parser
 from .scripts.utils import TrlParser
-from .scripts.vllm_serve import main as vllm_serve_main
-from .scripts.vllm_serve import make_parser as make_vllm_serve_parser
+from .scripts.vllm_serve_sync import main as vllm_serve_main
+from .scripts.vllm_serve_sync import make_parser as make_vllm_serve_parser
 
 
 def main():
@@ -93,7 +93,10 @@ def main():
     elif args.command == "vllm-serve":
         (script_args,) = parser.parse_args_and_config()
         vllm_serve_main(script_args)
+        
+    # Make the vllm-serve-openai-endpoint subparser
 
 
 if __name__ == "__main__":
     main()
+    

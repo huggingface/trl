@@ -15,7 +15,8 @@
 import atexit
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
+from abc import ABC, abstractmethod
 
 import torch
 from torch import nn
@@ -36,7 +37,7 @@ if is_vllm_available():
 logger = logging.getLogger(__name__)
 
 
-class VLLMClient:
+class VLLMClient(ABC):
     """
     A client class to interact with a vLLM server.
 
@@ -131,8 +132,7 @@ class VLLMClient:
 
     def generate(
         self,
-        prompts: list[str],
-        n: int = 1,
+        data: list[dict[str, Any]],
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
@@ -140,15 +140,13 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
-    ) -> list[list[int]]:
+    ) -> list[dict[str, Any]]:
         """
-        Generates model completions for the provided prompts.
+        Generates model completions for the provided data.
 
         Args:
-            prompts (`list[str]`):
-                List of text prompts for which the model will generate completions.
-            n (`int`, *optional*, defaults to `1`):
-                Number of completions to generate for each prompt.
+            data (`list[dict[str, Any]]`):
+                List of dataset entries.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
                 Parameter for repetition penalty. 1.0 means no penalty.
             temperature (`float`, *optional*, defaults to `1.0`):
@@ -165,28 +163,10 @@ class VLLMClient:
                 Regular expression to guide the decoding process.
 
         Returns:
-            `list[list[int]]`:
-                List of lists of token IDs representing the model-generated completions for each prompt.
+            `list[dict[str, Any]]`:
+                List of dataset entries with the generated completions added.
         """
-        url = f"http://{self.host}:{self.server_port}/generate/"
-        response = self.session.post(
-            url,
-            json={
-                "prompts": prompts,
-                "n": n,
-                "repetition_penalty": repetition_penalty,
-                "temperature": temperature,
-                "top_p": top_p,
-                "top_k": top_k,
-                "min_p": min_p,
-                "max_tokens": max_tokens,
-                "guided_decoding_regex": guided_decoding_regex,
-            },
-        )
-        if response.status_code == 200:
-            return response.json()["completion_ids"]
-        else:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        pass
 
     def init_communicator(self):
         """
@@ -269,6 +249,77 @@ class VLLMClient:
         else:
             if response.status_code != 200:
                 raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        
+class SimpleClient(VLLMClient):
+    def generate(
+        self,
+        data: list[dict[str, Any]],
+        repetition_penalty: float = 1.0,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        min_p: float = 0.0,
+        max_tokens: int = 16,
+        guided_decoding_regex: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Generates model completions for the provided data.
+
+        Args:
+            data (`list[dict[str, Any]]`):
+                List of dataset entries.
+            repetition_penalty (`float`, *optional*, defaults to `1.0`):
+                Parameter for repetition penalty. 1.0 means no penalty.
+            temperature (`float`, *optional*, defaults to `1.0`):
+                Temperature parameter for sampling. Higher values increase diversity.
+            top_p (`float`, *optional*, defaults to `1.0`):
+                Top-p sampling parameter.`1.0` means no truncation.
+            top_k (`int`, *optional*, defaults to `-1`):
+                Top-k sampling parameter. `-1` means no truncation.
+            min_p (`float`, *optional*, defaults to `0.0`):
+                Minimum probability for sampling.
+            max_tokens (`int`, *optional*, defaults to `16`):
+                Maximum number of tokens to generate for each prompt.
+            guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+                Regular expression to guide the decoding process.
+
+        Returns:
+            `list[dict[str, Any]]`:
+                List of dataset entries with the generated completions added.
+        """
+        url = f"http://{self.host}:{self.server_port}/v1/chat/completions"
+        headers = {"Authorization": "Bearer dummy"}
+
+        def get_answer(item):
+            messages = [
+                {"role": "system", "content": "You are a helpful AI assistant."},
+                {"role": "user", "content": item["prompt"]}
+            ]
+            payload = {
+                "model": "deployed_model",
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "repetition_penalty": repetition_penalty,
+                "top_p": top_p,
+                "top_k": top_k,
+                "min_p": min_p,
+                "stream": False
+            }
+            if guided_decoding_regex is not None:
+                payload["guided_decoding_regex"] = guided_decoding_regex
+                
+            resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            resp_data = resp.json()
+            return resp_data["choices"][0]["message"]["content"]
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(get_answer, item) for item in data]
+            for item, future in zip(data, futures):
+                item["answer"] = future.result()
+
+        return data
 
 
 # Example usage
