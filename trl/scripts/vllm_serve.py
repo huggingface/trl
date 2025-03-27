@@ -13,12 +13,14 @@
 # limitations under the License.
 
 import argparse
+import ctypes
 import logging
 import os
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 import torch
+import torch.distributed as dist
 
 from trl import TrlParser
 from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
@@ -35,8 +37,19 @@ if is_pydantic_available():
 if is_uvicorn_available():
     import uvicorn
 
+# When no GPU is available, importing 'Worker' from 'vllm.worker.worker' fails with the following error:
+# libcuda.so.1: cannot open shared object file: No such file or directory.
+# To prevent this error, we check if libcuda is available before importing 'Worker'. While this check is not
+# crucial—since vLLM and TRL are not intended to run without a GPU—it helps avoid errors when running CI on a machine
+# without a GPU.
+try:
+    ctypes.CDLL("libcuda.so.1")
+except OSError:
+    libcuda_available = False
+else:
+    libcuda_available = True
 
-if is_vllm_available():
+if is_vllm_available() and libcuda_available:
     from vllm import LLM, SamplingParams
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
@@ -256,7 +269,7 @@ def main(script_args: ScriptArguments):
         # This is particularly useful here because we generate completions from the same prompts.
         enable_prefix_caching=script_args.enable_prefix_caching,
         max_model_len=script_args.max_model_len,
-        worker_cls=WeightSyncWorker,
+        worker_cls="trl.scripts.vllm_serve.WeightSyncWorker",
     )
 
     app = FastAPI()
@@ -415,6 +428,8 @@ def main(script_args: ScriptArguments):
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
+
+    dist.destroy_process_group()
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):

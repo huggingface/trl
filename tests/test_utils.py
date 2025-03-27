@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+import textwrap
 import unittest
+from io import StringIO
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -32,6 +36,7 @@ from trl.trainer.utils import (
     generate_model_card,
     get_peft_config,
     pad,
+    print_prompt_completions_sample,
     selective_log_softmax,
 )
 
@@ -474,3 +479,63 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
             self.assertTrue(torch.equal(actual_output, expected_output))
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
+
+
+class TestPrintPromptCompletionsSample(unittest.TestCase):
+    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")  # getting unicode issues on Windows
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_output(self, mock_stdout):
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, step)
+
+        output = mock_stdout.getvalue()
+
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────── Step 42 ───────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
+        │ └────────────┴──────────────┴─────────────┴────────┘ │
+        ╰──────────────────────────────────────────────────────╯
+        """)
+        self.assertEqual(output, expected_output)
+
+    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")  # getting unicode issues on Windows
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_num_samples(self, mock_stdout):
+        prompts = ["A", "B"]
+        completions = ["1", "2"]
+        rewards = {"Score": [0.1, 0.2]}
+        step = 10
+
+        print_prompt_completions_sample(prompts, completions, rewards, step, num_samples=1)
+        output = mock_stdout.getvalue()
+
+        possible_outputs = [
+            textwrap.dedent("""\
+                ╭──────────── Step 10 ────────────╮
+                │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓ │
+                │ ┃ Prompt ┃ Completion ┃ Score ┃ │
+                │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩ │
+                │ │ A      │ 1          │  0.10 │ │
+                │ └────────┴────────────┴───────┘ │
+                ╰─────────────────────────────────╯
+                """),
+            textwrap.dedent("""\
+                ╭──────────── Step 10 ────────────╮
+                │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓ │
+                │ ┃ Prompt ┃ Completion ┃ Score ┃ │
+                │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩ │
+                │ │ B      │ 2          │  0.20 │ │
+                │ └────────┴────────────┴───────┘ │
+                ╰─────────────────────────────────╯
+                """),
+        ]
+        self.assertIn(output, possible_outputs)
