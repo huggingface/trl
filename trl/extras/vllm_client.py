@@ -367,9 +367,6 @@ class VLLMColocationClient:
             enable_prefix_caching=self.args.vllm_enable_prefix_caching,
             max_model_len=self.args.vllm_max_model_len,
             distributed_executor_backend="external_launcher",
-            hf_overrides = { 
-                'max_position_embeddings': self.args.vllm_max_model_len # model config reflects model length just for consistency (vllm == 0.8.2)
-            },
         )
         
     def update_named_param(self, name: str, weights: torch.Tensor):
