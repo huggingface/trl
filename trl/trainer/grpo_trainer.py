@@ -40,6 +40,7 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
+from transformers.utils import is_liger_kernel_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -63,6 +64,8 @@ if is_deepspeed_available():
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 if is_wandb_available():
     import wandb
@@ -386,6 +389,7 @@ class GRPOTrainer(Trainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
+        self.use_liger_grpo_loss = args.use_liger_grpo_loss
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
@@ -404,6 +408,12 @@ class GRPOTrainer(Trainer):
         # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
+
+        if self.use_liger_grpo_loss:
+            if not is_liger_kernel_available():
+                raise ImportError("Liger is required to use `liger_grpo_loss`. Run `pip install liger-kernel`.")
+            self.use_liger_grpo_loss = args.use_liger_grpo_loss
+            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(beta=self.beta, epsilon_low=self.epsilon_low, epsilon_high=self.epsilon_high, temperature=self.temperature, use_ref_model=self.ref_model is not None)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -582,13 +592,26 @@ class GRPOTrainer(Trainer):
 
         return model
 
+    @profiling_decorator
+    def _get_hidden_states(self, model, input_ids, attention_mask, logits_to_keep=None):
+        # need to unwrap the model to get the hidden states
+        # intended to work with DP, DDP, FSDP 
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        hidden_states = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask)[0]
+        hidden_states = hidden_states[:, :-1, :]  # (B, L-1, H)
+        if logits_to_keep is not None:
+            hidden_states = hidden_states[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+        return hidden_states
+
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
-    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
+    def _get_hidden_states_or_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, skip_liger=False):
+        if self.use_liger_grpo_loss and not skip_liger:
+            return self._get_hidden_states(model, input_ids, attention_mask, logits_to_keep)
+
         # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
         logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-
         input_ids = input_ids[:, -logits_to_keep:]
         # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
         # See https://github.com/huggingface/trl/issues/2770
@@ -741,21 +764,25 @@ class GRPOTrainer(Trainer):
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:
-                old_per_token_logps = self._get_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                # TODO: add an option in Liger to use the old_per_token_logps
+                # if using Liger GRPO loss, we directly compute logps rather than hidden states 
+                # as that would require needing to store the old lm head weights 
+                # TODO: Liger: need to check if the extra memory overhead is worth it
+                old_per_token_logps = self._get_hidden_states_or_per_token_logps(
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, skip_liger=True
                 )
             else:
                 old_per_token_logps = None
 
             if self.beta == 0.0:
-                ref_per_token_logps = None
+                ref_hidden_states_or_per_token_logps = None
             elif self.ref_model is not None:
-                ref_per_token_logps = self._get_per_token_logps(
+                ref_hidden_states_or_per_token_logps = self._get_hidden_states_or_per_token_logps(
                     self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
                 )
             else:
                 with self.accelerator.unwrap_model(self.model).disable_adapter():
-                    ref_per_token_logps = self._get_per_token_logps(
+                    ref_hidden_states_or_per_token_logps = self._get_hidden_states_or_per_token_logps(
                         self.model, prompt_completion_ids, attention_mask, logits_to_keep
                     )
 
@@ -884,15 +911,26 @@ class GRPOTrainer(Trainer):
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
-        return {
+        result = {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
-            "old_per_token_logps": old_per_token_logps,
-            "ref_per_token_logps": ref_per_token_logps,
             "advantages": advantages,
+            "old_per_token_logps": old_per_token_logps,
         }
+
+        # Add liger-specific or standard-specific keys
+        if self.use_liger_grpo_loss:
+            result.update({
+                "ref_hidden_states": ref_hidden_states_or_per_token_logps,
+            })
+        else:
+            result.update({
+                "ref_per_token_logps": ref_hidden_states_or_per_token_logps,
+            })
+            
+        return result
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -906,8 +944,31 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        hidden_states_or_per_token_logps = self._get_hidden_states_or_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        
+        if self.use_liger_grpo_loss:
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            if self.ref_model:
+                ref_unwrapped_model = self.accelerator.unwrap_model(self.ref_model)
+            loss, metrics = self.liger_grpo_loss(
+                _input=hidden_states_or_per_token_logps,
+                lin_weight=unwrapped_model.lm_head.weight,
+                selected_token_ids=completion_ids,
+                attention_mask=completion_mask,
+                advantages=inputs["advantages"],
+                bias=unwrapped_model.lm_head.bias,
+                ref_input=inputs["ref_hidden_states"],
+                ref_weight=ref_unwrapped_model.lm_head.weight if self.ref_model else None,
+                ref_bias=ref_unwrapped_model.lm_head.bias if self.ref_model else None,
+                old_per_token_logps=inputs["old_per_token_logps"],
+            )
+            if self.beta != 0.0:
+                mean_kl = metrics[-1]
+                mode = "eval" if self.control.should_evaluate else "train"
+                self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+            return loss
 
+        per_token_logps = hidden_states_or_per_token_logps
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
