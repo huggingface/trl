@@ -134,7 +134,7 @@ class SFTTrainer(Trainer):
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         formatting_func (`Optional[Callable]`):
-            Formatting function applied to the dataset before tokenization.
+            A batched formatting function applied to the dataset before tokenization.
     """
 
     _tag_names = ["trl", "sft"]
@@ -410,12 +410,10 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
 
-                batched = isinstance(formatting_func(dataset), list)
-
                 def _func(example):
                     return {"text": formatting_func(example)}
 
-                dataset = dataset.map(_func, batched=batched, **map_kwargs)
+                dataset = dataset.map(_func, batched=True, **map_kwargs)
 
             # If the dataset is prompt-completion, convert it to language modeling type
             first_example = next(iter(dataset))
