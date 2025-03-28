@@ -67,18 +67,18 @@ from .utils import (
 )
 
 
+if is_deepspeed_available():
+    import deepspeed
+
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearKTOLoss
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
-
 if is_wandb_available():
     import wandb
 
-if is_deepspeed_available():
-    import deepspeed
 
 if TYPE_CHECKING:
     from transformers import PreTrainedModel, PreTrainedTokenizer
