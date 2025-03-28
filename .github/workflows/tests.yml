@@ -40,9 +40,8 @@ jobs:
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
-        os: ['ubuntu-latest', 'windows-latest']
       fail-fast: false
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
@@ -67,13 +66,13 @@ jobs:
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python ${{ matrix.python-version }} on ${{ matrix.os }} with lastest dependencies
+          title: Results with Python ${{ matrix.python-version }} with lastest dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_dev:
     name: Tests with dev dependencies
-    runs-on: 'ubuntu-latest'
+    runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
@@ -106,7 +105,7 @@ jobs:
 
   tests_wo_optional_deps:
     name: Tests without optional dependencies
-    runs-on: 'ubuntu-latest'
+    runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
@@ -136,7 +135,7 @@ jobs:
 
   tests_min_versions:
     name: Tests with minimum versions
-    runs-on: 'ubuntu-latest'
+    runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4

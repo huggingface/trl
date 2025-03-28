@@ -13,7 +13,7 @@ env:
 jobs:
   tests:
     name: Tests latest TRL release with dev dependencies
-    runs-on: 'ubuntu-latest'
+    runs-on: ubuntu-latest
     steps:
       - name: Git checkout
         uses: actions/checkout@v4
