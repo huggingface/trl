@@ -23,6 +23,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          pip install uv
           uv pip install ".[dev]"
 
       - name: Test with pytest
