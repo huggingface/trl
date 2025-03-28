@@ -686,6 +686,8 @@ class GRPOTrainer(Trainer):
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
+        answers_text = [x["answer"] for x in inputs]
+
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
@@ -889,6 +891,7 @@ class GRPOTrainer(Trainer):
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
             prompts_to_log = gather_object(prompts_text)
             completions_to_log = gather_object(completions_text)
+            answers_to_log = gather_object(answers_text)
             rewards_to_log = {
                 reward_func_name: rewards_per_func[:, i] for i, reward_func_name in enumerate(reward_func_names)
             }
@@ -910,6 +913,7 @@ class GRPOTrainer(Trainer):
                         "step": [str(self.state.global_step)] * len(rewards),
                         "prompt": prompts_to_log,
                         "completion": completions_to_log,
+                        "answer": answers_to_log,
                         "reward": rewards.tolist(),
                     }
                     df = pd.DataFrame(table)
