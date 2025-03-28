@@ -798,6 +798,10 @@ class KTOTrainer(Trainer):
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set `precompute_ref_log_probs=False`."
                 )
+            if self.is_peft_model or self.ref_model is not None:
+                raise ValueError(
+                    "You cannot use `use_liger_loss=True` with Peft models. Please set `use_liger_loss=False`."
+                )
             self.kto_loss_fn = LigerFusedLinearKTOLoss(
                 ignore_index=self.label_pad_token_id, beta=self.beta, use_ref_model=(self.ref_model is not None)
             )
