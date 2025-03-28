@@ -15,3 +15,10 @@ jobs:
       - name: Echo dummy
         run: |
           echo "Dummy test"
+          which python
+          # Check the python version
+          python --version
+          # Check the pip version
+          python -m pip --version
+          # Check if pytorch is installed
+          python -c "import torch; print(torch.__version__)"
