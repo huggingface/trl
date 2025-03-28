@@ -45,7 +45,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        if: github.event.pull_request.draft == false
+    if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
         uses: actions/checkout@v4
@@ -94,7 +94,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        if: github.event.pull_request.draft == false
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
@@ -147,7 +146,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        if: github.event.pull_request.draft == false
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
@@ -197,7 +195,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        if: github.event.pull_request.draft == false
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
