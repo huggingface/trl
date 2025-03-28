@@ -1,22 +1,36 @@
-name: Test self hosted
+name: Test self-hosted on all groups
 
 on:
   pull_request:
 
 jobs:
   dummy:
+    strategy:
+      matrix:
+        runner_group: 
+          - p3.2xlarge
+          - p2.xlarge
+          - g4dn.xlarge
+          - g4dn.16xlarge
+          - g4dn.8xlarge
+          - g4dn.4xlarge
+          - g4dn.2xlarge
+          - p3.8xlarge
+          - g4dn.12xlarge
+          - p4d.24xlarge
+          - p3dn.24xlarge
+          - p3.16xlarge
+          - p2.8xlarge
+          - p2.16xlarge
     runs-on:
-      group: aws-g4dn-12xlarge
+      group: ${{ matrix.runner_group }}
     defaults:
       run:
         shell: bash
-    env:
-      CUDA_VISIBLE_DEVICES: "0,1"
     steps:
       - uses: actions/checkout@v4
       - name: Echo dummy
-        run: |
-          echo "Dummy test"
+        run: echo "Running on ${{ matrix.runner_group }}"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -24,5 +38,4 @@ jobs:
           python-version: '3.12'
 
       - name: Show GPUs
-        run: |
-          nvidia-smi
+        run: nvidia-smi
