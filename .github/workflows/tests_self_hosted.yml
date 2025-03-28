@@ -5,22 +5,16 @@ on:
 
 jobs:
   dummy:
-    strategy:
-      matrix:
-        runner_group: 
-          - aws-g6-4xlarge-plus
-          - aws-g6e-xlarge-plus
-          - aws-g4dn-2xlarge
-
+    # Run of a miachine with 1 GPU
     runs-on:
-      group: ${{ matrix.runner_group }}
+      group: aws-g4dn-2xlarge
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Echo dummy
-        run: echo "Running on ${{ matrix.runner_group }}"
+        run: echo "Dummy"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
