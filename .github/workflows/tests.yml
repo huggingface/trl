@@ -6,7 +6,7 @@ on:
   pull_request:
     paths:
       # Run only when relevant files are modified
-      - ".github/**.yml"
+      # - ".github/**.yml"
       - "examples/**.py"
       - "scripts/**.py"
       - "tests/**.py"
