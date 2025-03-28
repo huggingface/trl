@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install uv
+          pip install uv # we use uv as its 2x faster for installing packages
           uv pip install ".[dev]" --system
 
       - name: Test with pytest
