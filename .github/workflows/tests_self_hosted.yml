@@ -28,5 +28,7 @@ jobs:
           python --version
           # Check the pip version
           python -m pip --version
-          # Check if pytorch is installed
-          python -c "import torch; print(torch.__version__)"
+
+      - name: Show GPUs
+        run: |
+          nvidia-smi
