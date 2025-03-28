@@ -27,14 +27,24 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install uv
+        run: |
+          pip install uv
+
+      - name: Create Python virtual environment
+          uv venv
+          source .venv/bin/activate
+
+      - name: Install Make
         run: |
           apt-get update && apt-get install -y make
-          pip install uv
-          uv pip install -U git+https://github.com/huggingface/accelerate.git --system
-          uv pip install -U git+https://github.com/huggingface/datasets.git --system
-          uv pip install -U git+https://github.com/huggingface/transformers.git --system
-          uv pip install ".[dev]" --system
+
+      - name: Install dependencies
+        run: |
+          uv pip install -U git+https://github.com/huggingface/accelerate.git
+          uv pip install -U git+https://github.com/huggingface/datasets.git
+          uv pip install -U git+https://github.com/huggingface/transformers.git
+          uv pip install ".[dev]"
 
       - name: Test with pytest
         run: |

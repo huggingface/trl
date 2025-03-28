@@ -52,11 +52,21 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install uv
+        run: |
+          pip install uv
+      
+      - name: Create Python virtual environment
+          uv venv
+          source .venv/bin/activate
+      
+      - name: Install Make
         run: |
           apt-get update && apt-get install -y make
-          pip install uv
-          uv pip install ".[dev]" --system
+
+      - name: Install dependencies
+        run: |
+          uv pip install ".[dev]"
 
       - name: Test with pytest
         run: |
@@ -81,27 +91,41 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@v4
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install dependencies
+
+      - name: Install uv
+        run: |
+          pip install uv
+      
+      - name: Create Python virtual environment
+          uv venv
+          source .venv/bin/activate
+      
+      - name: Install Make
         run: |
           apt-get update && apt-get install -y make
-          pip install uv
-          uv pip install -U git+https://github.com/huggingface/accelerate.git --system
-          uv pip install -U git+https://github.com/huggingface/datasets.git --system
-          uv pip install -U git+https://github.com/huggingface/transformers.git --system
-          uv pip install ".[dev]" --system
+
+      - name: Install dependencies
+        run: |
+          uv pip install -U git+https://github.com/huggingface/accelerate.git
+          uv pip install -U git+https://github.com/huggingface/datasets.git
+          uv pip install -U git+https://github.com/huggingface/transformers.git
+          uv pip install ".[dev]"
+
       - name: Test with pytest
         run: |
           make test
+
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 on ubuntu-latest with dev dependencies
+          title: Results with Python 3.12 on with dev dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -119,20 +143,33 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install dependencies
+
+      - name: Install uv
+        run: |
+          pip install uv
+      
+      - name: Create Python virtual environment
+          uv venv
+          source .venv/bin/activate
+      
+      - name: Install Make
         run: |
           apt-get update && apt-get install -y make
-          pip install uv
-          uv pip install ".[test]" --system
+
+      - name: Install dependencies
+        run: |
+          uv pip install ".[test]"
+
       - name: Test with pytest
         run: |
           make test
+
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 on ubuntu-latest without optional dependencies
+          title: Results with Python 3.12 without optional dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
@@ -150,23 +187,35 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install dependencies
+
+      - name: Install uv
+        run: |
+          pip install uv
+
+      - name: Create Python virtual environment
+          uv venv
+          source .venv/bin/activate
+
+      - name: Install Make
         run: |
           apt-get update && apt-get install -y make
-          pip install uv
-          uv pip install --upgrade pip --system
-          uv pip install accelerate==0.34.0 --system
-          uv pip install datasets==3.0.0 --system
-          uv pip install transformers==4.46.0 --system
-          uv pip install ".[dev]" --system
+
+      - name: Install dependencies
+        run: |
+          uv pip install accelerate==0.34.0
+          uv pip install datasets==3.0.0
+          uv pip install transformers==4.46.0
+          uv pip install ".[dev]"
+
       - name: Test with pytest
         run: |
           make test
+
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 on ubuntu-latest with minimum versions
+          title: Results with Python 3.12 and minimum dependencies versions
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
