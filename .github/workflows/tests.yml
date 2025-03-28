@@ -42,7 +42,10 @@ jobs:
       group: aws-g4dn-2xlarge
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
-    if: github.event.pull_request.draft == false
+    defaults:
+      run:
+        shell: bash
+        if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
         uses: actions/checkout@v4
@@ -88,6 +91,10 @@ jobs:
       group: aws-g4dn-2xlarge
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+    defaults:
+      run:
+        shell: bash
+        if: github.event.pull_request.draft == false
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
@@ -137,6 +144,10 @@ jobs:
       group: aws-g4dn-2xlarge
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+    defaults:
+      run:
+        shell: bash
+        if: github.event.pull_request.draft == false
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
@@ -183,6 +194,10 @@ jobs:
       group: aws-g4dn-2xlarge
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+    defaults:
+      run:
+        shell: bash
+        if: github.event.pull_request.draft == false
     if: github.event.pull_request.draft == false
     steps:
       - name: Git checkout
