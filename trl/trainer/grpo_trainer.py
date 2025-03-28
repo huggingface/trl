@@ -43,7 +43,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
-from ..extras.vllm_client import VLLMClient
+from ..extras.vllm_client import get_vllm_client
 from ..import_utils import is_deepspeed_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
@@ -473,10 +473,9 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
-            if self.accelerator.is_main_process:
-                self.vllm_client = VLLMClient(
-                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
-                )
+            self.vllm_client = get_vllm_client(
+                self.args, model, self.accelerator, 
+            )
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
@@ -642,8 +641,7 @@ class GRPOTrainer(Trainer):
                         continue
                     name = name.replace("modules_to_save.default.", "")
 
-                    if self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
+                    self.vllm_client.update_named_param(name, param.data)
 
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
@@ -652,12 +650,10 @@ class GRPOTrainer(Trainer):
             # For non-PEFT models, simply gather and update each parameter individually.
             for name, param in self.model.named_parameters():
                 with gather_if_zero3([param]):
-                    if self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
+                    self.vllm_client.update_named_param(name, param.data)
 
-        # Reset cache on main process
-        if self.accelerator.is_main_process:
-            self.vllm_client.reset_prefix_cache()
+        # Reset cache on main process (if colocated, reset cache on all vllms)
+        self.vllm_client.reset_prefix_cache()
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
@@ -697,35 +693,18 @@ class GRPOTrainer(Trainer):
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
-            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-            all_prompts_text = gather_object(prompts_text)
-            if self.accelerator.is_main_process:
-                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                # prompt individually.
-                ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-                with profiling_context(self, "vLLM.generate"):
-                    completion_ids = self.vllm_client.generate(
-                        prompts=ordered_set_of_prompts,
-                        n=self.num_generations,
-                        repetition_penalty=self.repetition_penalty,
-                        temperature=self.temperature,
-                        top_p=self.top_p,
-                        top_k=-1 if self.top_k is None else self.top_k,
-                        min_p=0.0 if self.min_p is None else self.min_p,
-                        max_tokens=self.max_completion_length,
-                        guided_decoding_regex=self.guided_decoding_regex,
-                    )
-            else:
-                completion_ids = [None] * len(all_prompts_text)
-            # Broadcast the completions from the main process to all processes, ensuring each process receives its
-            # corresponding slice.
-            completion_ids = broadcast_object_list(completion_ids, from_process=0)
-            process_slice = slice(
-                self.accelerator.process_index * len(prompts),
-                (self.accelerator.process_index + 1) * len(prompts),
+            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process (if colocated, work on your own batch)
+            completion_ids = self.vllm_client.generate(
+                prompts=prompts_text,
+                n=self.num_generations,
+                repetition_penalty=self.repetition_penalty,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                top_k=-1 if self.top_k is None else self.top_k,
+                min_p=0.0 if self.min_p is None else self.min_p,
+                max_tokens=self.max_completion_length,
+                guided_decoding_regex=self.guided_decoding_regex,
             )
-            completion_ids = completion_ids[process_slice]
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
