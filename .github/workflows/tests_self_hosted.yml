@@ -10,6 +10,9 @@ jobs:
         runner_group: 
           - aws-g4dn-2xlarge
           - aws-g4dn-12xlarge
+          - aws-g4dn-12xlarge-cache
+          - aws-g4dn-12xlarge-cache
+
     runs-on:
       group: ${{ matrix.runner_group }}
     defaults:
