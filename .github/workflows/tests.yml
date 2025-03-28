@@ -55,22 +55,24 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install uv
-        run: |
-          pip install uv
-      
-      - name: Create Python virtual environment
-        run: |
-          uv venv
-          source .venv/bin/activate
-      
       - name: Install Make and Git
         run: |
           apt-get update && apt-get install -y make git
 
+      - name: Install uv
+        run: |
+          pip install uv
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          source .venv/bin/activate
+
       - name: Install dependencies
         run: |
+          which python
           uv pip install ".[dev]"
+          python -c "import torch; print(torch.__version__)"
 
       - name: Test with pytest
         run: |
