@@ -39,9 +39,9 @@ jobs:
           uv venv
           source .venv/bin/activate
 
-      - name: Install Make
+      - name: Install Make and Git
         run: |
-          apt-get update && apt-get install -y make
+          apt-get update && apt-get install -y make git
 
       - name: Install dependencies
         run: |
