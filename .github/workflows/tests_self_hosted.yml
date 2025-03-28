@@ -8,20 +8,8 @@ jobs:
     strategy:
       matrix:
         runner_group: 
-          - aws-p3-2xlarge
-          - aws-p2-xlarge
-          - aws-g4dn-xlarge
-          - aws-g4dn-16xlarge
-          - aws-g4dn-8xlarge
-          - aws-g4dn-4xlarge
           - aws-g4dn-2xlarge
-          - aws-p3-8xlarge
           - aws-g4dn-12xlarge
-          - aws-p4d-24xlarge
-          - aws-p3dn-24xlarge
-          - aws-p3-16xlarge
-          - aws-p2-8xlarge
-          - aws-p2-16xlarge
     runs-on:
       group: ${{ matrix.runner_group }}
     defaults:
