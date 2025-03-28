@@ -10,6 +10,8 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      CUDA_VISIBLE_DEVICES: "0,1"
     steps:
       - uses: actions/checkout@v4
       - name: Echo dummy
