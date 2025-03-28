@@ -1438,8 +1438,6 @@ class KTOTrainer(Trainer):
             )
 
         metrics["kl"] = kl.item()
-        # num_chosen = torch.Tensor([len(chosen_rewards)]).to(self.accelerator.device)
-        # num_rejected = torch.Tensor([len(rejected_rewards)]).to(self.accelerator.device)
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
