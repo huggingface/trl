@@ -57,6 +57,7 @@ jobs:
           pip install uv
       
       - name: Create Python virtual environment
+        run: |
           uv venv
           source .venv/bin/activate
       
@@ -102,6 +103,7 @@ jobs:
           pip install uv
       
       - name: Create Python virtual environment
+        run: |
           uv venv
           source .venv/bin/activate
       
@@ -139,6 +141,7 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@v4
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -149,6 +152,7 @@ jobs:
           pip install uv
       
       - name: Create Python virtual environment
+        run: |
           uv venv
           source .venv/bin/activate
       
@@ -183,6 +187,7 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@v4
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -193,6 +198,7 @@ jobs:
           pip install uv
 
       - name: Create Python virtual environment
+        run: |
           uv venv
           source .venv/bin/activate
 

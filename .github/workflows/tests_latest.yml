@@ -32,6 +32,7 @@ jobs:
           pip install uv
 
       - name: Create Python virtual environment
+        run: |
           uv venv
           source .venv/bin/activate
 
