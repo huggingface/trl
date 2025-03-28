@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 import torch
+import torch.distributed as dist
 
 from trl import TrlParser
 from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
@@ -268,7 +269,7 @@ def main(script_args: ScriptArguments):
         # This is particularly useful here because we generate completions from the same prompts.
         enable_prefix_caching=script_args.enable_prefix_caching,
         max_model_len=script_args.max_model_len,
-        worker_cls=WeightSyncWorker,
+        worker_cls="trl.scripts.vllm_serve.WeightSyncWorker",
     )
 
     app = FastAPI()
@@ -427,6 +428,8 @@ def main(script_args: ScriptArguments):
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
+
+    dist.destroy_process_group()
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
