@@ -44,7 +44,8 @@ jobs:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v4
+      - name: Git checkout
+        uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -72,10 +73,14 @@ jobs:
 
   tests_dev:
     name: Tests with dev dependencies
-    runs-on: ubuntu-latest
+    runs-on:
+      group: aws-g4dn-2xlarge
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v4
+      - name: Git checkout
+        uses: actions/checkout@v4
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -106,10 +111,14 @@ jobs:
 
   tests_wo_optional_deps:
     name: Tests without optional dependencies
-    runs-on: ubuntu-latest
+    runs-on:
+      group: aws-g4dn-2xlarge
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v4
+      - name: Git checkout
+        uses: actions/checkout@v4
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -137,10 +146,14 @@ jobs:
 
   tests_min_versions:
     name: Tests with minimum versions
-    runs-on: ubuntu-latest
+    runs-on:
+      group: aws-g4dn-2xlarge
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v4
+      - name: Git checkout
+        uses: actions/checkout@v4
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
