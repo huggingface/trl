@@ -79,10 +79,10 @@ class KTOConfig(TrainingArguments):
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use Liger loss.
+            Whether to use Liger loss. It requires liger-kernel to be installed.
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
-            Name of the attribute in the model that contains the base model. This is used to get the base model from the
-            model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
+            Name of the attribute in the model that contains the base model. This is used to get the base model from
+            the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
     """
 
     learning_rate: float = field(
@@ -200,13 +200,13 @@ class KTOConfig(TrainingArguments):
     )
     use_liger_loss: bool = field(
         default=False,
-        metadata={"help": "Whether to use Liger loss."},
+        metadata={"help": "Whether to use Liger loss. It requires liger-kernel to be installed."},
     )
     base_model_attribute_name: str = field(
         default="model",
         metadata={
-            "help": "Name of the attribute in the model that contains the base model. This is used to get the base model "
-            "from the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is "
-            "`True`."
+            "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
+            "model from the model when the model does not have a `get_decoder` method in the case when "
+            "`use_liger_loss` is `True`."
         },
     )

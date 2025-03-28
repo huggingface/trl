@@ -785,18 +785,19 @@ class KTOTrainer(Trainer):
         # Import Liger loss if enabled
         if self.args.use_liger_loss:
             if not is_liger_kernel_available():
-                raise ValueError(
+                raise ImportError(
                     "You set `use_liger_loss=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
             if self.loss_type in ["apo_zero_unpaired"]:
                 raise ValueError(
-                    "You cannot set `loss_type=apo_zero_unpaired` with liger-kernel."
+                    "You cannot set `loss_type='apo_zero_unpaired'` with liger-kernel."
                     "Only KTO loss is supported with liger-kernel."
                 )
             if self.precompute_ref_log_probs:
                 raise ValueError(
-                    "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set `precompute_ref_log_probs=False`."
+                    "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
+                    "`precompute_ref_log_probs=False`."
                 )
             if self.is_peft_model or self.ref_model is not None:
                 raise ValueError(
@@ -1196,24 +1197,21 @@ class KTOTrainer(Trainer):
         """Compute KL log probabilities for a given batch."""
         KL_logps = None
         if self.calculate_KL:
-            KL_logps = None
-            KL_model_kwargs = (
-                {
+            if self.is_encoder_decoder:
+                KL_model_kwargs = {
                     "input_ids": batch["KL_prompt_input_ids"],
                     "attention_mask": batch["KL_prompt_attention_mask"],
                     "labels": batch["KL_completion_labels"],
                     "decoder_input_ids": batch.get("KL_completion_decoder_input_ids"),
                 }
-                if self.is_encoder_decoder
-                else {
+            else:
+                KL_model_kwargs = {
                     "input_ids": batch["KL_completion_input_ids"],
                     "attention_mask": batch["KL_completion_attention_mask"],
                 }
-            )
+
             with torch.no_grad():
-                KL_logits = model(
-                    **KL_model_kwargs,
-                ).logits
+                KL_logits = model(**KL_model_kwargs).logits
 
             KL_logps = self.get_batch_logps(
                 KL_logits,

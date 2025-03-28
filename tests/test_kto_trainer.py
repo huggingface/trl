@@ -396,7 +396,6 @@ class KTOTrainerTester(unittest.TestCase):
                 args=training_args,
                 processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
