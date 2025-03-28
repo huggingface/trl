@@ -799,7 +799,7 @@ class KTOTrainer(Trainer):
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set "
                     "`precompute_ref_log_probs=False`."
                 )
-            if self.is_peft_model or self.ref_model is not None:
+            if self.is_peft_model or self.ref_adapter_name is not None:
                 raise ValueError(
                     "You cannot use `use_liger_loss=True` with Peft models. Please set `use_liger_loss=False`."
                 )
