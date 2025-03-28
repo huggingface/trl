@@ -25,6 +25,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          apt-get update && apt-get install -y make
           # We use uv as its 2x faster for installing packages than pip
           pip install uv
           uv pip install ".[dev]" --system
