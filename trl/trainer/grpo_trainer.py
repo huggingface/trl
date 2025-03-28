@@ -429,6 +429,14 @@ class GRPOTrainer(Trainer):
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
         self.num_completions_to_print = args.num_completions_to_print
+        # Initialize the completions table for wandb logging
+        self.completions_table = {
+            "step": [],
+            "prompt": [],
+            "completion": [],
+            "answer": [],
+            "reward": [],
+        }
 
         super().__init__(
             model=model,
@@ -908,15 +916,15 @@ class GRPOTrainer(Trainer):
                 if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
                     import pandas as pd
 
-                    # For logging
-                    table = {
-                        "step": [str(self.state.global_step)] * len(rewards),
-                        "prompt": prompts_to_log,
-                        "completion": completions_to_log,
-                        "answer": answers_to_log,
-                        "reward": rewards.tolist(),
-                    }
-                    df = pd.DataFrame(table)
+                    # Append new data to the completions table
+                    self.completions_table["step"].extend([str(self.state.global_step)] * len(rewards))
+                    self.completions_table["prompt"].extend(prompts_to_log)
+                    self.completions_table["completion"].extend(completions_to_log)
+                    self.completions_table["answer"].extend(answers_to_log)
+                    self.completions_table["reward"].extend(rewards.tolist())
+                    
+                    # Log the entire accumulated table
+                    df = pd.DataFrame(self.completions_table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
