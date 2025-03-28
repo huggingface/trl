@@ -6,7 +6,7 @@ on:
 jobs:
   dummy:
     runs-on:
-      group: aws-g4dn-12xlarge-cache
+      group: aws-g4dn-2xlarge-cache
     defaults:
       run:
         shell: bash
