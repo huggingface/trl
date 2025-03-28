@@ -7,9 +7,6 @@ jobs:
   dummy:
     runs-on:
       group: aws-g4dn-2xlarge
-    container:
-      image: huggingface/trl-latest-gpu:latest
-      options: --gpus all --shm-size "16gb" -e NVIDIA_DISABLE_REQUIRE=true
     defaults:
       run:
         shell: bash
