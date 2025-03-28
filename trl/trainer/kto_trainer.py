@@ -66,6 +66,7 @@ from .utils import (
     selective_log_softmax,
 )
 
+
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearKTOLoss
 
@@ -797,7 +798,9 @@ class KTOTrainer(Trainer):
                 raise ValueError(
                     "You cannot use `precompute_ref_log_probs=True` with liger kernel. Please set `precompute_ref_log_probs=False`."
                 )
-            self.kto_loss_fn = LigerFusedLinearKTOLoss(ignore_index=self.label_pad_token_id, beta=self.beta, use_ref_model=(self.ref_model is not None))
+            self.kto_loss_fn = LigerFusedLinearKTOLoss(
+                ignore_index=self.label_pad_token_id, beta=self.beta, use_ref_model=(self.ref_model is not None)
+            )
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
@@ -1216,7 +1219,6 @@ class KTOTrainer(Trainer):
                 label_pad_token_id=self.label_pad_token_id,
             )
         return KL_logps
-        
 
     def _compute_loss_liger(self, model, batch):
         """
@@ -1315,20 +1317,25 @@ class KTOTrainer(Trainer):
         lm_head = model.get_output_embeddings()
         ref_lm_head = self.ref_model.get_output_embeddings()
 
-        loss, (
-            chosen_logps_sum,
-            rejected_logps_sum,
-            chosen_logits_sum,
-            rejected_logits_sum,
-            chosen_rewards_sum,
-            rejected_rewards_sum,
+        (
+            loss,
+            (
+                chosen_logps_sum,
+                rejected_logps_sum,
+                chosen_logits_sum,
+                rejected_logits_sum,
+                chosen_rewards_sum,
+                rejected_rewards_sum,
+            ),
         ) = self.kto_loss_fn(
             _input=outputs.last_hidden_state[:, :-1] if not self.is_encoder_decoder else outputs.last_hidden_state,
             lin_weight=lm_head.weight,
             target=batch["completion_labels"][:, 1:],
             bias=lm_head.bias if hasattr(lm_head, "bias") else None,
             preference_labels=torch.tensor(batch["label"], dtype=torch.bool).to(self.accelerator.device),
-            ref_input=ref_outputs.last_hidden_state[:, :-1] if not self.is_encoder_decoder else outputs.last_hidden_state,
+            ref_input=ref_outputs.last_hidden_state[:, :-1]
+            if not self.is_encoder_decoder
+            else outputs.last_hidden_state,
             ref_weight=ref_lm_head.weight,
             ref_bias=ref_lm_head.bias if hasattr(lm_head, "bias") else None,
             kl=kl,
@@ -1348,7 +1355,6 @@ class KTOTrainer(Trainer):
             output["aux_loss"] = outputs.aux_loss
 
         return output
-        
 
     def get_batch_loss_metrics(
         self,
@@ -1386,7 +1392,7 @@ class KTOTrainer(Trainer):
             ) = forward_output[:5]
             if self.aux_loss_enabled:
                 aux_loss = forward_output[5]
-            
+
             # if reference_logps in batch use them, otherwise use the reference model
             if "reference_logps" in batch:
                 chosen_idx = [i for i in range(batch["reference_logps"].shape[0]) if batch["label"][i] is True]
@@ -1462,7 +1468,6 @@ class KTOTrainer(Trainer):
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
 
-        print(loss, metrics)
         return loss, metrics
 
     def compute_loss(
