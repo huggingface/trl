@@ -9,7 +9,7 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+      image: nvidia/cuda:12.8.1-cudnn-devel-runtime-ubuntu24.04
     defaults:
       run:
         shell: bash
