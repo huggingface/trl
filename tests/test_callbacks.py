@@ -341,7 +341,7 @@ class MergeModelCallbackTester(unittest.TestCase):
             self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
 
     def test_every_checkpoint(self):
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 num_train_epochs=1,
