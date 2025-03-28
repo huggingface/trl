@@ -21,5 +21,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Show GPUs
-        run: nvidia-smi
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Test with pytest
+        run: |
+          make test
