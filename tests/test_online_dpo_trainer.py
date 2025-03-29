@@ -21,9 +21,9 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available, is_vllm_available
+from trl import OnlineDPOConfig, OnlineDPOTrainer
 
-from .testing_utils import RandomPairwiseJudge
+from .testing_utils import RandomPairwiseJudge, require_llm_blender, require_vllm
 
 
 if is_peft_available():
@@ -213,7 +213,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_llm_blender_available(), "llm-blender is not available")
+    @require_llm_blender
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training_with_judge(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -240,7 +240,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_vllm_available(), "vllm is not available")
+    @require_vllm
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     @require_torch_accelerator
     def test_training_with_vllm(self, config_name):

@@ -19,7 +19,7 @@ import torch
 from parameterized import parameterized
 from transformers.utils import is_peft_available
 
-from trl import is_diffusers_available
+from trl.import_utils import is_diffusers_available
 
 from .testing_utils import require_diffusers
 
