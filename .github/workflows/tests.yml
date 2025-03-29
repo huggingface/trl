@@ -74,6 +74,7 @@ jobs:
 
       - name: Test with pytest
         run: |
+          source .venv/bin/activate
           make test
 
       - name: Post to Slack
