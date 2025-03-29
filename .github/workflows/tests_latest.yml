@@ -16,7 +16,8 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      options: --gpus all
     defaults:
       run:
         shell: bash
