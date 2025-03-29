@@ -695,7 +695,9 @@ class OnlineDPOTrainer(Trainer):
 
     # Same as Trainer._maybe_log_save_evaluate but log our metrics
     # start_time defaults to None to allow compatibility with transformers<=4.46
-    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None):
+    def _maybe_log_save_evaluate(
+        self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None, learning_rate=None
+    ):
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
             logs: dict[str, float] = {}
 
@@ -708,7 +710,10 @@ class OnlineDPOTrainer(Trainer):
             logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
             if grad_norm is not None:
                 logs["grad_norm"] = grad_norm.detach().item() if isinstance(grad_norm, torch.Tensor) else grad_norm
-            logs["learning_rate"] = self._get_learning_rate()
+            if learning_rate is not None:
+                logs["learning_rate"] = learning_rate
+            else:
+                logs["learning_rate"] = self._get_learning_rate()
 
             # Add our metrics
             for key, val in self.stats.items():
