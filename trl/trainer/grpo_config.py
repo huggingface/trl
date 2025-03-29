@@ -106,6 +106,14 @@ class GRPOConfig(TrainingArguments):
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        max_reward_punish_completion_len (`int`, *optional*, defaults to `None`):
+            Maximum response length for soft overlong punishment on reward. If not specified, it defaults to None.
+            Must be greater than argument #{min_reward_punish_completion_len}.
+            See Paper [DAPO](https://huggingface.co/papers/2503.14476).
+        min_reward_punish_completion_len (`int`, *optional*, defaults to `None`):
+            Minimum response length for soft overlong punishment on reward. If not specified, it defaults to None.
+            Must be greater than 0 and less than argument #{max_reward_punish_completion_len}.
+            See Paper [DAPO](https://huggingface.co/papers/2503.14476).
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -280,6 +288,14 @@ class GRPOConfig(TrainingArguments):
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
         },
+    )
+    max_reward_punish_completion_len: Optional[int] = field(
+        default=None,
+        metadata={"help": "Maximum length of completion string for soft overlong punishment interval right side."},
+    )
+    min_reward_punish_completion_len: Optional[int] = field(
+        default=None,
+        metadata={"help": "Minimum length of completion string for soft overlong punishment interval left side."},
     )
     reward_weights: Optional[list[float]] = field(
         default=None,

@@ -178,6 +178,13 @@ def nanstd(tensor: torch.Tensor) -> torch.Tensor:
     variance *= count / (count - 1)  # Bessel's correction
     return torch.sqrt(variance)
 
+def soft_overlong_punishment(completion_lengths: torch.Tensor,
+                             max_resp_len: int,
+                             overlong_buffer_len: int) -> torch.Tensor:
+    expected_len = max_resp_len - overlong_buffer_len
+    exceed_len = expected_len - completion_lengths
+    overlong_punish = exceed_len / overlong_buffer_len
+    return torch.clamp(overlong_punish, min=-1, max=0)
 
 class GRPOTrainer(Trainer):
     """
@@ -410,6 +417,8 @@ class GRPOTrainer(Trainer):
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.max_reward_punish_completion_len = args.max_reward_punish_completion_len
+        self.min_reward_punish_completion_len = args.min_reward_punish_completion_len
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
@@ -789,6 +798,14 @@ class GRPOTrainer(Trainer):
         else:
             completions = completions_text
 
+        completion_lengths = [len(completion) for completion in completions]
+        completion_lengths = torch.Tensor(completion_lengths, device=device)
+        reward_penalty = torch.zeros_like(completion_lengths)
+        if self.max_reward_punish_completion_len > self.min_reward_punish_completion_len > 0:
+            reward_penalty = soft_overlong_punishment(completion_lengths,
+                                                      self.max_reward_punish_completion_len,
+                                                      self.min_reward_punish_completion_len)
+
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
@@ -812,6 +829,7 @@ class GRPOTrainer(Trainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+                        rewards_per_func[:, i] += reward_penalty.to(rewards_per_func[:, i].dtype)
                 else:
                     # Repeat all input columns (but "prompt" and "completion") to match the number of generations
                     keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
@@ -821,6 +839,7 @@ class GRPOTrainer(Trainer):
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
 
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+                    rewards_per_func[:, i] += reward_penalty.to(rewards_per_func[:, i].dtype)
 
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
