@@ -66,14 +66,11 @@ jobs:
       - name: Create Python virtual environment
         run: |
           uv venv
-          source .venv/bin/activate
-          which python
 
       - name: Install dependencies
         run: |
-          which python
+          source .venv/bin/activate
           uv pip install ".[dev]"
-          python -c "import torch; print(torch.__version__)"
 
       - name: Test with pytest
         run: |
@@ -118,10 +115,10 @@ jobs:
       - name: Create Python virtual environment
         run: |
           uv venv
-          source .venv/bin/activate
 
       - name: Install dependencies
         run: |
+          source .venv/bin/activate
           uv pip install -U git+https://github.com/huggingface/accelerate.git
           uv pip install -U git+https://github.com/huggingface/datasets.git
           uv pip install -U git+https://github.com/huggingface/transformers.git
@@ -129,6 +126,7 @@ jobs:
 
       - name: Test with pytest
         run: |
+          source .venv/bin/activate
           make test
 
       - name: Post to Slack
@@ -170,14 +168,15 @@ jobs:
       - name: Create Python virtual environment
         run: |
           uv venv
-          source .venv/bin/activate
 
       - name: Install dependencies
         run: |
+          source .venv/bin/activate
           uv pip install ".[test]"
 
       - name: Test with pytest
         run: |
+          source .venv/bin/activate
           make test
 
       - name: Post to Slack
