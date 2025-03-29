@@ -45,6 +45,7 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_deepspeed_available, is_rich_available, is_vllm_available
+from ..logging_utils import build_html_table
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -429,14 +430,6 @@ class GRPOTrainer(Trainer):
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
         self.num_completions_to_print = args.num_completions_to_print
-        # Initialize the completions table for wandb logging
-        self.completions_table = {
-            "step": [],
-            "prompt": [],
-            "completion": [],
-            "answer": [],
-            "reward": [],
-        }
 
         super().__init__(
             model=model,
@@ -916,16 +909,17 @@ class GRPOTrainer(Trainer):
                 if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
                     import pandas as pd
 
-                    # Append new data to the completions table
-                    self.completions_table["step"].extend([str(self.state.global_step)] * len(rewards))
-                    self.completions_table["prompt"].extend(prompts_to_log)
-                    self.completions_table["completion"].extend(completions_to_log)
-                    self.completions_table["answer"].extend(answers_to_log)
-                    self.completions_table["reward"].extend(rewards.tolist())
-                    
-                    # Log the entire accumulated table
-                    df = pd.DataFrame(self.completions_table)
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
+                    # For logging
+                    table = {
+                        "step": [str(self.state.global_step)] * len(rewards),
+                        "prompt": prompts_to_log,
+                        "completion": completions_to_log,
+                        "answer": answers_to_log,
+                        "reward": rewards.tolist(),
+                    }
+                    df = pd.DataFrame(table)
+                    html_table = build_html_table(df)
+                    wandb.log({"completions": html_table})
 
         return {
             "prompt_ids": prompt_ids,
