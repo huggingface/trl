@@ -30,18 +30,18 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
       - name: Install uv
         run: |
-          pip install uv
+          curl -LsSf https://astral.sh/uv/install.sh | sh
 
       - name: Create Python virtual environment
         run: |
           uv venv
           source .venv/bin/activate
-
-      - name: Install Make and Git
-        run: |
-          apt-get update && apt-get install -y make git
 
       - name: Install dependencies
         run: |
