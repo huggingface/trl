@@ -56,7 +56,7 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
+          uv pip install .
 
       - name: Test with pytest
         run: |
