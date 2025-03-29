@@ -253,7 +253,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
                 use_vllm=True,
-                gpu_memory_utilization=0.1,
+                gpu_memory_utilization=0.2,
                 report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
