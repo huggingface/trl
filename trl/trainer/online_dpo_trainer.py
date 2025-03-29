@@ -269,7 +269,7 @@ class OnlineDPOTrainer(Trainer):
             # space for them. Setting gpu_memory_utilization to 0.55 seems to work well in practice.
             self.llm = LLM(
                 model=model.name_or_path,
-                gpu_memory_utilization=0.55,
+                gpu_memory_utilization=args.gpu_memory_utilization,
                 dtype=torch.float32,
                 # When release by vLLM, we would be able to distribute the model on multiple GPUs
                 # See https://github.com/vllm-project/vllm/pull/12071

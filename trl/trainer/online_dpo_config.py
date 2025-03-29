@@ -144,6 +144,12 @@ class OnlineDPOConfig(TrainingArguments):
             "(`pip install vllm`)."
         },
     )
+    gpu_memory_utilization: Optional[float] = field(
+        default=0.55,
+        metadata={
+            "help": "The vLLM memory utilization. The default value is 0.55.",
+        },
+    )
     ds3_gather_for_generation: bool = field(
         default=True,
         metadata={
