@@ -288,16 +288,19 @@ If you don't want to pack your `eval_dataset`, you can pass `eval_packing=False`
 If your dataset has several fields that you want to combine, for example if the dataset has `question` and `answer` fields and you want to combine them, you can pass a formatting function to the trainer that will take care of that. For example:
 
 ```python
-def formatting_func(example):
-    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
-    return text
+def formatting_prompts_func(example):
+    output_texts = []
+    for i in range(len(example['question'])):
+        text = f"### Question: {example['question'][i]}\n ### Answer: {example['answer'][i]}"
+        output_texts.append(text)
+    return output_texts
 
 training_args = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
     args=training_args,
-    formatting_func=formatting_func
+    formatting_func=formatting_prompts_func
 )
 
 trainer.train()
