@@ -67,6 +67,7 @@ jobs:
       - name: Create Python virtual environment
         run: |
           uv venv
+          uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
         run: |
@@ -118,6 +119,7 @@ jobs:
       - name: Create Python virtual environment
         run: |
           uv venv
+          uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
         run: |
@@ -172,6 +174,7 @@ jobs:
       - name: Create Python virtual environment
         run: |
           uv venv
+          uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
         run: |
@@ -223,6 +226,7 @@ jobs:
       - name: Create Python virtual environment
         run: |
           uv venv
+          uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
         run: |
