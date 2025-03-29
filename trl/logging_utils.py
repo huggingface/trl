@@ -1,3 +1,4 @@
+import html
 from typing import Dict, List, Any
 from pygments.formatters import HtmlFormatter
 
@@ -169,7 +170,7 @@ def build_html_table(table: Dict[str, List[Any]]):
         prompt_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
-            f"<pre style='margin:0; height:100%;'>{prompt}</pre>"
+            f"<pre style='margin:0; height:100%;'>{html.escape(prompt)}</pre>"
             "</div>"
             "</div>"
         )
@@ -177,7 +178,7 @@ def build_html_table(table: Dict[str, List[Any]]):
         completion_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
-            f"<pre style='margin:0; height:100%;'>{completion}</pre>"
+            f"<pre style='margin:0; height:100%;'>{html.escape(completion)}</pre>"
             "</div>"
             "</div>"
         )
@@ -185,7 +186,7 @@ def build_html_table(table: Dict[str, List[Any]]):
         correct_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
-            f"<pre style='margin:0; height:100%;'>{correct}</pre>"
+            f"<pre style='margin:0; height:100%;'>{html.escape(correct)}</pre>"
             "</div>"
             "</div>"
         )
@@ -193,7 +194,7 @@ def build_html_table(table: Dict[str, List[Any]]):
         reward_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
-            f"<pre style='margin:0; height:100%;'>{reward}</pre>"
+            f"<pre style='margin:0; height:100%;'>{html.escape(reward)}</pre>"
             "</div>"
             "</div>"
         )
