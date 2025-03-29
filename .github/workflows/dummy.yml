@@ -41,33 +41,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install Make and Git
-        run: |
-          apt-get update && apt-get install -y make git curl
-
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      - name: Create Python virtual environment
-        run: |
-          uv venv
-
       - name: Install dependencies
         run: |
-          source .venv/bin/activate
-          uv pip install .
+          pip install torch
 
       - name: Test with pytest
         run: |
-          source .venv/bin/activate
-          trl env
-
-      - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python ${{ matrix.python-version }} and latest dependencies
-          status: ${{ job.status }}
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+          python -c "import torch; print(torch.cuda.get_device_name(0))"
