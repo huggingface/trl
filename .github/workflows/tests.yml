@@ -218,10 +218,10 @@ jobs:
       - name: Create Python virtual environment
         run: |
           uv venv
-          source .venv/bin/activate
 
       - name: Install dependencies
         run: |
+          source .venv/bin/activate
           uv pip install accelerate==0.34.0
           uv pip install datasets==3.0.0
           uv pip install transformers==4.46.0
@@ -229,6 +229,7 @@ jobs:
 
       - name: Test with pytest
         run: |
+          source .venv/bin/activate
           make test
 
       - name: Post to Slack
