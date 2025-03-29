@@ -194,7 +194,7 @@ def build_html_table(table: Dict[str, List[Any]]):
         reward_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
-            f"<pre style='margin:0; height:100%;'>{html.escape(reward)}</pre>"
+            f"<pre style='margin:0; height:100%;'>{reward}</pre>"
             "</div>"
             "</div>"
         )
