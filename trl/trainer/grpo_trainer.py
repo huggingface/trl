@@ -914,7 +914,8 @@ class GRPOTrainer(Trainer):
                         "correct": answers_to_log,
                         "reward": rewards.tolist(),
                     }
-                    wandb.log({"completions": wandb.Html(build_html_table(table))})
+                    print(table)
+                    wandb.log({"Media/completions_table": wandb.Html(build_html_table(table))})
 
         return {
             "prompt_ids": prompt_ids,
