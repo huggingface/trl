@@ -1,4 +1,3 @@
-import html
 from typing import Dict, List, Any
 from pygments.formatters import HtmlFormatter
 
@@ -167,7 +166,6 @@ def build_html_table(table: Dict[str, List[Any]]):
     """
 
     for prompt, completion, correct, reward in zip(table["prompt"], table["response"], table["correct"], table["reward"]):
-        # --- Prompt with syntax highlighting ---
         prompt_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
@@ -176,30 +174,27 @@ def build_html_table(table: Dict[str, List[Any]]):
             "</div>"
         )
 
-        # --- Response (simple HTML formatting) ---
         completion_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
-            f"{completion}"
+            f"<pre style='margin:0; height:100%;'>{completion}</pre>"
             "</div>"
             "</div>"
         )
 
-        # --- Correct Answer ---
-        correct_escaped = html.escape(str(correct))
         correct_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
-            f"<pre style='margin:0; height:100%;'>{correct_escaped}</pre>"
+            f"<pre style='margin:0; height:100%;'>{correct}</pre>"
             "</div>"
             "</div>"
         )
 
-        # --- Reward ---
         reward_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
             f"<pre style='margin:0; height:100%;'>{reward}</pre>"
+            "</div>"
             "</div>"
         )
 
