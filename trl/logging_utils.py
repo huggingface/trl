@@ -158,14 +158,15 @@ def build_html_table(table: Dict[str, List[Any]]):
       <thead>
         <tr>
           <th style="border: 1px solid black; padding: 6px; width:33.33%;">Prompt</th>
-          <th style="border: 1px solid black; padding: 6px; width:33.33%;">Response</th>
+          <th style="border: 1px solid black; padding: 6px; width:33.33%;">Completion</th>
           <th style="border: 1px solid black; padding: 6px; width:33.33%;">Ground Truth</th>
+          <th style="border: 1px solid black; padding: 6px; width:33.33%;">Reward</th>
         </tr>
       </thead>
       <tbody>
     """
 
-    for prompt, response, correct in zip(table["prompt"], table["completion"], table["answer"]):
+    for prompt, completion, correct, reward in zip(table["prompt"], table["response"], table["correct"], table["reward"]):
         # --- Prompt with syntax highlighting ---
         prompt_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
@@ -176,10 +177,10 @@ def build_html_table(table: Dict[str, List[Any]]):
         )
 
         # --- Response (simple HTML formatting) ---
-        response_html = (
+        completion_html = (
             "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
             "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
-            f"{response}"
+            f"{completion}"
             "</div>"
             "</div>"
         )
@@ -194,11 +195,20 @@ def build_html_table(table: Dict[str, List[Any]]):
             "</div>"
         )
 
+        # --- Reward ---
+        reward_html = (
+            "<div class='cell-content' onclick='showModal(this.innerHTML)'>"
+            "<div class='content-wrapper' style='height:100%; overflow-y:auto;'>"
+            f"<pre style='margin:0; height:100%;'>{reward}</pre>"
+            "</div>"
+        )
+
         html_str += f"""
         <tr>
           <td style="border: 1px solid black; padding: 6px; vertical-align: top;">{prompt_html}</td>
-          <td style="border: 1px solid black; padding: 6px; vertical-align: top;">{response_html}</td>
+          <td style="border: 1px solid black; padding: 6px; vertical-align: top;">{completion_html}</td>
           <td style="border: 1px solid black; padding: 6px; vertical-align: top;">{correct_html}</td>
+          <td style="border: 1px solid black; padding: 6px; vertical-align: top;">{reward_html}</td>
         </tr>
         """
 

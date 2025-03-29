@@ -907,19 +907,14 @@ class GRPOTrainer(Trainer):
                         self.num_completions_to_print,
                     )
                 if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                    import pandas as pd
-
                     # For logging
                     table = {
-                        "step": [str(self.state.global_step)] * len(rewards),
                         "prompt": prompts_to_log,
-                        "completion": completions_to_log,
-                        "answer": answers_to_log,
+                        "response": completions_to_log,
+                        "correct": answers_to_log,
                         "reward": rewards.tolist(),
                     }
-                    df = pd.DataFrame(table)
-                    html_table = build_html_table(df)
-                    wandb.log({"completions": html_table})
+                    wandb.log({"completions": wandb.Html(build_html_table(table))})
 
         return {
             "prompt_ids": prompt_ids,
