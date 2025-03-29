@@ -24,9 +24,6 @@ jobs:
     if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -40,129 +37,215 @@ jobs:
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
-        os: ['ubuntu-latest', 'windows-latest']
       fail-fast: false
-    runs-on: ${{ matrix.os }}
+    runs-on:
+      group: aws-g4dn-2xlarge
+    container:
+      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v4
+      - name: Git checkout
+        uses: actions/checkout@v4
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
-          cache-dependency-path: |
-              setup.py
-              requirements.txt
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install ".[dev]"
+          source .venv/bin/activate
+          uv pip install ".[dev]"
+
       - name: Test with pytest
         run: |
+          source .venv/bin/activate
           make test
+
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python ${{ matrix.python-version }} on ${{ matrix.os }} with lastest dependencies
+          title: Results with Python ${{ matrix.python-version }} and latest dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_dev:
     name: Tests with dev dependencies
-    runs-on: 'ubuntu-latest'
+    runs-on:
+      group: aws-g4dn-2xlarge
+    container:
+      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v4
+      - name: Git checkout
+        uses: actions/checkout@v4
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: "pip"
-          cache-dependency-path: |
-              setup.py
-              requirements.txt
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -U git+https://github.com/huggingface/accelerate.git
-          python -m pip install -U git+https://github.com/huggingface/datasets.git
-          python -m pip install -U git+https://github.com/huggingface/transformers.git
-          python -m pip install ".[dev]"
+          source .venv/bin/activate
+          uv pip install -U git+https://github.com/huggingface/accelerate.git
+          uv pip install -U git+https://github.com/huggingface/datasets.git
+          uv pip install -U git+https://github.com/huggingface/transformers.git
+          uv pip install ".[dev]"
+
       - name: Test with pytest
         run: |
+          source .venv/bin/activate
           make test
+
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 on ubuntu-latest with dev dependencies
+          title: Results with Python 3.12 and dev dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_wo_optional_deps:
     name: Tests without optional dependencies
-    runs-on: 'ubuntu-latest'
+    runs-on:
+      group: aws-g4dn-2xlarge
+    container:
+      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v4
+      - name: Git checkout
+        uses: actions/checkout@v4
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: "pip"
-          cache-dependency-path: |
-              setup.py
-              requirements.txt
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install ".[test]"
+          source .venv/bin/activate
+          uv pip install ".[test]"
+
       - name: Test with pytest
         run: |
+          source .venv/bin/activate
           make test
+
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 on ubuntu-latest without optional dependencies
+          title: Results with Python 3.12 without optional dependencies
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_min_versions:
     name: Tests with minimum versions
-    runs-on: 'ubuntu-latest'
+    runs-on:
+      group: aws-g4dn-2xlarge
+    container:
+      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
     if: github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v4
+      - name: Git checkout
+        uses: actions/checkout@v4
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: "pip"
-          cache-dependency-path: |
-              setup.py
-              requirements.txt
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install accelerate==0.34.0
-          python -m pip install datasets==3.0.0
-          python -m pip install transformers==4.46.0
-          python -m pip install ".[dev]"
+          source .venv/bin/activate
+          uv pip install accelerate==0.34.0
+          uv pip install datasets==3.0.0
+          uv pip install transformers==4.46.0
+          uv pip install ".[dev]"
+
       - name: Test with pytest
         run: |
+          source .venv/bin/activate
           make test
+
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 on ubuntu-latest with minimum versions
+          title: Results with Python 3.12 and minimum dependencies versions
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
