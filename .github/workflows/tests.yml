@@ -67,6 +67,7 @@ jobs:
         run: |
           uv venv
           source .venv/bin/activate
+          which python
 
       - name: Install dependencies
         run: |
