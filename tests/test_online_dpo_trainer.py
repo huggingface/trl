@@ -15,6 +15,7 @@
 import tempfile
 import unittest
 
+import pytest
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
@@ -240,10 +241,10 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @require_vllm
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     @require_torch_accelerator
-    @unittest.skipIf(not is_vllm_available(), "vllm is not available")
+    @require_vllm
+    @pytest.mark.slow
     def test_training_with_vllm(self, config_name):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
         model = AutoModelForCausalLM.from_pretrained(model_id)

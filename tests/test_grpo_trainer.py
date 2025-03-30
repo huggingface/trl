@@ -15,7 +15,6 @@
 import tempfile
 import unittest
 
-import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
@@ -729,9 +728,9 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     @require_peft
+    @require_vllm
     def test_training_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")  # tiny model is too small for vLLM

@@ -1203,9 +1203,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir, model_init_kwargs={"torch_dtype": -1}, report_to="none"
-            )
+            training_args = SFTConfig(output_dir=tmp_dir, model_init_kwargs={"torch_dtype": -1}, report_to="none")
             with self.assertRaises(ValueError) as context:
                 SFTTrainer(
                     model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -1215,7 +1213,6 @@ class SFTTrainerTester2(unittest.TestCase):
                 "a `torch.dtype` (e.g., 'float32'), but got -1.",
                 str(context.exception),
             )
-
 
     @require_peft
     def test_train_peft_model(self):

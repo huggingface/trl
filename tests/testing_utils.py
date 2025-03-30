@@ -64,13 +64,6 @@ def require_mergekit(test_case):
     return unittest.skipUnless(is_mergekit_available(), "test requires mergekit")(test_case)
 
 
-def require_no_wandb(test_case):
-    """
-    Decorator marking a test that requires no wandb. Skips the test if wandb is available.
-    """
-    return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
-
-
 def require_sklearn(test_case):
     """
     Decorator marking a test that requires sklearn. Skips the test if sklearn is not available.
@@ -83,6 +76,13 @@ def require_vllm(test_case):
     Decorator marking a test that requires vllm. Skips the test if vllm is not available.
     """
     return unittest.skipUnless(is_vllm_available(), "test requires vllm")(test_case)
+
+
+def require_no_wandb(test_case):
+    """
+    Decorator marking a test that requires no wandb. Skips the test if wandb is available.
+    """
+    return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
 
 
 class RandomBinaryJudge(BaseBinaryJudge):
