@@ -651,7 +651,6 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 bf16=True,
                 beta=0.1,
-                generate_during_eval=True,
                 report_to="none",
             )
 
