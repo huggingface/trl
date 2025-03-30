@@ -244,7 +244,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
     @require_torch_accelerator
     @unittest.skipIf(not is_vllm_available(), "vllm is not available")
     def test_training_with_vllm(self, config_name):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We neeed a bigger model
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -253,6 +253,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
                 use_vllm=True,
+                gpu_memory_utilization=0.2,
                 report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
