@@ -51,7 +51,8 @@ class GRPOTrainerSlowTester(unittest.TestCase):
                 eval_dataset=self.eval_dataset,
                 processing_class=tokenizer,
             )
-            assert trainer.use_liger_grpo_loss
+            from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+            assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
             trainer.train()
 
         release_memory(trainer.model, trainer)
