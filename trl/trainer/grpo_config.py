@@ -237,7 +237,11 @@ class GRPOConfig(TrainingArguments):
     )
     vllm_server_port: int = field(
         default=8000,
-        metadata={"help": "Port of the vLLM server to connect to."},
+        metadata={"help": "Http port of the vLLM server to connect to."},
+    )
+    vllm_server_nccl_port: int = field(
+        default=51216,
+        metadata={"help": "Nccl port of the vLLM server to connect to. This port is used to update weights."},
     )
     vllm_server_timeout: float = field(
         default=120.0,

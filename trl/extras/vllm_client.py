@@ -15,6 +15,7 @@
 import atexit
 import logging
 import time
+import uuid
 from typing import Optional
 
 import torch
@@ -80,7 +81,7 @@ class VLLMClient:
     """
 
     def __init__(
-        self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0
+        self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0, without_nccl: bool = False
     ):
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
@@ -89,11 +90,16 @@ class VLLMClient:
 
         self.session = requests.Session()
         self.host = host
+        self.version = 0
         self.server_port = server_port
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
-        self.init_communicator()
-        atexit.register(self.close_communicator)  # when the client object is deleted, close the weight update group
+        if not without_nccl:
+            # with async vllm server, we could use the vllm-sever after the training is done 
+            # by attaching another client into the server
+            # but note that we must set `without_nccl` to `True` in the second client
+            self.init_communicator()
+            atexit.register(self.close_communicator)  # when the client object is deleted, close the weight update group
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
@@ -140,6 +146,8 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
+        multi_round: bool = False,
+        is_async: bool = False,
     ) -> list[list[str]]:
         """
         Generates model completions for the provided prompts.
@@ -163,6 +171,8 @@ class VLLMClient:
                 Maximum number of tokens to generate for each prompt.
             guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
                 Regular expression to guide the decoding process.
+            is_async: (`bool`, *optional*, defaults to `False`):
+                Whether to run the generation asynchronously. If `True`, the method will return immediately.
 
         Returns:
             `list[list[int]]`:
@@ -181,6 +191,49 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
+                "version": self.version,
+                "multi_round": multi_round,
+                "is_async": is_async,
+            },
+        )
+        if response.status_code == 200:
+            if is_async:
+                return []
+            else:
+                return response.json()["completion_ids"]
+        else:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def get_generate_future(
+        self,
+        prompts: list[str],
+        n: int = 1,
+        repetition_penalty: float = 1.0,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        min_p: float = 0.0,
+        max_tokens: int = 16,
+        guided_decoding_regex: Optional[str] = None,
+        multi_round: bool = False,
+        **kwargs,
+    ) -> list[list[str]]:
+        url = f"http://{self.host}:{self.server_port}/get_future/"
+
+        response = self.session.post(
+            url,
+            json={
+                "prompts": prompts,
+                "n": n,
+                "repetition_penalty": repetition_penalty,
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "min_p": min_p,
+                "max_tokens": max_tokens,
+                "guided_decoding_regex": guided_decoding_regex,
+                "version": self.version,
+                "multi_round": multi_round,
             },
         )
         if response.status_code == 200:
@@ -245,6 +298,7 @@ class VLLMClient:
         for name, param in model.named_parameters():
             # Update each parameter individually
             self.update_named_param(name, param.data)
+        self.version += 1
 
     def reset_prefix_cache(self):
         """

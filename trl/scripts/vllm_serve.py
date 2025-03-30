@@ -15,13 +15,16 @@
 import argparse
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Optional, Sequence
-
+import asyncio
 import torch
+import threading
 import torch.distributed as dist
 
 from trl import TrlParser
+from transformers import AutoTokenizer
+from multiprocessing import Queue, Lock
+from dataclasses import dataclass, field
+from typing import Optional, Sequence, Union, Any
 from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
 
 
@@ -38,12 +41,17 @@ if is_uvicorn_available():
 
 
 if is_vllm_available():
-    from vllm import LLM, SamplingParams
+    from vllm import LLM, SamplingParams, AsyncLLMEngine
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
     from vllm.worker.worker import Worker
+    from vllm.engine.arg_utils import (AsyncEngineArgs, HfOverrides, PoolerConfig, TaskOption)
+    from vllm.engine.async_llm_engine import AsyncLLMEngine
+    from vllm.usage.usage_lib import UsageContext
+    from vllm.utils import (Counter, Device, deprecate_args, deprecate_kwargs, is_list_of)
+    
 else:
     Worker = object
 
@@ -142,6 +150,94 @@ class WeightSyncWorker(Worker):
             del self.pynccl_comm
             self.pynccl_comm = None  # Ensure attribute is reset to None
             self.client_rank = None  # Ensure attribute is reset to None
+
+
+class RolloutEngine():
+    def __init__(self, async_llm_engine, tokenizer):
+        self.async_llm_engine = async_llm_engine
+        self.working_tasks: dict[asyncio.Task] = {}
+        self.task = self.run_async_in_new_thread_and_new_event_loop(self.print_working_tasks)
+        self.tokenizer = tokenizer
+
+    @staticmethod
+    def run_async_in_new_thread_and_new_event_loop(func, *args, **kwargs):
+        """ Run an async function in a new thread and a new event loop.
+        """
+        def job():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            task = loop.create_task(func(*args, **kwargs))
+            loop.run_until_complete(task)
+        threading.Thread(target=job, daemon=True).start()
+
+    async def print_working_tasks(self):
+        """ print number of working tasks every second
+        """
+        while True:
+            print(f"Async working tasks counter: {len(self.working_tasks.keys())}")
+            await asyncio.sleep(1)
+
+    async def get_output(self, results_generator):
+        """ get async output from async generator
+        """
+        final_output = None
+        async for request_output in results_generator:
+            final_output = request_output
+            # print(request_output.outputs[0].text[-1])
+        return final_output
+
+    async def submit_llm_generate(self, prompts, sampling_params):
+        """ submit llm generate task
+        """
+        import uuid
+        event_loop = asyncio.get_event_loop()
+        tasks = []
+        for prompt in prompts:
+            tasks.append(event_loop.create_task(self.get_output(self.async_llm_engine.generate(
+                prompt=prompt,
+                sampling_params=sampling_params,
+                request_id=uuid.uuid4().hex,
+                priority=0
+            ))))
+        all_outputs = await asyncio.gather(*tasks)
+        return all_outputs
+
+    async def submit_new_task(self, req_json, prompts, sampling_params, multi_round):
+        """
+        create async task
+        """
+        if req_json in self.working_tasks: return {"completion_ids": []}
+        event_loop = asyncio.get_event_loop()
+        task = event_loop.create_task(self.llm_rollout_task_main(prompts=prompts, sampling_params=sampling_params, multi_round=multi_round))
+        self.working_tasks[req_json] = task
+
+    async def get_future(self, req_json):
+        """
+        return async task result
+        """
+        # check cache
+        assert req_json in self.working_tasks
+        # wait until complete
+        while (not self.working_tasks[req_json].done()):
+            await asyncio.sleep(0.2)
+        completion_ids = self.working_tasks.pop(req_json).result()
+        return {"completion_ids": completion_ids}
+
+    def running_task_count(self):
+        """
+        return number of running tasks
+        """
+        return len(self.working_tasks.keys())
+
+    async def llm_rollout_task_main(self, prompts, sampling_params, multi_round):
+        """ main function for llm rollout task
+        """
+        if not multi_round:
+            all_outputs = await self.submit_llm_generate(prompts=prompts, sampling_params=sampling_params)
+            completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
+        else:
+            raise NotImplementedError("Multi-round rollout with tool-call is coming soon.")
+        return completion_ids
 
 
 @dataclass
@@ -246,7 +342,89 @@ def main(script_args: ScriptArguments):
     if not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
-    llm = LLM(
+    class AsyncVllmEngine(LLM):
+        """This class is copied and modified from: python/site-packages/vllm/entrypoints/llm.py (Tested under vllm 0.8.2)
+        """
+        def __init__(
+            self,
+            model: str,
+            tokenizer: Optional[str] = None,
+            tokenizer_mode: str = "auto",
+            skip_tokenizer_init: bool = False,
+            trust_remote_code: bool = False,
+            allowed_local_media_path: str = "",
+            tensor_parallel_size: int = 1,
+            dtype: str = "auto",
+            quantization: Optional[str] = None,
+            revision: Optional[str] = None,
+            tokenizer_revision: Optional[str] = None,
+            seed: Optional[int] = 42,
+            gpu_memory_utilization: float = 0.9,
+            swap_space: float = 4,
+            cpu_offload_gb: float = 0,
+            enforce_eager: Optional[bool] = None,
+            max_seq_len_to_capture: int = 8192,
+            disable_custom_all_reduce: bool = False,
+            disable_async_output_proc: bool = False,
+            hf_overrides = None,
+            mm_processor_kwargs = None,
+            # After positional args are removed, move this right below `model`
+            task = "auto",
+            override_pooler_config = None,
+            compilation_config = None,
+            **kwargs,
+        ) -> None:
+
+            if "disable_log_stats" not in kwargs:
+                kwargs["disable_log_stats"] = True
+
+            if "worker_cls" in kwargs:
+                worker_cls = kwargs["worker_cls"]
+
+            compilation_config_instance = None
+
+            engine_args = AsyncEngineArgs(
+                model=model,
+                task=task,
+                tokenizer=tokenizer,
+                tokenizer_mode=tokenizer_mode,
+                skip_tokenizer_init=skip_tokenizer_init,
+                trust_remote_code=trust_remote_code,
+                allowed_local_media_path=allowed_local_media_path,
+                tensor_parallel_size=tensor_parallel_size,
+                dtype=dtype,
+                quantization=quantization,
+                revision=revision,
+                tokenizer_revision=tokenizer_revision,
+                seed=seed,
+                gpu_memory_utilization=gpu_memory_utilization,
+                swap_space=swap_space,
+                cpu_offload_gb=cpu_offload_gb,
+                enforce_eager=enforce_eager,
+                max_seq_len_to_capture=max_seq_len_to_capture,
+                disable_custom_all_reduce=disable_custom_all_reduce,
+                disable_async_output_proc=disable_async_output_proc,
+                hf_overrides=hf_overrides,
+                mm_processor_kwargs=mm_processor_kwargs,
+                override_pooler_config=override_pooler_config,
+                compilation_config=compilation_config_instance,
+                **kwargs,
+            )
+
+            self.llm_engine = AsyncLLMEngine.from_engine_args(engine_args=engine_args, usage_context=UsageContext.LLM_CLASS)
+            self.engine_class = type(self.llm_engine)
+
+            self.request_counter = Counter()
+            self.default_sampling_params: Union[dict[str, Any], None] = None
+
+            self.async_llm_engine: AsyncLLMEngine  = self.llm_engine
+            self.llm_engine = self.llm_engine.engine
+
+        @staticmethod
+        def get_engine_class():
+            return AsyncLLMEngine
+
+    llm = AsyncVllmEngine(
         model=script_args.model,
         revision=script_args.revision,
         tensor_parallel_size=script_args.tensor_parallel_size,
@@ -257,7 +435,7 @@ def main(script_args: ScriptArguments):
         # This is particularly useful here because we generate completions from the same prompts.
         enable_prefix_caching=script_args.enable_prefix_caching,
         max_model_len=script_args.max_model_len,
-        worker_cls="trl.scripts.vllm_serve.WeightSyncWorker",
+        worker_cls='trl.scripts.vllm_serve.WeightSyncWorker',
     )
 
     app = FastAPI()
@@ -296,9 +474,14 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         guided_decoding_regex: Optional[str] = None
+        multi_round: Optional[bool] = False
+        is_async: Optional[bool] = False
+        version: Optional[int] = 0
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
+
+    rollout_engine = RolloutEngine(async_llm_engine=llm.async_llm_engine, tokenizer=AutoTokenizer.from_pretrained(script_args.model))
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -341,9 +524,26 @@ def main(script_args: ScriptArguments):
             max_tokens=request.max_tokens,
             guided_decoding=guided_decoding,
         )
-        all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
-        completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        return {"completion_ids": completion_ids}
+        multi_round = request.multi_round
+        is_async = request.is_async
+        # discard `is_async`, so as to unify the future query key
+        request.is_async = None; req_json = request.model_dump_json()
+        await rollout_engine.submit_new_task(
+            req_json=req_json, 
+            prompts=request.prompts, 
+            sampling_params=sampling_params, 
+            multi_round=multi_round
+        )
+        if is_async:
+            return {"completion_ids": []}
+        else:
+            return await rollout_engine.get_future(req_json)
+
+    @app.post("/get_future/", response_model=GenerateResponse)
+    async def get_future(request: GenerateRequest):
+        # discard `is_async`, so as to unify the future query key
+        request.is_async = None; req_json = request.model_dump_json()
+        return await rollout_engine.get_future(req_json)
 
     class InitCommunicatorRequest(BaseModel):
         host: str
@@ -393,6 +593,10 @@ def main(script_args: ScriptArguments):
         # llm.collective_rpc("update_named_param", args=("name", torch.float32, (10, 10)))
         # And with background_tasks.add_task we need to call it this way:
         # background_tasks.add_task(llm.collective_rpc, "update_named_param", args=("name", torch.float32, (10, 10)))
+        while (rollout_engine.running_task_count() > 0):
+            print("[vllm-serve warning]: You cannot update weights while some generation tasks are running! Waiting for all tasks to finish.")
+            await asyncio.sleep(1)
+
         dtype = torch.__getattribute__(request.dtype.split(".")[-1])
         background_tasks.add_task(llm.collective_rpc, "update_named_param", args=(request.name, dtype, request.shape))
 

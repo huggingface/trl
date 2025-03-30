@@ -475,7 +475,7 @@ class GRPOTrainer(Trainer):
 
             if self.accelerator.is_main_process:
                 self.vllm_client = VLLMClient(
-                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
+                    args.vllm_server_host, args.vllm_server_port, group_port=args.vllm_server_nccl_port, connection_timeout=args.vllm_server_timeout
                 )
 
             # vLLM specific sampling arguments
@@ -674,6 +674,23 @@ class GRPOTrainer(Trainer):
             inputs = self._generate_and_score_completions(inputs)
         return inputs
 
+    def get_batch_samples(self, epoch_iterator, num_batches):
+        """
+        We can pre-commit batchs to vllm rollout server with after vllm goes async!
+        However to do so, we just need to rewrite transformer ``get_batch_samples`` method to
+        get the batch samples, record them into 'full_batch_samples'
+        """
+
+        batch_samples, num_items_in_batch = super().get_batch_samples(epoch_iterator, num_batches)
+        pre_submit = self.args.gradient_accumulation_steps != 1 and 'full_batch_samples' in all_inputs[0]
+        if pre_submit:
+            try:
+                # (gradient_accumulation_steps, batch_size_per_device)
+                batch_samples[0][0]['full_batch_samples'] = batch_samples
+            except:
+                pass
+        return batch_samples, num_items_in_batch
+
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
@@ -699,13 +716,70 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
+            all_inputs = gather_object(inputs)
             if self.accelerator.is_main_process:
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually.
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-                with profiling_context(self, "vLLM.generate"):
+
+                pre_submit = self.args.gradient_accumulation_steps != 1 and 'full_batch_samples' in all_inputs[0]
+                if not pre_submit:
                     completion_ids = self.vllm_client.generate(
+                        is_async=True,  # return immediately, do not block, will wait for the result later
+                        prompts=ordered_set_of_prompts,
+                        n=self.num_generations,
+                        repetition_penalty=self.repetition_penalty,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        top_k=-1 if self.top_k is None else self.top_k,
+                        min_p=0.0 if self.min_p is None else self.min_p,
+                        max_tokens=self.max_completion_length,
+                        guided_decoding_regex=self.guided_decoding_regex,
+                    )
+                else:
+                    # pre-submit *gradient_step_batch_split* batches to vllm server, taking advantage of the async mode
+                    try:
+                        input_slice = all_inputs[:: self.args.per_device_train_batch_size]
+                        # sim_full.shape = (process/gpu:8, gradient_step_batch_split:4, per_device_train_batch_size:8)
+                        sim_full = [d.pop('full_batch_samples') for d in input_slice]
+                    except:
+                        input_slice = all_inputs[:: self.args.per_device_eval_batch_size]
+                        # sim_full.shape = (process/gpu:8, gradient_step_batch_split:4, per_device_train_batch_size:8)
+                        sim_full = [d.pop('full_batch_samples') for d in input_slice]
+                    # sim_full_each_step.shape = (gradient_step_batch_split:4, process/gpu:8, per_device_train_batch_size:8)
+                    sim_full_each_step = [[d[i] for d in sim_full] for i in range(self.args.gradient_accumulation_steps)]
+                    # sim_full_flatten.shape = (gradient_step_batch_split:4, (process/gpu * per_device_train_batch_size):64)
+                    sim_full_flatten = [[ddd for dd in d for ddd in dd] for d in sim_full_each_step]
+                    # sim_full_flatten_sel.shape = (gradient_step_batch_split:4, (process/gpu * per_device_train_batch_size):4)
+                    sim_full_flatten_sel = [d[:: self.num_generations] for d in sim_full_flatten]
+                    def inputs_to_prompts_text(inputs):
+                        prompts = [x["prompt"] for x in inputs]
+                        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+                        return prompts_text
+                    sim_full_flatten_prompts_text = [inputs_to_prompts_text(d) for d in sim_full_flatten_sel]
+                    # raise error if the first batch is not what we expect
+                    assert sim_full_flatten_prompts_text[0] == all_prompts_text[:: self.num_generations]
+                    # we commit *gradient_step_batch_split* batches to vllm server
+                    for ordered_set_of_prompts in sim_full_flatten_prompts_text:
+                        gen_kwargs = {
+                            "prompts": ordered_set_of_prompts,
+                            "n": self.num_generations,
+                            "repetition_penalty": self.repetition_penalty,
+                            "temperature": self.temperature,
+                            "top_p": self.top_p,
+                            "top_k": -1 if self.top_k is None else self.top_k,
+                            "min_p": 0.0 if self.min_p is None else self.min_p,
+                            "max_tokens": self.max_completion_length,
+                            "guided_decoding_regex": self.guided_decoding_regex,
+                            "is_async": True,   # return immediately, do not block, will wait for the result later
+                        }
+                        # send the request to vllm server
+                        self.vllm_client.generate(**gen_kwargs)
+
+                with profiling_context(self, "vLLM.generate"):
+                    completion_ids = self.vllm_client.get_generate_future(  # get results
+                        is_async=True,
                         prompts=ordered_set_of_prompts,
                         n=self.num_generations,
                         repetition_penalty=self.repetition_penalty,
@@ -814,7 +888,7 @@ class GRPOTrainer(Trainer):
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
                     # Repeat all input columns (but "prompt" and "completion") to match the number of generations
-                    keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
+                    keys = [key for key in inputs[0] if key not in ["prompt", "completion", "full_batch_samples"]]
                     reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                     output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
                     # Convert None values to NaN
