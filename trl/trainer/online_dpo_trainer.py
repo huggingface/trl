@@ -269,7 +269,7 @@ class OnlineDPOTrainer(Trainer):
             # space for them. Setting gpu_memory_utilization to 0.55 seems to work well in practice.
             self.llm = LLM(
                 model=model.name_or_path,
-                gpu_memory_utilization=0.55,
+                gpu_memory_utilization=args.gpu_memory_utilization,
                 dtype=torch.float32,
                 # When release by vLLM, we would be able to distribute the model on multiple GPUs
                 # See https://github.com/vllm-project/vllm/pull/12071
@@ -695,7 +695,9 @@ class OnlineDPOTrainer(Trainer):
 
     # Same as Trainer._maybe_log_save_evaluate but log our metrics
     # start_time defaults to None to allow compatibility with transformers<=4.46
-    def _maybe_log_save_evaluate(self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None):
+    def _maybe_log_save_evaluate(
+        self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None, learning_rate=None
+    ):
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
             logs: dict[str, float] = {}
 
@@ -708,7 +710,10 @@ class OnlineDPOTrainer(Trainer):
             logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
             if grad_norm is not None:
                 logs["grad_norm"] = grad_norm.detach().item() if isinstance(grad_norm, torch.Tensor) else grad_norm
-            logs["learning_rate"] = self._get_learning_rate()
+            if learning_rate is not None:
+                logs["learning_rate"] = learning_rate
+            else:
+                logs["learning_rate"] = self._get_learning_rate()
 
             # Add our metrics
             for key, val in self.stats.items():
