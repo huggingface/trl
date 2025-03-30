@@ -53,6 +53,13 @@ class GRPOTrainerSlowTester(unittest.TestCase):
             )
             from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
             assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+
+            previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
+
             trainer.train()
 
-        release_memory(trainer.model, trainer)
+            for n, param in previous_trainable_params.items():
+                new_param = model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+        release_memory(model, trainer)
