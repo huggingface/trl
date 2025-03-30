@@ -605,10 +605,7 @@ class GRPOTrainer(Trainer):
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
-    def _get_hidden_states_or_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, skip_liger=False):
-        if self.use_liger_grpo_loss and not skip_liger:
-            return self._get_hidden_states(model, input_ids, attention_mask, logits_to_keep)
-
+    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
         # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
         logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
@@ -768,21 +765,21 @@ class GRPOTrainer(Trainer):
                 # if using Liger GRPO loss, we directly compute logps rather than hidden states 
                 # as that would require needing to store the old lm head weights 
                 # TODO: Liger: need to check if the extra memory overhead is worth it
-                old_per_token_logps = self._get_hidden_states_or_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, skip_liger=True
+                old_per_token_logps = self._get_per_token_logps(
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep
                 )
             else:
                 old_per_token_logps = None
 
             if self.beta == 0.0:
-                ref_hidden_states_or_per_token_logps = None
+                ref_per_token_logps = None
             elif self.ref_model is not None:
-                ref_hidden_states_or_per_token_logps = self._get_hidden_states_or_per_token_logps(
+                ref_per_token_logps = self._get_per_token_logps(
                     self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
                 )
             else:
                 with self.accelerator.unwrap_model(self.model).disable_adapter():
-                    ref_hidden_states_or_per_token_logps = self._get_hidden_states_or_per_token_logps(
+                    ref_per_token_logps = self._get_per_token_logps(
                         self.model, prompt_completion_ids, attention_mask, logits_to_keep
                     )
 
@@ -918,17 +915,8 @@ class GRPOTrainer(Trainer):
             "completion_mask": completion_mask,
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
+            "ref_per_token_logps": ref_per_token_logps,
         }
-
-        # Add liger-specific or standard-specific keys
-        if self.use_liger_grpo_loss:
-            result.update({
-                "ref_hidden_states": ref_hidden_states_or_per_token_logps,
-            })
-        else:
-            result.update({
-                "ref_per_token_logps": ref_hidden_states_or_per_token_logps,
-            })
             
         return result
 
@@ -937,68 +925,61 @@ class GRPOTrainer(Trainer):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
         # Compute the per-token log probabilities for the model
-
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        hidden_states_or_per_token_logps = self._get_hidden_states_or_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
-        
         if self.use_liger_grpo_loss:
+            hidden_states = self._get_hidden_states(model, input_ids, attention_mask, logits_to_keep)
             unwrapped_model = self.accelerator.unwrap_model(model)
-            if self.ref_model:
-                ref_unwrapped_model = self.accelerator.unwrap_model(self.ref_model)
+            # compute loss and metrics using liger grpo loss
             loss, metrics = self.liger_grpo_loss(
-                _input=hidden_states_or_per_token_logps,
+                _input=hidden_states,
                 lin_weight=unwrapped_model.lm_head.weight,
                 selected_token_ids=completion_ids,
                 attention_mask=completion_mask,
                 advantages=inputs["advantages"],
                 bias=unwrapped_model.lm_head.bias,
-                ref_input=inputs["ref_hidden_states"],
-                ref_weight=ref_unwrapped_model.lm_head.weight if self.ref_model else None,
-                ref_bias=ref_unwrapped_model.lm_head.bias if self.ref_model else None,
+                ref_per_token_logps=inputs["ref_per_token_logps"],
                 old_per_token_logps=inputs["old_per_token_logps"],
             )
+            # Extract metrics from the liger_grpo_loss output
+            # KL divergence is the first metric when beta is non-zero
+            mean_kl = metrics[0] if self.beta != 0.0 else None
+            clip_ratio = metrics[-1]
+
+        else:
+            per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+            # Compute the KL divergence between the model and the reference model
             if self.beta != 0.0:
-                mean_kl = metrics[-1]
-                mode = "eval" if self.control.should_evaluate else "train"
-                self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
-            return loss
+                ref_per_token_logps = inputs["ref_per_token_logps"]
+                per_token_kl = (
+                    torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+                )
+                mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
 
-        per_token_logps = hidden_states_or_per_token_logps
-        # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
-
-        # Compute the loss
-        advantages = inputs["advantages"]
-        # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
-        # _generate_and_score_completions) and use per_token_logps.detach() instead.
-        old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
-        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-        if self.beta != 0.0:
-            per_token_loss = per_token_loss + self.beta * per_token_kl
-        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
-
+            # Compute the loss
+            advantages = inputs["advantages"]
+            # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
+            # _generate_and_score_completions) and use per_token_logps.detach() instead.
+            old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
+            coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+            per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+            if self.beta != 0.0:
+                per_token_loss = per_token_loss + self.beta * per_token_kl
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
+            is_clipped = (per_token_loss1 < per_token_loss2).float()
+            clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
+        
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
-
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
-
-        is_clipped = (per_token_loss1 < per_token_loss2).float()
-        clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
 
