@@ -112,7 +112,7 @@ class PeftModelTester(unittest.TestCase):
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
         self.assertEqual(nb_trainable_params, 905)
-        self.assertEqual(trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__, Linear8bitLt)
+        self.assertIsInstance(trl_model.pretrained_model.model.model.layers[0].mlp.gate_proj, Linear8bitLt)
 
         causal_lm_model = AutoModelForCausalLM.from_pretrained(
             self.causal_lm_model_id, load_in_8bit=True, device_map="auto"
@@ -121,7 +121,7 @@ class PeftModelTester(unittest.TestCase):
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
         self.assertEqual(nb_trainable_params, 905)
-        self.assertEqual(trl_model.pretrained_model.model.gpt_neox.layers[0].mlp.dense_h_to_4h.__class__, Linear8bitLt)
+        self.assertIsInstance(trl_model.pretrained_model.model.model.layers[0].mlp.gate_proj, Linear8bitLt)
 
     def test_save_pretrained_peft(self):
         r"""

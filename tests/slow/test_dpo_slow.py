@@ -36,6 +36,7 @@ if is_peft_available():
 
 
 @require_torch_accelerator
+@require_peft
 class DPOTrainerSlowTester(unittest.TestCase):
     def setUp(self):
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
