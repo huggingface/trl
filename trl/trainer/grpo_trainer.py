@@ -884,8 +884,8 @@ class GRPOTrainer(Trainer):
         min_completion_length_eos = arg_completion_mask.float().min().item()
         max_completion_length_eos = arg_completion_mask.float().max().item()
         self._metrics[mode]["mean_terminated_completion_length"].append(mean_completion_length_eos)
-        self._metrics[mode]["min_terminate_completion_length"].append(min_completion_length_eos)
-        self._metrics[mode]["max_terminate_completion_length"].append(max_completion_length_eos)
+        self._metrics[mode]["min_terminated_completion_length"].append(min_completion_length_eos)
+        self._metrics[mode]["max_terminated_completion_length"].append(max_completion_length_eos)
 
         # Get the names of the reward functions
         reward_func_names = []
