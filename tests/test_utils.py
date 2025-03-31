@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
 import textwrap
 import unittest
 from io import StringIO
@@ -482,7 +481,6 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
 
 
 class TestPrintPromptCompletionsSample(unittest.TestCase):
-    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")  # getting unicode issues on Windows
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
@@ -507,7 +505,6 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         """)
         self.assertEqual(output, expected_output)
 
-    @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")  # getting unicode issues on Windows
     @patch("sys.stdout", new_callable=StringIO)
     def test_num_samples(self, mock_stdout):
         prompts = ["A", "B"]

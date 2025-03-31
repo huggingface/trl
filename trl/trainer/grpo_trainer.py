@@ -659,11 +659,14 @@ class GRPOTrainer(Trainer):
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
-            if self.state.global_step % self.num_iterations == 0:
+            buffer_index = self._step % self.args.gradient_accumulation_steps
+            buffered_inputs = self._buffered_inputs[buffer_index]
+            if self.state.global_step % self.num_iterations == 0 or buffered_inputs is None:
+                # buffered_inputs=None can occur when resuming from a checkpoint
                 inputs = self._generate_and_score_completions(inputs)
-                self._buffered_inputs[self._step % self.args.gradient_accumulation_steps] = inputs
+                self._buffered_inputs[buffer_index] = inputs
             else:
-                inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+                inputs = buffered_inputs
             self._step += 1
         else:
             # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
@@ -892,6 +895,8 @@ class GRPOTrainer(Trainer):
                         "reward": rewards.tolist(),
                     }
                     df = pd.DataFrame(table)
+                    if self.args.wandb_log_unique_prompts:
+                        df = df.drop_duplicates(subset=["prompt"])
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
@@ -946,7 +951,10 @@ class GRPOTrainer(Trainer):
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
-        is_clipped = (coef_1 < (1 - self.epsilon_low)) | (coef_1 > (1 + self.epsilon_high))
+        # Compute the clip ratio
+        is_clipped = ((coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)) | (
+            (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+        )
         clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
