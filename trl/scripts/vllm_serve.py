@@ -299,6 +299,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
+        log_probs: list[list[float]]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -312,6 +313,7 @@ def main(script_args: ScriptArguments):
         Returns:
             `GenerateResponse`:
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
+                - `log_probs` (list of list of `float`): A list of lists of float representing the token logprobs.
 
         Example request:
         ```json
@@ -321,6 +323,7 @@ def main(script_args: ScriptArguments):
         Example response:
         ```json
         {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
+        {"log_probs": [[1.1, 1.2, 1.3], [2.1, 2.2, 2.3]]}
         ```
         """
 
@@ -343,7 +346,11 @@ def main(script_args: ScriptArguments):
         )
         all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        return {"completion_ids": completion_ids}
+        log_probs = [list(output.logprobs) for outputs in all_outputs for output in outputs.outputs]
+        return {
+                "completion_ids": completion_ids,
+                "log_probs": log_probs
+            }
 
     class InitCommunicatorRequest(BaseModel):
         host: str

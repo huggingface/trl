@@ -708,7 +708,7 @@ class GRPOTrainer(Trainer):
                 # prompt individually.
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                 with profiling_context(self, "vLLM.generate"):
-                    completion_ids = self.vllm_client.generate(
+                    completion_ids, vllm_log_probs = self.vllm_client.generate(
                         prompts=ordered_set_of_prompts,
                         n=self.num_generations,
                         repetition_penalty=self.repetition_penalty,
@@ -721,18 +721,23 @@ class GRPOTrainer(Trainer):
                     )
             else:
                 completion_ids = [None] * len(all_prompts_text)
+                vllm_log_probs = [None] * len(all_prompts_text)
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
             # corresponding slice.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            vllm_log_probs = broadcast_object_list(vllm_log_probs, from_process=0)
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
                 (self.accelerator.process_index + 1) * len(prompts),
             )
             completion_ids = completion_ids[process_slice]
+            vllm_log_probs = vllm_log_probs[process_slice]
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            vllm_log_probs = [torch.tensor(logp, device=device) for logp in vllm_log_probs]
+            vllm_log_probs = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
@@ -764,9 +769,13 @@ class GRPOTrainer(Trainer):
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:
-                old_per_token_logps = self._get_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep
-                )
+                if self.args.used_vllm_logprobs:
+                    # Wrap with torch.tensor and pad?
+                    old_per_token_logps = vllm_log_probs
+                else:
+                    old_per_token_logps = self._get_per_token_logps(
+                        self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                    )
             else:
                 old_per_token_logps = None
 
