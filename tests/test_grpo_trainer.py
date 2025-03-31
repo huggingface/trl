@@ -923,7 +923,9 @@ class GRPOTrainerTester(unittest.TestCase):
         training_args = GRPOConfig(
             output_dir=tempfile.mkdtemp(),
             learning_rate=0.1,
-            per_device_train_batch_size=1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=32,
             use_peft_as_reference=True,
             report_to="none",
         )
