@@ -39,8 +39,7 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
-from transformers.utils import is_liger_kernel_available
+from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -413,7 +412,13 @@ class GRPOTrainer(Trainer):
             if not is_liger_kernel_available():
                 raise ImportError("Liger is required to use `liger_grpo_loss`. Run `pip install liger-kernel`.")
             self.use_liger_grpo_loss = args.use_liger_grpo_loss
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(beta=self.beta, epsilon_low=self.epsilon_low, epsilon_high=self.epsilon_high, temperature=self.temperature, use_ref_model=self.ref_model is not None)
+            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
+                beta=self.beta,
+                epsilon_low=self.epsilon_low,
+                epsilon_high=self.epsilon_high,
+                temperature=self.temperature,
+                use_ref_model=self.ref_model is not None,
+            )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -595,7 +600,7 @@ class GRPOTrainer(Trainer):
     @profiling_decorator
     def _get_hidden_states(self, model, input_ids, attention_mask, logits_to_keep=None):
         # need to unwrap the model to get the hidden states
-        # intended to work with DP, DDP, FSDP 
+        # intended to work with DP, DDP, FSDP
         unwrapped_model = self.accelerator.unwrap_model(model)
         hidden_states = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask)[0]
         hidden_states = hidden_states[:, :-1, :]  # (B, L-1, H)
@@ -761,10 +766,6 @@ class GRPOTrainer(Trainer):
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:
-                # TODO: add an option in Liger to use the old_per_token_logps
-                # if using Liger GRPO loss, we directly compute logps rather than hidden states 
-                # as that would require needing to store the old lm head weights 
-                # TODO: Liger: need to check if the extra memory overhead is worth it
                 old_per_token_logps = self._get_per_token_logps(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep
                 )
@@ -917,7 +918,7 @@ class GRPOTrainer(Trainer):
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
         }
-            
+
         return result
 
     @profiling_decorator
@@ -964,7 +965,9 @@ class GRPOTrainer(Trainer):
             advantages = inputs["advantages"]
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
             # _generate_and_score_completions) and use per_token_logps.detach() instead.
-            old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
+            old_per_token_logps = (
+                inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
+            )
             coef_1 = torch.exp(per_token_logps - old_per_token_logps)
             coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
             per_token_loss1 = coef_1 * advantages.unsqueeze(1)
@@ -975,7 +978,7 @@ class GRPOTrainer(Trainer):
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
             is_clipped = (per_token_loss1 < per_token_loss2).float()
             clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
-        
+
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
         if self.beta != 0.0:

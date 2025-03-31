@@ -1,16 +1,32 @@
-import unittest
+# Copyright 2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import gc
+import tempfile
+import unittest
+
 import torch
+from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers.testing_utils import require_torch_accelerator
-import itertools
-from .testing_constants import MODELS_TO_TEST, PACKING_OPTIONS
-from trl import GRPOConfig, GRPOTrainer
-from accelerate.utils.memory import release_memory
-import tempfile
-from transformers.testing_utils import require_liger_kernel
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.testing_utils import require_liger_kernel, require_torch_accelerator
+
+from trl import GRPOConfig, GRPOTrainer
+
+from .testing_constants import MODELS_TO_TEST
+
 
 @require_torch_accelerator
 class GRPOTrainerSlowTester(unittest.TestCase):
@@ -52,6 +68,7 @@ class GRPOTrainerSlowTester(unittest.TestCase):
                 processing_class=tokenizer,
             )
             from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+
             assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
 
             previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
