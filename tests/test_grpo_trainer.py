@@ -919,9 +919,10 @@ class GRPOTrainerTester(unittest.TestCase):
     def test_peft_use_as_reference_flag_true(self):
         # Test that for a PEFT model with use_peft_as_reference=True, ref_model is set
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train").select(range(5))
-        training_args = GRPOConfig(
-            output_dir=tempfile.mkdtemp(),
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
             learning_rate=0.1,
             per_device_train_batch_size=3,
             num_generations=3,
