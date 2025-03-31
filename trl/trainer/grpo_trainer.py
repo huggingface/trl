@@ -916,6 +916,8 @@ class GRPOTrainer(Trainer):
                         "reward": rewards.tolist(),
                     }
                     df = pd.DataFrame(table)
+                    if self.args.wandb_log_unique_prompts:
+                        df = df.drop_duplicates(subset=["prompt"])
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {

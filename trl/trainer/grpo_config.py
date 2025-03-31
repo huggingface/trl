@@ -332,6 +332,13 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
     )
+    wandb_log_unique_prompts: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
+            "all prompts are logged."
+        },
+    )
 
     # Deprecated parameters
     vllm_device: Optional[str] = field(
