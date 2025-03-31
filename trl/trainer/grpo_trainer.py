@@ -868,9 +868,25 @@ class GRPOTrainer(Trainer):
             self._total_train_tokens += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
-        self._metrics[mode]["completion_length"].append(completion_length)
-
+        # log completion lengths, mean, min, max
+        arg_completion_mask = self.accelerator.gather_for_metrics(completion_mask.sum(1))
+        mean_completion_length = arg_completion_mask.float().mean().item()
+        min_completion_length = arg_completion_mask.float().min().item()
+        max_completion_length = arg_completion_mask.float().max().item()
+        self._metrics[mode]["mean_completion_length"].append(mean_completion_length)
+        self._metrics[mode]["min_completion_length"].append(min_completion_length)
+        self._metrics[mode]["max_completion_length"].append(max_completion_length)
+        
+        # identify sequences that terminated with EOS and log their lengths
+        agg_terminated_with_eos = self.accelerator.gather_for_metrics(is_eos.any(dim=1))
+        arg_completion_mask = arg_completion_mask[agg_terminated_with_eos]
+        mean_completion_length_eos = arg_completion_mask.float().mean().item()
+        min_completion_length_eos = arg_completion_mask.float().min().item()
+        max_completion_length_eos = arg_completion_mask.float().max().item() 
+        self._metrics[mode]["mean_terminated_completion_length"].append(mean_completion_length_eos)
+        self._metrics[mode]["min_terminate_completion_length"].append(min_completion_length_eos)
+        self._metrics[mode]["max_terminate_completion_length"].append(max_completion_length_eos)
+        
         # Get the names of the reward functions
         reward_func_names = []
         for reward_func in self.reward_funcs:
