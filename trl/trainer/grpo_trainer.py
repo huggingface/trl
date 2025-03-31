@@ -338,9 +338,12 @@ class GRPOTrainer(Trainer):
         elif is_deepspeed_zero3_enabled():
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif is_peft_model(model):
-            # If PEFT is used, the reference model is not needed since the adapter can be disabled
-            # to revert to the initial model.
-            self.ref_model = None
+            if args.use_peft_as_reference:
+                # Using the full PEFT model as reference for GRPO tuning of pre-finetuned LoRA models (or quantized models).
+                self.ref_model = create_reference_model(model)
+            else:
+                # For PEFT models, if not explicitly requested, the reference model is not needed as the adapter can be disabled
+                self.ref_model = None
         else:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
