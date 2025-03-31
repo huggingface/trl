@@ -769,8 +769,7 @@ class GRPOTrainer(Trainer):
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:
-                if self.args.used_vllm_logprobs:
-                    # Wrap with torch.tensor and pad?
+                if self.args.use_vllm_logprobs:
                     old_per_token_logps = vllm_log_probs
                 else:
                     old_per_token_logps = self._get_per_token_logps(

@@ -81,6 +81,8 @@ class GRPOConfig(TrainingArguments):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept unused for
             training, as vLLM will require one for generation. vLLM must be installed (`pip install vllm`).
+        use_vllm_logprobs (`bool`, *optional*, defaults to `False`):
+            Whether to use vLLM's logprobs for the `"old_logprobs"` in the GRPO loss. Requires `use_vllm=True`.
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the vLLM server to connect to.
         vllm_server_port (`int`, *optional*, defaults to `8000`):
@@ -229,6 +231,12 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to use vLLM for generating completions. If set to `True`, ensure that a vLLM server is "
             "running. To run the server, install vLLM (`pip install vllm`) and run `trl vllm-serve`."
+        },
+    )
+    use_vllm_logprobs: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use vLLM's logprobs for the 'old_logprobs' in the GRPO loss. Requires use_vllm=True."
         },
     )
     vllm_server_host: str = field(
