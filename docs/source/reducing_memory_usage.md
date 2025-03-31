@@ -114,7 +114,7 @@ It's highly recommended to use padding-free batching with **Flash Attention 2**.
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention2"})
+training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
 ```
 
 </hfoption>
@@ -123,7 +123,7 @@ training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_imple
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention2"})
+training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
 ```
 
 </hfoption>
@@ -136,6 +136,15 @@ When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Onl
 If you encounter this issue, you can disable the gathering of model weights for generation by setting the following parameter:
 
 <hfoptions id="ds3_gather_for_generation">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., ds3_gather_for_generation=False)
+```
+
+</hfoption>
 <hfoption id="Online DPO">
 
 ```python
