@@ -347,10 +347,7 @@ def main(script_args: ScriptArguments):
         all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         log_probs = [list(output.logprobs) for outputs in all_outputs for output in outputs.outputs]
-        return {
-                "completion_ids": completion_ids,
-                "log_probs": log_probs
-            }
+        return {"completion_ids": completion_ids, "log_probs": log_probs}
 
     class InitCommunicatorRequest(BaseModel):
         host: str
