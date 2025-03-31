@@ -387,7 +387,7 @@ class GRPOConfig(TrainingArguments):
             "vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server configuration."
         },
     )
-    use_liger_grpo_loss: bool = field(
+    use_liger_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
     )

@@ -443,12 +443,8 @@ class GRPOTrainer(Trainer):
 
         if self.use_liger_loss:
             if not is_liger_kernel_available():
-                raise ImportError(
-                    "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
-                )
-            if is_peft_model(model):
-                raise ValueError("Liger loss is not supported with a PEFT model.")
-
+                raise ImportError("Liger is required to use `liger_grpo_loss`. Run `pip install liger-kernel`.")
+            self.use_liger_grpo_loss = args.use_liger_grpo_loss
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
@@ -1046,7 +1042,7 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        if self.use_liger_grpo_loss:
+        if self.use_liger_loss:
             hidden_states = self._get_hidden_states(model, input_ids, attention_mask, logits_to_keep)
             unwrapped_model = self.accelerator.unwrap_model(model)
             # compute loss and metrics using liger grpo loss
