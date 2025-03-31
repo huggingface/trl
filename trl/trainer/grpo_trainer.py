@@ -634,28 +634,38 @@ class GRPOTrainer(Trainer):
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
 
-        def post_order_fsdp_processing(module: nn.Module, prefix: str = ""):
-            """ requires use_orig_params=True """
-            for child_name, child_module in module.named_children():
-                if child_name == "_fsdp_wrapped_module":
-                    # Skip the FSDP internals
-                    continue
+        def post_order_fsdp_processing(module: nn.Module, prefix: str = "", visited=None):
+            """ memory-efficient module gather """
+            extra_names = ['_fsdp_wrapped_module.', '_checkpoint_wrapped_module.']
+            if visited is None:
+                visited = set()
 
+            for child_name, child_module in module.named_children():
                 if prefix == "":
                     child_prefix = child_name
                 else:
                     child_prefix = f"{prefix}.{child_name}"
 
                 # Recurse into the child
-                post_order_fsdp_processing(child_module, prefix=child_prefix)
+                post_order_fsdp_processing(child_module, prefix=child_prefix, visited=visited)
 
             if isinstance(module, FSDP):
                 with FSDP.summon_full_params(module, recurse=False, writeback=False):
-                    for param_name, param in module.named_parameters(recurse=False):
+                    for param_name, param in module.named_parameters():
                         if prefix == "":
                             full_name = param_name
                         else:
                             full_name = f"{prefix}.{param_name}"
+
+                        for extra in extra_names:
+                            full_name = full_name.replace(extra, '')
+
+                        if full_name in visited:
+                            # skip FSDP subtrees already traversed
+                            continue
+
+                        visited.add(full_name)
+
                         if self.accelerator.is_local_main_process:
                             self.vllm_client.update_named_param(full_name, param.data)
 
