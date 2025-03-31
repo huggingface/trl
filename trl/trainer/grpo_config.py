@@ -389,10 +389,9 @@ class GRPOConfig(TrainingArguments):
     )
     use_liger_grpo_loss: bool = field(
         default=False,
-        metadata={
-            "help": "Whether to use the Liger GRPO loss."
-        },
+        metadata={"help": "Whether to use the Liger GRPO loss."},
     )
+
     def __post_init__(self):
         super().__post_init__()
 
