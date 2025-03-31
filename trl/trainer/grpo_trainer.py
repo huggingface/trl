@@ -971,9 +971,8 @@ class GRPOTrainer(Trainer):
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
         # Compute the clip ratio
-        is_clipped = (
-            ((coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)) |
-            ((coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0))
+        is_clipped = ((coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)) | (
+            (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
         )
         clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
