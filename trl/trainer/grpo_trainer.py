@@ -40,7 +40,7 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
-from torch.distributed.fsdp import FullyShardedDataParallel
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -633,13 +633,31 @@ class GRPOTrainer(Trainer):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
-        gather_if_fsdp = lambda m: (
-            FullyShardedDataParallel.summon_full_params(m, recurse=False, writeback=False)
-        ) if self.is_fsdp_enabled else nullcontext
 
-        def strip_checkpoint_suffix(param_name: str) -> str:
-            # FSDP activation checkpointing modifies names
-            return param_name.replace('._checkpoint_wrapped_module', '')
+        def post_order_fsdp_processing(module: nn.Module, prefix: str = ""):
+            """ requires use_orig_params=True """
+            for child_name, child_module in module.named_children():
+                if child_name == "_fsdp_wrapped_module":
+                    # Skip the FSDP internals
+                    continue
+
+                if prefix == "":
+                    child_prefix = child_name
+                else:
+                    child_prefix = f"{prefix}.{child_name}"
+
+                # Recurse into the child
+                post_order_fsdp_processing(child_module, prefix=child_prefix)
+
+            if isinstance(module, FSDP):
+                with FSDP.summon_full_params(module, recurse=False, writeback=False):
+                    for param_name, param in module.named_parameters(recurse=False):
+                        if prefix == "":
+                            full_name = param_name
+                        else:
+                            full_name = f"{prefix}.{param_name}"
+                        if self.accelerator.is_local_main_process:
+                            self.vllm_client.update_named_param(full_name, param.data)
 
         if is_peft_model(self.model):
             # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
@@ -666,7 +684,9 @@ class GRPOTrainer(Trainer):
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather and update each parameter individually.
-            with gather_if_fsdp(self.model):
+            if self.is_fsdp_enabled:
+                post_order_fsdp_processing(self.model_wrapped)
+            else:
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
                         if self.accelerator.is_local_main_process:
