@@ -737,7 +737,7 @@ class GRPOTrainer(Trainer):
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             vllm_log_probs = [torch.tensor(logp, device=device) for logp in vllm_log_probs]
-            vllm_log_probs = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            vllm_log_probs = pad(vllm_log_probs, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
