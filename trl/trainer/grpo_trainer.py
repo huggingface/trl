@@ -880,6 +880,9 @@ class GRPOTrainer(Trainer):
         # identify sequences that terminated with EOS and log their lengths
         agg_terminated_with_eos = self.accelerator.gather_for_metrics(is_eos.any(dim=1))
         arg_completion_mask = arg_completion_mask[agg_terminated_with_eos]
+        if len(arg_completion_mask) == 0:
+            # edge case where no completed sequences are found
+            arg_completion_mask = torch.zeros(1, device=device)
         mean_completion_length_eos = arg_completion_mask.float().mean().item()
         min_completion_length_eos = arg_completion_mask.float().min().item()
         max_completion_length_eos = arg_completion_mask.float().max().item()
