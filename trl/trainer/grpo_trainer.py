@@ -665,6 +665,7 @@ class GRPOTrainer(Trainer):
             buffer_index = self._step % self.args.gradient_accumulation_steps
             buffered_inputs = self._buffered_inputs[buffer_index]
             if self.state.global_step % self.num_iterations == 0 or buffered_inputs is None:
+                # buffered_inputs=None can occur when resuming from a checkpoint
                 inputs = self._generate_and_score_completions(inputs)
                 self._buffered_inputs[buffer_index] = inputs
             else:
