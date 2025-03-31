@@ -677,7 +677,7 @@ class GRPOTrainer(Trainer):
                     name = name.replace("modules_to_save.default.", "")
 
                     if self.accelerator.is_local_main_process:
-                        self.vllm_client.update_named_param(strip_checkpoint_suffix(name), param.data)
+                        self.vllm_client.update_named_param(name, param.data)
 
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
@@ -690,7 +690,7 @@ class GRPOTrainer(Trainer):
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
                         if self.accelerator.is_local_main_process:
-                            self.vllm_client.update_named_param(strip_checkpoint_suffix(name), param.data)
+                            self.vllm_client.update_named_param(name, param.data)
 
         # Reset cache on main process
         if self.accelerator.is_local_main_process:
