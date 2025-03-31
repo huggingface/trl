@@ -343,10 +343,12 @@ def main(script_args: ScriptArguments):
             min_p=request.min_p,
             max_tokens=request.max_tokens,
             guided_decoding=guided_decoding,
+            logprobs=1,
         )
         all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        log_probs = [list(output.logprobs) for outputs in all_outputs for output in outputs.outputs]
+        print(all_outputs)
+        log_probs = [[list(p.values())[0].logprob for p in output.logprobs] for outputs in all_outputs for output in outputs.outputs]
         return {"completion_ids": completion_ids, "log_probs": log_probs}
 
     class InitCommunicatorRequest(BaseModel):
