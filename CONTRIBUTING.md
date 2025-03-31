@@ -171,8 +171,7 @@ Follow these steps to start contributing:
    $ pytest tests/<TEST_TO_RUN>.py
    ```
    
-   > For the following commands leveraging the `make` utility, we recommend using the WSL system when running on
-   > Windows. More information [here](https://docs.microsoft.com/en-us/windows/wsl/about).
+   > For the following commands leveraging the `make` utility.
 
    You can also run the full suite with the following command.
 
