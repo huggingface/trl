@@ -33,6 +33,7 @@ _rich_available = _is_package_available("rich")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
 _vllm_available = _is_package_available("vllm")
+_joblib_available = _is_package_available("joblib")
 
 
 def is_deepspeed_available() -> bool:
@@ -77,6 +78,10 @@ def is_uvicorn_available() -> bool:
 
 def is_vllm_available() -> bool:
     return _vllm_available
+
+
+def is_joblib_available() -> bool:
+    return _joblib_available
 
 
 class _LazyModule(ModuleType):
