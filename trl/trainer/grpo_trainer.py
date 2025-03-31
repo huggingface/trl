@@ -40,6 +40,7 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
+from torch.distributed.fsdp import FullyShardedDataParallel
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -55,8 +56,6 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
 )
-
-from accelerate.utils import DistributedType, get_cpu_distributed_information
 
 if is_deepspeed_available():
     import deepspeed
@@ -524,6 +523,15 @@ class GRPOTrainer(Trainer):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
+        # compute the local world size
+        if self.accelerator.is_local_main_process:
+            one = [1]
+        else:
+            one = []
+        ones = gather_object(one)
+        self.num_local_processes = self.accelerator.num_processes // sum(ones)
+
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -625,11 +633,18 @@ class GRPOTrainer(Trainer):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
+        gather_if_fsdp = lambda m: (
+            FullyShardedDataParallel.summon_full_params(m, recurse=False, writeback=False)
+        ) if self.is_fsdp_enabled else nullcontext
+
+        def strip_checkpoint_suffix(param_name: str) -> str:
+            # FSDP activation checkpointing modifies names
+            return param_name.replace('._checkpoint_wrapped_module', '')
 
         if is_peft_model(self.model):
             # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
             # adapters in a sharded manner is not supported.
-            with gather_if_zero3(list(self.model.parameters())):
+            with gather_if_zero3(list(self.model.parameters())), gather_if_fsdp(self.model):
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
@@ -644,17 +659,18 @@ class GRPOTrainer(Trainer):
                     name = name.replace("modules_to_save.default.", "")
 
                     if self.accelerator.is_local_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
+                        self.vllm_client.update_named_param(strip_checkpoint_suffix(name), param.data)
 
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather and update each parameter individually.
-            for name, param in self.model.named_parameters():
-                with gather_if_zero3([param]):
-                    if self.accelerator.is_local_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
+            with gather_if_fsdp(self.model):
+                for name, param in self.model.named_parameters():
+                    with gather_if_zero3([param]):
+                        if self.accelerator.is_local_main_process:
+                            self.vllm_client.update_named_param(strip_checkpoint_suffix(name), param.data)
 
         # Reset cache on main process
         if self.accelerator.is_local_main_process:
@@ -702,40 +718,21 @@ class GRPOTrainer(Trainer):
             # main process
             all_prompts_text = gather_object(prompts_text)
 
-            state = self.accelerator.state
-            if state.distributed_type != DistributedType.NO:
-                num_local_processes = get_cpu_distributed_information().local_world_size
-            else:
-                num_local_processes = state.num_processes
-
             if self.accelerator.is_local_main_process:
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
-                    (self.accelerator.process_index + num_local_processes) * len(prompts),
+                    (self.accelerator.process_index + self.num_local_processes) * len(prompts),
                 )
                 all_prompts_text = all_prompts_text[process_slice]
 
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually.
-
-                def group_prompts(prompts, n):
-                    prompt_counts = defaultdict(int)
-                    grouped_prompts = []
-
-                    for prompt in prompts:
-                        count = prompt_counts[prompt]
-                        if count % n == 0:
-                            grouped_prompts.append(prompt)
-                        prompt_counts[prompt] += 1
-
-                    return grouped_prompts
-
-                grouped_prompts = group_prompts(all_prompts_text, self.num_generations)
+                # TODO: not currently implemented with local main proceses
 
                 with profiling_context(self, "vLLM.generate"):
                     completion_ids = self.vllm_client.generate(
-                        grouped_prompts,
+                        all_prompts_text,
                         repetition_penalty=self.repetition_penalty,
                         temperature=self.temperature,
                         top_p=self.top_p,
@@ -746,8 +743,8 @@ class GRPOTrainer(Trainer):
                     )
             else:
                 completion_ids = []
-            # Broadcast the completions from the main process to all processes, ensuring each process receives its
-            # corresponding slice.
+
+            # Ensure each process receives its corresponding slice.
             completion_ids = gather_object(completion_ids)
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
