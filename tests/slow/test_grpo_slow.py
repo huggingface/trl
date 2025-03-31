@@ -48,7 +48,7 @@ class GRPOTrainerSlowTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 per_device_train_batch_size=3,
                 num_generations=3,
-                use_liger_grpo_loss=True,
+                use_liger_loss=True,
                 max_completion_length=self.max_length,
                 max_steps=4,
                 report_to="none",

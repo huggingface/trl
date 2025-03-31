@@ -407,7 +407,7 @@ class GRPOTrainer(Trainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
-        self.use_liger_grpo_loss = args.use_liger_grpo_loss
+        self.use_liger_loss = args.use_liger_loss
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
@@ -427,10 +427,10 @@ class GRPOTrainer(Trainer):
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
-        if self.use_liger_grpo_loss:
+        if self.use_liger_loss:
             if not is_liger_kernel_available():
-                raise ImportError("Liger is required to use `liger_grpo_loss`. Run `pip install liger-kernel`.")
-            self.use_liger_grpo_loss = args.use_liger_grpo_loss
+                raise ImportError("Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`.")
+            
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
@@ -966,7 +966,7 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        if self.use_liger_grpo_loss:
+        if self.use_liger_loss:
             hidden_states = self._get_hidden_states(model, input_ids, attention_mask, logits_to_keep)
             unwrapped_model = self.accelerator.unwrap_model(model)
             # compute loss and metrics using liger grpo loss

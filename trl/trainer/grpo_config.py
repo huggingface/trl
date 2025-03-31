@@ -128,7 +128,7 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
-        use_liger_grpo_loss (`bool`, *optional*, defaults to `False`):
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
 
         > Parameters that control the logging
@@ -380,7 +380,7 @@ class GRPOConfig(TrainingArguments):
             "vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server configuration."
         },
     )
-    use_liger_grpo_loss: bool = field(
+    use_liger_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
     )
