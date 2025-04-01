@@ -214,9 +214,9 @@ class SFTTrainer(Trainer):
         formatting_func: Optional[Union[Callable[[dict], str], Callable[[dict], list[str]]]] = None,
     ):
         # Args
+        model_id = model if isinstance(model, str) else model.config._name_or_path
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
-            model_name = model_name.split("/")[-1]
+            model_name = model_id.split("/")[-1]
             args = SFTConfig(f"{model_name}-SFT")
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
@@ -226,7 +226,7 @@ class SFTTrainer(Trainer):
 
         # Handle the tokenizer
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
+            processing_class = AutoTokenizer.from_pretrained(model_id)
 
         # Data collator
         if args.padding_free:
