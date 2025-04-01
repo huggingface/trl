@@ -432,6 +432,8 @@ class GRPOTrainer(Trainer):
                 raise ImportError(
                     "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
                 )
+            if is_peft_model(model):
+                raise ValueError("Liger loss is not supported with a PEFT model.")
 
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
