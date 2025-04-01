@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import atexit
 import logging
 import time
 from typing import Optional
@@ -92,8 +91,8 @@ class VLLMClient:
         self.server_port = server_port
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
-        self.init_communicator()
-        atexit.register(self.close_communicator)  # when the client object is deleted, close the weight update group
+        # self.init_communicator()
+        # atexit.register(self.close_communicator)  # when the client object is deleted, close the weight update group
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
@@ -140,7 +139,7 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
-    ) -> list[list[str]]:
+    ) -> list[list[int]]:
         """
         Generates model completions for the provided prompts.
 
