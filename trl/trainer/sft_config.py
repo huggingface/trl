@@ -47,6 +47,8 @@ class SFTConfig(TrainingArguments):
             `skip_prepare_dataset`.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        pad_token_id (`int` or `None`, *optional*, defaults to `None`):
+            Token ID used for padding. If `None`, the model's default padding token ID is used.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
@@ -91,6 +93,10 @@ class SFTConfig(TrainingArguments):
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    pad_token_id: Optional[int] = field(
+        default=None,
+        metadata={"help": "Token ID used for padding. If `None`, the model's default padding token ID is used."},
     )
     max_length: Optional[int] = field(
         default=1024,

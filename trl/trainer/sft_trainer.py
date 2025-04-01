@@ -240,8 +240,6 @@ class SFTTrainer(Trainer):
         # Handle the tokenizer
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
-            if processing_class.pad_token is None:
-                processing_class.pad_token = processing_class.eos_token  # required for padding when collating data
 
         # Dataset
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
@@ -288,7 +286,14 @@ class SFTTrainer(Trainer):
             data_collator = DataCollatorWithFlattening()
 
         if data_collator is None:
-            data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
+            # Get the pad token ID
+            pad_token_id = args.pad_token_id or processing_class.pad_token_id
+            if pad_token_id is None:
+                raise ValueError(
+                    "No `pad_token_id` was found. Either set `pad_token_id` in `SFTConfig`, or ensure that the "
+                    "tokenizer has a defined `pad_token`."
+                )
+            data_collator = DataCollatorForLanguageModeling(pad_token_id)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
