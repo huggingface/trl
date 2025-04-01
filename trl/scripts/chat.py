@@ -17,7 +17,7 @@ import argparse
 import copy
 import json
 import os
-import platform
+import pwd
 import re
 import time
 from dataclasses import dataclass, field
@@ -34,9 +34,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStream
 from trl import TrlParser, init_zero_verbose
 from trl.trainer.utils import get_quantization_config
 
-
-if platform.system() != "Windows":
-    import pwd
 
 init_zero_verbose()
 
@@ -276,10 +273,7 @@ class RichInterface:
 
 
 def get_username():
-    if platform.system() == "Windows":
-        return os.getlogin()
-    else:
-        return pwd.getpwuid(os.getuid()).pw_name
+    return pwd.getpwuid(os.getuid()).pw_name
 
 
 def create_default_filename(model_name):
