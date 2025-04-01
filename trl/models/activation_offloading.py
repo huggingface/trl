@@ -135,10 +135,12 @@ class OffloadActivations(saved_tensors_hooks):
             num_bytes = get_num_bytes_tensor(activation)
             tensor_id = get_tensor_id()
 
-            # only offload hefty bois if they're activations (our heuristic for that is to
-            # check if they're not params or buffers)!
-            if num_bytes >= self.min_tensor_size_bytes and (
-                not isinstance(activation, torch.nn.Parameter) and not isinstance(activation, torch.nn.Buffer)
+            # only offload hefty bois if they're activations on CUDA (our heuristic
+            # for that is to check if they're not params or buffers)!
+            if (
+                activation.is_cuda
+                and num_bytes >= self.min_tensor_size_bytes
+                and (not isinstance(activation, torch.nn.Parameter) and not isinstance(activation, torch.nn.Buffer))
             ):
                 if self.use_streams:
                     # First, sync back and dereference previously offloaded tensors
