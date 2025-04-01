@@ -174,8 +174,12 @@ class RolloutEngine():
         """ print number of working tasks every second
         """
         while True:
-            print(f"Async working tasks counter: {len(self.working_tasks.keys())}")
-            await asyncio.sleep(1)
+            total_tasks = len(self.working_tasks.keys())
+            finished_tasks = len([task for task in self.working_tasks.values() if task.done()])
+            processing_tasks = total_tasks - finished_tasks
+            print(f"Tasks Counter: {total_tasks} [ processing: {processing_tasks} | finished/cached: {finished_tasks} ]")
+            await asyncio.sleep(3)
+
 
     async def get_output(self, results_generator):
         """ get async output from async generator
