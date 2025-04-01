@@ -877,7 +877,7 @@ class GRPOTrainer(Trainer):
         # identify sequences that terminated with EOS and log their lengths
         agg_terminated_with_eos = self.accelerator.gather_for_metrics(is_eos.any(dim=1))
         term_completion_mask = agg_completion_mask[agg_terminated_with_eos]
-        clipped_completions_ratio = 1 - (len(term_completion_mask) / len(agg_completion_mask))
+        clipped_completions_ratio = 1 - len(term_completion_mask) / len(agg_completion_mask)
         self._metrics[mode]["clipped_completions_ratio"].append(clipped_completions_ratio)
         if len(term_completion_mask) == 0:
             # edge case where no completed sequences are found
