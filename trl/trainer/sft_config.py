@@ -47,9 +47,9 @@ class SFTConfig(TrainingArguments):
             `skip_prepare_dataset`.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
-        pad_token_id (`int` or `None`, *optional*, defaults to `None`):
-            Token ID used for padding. If `None`, it defaults to `processing_class.pad_token_id`, or if that is also
-            `None`, it falls back to `processing_class.eos_token_id`.
+        pad_token (`int` or `None`, *optional*, defaults to `None`):
+            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
+            it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
@@ -95,11 +95,11 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    pad_token_id: Optional[int] = field(
+    pad_token: Optional[str] = field(
         default=None,
         metadata={
-            "help": "Token ID used for padding. If `None`, it defaults to `processing_class.pad_token_id`, or if that "
-            "is also `None`, it falls back to `processing_class.eos_token_id`."
+            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
+            "is also `None`, it falls back to `processing_class.eos_token`."
         },
     )
     max_length: Optional[int] = field(
