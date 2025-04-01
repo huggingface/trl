@@ -19,7 +19,7 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
-from transformers.testing_utils import require_peft
+from transformers.testing_utils import require_liger_kernel, require_peft
 
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
@@ -378,6 +378,38 @@ class KTOTrainerTester(unittest.TestCase):
                 AutoModelForCausalLM.from_pretrained(tmp_dir)
             except OSError:
                 self.fail("Loading the saved peft adapter failed")
+
+    @require_liger_kernel
+    def test_kto_trainer_with_liger(self):
+        """Test KTO trainer with Liger loss enabled."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = KTOConfig(
+                output_dir=tmp_dir,
+                report_to="none",
+                use_liger_loss=True,  # Enable Liger loss
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+
+            trainer = KTOTrainer(
+                model=self.model,
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # check the params have changed - ignore 0 biases
+                if param.sum() != 0:
+                    self.assertFalse(torch.equal(param, new_param))
 
     def test_compute_metrics(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")

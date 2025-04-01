@@ -663,11 +663,14 @@ class GRPOTrainer(Trainer):
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
-            if self.state.global_step % self.num_iterations == 0:
+            buffer_index = self._step % self.args.gradient_accumulation_steps
+            buffered_inputs = self._buffered_inputs[buffer_index]
+            if self.state.global_step % self.num_iterations == 0 or buffered_inputs is None:
+                # buffered_inputs=None can occur when resuming from a checkpoint
                 inputs = self._generate_and_score_completions(inputs)
-                self._buffered_inputs[self._step % self.args.gradient_accumulation_steps] = inputs
+                self._buffered_inputs[buffer_index] = inputs
             else:
-                inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+                inputs = buffered_inputs
             self._step += 1
         else:
             # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
@@ -865,8 +868,23 @@ class GRPOTrainer(Trainer):
             self._total_train_tokens += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
-        self._metrics[mode]["completion_length"].append(completion_length)
+        # log completion lengths, mean, min, max
+        agg_completion_mask = self.accelerator.gather_for_metrics(completion_mask.sum(1))
+        self._metrics[mode]["mean_completion_length"].append(agg_completion_mask.float().mean().item())
+        self._metrics[mode]["min_completion_length"].append(agg_completion_mask.float().min().item())
+        self._metrics[mode]["max_completion_length"].append(agg_completion_mask.float().max().item())
+
+        # identify sequences that terminated with EOS and log their lengths
+        agg_terminated_with_eos = self.accelerator.gather_for_metrics(is_eos.any(dim=1))
+        term_completion_mask = agg_completion_mask[agg_terminated_with_eos]
+        clipped_completions_ratio = 1 - len(term_completion_mask) / len(agg_completion_mask)
+        self._metrics[mode]["clipped_completions_ratio"].append(clipped_completions_ratio)
+        if len(term_completion_mask) == 0:
+            # edge case where no completed sequences are found
+            term_completion_mask = torch.zeros(1, device=device)
+        self._metrics[mode]["mean_terminated_completion_length"].append(term_completion_mask.float().mean().item())
+        self._metrics[mode]["min_terminated_completion_length"].append(term_completion_mask.float().min().item())
+        self._metrics[mode]["max_terminated_completion_length"].append(term_completion_mask.float().max().item())
 
         # Get the names of the reward functions
         reward_func_names = []
@@ -913,6 +931,8 @@ class GRPOTrainer(Trainer):
                         "reward": rewards.tolist(),
                     }
                     df = pd.DataFrame(table)
+                    if self.args.wandb_log_unique_prompts:
+                        df = df.drop_duplicates(subset=["prompt"])
                     wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
@@ -967,7 +987,10 @@ class GRPOTrainer(Trainer):
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
-        is_clipped = (coef_1 < (1 - self.epsilon_low)) | (coef_1 > (1 + self.epsilon_high))
+        # Compute the clip ratio
+        is_clipped = ((coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)) | (
+            (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+        )
         clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
