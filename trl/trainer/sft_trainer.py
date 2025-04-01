@@ -224,40 +224,9 @@ class SFTTrainer(Trainer):
             dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
-        # Model
-        if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
-                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
-                "The `model_init_kwargs` will be ignored."
-            )
-        if isinstance(model, str):
-            model = self._create_model_from_path(model, args)
-
-        # PEFT configuration and model wrapping
-        if peft_config is not None:
-            model = self._prepare_peft_model(model, peft_config, args)
-
         # Handle the tokenizer
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
-
-        # Dataset
-        preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
-        if preprocess_dataset:
-            train_dataset = self._prepare_dataset(
-                train_dataset, processing_class, args, args.packing, formatting_func, "train"
-            )
-            if eval_dataset is not None:
-                packing = args.packing if args.eval_packing is None else args.eval_packing
-                if isinstance(eval_dataset, dict):
-                    eval_dataset = {
-                        key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
-                        for key, dataset in eval_dataset.items()
-                    }
-                else:
-                    eval_dataset = self._prepare_dataset(
-                        eval_dataset, processing_class, args, packing, formatting_func, "eval"
-                    )
 
         # Data collator
         if args.padding_free:
@@ -296,8 +265,38 @@ class SFTTrainer(Trainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
-
             data_collator = DataCollatorForLanguageModeling(pad_token_id)
+
+        # Model
+        if args.model_init_kwargs is not None and not isinstance(model, str):
+            warnings.warn(
+                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
+                "The `model_init_kwargs` will be ignored."
+            )
+        if isinstance(model, str):
+            model = self._create_model_from_path(model, args)
+
+        # PEFT configuration and model wrapping
+        if peft_config is not None:
+            model = self._prepare_peft_model(model, peft_config, args)
+
+        # Dataset
+        preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
+        if preprocess_dataset:
+            train_dataset = self._prepare_dataset(
+                train_dataset, processing_class, args, args.packing, formatting_func, "train"
+            )
+            if eval_dataset is not None:
+                packing = args.packing if args.eval_packing is None else args.eval_packing
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
+                        for key, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._prepare_dataset(
+                        eval_dataset, processing_class, args, packing, formatting_func, "eval"
+                    )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
