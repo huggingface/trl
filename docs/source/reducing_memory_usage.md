@@ -114,7 +114,7 @@ It's highly recommended to use padding-free batching with **Flash Attention 2**.
 ```python
 from trl import DPOConfig
 
-training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention2"})
+training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
 ```
 
 </hfoption>
@@ -123,7 +123,7 @@ training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_imple
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention2"})
+training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
 ```
 
 </hfoption>
