@@ -69,7 +69,7 @@ To create the package for PyPI.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.16.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.17.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "accelerate>=0.34.0",
@@ -78,21 +78,17 @@ REQUIRED_PKGS = [
     "transformers>=4.46.0",
 ]
 EXTRAS = {
-    # Windows support is partially supported with DeepSpeed https://github.com/microsoft/DeepSpeed/tree/master#windows
-    "deepspeed": ["deepspeed>=0.14.4; sys_platform != 'win32'"],
+    "deepspeed": ["deepspeed>=0.14.4"],
     "diffusers": ["diffusers>=0.18.0"],
     "judges": ["openai>=1.23.2", "llm-blender>=0.0.2"],
-    # liger-kernel depends on triton, which is only available on Linux https://github.com/triton-lang/triton#compatibility
-    # can be set to >=0.5.3 when https://github.com/linkedin/Liger-Kernel/issues/586 is fixed
-    "liger": ["liger-kernel==0.5.3; sys_platform != 'win32'"],
+    "liger": ["liger-kernel>=0.5.5"],
     "mergekit": ["mergekit>=0.0.5.1"],
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],
     "scikit": ["scikit-learn"],
+    "bco": ["scikit-learn", "joblib"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
-    # vllm is not available on Windows
-    # vllm 0.7.3 causes hanging while gathering. temporary pinning the version until the issue is resolved
-    "vllm": ["vllm==0.7.2; sys_platform != 'win32'"],
+    "vllm": ["vllm>=0.7.0", "fastapi", "pydantic", "requests", "uvicorn"],
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
