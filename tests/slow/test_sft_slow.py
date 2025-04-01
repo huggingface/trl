@@ -76,7 +76,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 max_steps=10,
                 packing=packing,
                 max_length=self.max_length,
-                pad_token_id=123,
             )
 
             trainer = SFTTrainer(
@@ -407,7 +406,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 packing=packing,
                 max_length=self.max_length,
                 use_liger_kernel=True,
-                pad_token_id=123,
             )
 
             trainer = SFTTrainer(

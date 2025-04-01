@@ -286,13 +286,9 @@ class SFTTrainer(Trainer):
             data_collator = DataCollatorWithFlattening()
 
         if data_collator is None:
-            # Get the pad token ID
-            pad_token_id = args.pad_token_id or processing_class.pad_token_id
-            if pad_token_id is None:
-                raise ValueError(
-                    "No `pad_token_id` was found. Either set `pad_token_id` in `SFTConfig`, or ensure that the "
-                    "tokenizer has a defined `pad_token`."
-                )
+            # Get the pad token ID: if not provided, use the one from the processing class or the eos token ID
+            # if the processing class does not have a pad token ID.
+            pad_token_id = args.pad_token_id or processing_class.pad_token_id or processing_class.eos_token_id
             data_collator = DataCollatorForLanguageModeling(pad_token_id)
 
         # Initialize the metrics
