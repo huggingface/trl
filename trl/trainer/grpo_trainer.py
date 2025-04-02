@@ -739,12 +739,45 @@ class GRPOTrainer(Trainer):
                 
         return outputs
 
+    @profiling_decorator
+    def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
+        """Prepare inputs before passing them to the model."""
+        # Handle the case where inputs might be a list (in data parallel mode) instead of a dictionary
+        if isinstance(inputs, list):
+            # Convert list items into the format expected by _generate_and_score_completions
+            return self._generate_and_score_completions(inputs)
+            
+        # Original _prepare_inputs implementation
+        mode = "eval" if self.control.should_evaluate else "train"
+        if mode == "train":
+            buffer_index = self._step % self.args.gradient_accumulation_steps
+            buffered_inputs = self._buffered_inputs[buffer_index]
+            if self.state.global_step % self.num_iterations == 0 or buffered_inputs is None:
+                # buffered_inputs=None can occur when resuming from a checkpoint
+                inputs = self._generate_and_score_completions(inputs)
+                self._buffered_inputs[buffer_index] = inputs
+            else:
+                inputs = buffered_inputs
+            self._step += 1
+        else:
+            # In evaluation, we don't reuse completions across multiple updates
+            inputs = self._generate_and_score_completions(inputs)
+            
+        return inputs
+        
     def _generate_and_score_completions(
-        self, inputs: dict[str, Union[torch.Tensor, Any]]
+        self, inputs: Union[dict[str, Any], list]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
-        prompts = [x["prompt"] for x in inputs]
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+        
+        # Handle case where inputs is a list (from data parallel processing)
+        if isinstance(inputs, list):
+            prompts = [x["prompt"] for x in inputs]
+            prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+        else:
+            prompts = [x["prompt"] for x in inputs]
+            prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+            
         prompt_inputs = self.processing_class(
             text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
         )
