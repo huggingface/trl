@@ -1046,7 +1046,7 @@ class GRPOTrainer(Trainer):
         unwrapped_model = self.accelerator.unwrap_model(model)
         # compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
-            _input=hidden_states,
+            _input=last_hidden_state,
             lin_weight=unwrapped_model.lm_head.weight,
             selected_token_ids=completion_ids,
             attention_mask=completion_mask,
