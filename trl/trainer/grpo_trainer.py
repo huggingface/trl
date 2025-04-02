@@ -473,6 +473,9 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
+            # Initialize vllm_client to None for all processes
+            self.vllm_client = None
+            
             if self.accelerator.is_main_process:
                 self.vllm_client = VLLMClient(
                     args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
