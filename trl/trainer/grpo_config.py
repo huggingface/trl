@@ -163,6 +163,12 @@ class GRPOConfig(TrainingArguments):
             "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left."
         },
     )
+    min_prompt_length: Optional[int] = field(
+        default=0,
+        metadata={
+            "help": "Minimum length of the prompt. If the prompt is shorter than this value, it will be truncated left."
+        },
+    )
     num_generations: Optional[int] = field(
         default=8,
         metadata={
@@ -210,12 +216,77 @@ class GRPOConfig(TrainingArguments):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    repetition_penalty: float = field(
-        default=1.0,
+    repetition_penalty: int = field(
+        default=1,
         metadata={
-            "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
-            "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
-            "to repeat tokens."
+            "help": "List of text prompts for which the model will generate completions."
+        },
+    )
+    presence_penalty: float = field(
+        default=0.0,
+        metadata={
+            "help": "Float that penalizes new tokens based on whether they "
+            "appear in the generated text so far. Values > 0 encourage the model "
+            "to use new tokens, while values < 0 encourage the model to repeat "
+            "tokens."
+        },
+    )
+    frequency_penalty: float = field(
+        default=0.0,
+        metadata={
+            "help": "Float that penalizes new tokens based on their "
+            "frequency in the generated text so far. Values > 0 encourage the "
+            "model to use new tokens, while values < 0 encourage the model to "
+            "repeat tokens."
+        },
+    )
+    seed: Optional[int] = field(
+        default=0.0,
+        metadata={
+            "help": "Random seed to use for the generation."
+        },
+    )
+    stop: list[str] = field(
+        default=[],
+        metadata={
+            "help": "list of strings that stop the generation when they are generated. "
+            "The returned output will not contain the stop strings."
+        },
+    )
+    stop_token_ids: list[int] = field(
+        default=[],
+        metadata={
+            "help": "list of tokens that stop the generation when they are "
+            "generated. The returned output will contain the stop tokens unless "
+            "the stop tokens are special tokens."
+        },
+    )
+    bad_words: list[str] = field(
+        default=[],
+        metadata={
+            "help": "list of words that are not allowed to be generated. "
+            "More precisely, only the last token of a corresponding "
+            "token sequence is not allowed when the next generated token"
+        },
+    )
+    ignore_eos: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to ignore the EOS token and continue generating "
+            "tokens after the EOS token is generated."
+        },
+    )
+    skip_special_tokens: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to skip special tokens in the output."
+        },
+    )
+    include_stop_str_in_output: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to include the stop strings in "
+            "output text. Defaults to False."
         },
     )
     cache_implementation: Optional[str] = field(
