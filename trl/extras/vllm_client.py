@@ -20,17 +20,13 @@ from typing import Optional
 import torch
 from torch import nn
 
+from ..distributed_util import init_process_group
 from ..import_utils import is_requests_available, is_vllm_available
 
 
 if is_requests_available():
     import requests
     from requests import ConnectionError
-
-
-if is_vllm_available():
-    from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
-    from vllm.distributed.utils import StatelessProcessGroup
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +49,8 @@ class VLLMClient:
         connection_timeout (`float`, *optional*, defaults to `0.0`):
             Total timeout duration in seconds to wait for the server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
+        backend (`str`, *optional*, default to `nccl`):
+            The backend to use for collective communication.
 
     Examples:
         Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
@@ -80,7 +78,7 @@ class VLLMClient:
     """
 
     def __init__(
-        self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0
+        self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0, backend: str = "nccl"
     ):
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
@@ -91,9 +89,10 @@ class VLLMClient:
         self.host = host
         self.server_port = server_port
         self.group_port = group_port
+        self.backend = backend
         self.check_server(connection_timeout)  # check server and fail after timeout
-        self.init_communicator()
-        atexit.register(self.close_communicator)  # when the client object is deleted, close the weight update group
+        self.init_weight_update_group()
+        atexit.register(self.close_weight_update_group)  # when the client object is deleted, close the weight update group
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
@@ -188,7 +187,7 @@ class VLLMClient:
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def init_communicator(self):
+    def init_weight_update_group(self):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
         """
@@ -204,15 +203,20 @@ class VLLMClient:
         self.rank = tensor_parallel_size  # The client's rank is the last process
 
         # Initialize weight update group
-        url = f"http://{self.host}:{self.server_port}/init_communicator/"
+        url = f"http://{self.host}:{self.server_port}/init_weight_update_group/"
         # In the server side, the host is set to 0.0.0.0
-        response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "world_size": world_size})
+        response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "world_size": world_size, "backend": self.backend})
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         # Set up the communication group for weight broadcasting
-        pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device="cuda:0")
+        self.weight_update_group = init_process_group(
+            backend=self.backend,
+            init_method=f"tcp://{self.host}:{self.group_port}",
+            world_size=world_size,
+            rank=self.rank,
+            group_name="weight_update_group",
+        )
 
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
@@ -231,8 +235,7 @@ class VLLMClient:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         # Broadcast the weights to the other processes
-        self.pynccl_comm.broadcast(weights, src=self.rank, stream=torch.cuda.current_stream())
-        self.pynccl_comm.group.barrier()
+        torch.distributed.broadcast(weights, src=self.rank, group=self.weight_update_group)
 
     def update_model_params(self, model: nn.Module):
         """
@@ -255,11 +258,11 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def close_communicator(self):
+    def close_weight_update_group(self):
         """
-        Closes the weight update group and cleans up the communication group.
+        Closes the weight update group and cleans up the weight update group.
         """
-        url = f"http://{self.host}:{self.server_port}/close_communicator/"
+        url = f"http://{self.host}:{self.server_port}/close_weight_update_group/"
         response = self.session.post(url)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
