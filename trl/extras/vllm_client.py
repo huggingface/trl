@@ -139,7 +139,17 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
+        min_tokens: int = 0,
         guided_decoding_regex: Optional[str] = None,
+        presence_penalty: int = 0.0,
+        frequency_penalty: int = 0.0,
+        seed: Optional[int] = None,
+        stop: list[str] = [],
+        stop_token_ids: list[int] = [],
+        bad_words: list[str] = [],
+        ignore_eos: bool = False,
+        skip_special_tokens: bool = True,
+        include_stop_str_in_output: bool = False,
     ) -> list[list[str]]:
         """
         Generates model completions for the provided prompts.
@@ -161,8 +171,42 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
+            min_tokens (`int`, *optional*, defaults to `0`):
+                Minimum number of tokens to generate for each prompt.
             guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
                 Regular expression to guide the decoding process.
+            presence_penalty (`float`, *optional*, defaults to `0.0`):
+                Float that penalizes new tokens based on whether they
+                appear in the generated text so far. Values > 0 encourage the model
+                to use new tokens, while values < 0 encourage the model to repeat
+                tokens.
+            frequency_penalty (`float`, *optional*, defaults to `0.0`):
+                Float that penalizes new tokens based on their
+                frequency in the generated text so far. Values > 0 encourage the
+                model to use new tokens, while values < 0 encourage the model to
+                repeat tokens.
+            seed (`int` or None, *optional*, defaults to `None`): 
+                Random seed to use for the generation.
+            stop (`list[str]`,  *optional*, defaults to `[]`):
+                list of strings that stop the generation when they are generated.
+                The returned output will not contain the stop strings.
+            stop_token_ids (`list[int]`,  *optional*, defaults to `[]`):
+                list of tokens that stop the generation when they are
+                generated. The returned output will contain the stop tokens unless
+                the stop tokens are special tokens.
+            bad_words (`list[str]`,  *optional*, defaults to `[]`):
+                list of words that are not allowed to be generated.
+                More precisely, only the last token of a corresponding
+                token sequence is not allowed when the next generated token
+                can complete the sequence.
+            ignore_eos (`bool`,  *optional*, defaults to `False`): 
+                Whether to ignore the EOS token and continue generating
+                tokens after the EOS token is generated.
+            skip_special_tokens (`bool`,  *optional*, defaults to `True`): 
+                Whether to skip special tokens in the output.
+            include_stop_str_in_output (`bool`,  *optional*, defaults to `False`):
+                Whether to include the stop strings in
+                output text. Defaults to False.
 
         Returns:
             `list[list[int]]`:
@@ -180,7 +224,18 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
+                "min_tokens": min_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
+                "presence_penalty": presence_penalty,
+                "frequency_penalty": frequency_penalty,
+                "seed": seed,
+                "stop": stop,
+                "stop_token_ids": stop_token_ids,
+                "bad_words": bad_words,
+                "ignore_eos": ignore_eos,
+                "skip_special_tokens": skip_special_tokens,
+                "include_stop_str_in_output": include_stop_str_in_output,
+                
             },
         )
         if response.status_code == 200:
