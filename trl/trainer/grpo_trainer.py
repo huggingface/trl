@@ -398,12 +398,22 @@ class GRPOTrainer(Trainer):
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
+        self.min_completion_length = args.min_completion_length
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.top_k = args.top_k
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
+        self.presence_penalty = args.presence_penalty 
+        self.frequency_penalty = args.frequency_penalty
+        self.seed = args.seed
+        self.stop = args.stop
+        self.stop_token_ids = args.stop_token_ids
+        self.bad_words = args.bad_words
+        self.ignore_eos = args.ignore_eos
+        self.skip_special_tokens = args.skip_special_tokens
+        self.include_stop_str_in_output = args.include_stop_str_in_output
         self.use_vllm = args.use_vllm
 
         # Multi-step
@@ -712,12 +722,22 @@ class GRPOTrainer(Trainer):
                         prompts=ordered_set_of_prompts,
                         n=self.num_generations,
                         repetition_penalty=self.repetition_penalty,
+                        presence_penalty=self.presence_penalty,
+                        frequency_penalty=self.frequency_penalty,
                         temperature=self.temperature,
                         top_p=self.top_p,
                         top_k=-1 if self.top_k is None else self.top_k,
                         min_p=0.0 if self.min_p is None else self.min_p,
                         max_tokens=self.max_completion_length,
+                        min_tokens=self.min_completion_length,
                         guided_decoding_regex=self.guided_decoding_regex,
+                        seed=self.seed,
+                        stop=self.stop,
+                        stop_token_ids=self.stop_token_ids,
+                        bad_words=self.bad_words,
+                        ignore_eos=self.ignore_eos,
+                        skip_special_tokens=self.skip_special_tokens,
+                        include_stop_str_in_output=self.include_stop_str_in_output,
                     )
             else:
                 completion_ids = [None] * len(all_prompts_text)
