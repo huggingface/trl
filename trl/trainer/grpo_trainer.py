@@ -622,15 +622,14 @@ class GRPOTrainer(Trainer):
         return model
 
     @profiling_decorator
-    def _get_hidden_states(self, model, input_ids, attention_mask, logits_to_keep=None):
-        # need to unwrap the model to get the hidden states
-        # intended to work with DP, DDP, FSDP
+    def _get_last_hidden_state(self, model, input_ids, attention_mask, logits_to_keep=None):
+        # unwrap the model to access the model.model
         unwrapped_model = self.accelerator.unwrap_model(model)
-        hidden_states = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask)[0]
-        hidden_states = hidden_states[:, :-1, :]  # (B, L-1, H)
+        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask)[0]
+        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
-            hidden_states = hidden_states[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-        return hidden_states
+            last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+        return last_hidden_state
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
@@ -982,11 +981,12 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        hidden_states = self._get_hidden_states(model, input_ids, attention_mask, logits_to_keep)
+        # get the last hidden state of the model
+        last_hidden_state = self._get_last_hidden_state(model, input_ids, attention_mask, logits_to_keep)
         unwrapped_model = self.accelerator.unwrap_model(model)
         # compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
-            _input=hidden_states,
+            _input=last_hidden_state,
             lin_weight=unwrapped_model.lm_head.weight,
             selected_token_ids=completion_ids,
             attention_mask=completion_mask,
