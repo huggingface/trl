@@ -625,7 +625,7 @@ class GRPOTrainer(Trainer):
     def _get_last_hidden_state(self, model, input_ids, attention_mask, logits_to_keep=None):
         # unwrap the model to access the model.model
         unwrapped_model = self.accelerator.unwrap_model(model)
-        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask)[0]
+        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
