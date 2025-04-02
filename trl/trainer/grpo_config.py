@@ -321,6 +321,10 @@ class GRPOConfig(TrainingArguments):
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
     )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use the Liger GRPO loss."},
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(
@@ -379,10 +383,6 @@ class GRPOConfig(TrainingArguments):
             "help": "This parameter is deprecated and will be removed in version 0.18.0. To control prefix caching in "
             "vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server configuration."
         },
-    )
-    use_liger_loss: bool = field(
-        default=False,
-        metadata={"help": "Whether to use the Liger GRPO loss."},
     )
 
     def __post_init__(self):
