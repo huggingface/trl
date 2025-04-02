@@ -1010,11 +1010,6 @@ class GRPOTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
-        if self.model_accepts_loss_kwargs:
-            loss_kwargs = {}
-            if num_items_in_batch is not None:
-                loss_kwargs["num_items_in_batch"] = num_items_in_batch
-            inputs = {**inputs, **loss_kwargs}
         if self.use_liger_loss:
             # Compute the loss using the liger grpo loss
             return self.compute_liger_loss(model, inputs)
