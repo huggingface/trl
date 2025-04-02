@@ -90,6 +90,42 @@ class GRPOConfig(TrainingArguments):
             timeout, a `ConnectionError` is raised.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_parallelism_mode: str = field(
+            default="tensor",
+            metadata={
+                "help": "Parallelism mode for vLLM. Options are 'tensor' (default) or 'data'. "
+                "In data parallelism mode, separate vLLM instances run on different GPUs."
+            },
+        )
+        vllm_data_parallel_size: int = field(
+            default=1,
+            metadata={
+                "help": "Number of data parallel vLLM instances to use. Only applicable when "
+                "vllm_parallelism_mode is set to 'data'."
+            },
+        )
+        vllm_server_hosts: list[str] = field(
+            default_factory=lambda: ["localhost"],
+            metadata={
+                "help": "List of hosts for vLLM server instances in data parallel mode. "
+                "Default is ['localhost'] for all instances."
+            },
+        )
+        vllm_base_port: int = field(
+            default=8000,
+            metadata={
+                "help": "Base port for the first vLLM instance in data parallel mode. "
+                "Additional instances will use consecutive ports (base_port+i)."
+            },
+        )
+        vllm_colocation: bool = field(
+            default=False,
+            metadata={
+                "help": "Whether to use colocated vLLM execution via external launcher. If set to `True`, vLLM will be "
+                "initialized in all processes, each assigned to its respective device. This allows multi-GPU "
+                "or multi-node execution with vLLM's external launcher."
+            },
+        )
 
         > Parameters that control the training
 
@@ -249,6 +285,42 @@ class GRPOConfig(TrainingArguments):
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+    )
+    vllm_parallelism_mode: str = field(
+        default="tensor",
+        metadata={
+            "help": "Parallelism mode for vLLM. Options are 'tensor' (default) or 'data'. "
+            "In data parallelism mode, separate vLLM instances run on different GPUs."
+        },
+    )
+    vllm_data_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": "Number of data parallel vLLM instances to use. Only applicable when "
+            "vllm_parallelism_mode is set to 'data'."
+        },
+    )
+    vllm_server_hosts: list[str] = field(
+        default_factory=lambda: ["localhost"],
+        metadata={
+            "help": "List of hosts for vLLM server instances in data parallel mode. "
+            "Default is ['localhost'] for all instances."
+        },
+    )
+    vllm_base_port: int = field(
+        default=8000,
+        metadata={
+            "help": "Base port for the first vLLM instance in data parallel mode. "
+            "Additional instances will use consecutive ports (base_port+i)."
+        },
+    )
+    vllm_colocation: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use colocated vLLM execution via external launcher. If set to `True`, vLLM will be "
+            "initialized in all processes, each assigned to its respective device. This allows multi-GPU "
+            "or multi-node execution with vLLM's external launcher."
+        },
     )
 
     # Parameters that control the training
