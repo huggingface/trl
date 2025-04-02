@@ -20,8 +20,10 @@ from typing import Optional, Sequence
 
 import torch
 import torch.distributed as dist
+from accelerate.utils import is_npu_available
 
 from trl import TrlParser
+from trl.distributed_util import init_process_group
 from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
 
 
@@ -39,11 +41,11 @@ if is_uvicorn_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
-    from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
-    from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
     from vllm.worker.worker import Worker
+    if is_npu_available():
+        from vllm_ascend.worker.worker import NPUWorker as Worker
 else:
     Worker = object
 
@@ -72,13 +74,13 @@ class WeightSyncWorker(Worker):
 
         super().__init__(*args, **kwargs)
 
-        # The following attributes are initialized when `init_communicator` method is called.
-        self.pynccl_comm = None  # Communicator for weight updates
+        # The following attributes are initialized when `weight_update_group` method is called.
+        self.weight_update_group = None  # Communicator for weight updates
         self.client_rank = None  # Source rank for broadcasting updated weights
 
-    def init_communicator(self, host: str, port: int, world_size: int) -> None:
+    def init_weight_update_group(self, host: str, port: int, world_size: int, backend: str) -> None:
         """
-        Initializes the weight update communicator using a stateless process group.
+        Initializes the weight update process group.
 
         This method creates a `StatelessProcessGroup` that allows external training processes to
         communicate with vLLM workers without interfering with the global torch distributed group.
@@ -90,18 +92,23 @@ class WeightSyncWorker(Worker):
                 Port number to be used for communication.
             world_size (`int`):
                 Total number of participating processes in the update group.
+            backend (`str`):
+                The backend to use for collective communication.
         """
-        if self.pynccl_comm is not None:
-            raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
+        if self.weight_update_group is not None:
+            raise RuntimeError("Weight update group already initialized. Call close_weight_update_group first.")
 
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
         # Create a stateless process group to manage communication between training processes and vLLM workers.
-        pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
-
-        # Initialize the NCCL-based communicator for weight synchronization.
-        self.pynccl_comm = PyNcclCommunicator(pg, device=self.device)
+        self.weight_update_group = init_process_group(
+            backend=backend,
+            init_method=f"tcp://{host}:{port}",
+            world_size=world_size,
+            rank=rank,
+            group_name="weight_update_group",
+        )
 
         # The client process that sends updated weights has the highest rank (world_size - 1).
         self.client_rank = world_size - 1
@@ -118,29 +125,28 @@ class WeightSyncWorker(Worker):
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
-        if self.pynccl_comm is None:
-            raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
+        if self.weight_update_group is None:
+            raise RuntimeError("weight update group not initialized. Call `weight_update_group` first.")
 
         # Allocate memory for the incoming weight tensor on the correct device.
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
-        # Use NCCL to broadcast the updated weights from the client (src) to all workers.
-        self.pynccl_comm.broadcast(weight, src=self.client_rank, stream=torch.cuda.current_stream())
-        self.pynccl_comm.group.barrier()
+        # Broadcast the updated weights from the client (src) to all workers.
+        torch.distributed.broadcast(weight, src=self.client_rank, group=self.weight_update_group)
 
         # Load the received weights into the model.
         self.model_runner.model.load_weights(weights=[(name, weight)])
 
-    def close_communicator(self) -> None:
+    def close_weight_update_group(self) -> None:
         """
         Closes the communicator when weight synchronization is no longer needed.
 
         This method deletes the NCCL communicator to release associated resources.
         """
 
-        if self.pynccl_comm is not None:
-            del self.pynccl_comm
-            self.pynccl_comm = None  # Ensure attribute is reset to None
+        if self.weight_update_group is not None:
+            del self.weight_update_group
+            self.weight_update_group = None  # Ensure attribute is reset to None
             self.client_rank = None  # Ensure attribute is reset to None
 
 
@@ -345,13 +351,15 @@ def main(script_args: ScriptArguments):
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         return {"completion_ids": completion_ids}
 
-    class InitCommunicatorRequest(BaseModel):
+    class InitWeightUpdateGroupRequest(BaseModel):
         host: str
         port: int
         world_size: int
+        backend: str
 
-    @app.post("/init_communicator/")
-    async def init_communicator(request: InitCommunicatorRequest, background_tasks: BackgroundTasks):
+
+    @app.post("/init_weight_update_group/")
+    async def init_weight_update_group(request: InitWeightUpdateGroupRequest, background_tasks: BackgroundTasks):
         """
         Initializes the communicator for synchronizing model weights between a client and multiple server
         workers.
@@ -364,8 +372,8 @@ def main(script_args: ScriptArguments):
         """
         background_tasks.add_task(
             llm.collective_rpc,
-            "init_communicator",
-            args=(request.host, request.port, script_args.tensor_parallel_size + 1),
+            "init_weight_update_group",
+            args=(request.host, request.port, script_args.tensor_parallel_size + 1, request.backend),
         )
         return {"message": "Request received, initializing communicator"}
 
@@ -406,13 +414,13 @@ def main(script_args: ScriptArguments):
         success = llm.llm_engine.reset_prefix_cache()
         return {"message": "Request received, resetting prefix cache status: " + str(success)}
 
-    @app.post("/close_communicator/")
-    async def close_communicator():
+    @app.post("/close_weight_update_group/")
+    async def close_weight_update_group():
         """
         Closes the weight update group and cleans up associated resources.
         """
-        llm.collective_rpc("close_communicator")
-        return {"message": "Request received, closing communicator"}
+        llm.collective_rpc("close_weight_update_group")
+        return {"message": "Request received, closing weight update group"}
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
