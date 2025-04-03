@@ -738,7 +738,6 @@ class QwenGRPOTrainer(Trainer):
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        num_image_pad_ids = (completion_ids == self.image_pad_id).sum(dim=0)
         if is_conversational(inputs[0]):
             completions = []
             for prompt, completion in zip(conversations, completions_text):
@@ -851,13 +850,19 @@ class QwenGRPOTrainer(Trainer):
                 if isinstance(value, torch.Tensor):
                     inputs_data_to_log[key] = value.tolist()
 
+            # gather completion_ids and get num_image_pad_ids
+            # completion_ids shape: (B*G, C) B is batch size, G is number of generations, C is completion length
+            gathered_completion_ids = gather_object(completion_ids)
+            # after gathering, there will be B*G items and each item is a tensor of shape their own(C,)
+            # handle each item one by one
+            num_image_pad_ids = [(ids == self.image_pad_id).sum().item() for ids in gathered_completion_ids]
             table = {
                 "step": [str(self.state.global_step)] * len(rewards),
                 "prompt": gather_object(prompts_text),
                 "completion": gather_object(completions_text),
                 "reward": rewards.tolist(),
                 "reward_per_func": rewards_per_func.tolist(),
-                "num_image_pad_ids": num_image_pad_ids.tolist(),
+                "num_image_pad_ids": num_image_pad_ids,
                 **inputs_data_to_log,
             }
             df = pd.DataFrame(table)
