@@ -50,7 +50,6 @@ class GRPOTrainerSlowTester(unittest.TestCase):
                 num_generations=3,
                 use_liger_loss=True,
                 max_completion_length=self.max_length,
-                max_steps=4,
                 report_to="none",
                 logging_strategy="no",
             )
