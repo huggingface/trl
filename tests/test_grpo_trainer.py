@@ -914,3 +914,34 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_eval_from_iterable(self):
+        train_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="train"
+        ).to_iterable_dataset()
+        eval_dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="test"
+        ).to_iterable_dataset()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                eval_strategy="epoch",
+                eval_steps=2,
+                report_to="none",
+                max_steps=10,
+                dispatch_batches=False,
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+            )
+
+            trainer.train()
