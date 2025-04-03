@@ -870,21 +870,21 @@ class GRPOTrainer(Trainer):
 
         # log completion lengths, mean, min, max
         agg_completion_mask = self.accelerator.gather_for_metrics(completion_mask.sum(1))
-        self._metrics[mode]["mean_completion_length"].append(agg_completion_mask.float().mean().item())
-        self._metrics[mode]["min_completion_length"].append(agg_completion_mask.float().min().item())
-        self._metrics[mode]["max_completion_length"].append(agg_completion_mask.float().max().item())
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_mask.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_mask.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_mask.float().max().item())
 
         # identify sequences that terminated with EOS and log their lengths
         agg_terminated_with_eos = self.accelerator.gather_for_metrics(is_eos.any(dim=1))
         term_completion_mask = agg_completion_mask[agg_terminated_with_eos]
         clipped_completions_ratio = 1 - len(term_completion_mask) / len(agg_completion_mask)
-        self._metrics[mode]["clipped_completions_ratio"].append(clipped_completions_ratio)
+        self._metrics[mode]["completions/clipped_ratio"].append(clipped_completions_ratio)
         if len(term_completion_mask) == 0:
             # edge case where no completed sequences are found
             term_completion_mask = torch.zeros(1, device=device)
-        self._metrics[mode]["mean_terminated_completion_length"].append(term_completion_mask.float().mean().item())
-        self._metrics[mode]["min_terminated_completion_length"].append(term_completion_mask.float().min().item())
-        self._metrics[mode]["max_terminated_completion_length"].append(term_completion_mask.float().max().item())
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_mask.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_mask.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_mask.float().max().item())
 
         # Get the names of the reward functions
         reward_func_names = []
