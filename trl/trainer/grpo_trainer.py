@@ -531,6 +531,8 @@ class GRPOTrainer(Trainer):
         ones = gather_object(one)
         self.num_local_processes = self.accelerator.num_processes // sum(ones)
 
+        # create the intra-node commmunicator
+        self.intra_node_group, _ = torch.distributed.new_subgroups(self.num_local_processes)
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -737,6 +739,20 @@ class GRPOTrainer(Trainer):
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
+        def gather_object_on_main_process(obj: Any, group=torch.distributed.group.WORLD):
+            output_objects = [None for _ in range(torch.distributed.get_world_size(group))]
+            is_main_process = torch.distributed.get_rank(group) == 0
+            torch.distributed.gather_object(obj,
+                output_objects if is_main_process else None,
+                group_dst=0, group=group)
+            # gather_object returns a list of lists, so we need to flatten it
+            return [x for y in output_objects for x in y] if is_main_process else None
+
+        def scatter_objects_from_main_process(obj_list: list[Any], group=torch.distributed.group.WORLD):
+            output_objects = [None]
+            torch.distributed.scatter_object_list(output_objects, obj_list, group_src=0, group=group)
+            return output_objects[0]
+
         # Generate completions using either vLLM or regular generation
         if self.args.use_vllm:
             # First, have main process load weights if needed
@@ -744,17 +760,11 @@ class GRPOTrainer(Trainer):
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
-            # Generate completions using vLLM: gather all prompts and use them in a single call in the local
-            # main process
-            all_prompts_text = gather_object(prompts_text)
+            # Generate completions using vLLM: gather all prompts of the current node
+            # and use them in a single call
+            all_prompts_text = gather_object_on_main_process(prompts_text, self.intra_node_group)
 
             if self.accelerator.is_local_main_process:
-                process_slice = slice(
-                    self.accelerator.process_index * len(prompts),
-                    (self.accelerator.process_index + self.num_local_processes) * len(prompts),
-                )
-                all_prompts_text = all_prompts_text[process_slice]
-
                 # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually.
@@ -771,16 +781,21 @@ class GRPOTrainer(Trainer):
                         max_tokens=self.max_completion_length,
                         guided_decoding_regex=self.guided_decoding_regex,
                     )
-            else:
-                completion_ids = []
 
             # Ensure each process receives its corresponding slice.
-            completion_ids = gather_object(completion_ids)
-            process_slice = slice(
-                self.accelerator.process_index * len(prompts),
-                (self.accelerator.process_index + 1) * len(prompts),
-            )
-            completion_ids = completion_ids[process_slice]
+            def chunk_list(my_list, chunk_size):
+                chunks = []
+                for i in range(0, len(my_list), chunk_size):
+                    chunks.append(my_list[i:i + chunk_size])
+                return chunks
+
+            if self.accelerator.is_local_main_process:
+                process_slices = chunk_list(completion_ids, len(prompts))
+            else:
+                process_slices = [None] * self.num_local_processes
+
+            # scatter back to local processes
+            completion_ids = scatter_objects_from_main_process(process_slices, self.intra_node_group)
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
@@ -942,8 +957,8 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
-            prompts_to_log = gather_object(prompts_text)
-            completions_to_log = gather_object(completions_text)
+            prompts_to_log = gather_object_on_main_process(prompts_text)
+            completions_to_log = gather_object_on_main_process(completions_text)
             rewards_to_log = {
                 reward_func_name: rewards_per_func[:, i] for i, reward_func_name in enumerate(reward_func_names)
             }
