@@ -26,7 +26,7 @@ from accelerate.utils import broadcast_object_list, gather, gather_object, is_pe
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
-from torch.utils.data import Sampler
+from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -39,7 +39,8 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
+from transformers.trainer_utils import seed_worker
+from transformers.utils import is_datasets_available, is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -56,6 +57,9 @@ from .utils import (
     selective_log_softmax,
 )
 
+
+if is_datasets_available():
+    import datasets
 
 if is_deepspeed_available():
     import deepspeed
@@ -523,6 +527,123 @@ class GRPOTrainer(Trainer):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
+    def iterable_data_collator(self, features):
+        """
+        Collator function to use for an IterableDataset.
+
+        Calls the super class if the dataset is not an IterableDataset. If it is an IterableDataset it replicates the
+        original behaviour but changes the batch size.
+        """
+        return [x for x in features for _ in range(self.num_generations)]  # The duplication happens on the fly.
+
+    def get_train_dataloader(self) -> DataLoader:
+        """
+        Returns the training [`~torch.utils.data.DataLoader`].
+
+        Copy of the get_train_dataloader class from Trainer but with a change to the batch size and collator when using an IterableDataset.
+
+        Will use no sampler if `train_dataset` does not implement `__len__`, a random sampler (adapted to distributed
+        training if necessary) otherwise.
+        """
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        train_dataset = self.train_dataset
+        if isinstance(train_dataset, torch.utils.data.IterableDataset):
+            batch_size = self.args.eval_batch_size // self.num_generations
+            data_collator = self.iterable_data_collator
+        else:
+            batch_size = self.args.eval_batch_size
+            data_collator = self.data_collator
+
+        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+
+        dataloader_params = {
+            "batch_size": batch_size,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_train_sampler()
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["worker_init_fn"] = seed_worker
+            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
+    def get_eval_dataloader(self, eval_dataset: Optional[Union[str, Dataset]] = None) -> DataLoader:
+        """
+        Returns the evaluation [`~torch.utils.data.DataLoader`].
+
+        Copy of the get_eval_dataloader class from Trainer but with a change to the batch size and collator when using an IterableDataset.
+
+        Args:
+            eval_dataset (`str` or `torch.utils.data.Dataset`, *optional*):
+                If a `str`, will use `self.eval_dataset[eval_dataset]` as the evaluation dataset. If a `Dataset`, will override `self.eval_dataset` and must implement `__len__`. If it is a [`~datasets.Dataset`], columns not accepted by the `model.forward()` method are automatically removed.
+        """
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+
+        # If we have persistent workers, don't do a fork bomb especially as eval datasets
+        # don't change during training
+        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if (
+            hasattr(self, "_eval_dataloaders")
+            and dataloader_key in self._eval_dataloaders
+            and self.args.dataloader_persistent_workers
+        ):
+            return self.accelerator.prepare(self._eval_dataloaders[dataloader_key])
+
+        eval_dataset = (
+            self.eval_dataset[eval_dataset]
+            if isinstance(eval_dataset, str)
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
+        )
+
+        if isinstance(eval_dataset, torch.utils.data.IterableDataset):
+            batch_size = self.args.eval_batch_size // self.num_generations
+            data_collator = self.iterable_data_collator
+        else:
+            batch_size = self.args.eval_batch_size
+            data_collator = self.data_collator
+
+        if is_datasets_available() and isinstance(eval_dataset, datasets.Dataset):
+            eval_dataset = self._remove_unused_columns(eval_dataset, description="evaluation")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="evaluation")
+
+        dataloader_params = {
+            "batch_size": batch_size,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(eval_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_eval_sampler(eval_dataset)
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        # accelerator.free_memory() will destroy the references, so
+        # we need to store the non-prepared version
+        eval_dataloader = DataLoader(eval_dataset, **dataloader_params)
+        if self.args.dataloader_persistent_workers:
+            if hasattr(self, "_eval_dataloaders"):
+                self._eval_dataloaders[dataloader_key] = eval_dataloader
+            else:
+                self._eval_dataloaders = {dataloader_key: eval_dataloader}
+
+        return self.accelerator.prepare(eval_dataloader)
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -870,21 +991,21 @@ class GRPOTrainer(Trainer):
 
         # log completion lengths, mean, min, max
         agg_completion_mask = self.accelerator.gather_for_metrics(completion_mask.sum(1))
-        self._metrics[mode]["completions/mean_length"].append(agg_completion_mask.float().mean().item())
-        self._metrics[mode]["completions/min_length"].append(agg_completion_mask.float().min().item())
-        self._metrics[mode]["completions/max_length"].append(agg_completion_mask.float().max().item())
+        self._metrics[mode]["mean_completion_length"].append(agg_completion_mask.float().mean().item())
+        self._metrics[mode]["min_completion_length"].append(agg_completion_mask.float().min().item())
+        self._metrics[mode]["max_completion_length"].append(agg_completion_mask.float().max().item())
 
         # identify sequences that terminated with EOS and log their lengths
         agg_terminated_with_eos = self.accelerator.gather_for_metrics(is_eos.any(dim=1))
         term_completion_mask = agg_completion_mask[agg_terminated_with_eos]
         clipped_completions_ratio = 1 - len(term_completion_mask) / len(agg_completion_mask)
-        self._metrics[mode]["completions/clipped_ratio"].append(clipped_completions_ratio)
+        self._metrics[mode]["clipped_completions_ratio"].append(clipped_completions_ratio)
         if len(term_completion_mask) == 0:
             # edge case where no completed sequences are found
             term_completion_mask = torch.zeros(1, device=device)
-        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_mask.float().mean().item())
-        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_mask.float().min().item())
-        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_mask.float().max().item())
+        self._metrics[mode]["mean_terminated_completion_length"].append(term_completion_mask.float().mean().item())
+        self._metrics[mode]["min_terminated_completion_length"].append(term_completion_mask.float().min().item())
+        self._metrics[mode]["max_terminated_completion_length"].append(term_completion_mask.float().max().item())
 
         # Get the names of the reward functions
         reward_func_names = []
@@ -904,63 +1025,36 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
-        # Log completions when we complete a full gradient accumulation cycle
-        # For logging across the gradient accumulation steps, we need to accumulate the data
-        is_last_step_in_grad_accum = (
-            self._step % self.args.gradient_accumulation_steps == self.args.gradient_accumulation_steps - 1
-        )
-        should_log_completions = (
-            self.log_completions
-            and self.state.global_step % self.args.logging_steps == 0
-            and is_last_step_in_grad_accum
-        )
-
-        # Collect data for logging throughout the accumulation steps
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
-            if not hasattr(self, "_accumulated_prompts"):
-                self._accumulated_prompts = []
-                self._accumulated_completions = []
-                self._accumulated_rewards = {name: [] for name in reward_func_names}
-
-            # Gather and accumulate the data from this step
-            prompts_this_step = gather_object(prompts_text)
-            completions_this_step = gather_object(completions_text)
+            prompts_to_log = gather_object(prompts_text)
+            completions_to_log = gather_object(completions_text)
+            rewards_to_log = {
+                reward_func_name: rewards_per_func[:, i] for i, reward_func_name in enumerate(reward_func_names)
+            }
 
             if self.accelerator.is_main_process:
-                self._accumulated_prompts.extend(prompts_this_step)
-                self._accumulated_completions.extend(completions_this_step)
-                for i, name in enumerate(reward_func_names):
-                    self._accumulated_rewards[name].extend(rewards_per_func[:, i].tolist())
+                if is_rich_available():
+                    print_prompt_completions_sample(
+                        prompts_to_log,
+                        completions_to_log,
+                        rewards_to_log,
+                        self.state.global_step,
+                        self.num_completions_to_print,
+                    )
+                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                    import pandas as pd
 
-        # Log the accumulated data when we finish a grad accumulation cycle
-        if should_log_completions and self.accelerator.is_main_process:
-            if is_rich_available():
-                print_prompt_completions_sample(
-                    self._accumulated_prompts,
-                    self._accumulated_completions,
-                    self._accumulated_rewards,
-                    self.state.global_step,
-                    self.num_completions_to_print,
-                )
-
-            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                import pandas as pd
-
-                table = {
-                    "step": [str(self.state.global_step)] * len(self._accumulated_prompts),
-                    "prompt": self._accumulated_prompts,
-                    "completion": self._accumulated_completions,
-                    "reward": [sum(rewards) for rewards in zip(*self._accumulated_rewards.values())],
-                }
-                df = pd.DataFrame(table)
-                if self.args.wandb_log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
-                wandb.log({"completions": wandb.Table(dataframe=df)})
-
-            # Reset the accumulated data after logging
-            self._accumulated_prompts = []
-            self._accumulated_completions = []
-            self._accumulated_rewards = {name: [] for name in reward_func_names}
+                    # For logging
+                    table = {
+                        "step": [str(self.state.global_step)] * len(rewards),
+                        "prompt": prompts_to_log,
+                        "completion": completions_to_log,
+                        "reward": rewards.tolist(),
+                    }
+                    df = pd.DataFrame(table)
+                    if self.args.wandb_log_unique_prompts:
+                        df = df.drop_duplicates(subset=["prompt"])
+                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
         return {
             "prompt_ids": prompt_ids,
