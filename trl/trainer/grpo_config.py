@@ -136,6 +136,9 @@ class GRPOConfig(TrainingArguments):
             installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
         num_completions_to_print (`int` or `None`, *optional*, defaults to `None`):
             Number of completions to print with `rich`. If `None`, all completions are logged.
+        wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
+            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all
+            prompts are logged.
     """
 
     # Parameters that control the model and reference model
