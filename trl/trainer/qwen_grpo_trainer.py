@@ -738,7 +738,7 @@ class QwenGRPOTrainer(Trainer):
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        num_image_pad_ids = (completion_ids == self.image_pad_id).sum(dim=1)
+        num_image_pad_ids = (completion_ids == self.image_pad_id).sum(dim=0)
         if is_conversational(inputs[0]):
             completions = []
             for prompt, completion in zip(conversations, completions_text):
@@ -841,7 +841,11 @@ class QwenGRPOTrainer(Trainer):
             import pandas as pd
 
             # For logging
-            inputs_data_to_log = {key: gather_object(inputs[key]) for key in self.inputs_to_log}
+            inputs_data_to_log = {
+                key: gather_object(
+                    [i[key] for i in inputs if key in i]
+                ) for key in self.inputs_to_log
+            }
             # if the value is torch.Tensor, convert it to a list
             for key, value in inputs_data_to_log.items():
                 if isinstance(value, torch.Tensor):
