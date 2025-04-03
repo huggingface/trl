@@ -348,7 +348,7 @@ def main(script_args: ScriptArguments):
             max_tokens=request.max_tokens,
             guided_decoding=guided_decoding,
         )
-        all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
+        all_outputs = llm.generate(request.prompts, sampling_params=sampling_params, use_tqdm=False)
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         return {"completion_ids": completion_ids}
 
