@@ -24,7 +24,6 @@ import torch.distributed as dist
 from trl import TrlParser
 from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
 
-
 if is_fastapi_available():
     from fastapi import BackgroundTasks, FastAPI
 
@@ -175,6 +174,8 @@ class ScriptArguments:
         enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
+        timeout_keep_alive (`int`, defaults to 60s):
+            How long to keep the http connection open when no data exchange is happening
     """
 
     model: str = field(metadata={"help": "Model name or path to load the model from."})
@@ -223,6 +224,12 @@ class ScriptArguments:
         metadata={
             "help": "Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the "
             "hardware support this feature."
+        },
+    )
+    timeout_keep_alive: Optional[int] = field(
+        default=60,
+        metadata={
+            "help": "TCP connection timeout without data transfer."
         },
     )
 
@@ -415,7 +422,10 @@ def main(script_args: ScriptArguments):
         return {"message": "Request received, closing communicator"}
 
     # Start the server
-    uvicorn.run(app, host=script_args.host, port=script_args.port)
+    uvicorn.run(app,
+                host=script_args.host,
+                port=script_args.port,
+                timeout_keep_alive=script_args.timeout_keep_alive)
 
     dist.destroy_process_group()
 
