@@ -840,6 +840,7 @@ class QwenGRPOTrainer(Trainer):
                 "prompt": gather_object(prompts_text),
                 "completion": gather_object(completions_text),
                 "reward": rewards.tolist(),
+                "reward_per_func": rewards_per_func.tolist(),
             }
             df = pd.DataFrame(table)
 
