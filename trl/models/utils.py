@@ -246,6 +246,9 @@ def prepare_deepspeed(model, accelerator):
                 }
             )
 
+    # remove optimizer related config, tell DeepSpeed do NOT create optimizer (prevent from potential OOM)
+    config_kwargs.pop("optimizer", None)
+
     # If ZeRO-3 is used, we shard both the active and reference model.
     # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO
     # disabled (stage 0)
