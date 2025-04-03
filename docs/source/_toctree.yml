@@ -53,6 +53,8 @@
     title: Learning to Use Tools
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
+  - local: training_vlm_sft
+    title: Training a Multimodal Model Using SFT
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
