@@ -228,6 +228,7 @@ class QwenGRPOTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
         shuffle_dataset: bool = True,
+        image_pad_id: int = 151655,
     ):
         # Args
         if args is None:
@@ -477,6 +478,8 @@ class QwenGRPOTrainer(Trainer):
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+
+        self.image_pad_id = image_pad_id
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -733,6 +736,7 @@ class QwenGRPOTrainer(Trainer):
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        num_image_pad_ids = (completion_ids == self.image_pad_id).sum(dim=1)
         if is_conversational(inputs[0]):
             completions = []
             for prompt, completion in zip(conversations, completions_text):
@@ -841,6 +845,7 @@ class QwenGRPOTrainer(Trainer):
                 "completion": gather_object(completions_text),
                 "reward": rewards.tolist(),
                 "reward_per_func": rewards_per_func.tolist(),
+                "num_image_pad_ids": num_image_pad_ids.tolist(),
             }
             df = pd.DataFrame(table)
 
