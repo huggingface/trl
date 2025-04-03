@@ -148,7 +148,7 @@ class VLLMClient:
         guided_decoding_regex: Optional[str] = None,
         multi_round: bool = False,
         is_async: bool = False,
-    ) -> list[list[str]]:
+    ) -> list[list[int]]:
         """
         Generates model completions for the provided prompts.
 
