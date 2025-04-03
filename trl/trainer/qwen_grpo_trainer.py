@@ -229,6 +229,7 @@ class QwenGRPOTrainer(Trainer):
         peft_config: Optional["PeftConfig"] = None,
         shuffle_dataset: bool = True,
         image_pad_id: int = 151655,
+        inputs_to_log: list[str] = [],
     ):
         # Args
         if args is None:
@@ -480,6 +481,7 @@ class QwenGRPOTrainer(Trainer):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
         self.image_pad_id = image_pad_id
+        self.inputs_to_log = inputs_to_log
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -839,6 +841,12 @@ class QwenGRPOTrainer(Trainer):
             import pandas as pd
 
             # For logging
+            inputs_data_to_log = {key: gather_object(inputs[key]) for key in self.inputs_to_log}
+            # if the value is torch.Tensor, convert it to a list
+            for key, value in inputs_data_to_log.items():
+                if isinstance(value, torch.Tensor):
+                    inputs_data_to_log[key] = value.tolist()
+
             table = {
                 "step": [str(self.state.global_step)] * len(rewards),
                 "prompt": gather_object(prompts_text),
@@ -846,6 +854,7 @@ class QwenGRPOTrainer(Trainer):
                 "reward": rewards.tolist(),
                 "reward_per_func": rewards_per_func.tolist(),
                 "num_image_pad_ids": num_image_pad_ids.tolist(),
+                **inputs_data_to_log,
             }
             df = pd.DataFrame(table)
 
