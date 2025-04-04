@@ -16,6 +16,10 @@ import argparse
 import logging
 import os
 import asyncio
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Optional
+
 import torch
 import threading
 import torch.distributed as dist
