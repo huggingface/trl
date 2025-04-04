@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import time
+import uuid
 import argparse
 import logging
-import os
+import threading
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Dict, List, Any
 
 import torch
 import torch.distributed as dist
@@ -262,6 +265,10 @@ def main(script_args: ScriptArguments):
 
     app = FastAPI()
 
+    # Simple buffer to store all request-response pairs
+    request_buffer = []
+    buffer_lock = threading.Lock()
+    
     # Define the endpoints for the model server
     @app.get("/health/")
     async def health():
@@ -454,8 +461,8 @@ def main(script_args: ScriptArguments):
         
         This endpoint emulates the OpenAI API format while using vLLM for generation.
         """
-        import time
-        import uuid
+        request_id = f"req-{uuid.uuid4().hex}"
+        timestamp = time.time()
         
         # Format prompt from messages
         prompts = []
@@ -481,21 +488,24 @@ def main(script_args: ScriptArguments):
             stop=request.stop,
         )
         
-        # Generate completion
+        # vllm generate calls into the LLM engine which does dynamic batching for us
         outputs = llm.generate([full_prompt], sampling_params=sampling_params)
         
         # Format response to match OpenAI's schema
         choices = []
         completion_tokens = 0
+        generated_texts = []
         
         for i, output in enumerate(outputs[0].outputs):
             completion_tokens += len(output.token_ids)
+            generated_text = output.text
+            generated_texts.append(generated_text)
             choices.append(
                 OpenAIResponseChoice(
                     index=i,
                     message=ChatMessage(
                         role="assistant",
-                        content=output.text
+                        content=generated_text
                     ),
                     finish_reason="stop" if output.finish_reason == "stop" else "length"
                 )
@@ -505,10 +515,10 @@ def main(script_args: ScriptArguments):
         prompt_tokens = len(llm.llm_engine.tokenizer.encode(full_prompt))
         total_tokens = prompt_tokens + completion_tokens
         
-        return OpenAIResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex}",
+        response = OpenAIResponse(
+            id=f"chatcmpl-{request_id}",
             object="chat.completion",
-            created=int(time.time()),
+            created=int(timestamp),
             model=request.model,
             choices=choices,
             usage=OpenAIResponseUsage(
@@ -517,6 +527,67 @@ def main(script_args: ScriptArguments):
                 total_tokens=total_tokens
             )
         )
+        
+        # Store request and response in buffer
+        with buffer_lock:
+            request_buffer.append({
+                "request_id": request_id,
+                "timestamp": timestamp,
+                "request": {
+                    "messages": [{"role": msg.role, "content": msg.content} for msg in request.messages],
+                    "temperature": request.temperature,
+                    "top_p": request.top_p,
+                    "max_tokens": request.max_tokens,
+                    "n": request.n,
+                },
+                "response": {
+                    "generated_texts": generated_texts,
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": total_tokens
+                    }
+                }
+            })
+        
+        return response
+    
+    class BufferedRequestsResponse(BaseModel):
+        count: int
+        data: List[Dict[str, Any]]
+    
+    @app.post("/v1/get_buffered_requests")
+    async def get_buffered_requests():
+        """
+        Returns all buffered requests and responses, then resets the buffer.
+        """
+        with buffer_lock:
+            # Copy the buffer
+            data = request_buffer.copy()
+            count = len(data)
+            
+            # Clear the buffer
+            request_buffer.clear()
+        
+        return BufferedRequestsResponse(
+            count=count,
+            data=data
+        )
+
+    @app.get("/get_buffer")
+    async def get_buffer():
+        """
+        Simple endpoint to retrieve all buffered request/response pairs and reset the buffer.
+        Designed for internal use by RL training systems.
+        """
+        with buffer_lock:
+            # Get the current buffer
+            data = request_buffer.copy()
+            
+            # Clear the buffer
+            request_buffer.clear()
+        
+        return data
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
