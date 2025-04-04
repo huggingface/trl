@@ -16,11 +16,12 @@ __version__ = "0.17.0.dev0"
 
 from typing import TYPE_CHECKING
 
-from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
+from transformers.utils import OptionalDependencyNotAvailable, _LazyModule
+
+from .import_utils import is_diffusers_available
 
 
 _import_structure = {
-    "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -44,19 +45,14 @@ _import_structure = {
         "create_reference_model",
         "setup_chat_format",
     ],
+    "scripts": ["ScriptArguments", "TrlParser", "init_zero_verbose"],
     "trainer": [
         "AlignPropConfig",
         "AlignPropTrainer",
-        "AllTrueJudge",
-        "BaseBinaryJudge",
-        "BaseJudge",
-        "BasePairwiseJudge",
-        "BaseRankJudge",
         "BCOConfig",
         "BCOTrainer",
         "CPOConfig",
         "CPOTrainer",
-        "DataCollatorForCompletionOnlyLM",
         "DPOConfig",
         "DPOTrainer",
         "FDivergenceConstants",
@@ -65,21 +61,16 @@ _import_structure = {
         "GKDTrainer",
         "GRPOConfig",
         "GRPOTrainer",
-        "HfPairwiseJudge",
         "IterativeSFTTrainer",
         "KTOConfig",
         "KTOTrainer",
-        "LogCompletionsCallback",
-        "MergeModelCallback",
         "ModelConfig",
         "NashMDConfig",
         "NashMDTrainer",
         "OnlineDPOConfig",
         "OnlineDPOTrainer",
-        "OpenAIPairwiseJudge",
         "ORPOConfig",
         "ORPOTrainer",
-        "PairRMJudge",
         "PPOConfig",
         "PPOTrainer",
         "PRMConfig",
@@ -90,12 +81,32 @@ _import_structure = {
         "RLOOTrainer",
         "SFTConfig",
         "SFTTrainer",
-        "WinRateCallback",
         "XPOConfig",
         "XPOTrainer",
     ],
-    "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
+    "trainer.callbacks": [
+        "LogCompletionsCallback",
+        "MergeModelCallback",
+        "RichProgressCallback",
+        "SyncRefModelCallback",
+        "WinRateCallback",
+    ],
+    "trainer.judges": [
+        "AllTrueJudge",
+        "BaseBinaryJudge",
+        "BaseJudge",
+        "BasePairwiseJudge",
+        "BaseRankJudge",
+        "HfPairwiseJudge",
+        "OpenAIPairwiseJudge",
+        "PairRMJudge",
+    ],
+    "trainer.utils": [
+        "DataCollatorForCompletionOnlyLM",
+        "get_kbit_device_map",
+        "get_peft_config",
+        "get_quantization_config",
+    ],
 }
 
 try:
@@ -142,16 +153,10 @@ if TYPE_CHECKING:
     from .trainer import (
         AlignPropConfig,
         AlignPropTrainer,
-        AllTrueJudge,
-        BaseBinaryJudge,
-        BaseJudge,
-        BasePairwiseJudge,
-        BaseRankJudge,
         BCOConfig,
         BCOTrainer,
         CPOConfig,
         CPOTrainer,
-        DataCollatorForCompletionOnlyLM,
         DPOConfig,
         DPOTrainer,
         FDivergenceConstants,
@@ -160,21 +165,16 @@ if TYPE_CHECKING:
         GKDTrainer,
         GRPOConfig,
         GRPOTrainer,
-        HfPairwiseJudge,
         IterativeSFTTrainer,
         KTOConfig,
         KTOTrainer,
-        LogCompletionsCallback,
-        MergeModelCallback,
         ModelConfig,
         NashMDConfig,
         NashMDTrainer,
         OnlineDPOConfig,
         OnlineDPOTrainer,
-        OpenAIPairwiseJudge,
         ORPOConfig,
         ORPOTrainer,
-        PairRMJudge,
         PPOConfig,
         PPOTrainer,
         PRMConfig,
@@ -185,12 +185,32 @@ if TYPE_CHECKING:
         RLOOTrainer,
         SFTConfig,
         SFTTrainer,
-        WinRateCallback,
         XPOConfig,
         XPOTrainer,
     )
-    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
-    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
+    from .trainer.callbacks import (
+        LogCompletionsCallback,
+        MergeModelCallback,
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+    )
+    from .trainer.judges import (
+        AllTrueJudge,
+        BaseBinaryJudge,
+        BaseJudge,
+        BasePairwiseJudge,
+        BaseRankJudge,
+        HfPairwiseJudge,
+        OpenAIPairwiseJudge,
+        PairRMJudge,
+    )
+    from .trainer.utils import (
+        DataCollatorForCompletionOnlyLM,
+        get_kbit_device_map,
+        get_peft_config,
+        get_quantization_config,
+    )
 
     try:
         if not is_diffusers_available():

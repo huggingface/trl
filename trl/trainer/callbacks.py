@@ -19,7 +19,7 @@ import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import gather_object, is_comet_ml_available, is_deepspeed_available, is_wandb_available
+from accelerate.utils import gather_object, is_deepspeed_available, is_wandb_available
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
@@ -46,9 +46,6 @@ from .utils import log_table_to_comet_experiment
 
 if is_deepspeed_available():
     import deepspeed
-
-if is_comet_ml_available():
-    pass
 
 if is_wandb_available():
     import wandb
