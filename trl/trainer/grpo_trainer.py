@@ -405,6 +405,7 @@ class GRPOTrainer(Trainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
+        self.mask_truncated_samples = args.mask_truncated_samples
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
@@ -751,6 +752,15 @@ class GRPOTrainer(Trainer):
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+        # Identify truncated samples (completions that reached max_completion_length without generating an EOS token)
+        truncated_samples = torch.zeros(is_eos.size(0), dtype=torch.bool, device=device)
+        if self.mask_truncated_samples:
+            # A sample is truncated if it has no EOS token and its length equals max_completion_length
+            truncated_samples = ~is_eos.any(dim=1) & (completion_ids.size(1) == self.max_completion_length)
+            # Log the percentage of truncated samples (useful for esp long CoT)
+            truncated_pct = truncated_samples.float().mean().item() * 100
+            mode = "eval" if self.control.should_evaluate else "train"
+            self._metrics[mode]["truncated_samples_percent"].append(truncated_pct)
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
@@ -917,6 +927,7 @@ class GRPOTrainer(Trainer):
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
             "advantages": advantages,
+            "truncated_samples": truncated_samples,
         }
 
     @profiling_decorator
@@ -952,17 +963,27 @@ class GRPOTrainer(Trainer):
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
-        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
+        
+        # Apply masking for truncated samples if enabled
+        if self.mask_truncated_samples:
+            truncated_samples = inputs["truncated_samples"]
+            # Create a mask that is 0 for tokens in truncated samples and 1 otherwise
+            truncation_mask = (~truncated_samples).unsqueeze(1).expand_as(completion_mask).float()
+            effective_mask = completion_mask * truncation_mask
+        else:
+            effective_mask = completion_mask
+            
+        loss = (per_token_loss * effective_mask).sum() / effective_mask.sum().clamp(min=1.0)
 
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
 
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
+            mean_kl = (per_token_kl * effective_mask).sum() / effective_mask.sum().clamp(min=1.0)
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
         is_clipped = (coef_1 < (1 - self.epsilon_low)) | (coef_1 > (1 + self.epsilon_high))
-        clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
+        clip_ratio = (is_clipped * effective_mask).sum() / effective_mask.sum().clamp(min=1.0)
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
         return loss
 
