@@ -49,6 +49,7 @@ from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
+    disable_dropout_in_model,
     generate_model_card,
     get_comet_experiment_url,
     pad,
@@ -347,6 +348,12 @@ class GRPOTrainer(Trainer):
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
 
+        if args.disable_dropout:
+            if isinstance(model, nn.Module):
+                disable_dropout_in_model(model)
+            if self.ref_model is not None and isinstance(self.ref_model, nn.Module):
+                disable_dropout_in_model(self.ref_model)
+
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
@@ -359,6 +366,10 @@ class GRPOTrainer(Trainer):
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
+                if args.disable_dropout:
+                    if isinstance(reward_funcs[i], nn.Module):
+                        disable_dropout_in_model(reward_funcs[i])
+
         self.reward_funcs = reward_funcs
 
         # Reward weights
