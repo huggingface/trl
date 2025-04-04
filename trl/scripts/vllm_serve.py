@@ -556,7 +556,7 @@ def main(script_args: ScriptArguments):
         count: int
         data: List[Dict[str, Any]]
     
-    @app.post("/v1/get_buffered_requests")
+    @app.post("/v1/get_buffered_requests", response_model=BufferedRequestsResponse)
     async def get_buffered_requests():
         """
         Returns all buffered requests and responses, then resets the buffer.
@@ -573,21 +573,6 @@ def main(script_args: ScriptArguments):
             count=count,
             data=data
         )
-
-    @app.get("/get_buffer")
-    async def get_buffer():
-        """
-        Simple endpoint to retrieve all buffered request/response pairs and reset the buffer.
-        Designed for internal use by RL training systems.
-        """
-        with buffer_lock:
-            # Get the current buffer
-            data = request_buffer.copy()
-            
-            # Clear the buffer
-            request_buffer.clear()
-        
-        return data
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
