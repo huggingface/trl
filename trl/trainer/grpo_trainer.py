@@ -409,7 +409,7 @@ class GRPOTrainer(Trainer):
         self.use_vllm = args.use_vllm
         self.use_liger_loss = args.use_liger_loss
 
-        self.use_max_tokens_norm = self.args.use_max_tokens_norm
+        self.use_max_tokens_norm = args.use_max_tokens_norm
         if self.use_max_tokens_norm:
             if self.use_liger_loss:
                 raise ValueError("`use_max_tokens_norm` is not supported with `liger_loss`.")
