@@ -311,7 +311,7 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to mask the loss for samples that were truncated due to exceeding the maximum completion "
             "length. When enabled, truncated completions are excluded from loss calculation, preventing them from being "
-            "incorrectly penalized and introducing noise during training."
+            "penalized for being too long."
         },
     )
     sync_ref_model: bool = field(

@@ -815,7 +815,7 @@ class GRPOTrainer(Trainer):
         if self.mask_truncated_samples:
             # A sample is truncated if it has no EOS token and its length equals max_completion_length
             truncated_samples = ~is_eos.any(dim=1) & (completion_ids.size(1) == self.max_completion_length)
-            # Log the percentage of truncated samples (useful for esp long CoT)
+            # Log the % of truncated samples 
             truncated_pct = truncated_samples.float().mean().item() * 100
             mode = "eval" if self.control.should_evaluate else "train"
             self._metrics[mode]["truncated_samples_percent"].append(truncated_pct)
