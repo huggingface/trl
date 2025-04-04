@@ -306,7 +306,7 @@ class GRPOConfig(TrainingArguments):
             "deviation introduces a question-level difficulty bias."
         },
     )
-    mask_truncated_samples: bool = field(
+    mask_truncated_completions: bool = field(
         default=False,
         metadata={
             "help": "Whether to mask the loss for samples that were truncated due to exceeding the maximum completion "
