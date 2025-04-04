@@ -409,6 +409,15 @@ class GRPOTrainer(Trainer):
         self.use_vllm = args.use_vllm
         self.use_liger_loss = args.use_liger_loss
 
+        self.use_max_tokens_norm = self.args.use_max_tokens_norm
+        if self.use_max_tokens_norm:
+            if self.use_liger_loss:
+                raise ValueError("`use_max_tokens_norm` is not supported with `liger_loss`.")
+            # calculate a constant factor to normalize the loss
+            self.max_tokens_norm = args.per_device_train_batch_size * (
+                args.max_prompt_length + args.max_completion_length
+            )
+
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
@@ -1072,7 +1081,11 @@ class GRPOTrainer(Trainer):
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
-        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
+
+        if self.use_max_tokens_norm:
+            loss = (per_token_loss * completion_mask).sum() / self.max_tokens_norm
+        else:
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
 
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
