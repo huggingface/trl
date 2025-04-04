@@ -126,7 +126,7 @@ $$
 \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right)
 $$
 A higher value means more tokens were affected by clipping, limiting how much the policy can change.
-- `mask_truncated_completions`: The completions that were truncated due to exceeding the maximum completion length. Therefore, excluded from the loss calculation.
+- `mask_truncated_completions`: The completions that were truncated due to exceeding the maximum completion length. Therefore, excluded from the loss calculation. This feature was introduced as a metric of training stability in the (DAPO paper)[https://huggingface.co/papers/2503.14476]
 - `epsilon_high`: The upper bound of the clipping range. If set to higher value (e.g. 0.28), the policy can have more exploration ability.
 ## Customization
 
