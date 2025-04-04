@@ -115,7 +115,7 @@ class GRPOConfig(TrainingArguments):
             applied. The [Dr. GRPO](https://github.com/sail-sg/understand-r1-zero/blob/main/understand-r1-zero.pdf)
             paper recommends not scaling the rewards, as scaling by the standard deviation introduces a question-level
             difficulty bias.
-        mask_truncated_samples (`bool`, *optional*, defaults to `False`):
+        mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             Whether to mask the loss for samples that were truncated due to exceeding the maximum completion length.
             When enabled, truncated completions are excluded from loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training.
