@@ -116,7 +116,7 @@ class GRPOConfig(TrainingArguments):
             paper recommends not scaling the rewards, as scaling by the standard deviation introduces a question-level
             difficulty bias.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
-            Whether to mask the loss for samples that were truncated due to exceeding the maximum completion length.
+            Whether to mask the loss for completions that are truncated due to exceeding the maximum completion length.
             When enabled, truncated completions are excluded from loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
