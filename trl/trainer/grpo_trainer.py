@@ -756,11 +756,7 @@ class GRPOTrainer(Trainer):
         truncated_samples = torch.zeros(is_eos.size(0), dtype=torch.bool, device=device)
         if self.mask_truncated_samples:
             # A sample is truncated if it has no EOS token and its length equals max_completion_length
-            truncated_samples = ~is_eos.any(dim=1) & (completion_ids.size(1) == self.max_completion_length)
-            # Log the % of truncated samples 
-            truncated_pct = truncated_samples.float().mean().item() * 100
-            mode = "eval" if self.control.should_evaluate else "train"
-            self._metrics[mode]["truncated_samples_percent"].append(truncated_pct)
+            truncated_samples = ~is_eos.any(dim=1) 
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
