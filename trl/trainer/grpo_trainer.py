@@ -23,7 +23,7 @@ from typing import Any, Callable, Optional, Union
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
+from accelerate.utils import broadcast_object_list, gather, gather_object, is_npu_available, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
@@ -494,8 +494,9 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.accelerator.is_main_process:
+                backend = "hccl" if is_npu_available() else "nccl" 
                 self.vllm_client = VLLMClient(
-                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
+                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout, backend=backend
                 )
 
             # vLLM specific sampling arguments
