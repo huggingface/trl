@@ -1025,8 +1025,7 @@ class GRPOTrainer(Trainer):
             prompts_this_step = gather_object_on_main_process(prompts_text)
             completions_this_step = gather_object_on_main_process(completions_text)
 
-
-            if self.accelerator.is_local_main_process:
+            if self.accelerator.is_main_process:
                 self._accumulated_prompts.extend(prompts_this_step)
                 self._accumulated_completions.extend(completions_this_step)
                 for i, name in enumerate(reward_func_names):
