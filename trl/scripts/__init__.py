@@ -14,7 +14,7 @@
 
 from typing import TYPE_CHECKING
 
-from transformers.utils import _LazyModule
+from ..import_utils import _LazyModule
 
 
 _import_structure = {

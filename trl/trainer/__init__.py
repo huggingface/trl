@@ -14,9 +14,7 @@
 
 from typing import TYPE_CHECKING
 
-from transformers.utils import OptionalDependencyNotAvailable, _LazyModule
-
-from ..import_utils import is_diffusers_available
+from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
 
 
 _import_structure = {
@@ -24,8 +22,16 @@ _import_structure = {
     "alignprop_trainer": ["AlignPropTrainer"],
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
+    "callbacks": [
+        "LogCompletionsCallback",
+        "MergeModelCallback",
+        "RichProgressCallback",
+        "SyncRefModelCallback",
+        "WinRateCallback",
+    ],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
+    "ddpo_config": ["DDPOConfig"],
     "dpo_config": ["DPOConfig", "FDivergenceConstants", "FDivergenceType"],
     "dpo_trainer": ["DPOTrainer"],
     "gkd_config": ["GKDConfig"],
@@ -33,6 +39,16 @@ _import_structure = {
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
+    "judges": [
+        "AllTrueJudge",
+        "BaseBinaryJudge",
+        "BaseJudge",
+        "BasePairwiseJudge",
+        "BaseRankJudge",
+        "HfPairwiseJudge",
+        "OpenAIPairwiseJudge",
+        "PairRMJudge",
+    ],
     "kto_config": ["KTOConfig"],
     "kto_trainer": ["KTOTrainer"],
     "model_config": ["ModelConfig"],
@@ -52,6 +68,15 @@ _import_structure = {
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
+    "utils": [
+        "ConstantLengthDataset",
+        "DataCollatorForCompletionOnlyLM",
+        "RunningMoments",
+        "compute_accuracy",
+        "disable_dropout_in_model",
+        "empty_cache",
+        "peft_module_casting_to_bf16",
+    ],
     "xpo_config": ["XPOConfig"],
     "xpo_trainer": ["XPOTrainer"],
 }
@@ -62,15 +87,22 @@ except OptionalDependencyNotAvailable:
     pass
 else:
     _import_structure["ddpo_trainer"] = ["DDPOTrainer"]
-    _import_structure["ddpo_config"] = ["DDPOConfig"]
 
 if TYPE_CHECKING:
     from .alignprop_config import AlignPropConfig
     from .alignprop_trainer import AlignPropTrainer
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
+    from .callbacks import (
+        LogCompletionsCallback,
+        MergeModelCallback,
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WinRateCallback,
+    )
     from .cpo_config import CPOConfig
     from .cpo_trainer import CPOTrainer
+    from .ddpo_config import DDPOConfig
     from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
     from .dpo_trainer import DPOTrainer
     from .gkd_config import GKDConfig
@@ -78,6 +110,16 @@ if TYPE_CHECKING:
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
+    from .judges import (
+        AllTrueJudge,
+        BaseBinaryJudge,
+        BaseJudge,
+        BasePairwiseJudge,
+        BaseRankJudge,
+        HfPairwiseJudge,
+        OpenAIPairwiseJudge,
+        PairRMJudge,
+    )
     from .kto_config import KTOConfig
     from .kto_trainer import KTOTrainer
     from .model_config import ModelConfig
@@ -97,6 +139,15 @@ if TYPE_CHECKING:
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
+    from .utils import (
+        ConstantLengthDataset,
+        DataCollatorForCompletionOnlyLM,
+        RunningMoments,
+        compute_accuracy,
+        disable_dropout_in_model,
+        empty_cache,
+        peft_module_casting_to_bf16,
+    )
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer
 
@@ -106,7 +157,6 @@ if TYPE_CHECKING:
     except OptionalDependencyNotAvailable:
         pass
     else:
-        from .ddpo_config import DDPOConfig
         from .ddpo_trainer import DDPOTrainer
 else:
     import sys
