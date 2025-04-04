@@ -157,39 +157,37 @@ For more information, see [Speeding up training with vLLM](speeding_up_training#
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
 
-- **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such model. For more details, see [DeepSpeed Integration](deepspeed_integration).
+- **DeepSpeed ZeRO Stage 3** or **Fully sharded data parallel (FSDP)**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such model. For more details, see [DeepSpeed Integration](deepspeed_integration).
 - **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
-- **vLLM**: See the previous section on how to use vLLM to speed up generation.
+- **vLLM**: See the previous section on how to use vLLM to speed up generation. For scalable generation, deploy **one vLLM process per node**
 
-Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
+Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 8th node GPU in every node for vLLM-powered generation.
 
 ```sh
 #!/bin/bash
-#SBATCH --nodes=5
+#SBATCH --nodes=4
 #SBATCH --gres=gpu:8
+#SBATCH --tasks-per-node=1
 
-# Get the list of allocated nodes
-NODELIST=($(scontrol show hostnames $SLURM_JOB_NODELIST))
+# Assign the first 7 GPUs on every node to training, and the 8th GPU to inference
+cmd=$(tr -d "\n" << EOF
+accelerate launch
+    --mixed_precision=bf16
+    --num_machines=${SLURM_NNODES}
+    --num_processes=$((${SLURM_NNODES}*7))
+    --machine_rank=\${SLURM_NODEID}
+    --main_process_ip=${JOB_MASTER_ADDR}
+    --main_process_port=29500
+    --gpu_ids=0,1,2,3,4,5,6
+    train_grpo.py --vllm_server_host=127.0.0.1 <other script args> &
 
-# Assign the first 4 nodes for training and the 5th node for vLLM
-TRAIN_NODES="${NODELIST[@]:0:4}"  # Nodes 0, 1, 2, 3 for training
-VLLM_NODE="${NODELIST[4]}"  # Node 4 for vLLM
-
-# Run training on the first 4 nodes (Group 1)
-srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
-     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-     --num_processes 32 \
-     --num_machines 4 \
-     --main_process_ip ${NODELIST[0]} \
-     --machine_rank $SLURM_PROCID \
-     --rdzv_backend c10d \
-     train_grpo.py \
-     --server_ip $VLLM_NODE &
-
-# Run vLLM server on the 5th node (Group 2)
-srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+VLLM_PORT=29501 CUDA_VISIBLE_DEVICES=7 trl vllm-serve --model ${MODEL} --host=127.0.0.1 &
 
 wait
+EOF
+)
+
+srun bash -c "${cmd}"
 ```
 
 ```python
@@ -211,13 +209,14 @@ def main():
         return [len(set(c)) for c in completions]
 
     training_args = GRPOConfig(
+        # <add your fsdp or deepspeed config here>
         output_dir="Qwen2.5-72B-GRPO",
         per_device_train_batch_size=4,
         bf16=True,
         gradient_checkpointing=True,
         logging_steps=10,
         use_vllm=True,
-        vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
+        vllm_server_host=args.vllm_server_host,
     )
 
     trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
