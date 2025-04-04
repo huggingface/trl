@@ -6,7 +6,7 @@ ACCELERATE_CONFIG_PATH = `pwd`/examples/accelerate_configs
 COMMAND_FILES_PATH = `pwd`/commands
 
 test:
-	pytest -n auto -m "not slow" "not low-priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '(OSError|Timeout|HTTPError.*502|HTTPError.*504||not less than or equal to 0.01)' tests/
+	pytest -n auto -m "not slow and not low-priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '(OSError|Timeout|HTTPError.*502|HTTPError.*504||not less than or equal to 0.01)' tests/
 
 precommit:
 	python scripts/add_copyrights.py
