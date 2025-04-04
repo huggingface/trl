@@ -175,6 +175,8 @@ Below is an example SLURM script to train a 70B model with GRPO on multiple node
 #SBATCH --gres=gpu:8
 #SBATCH --tasks-per-node=1
 
+export JOB_MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+
 # Assign the first 7 GPUs on every node to training, and the 8th GPU to inference
 cmd=$(tr -d "\n" << EOF
 accelerate launch
