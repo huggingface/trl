@@ -15,6 +15,7 @@
 import gc
 import unittest
 
+import pytest
 import torch
 from parameterized import parameterized
 from transformers.utils import is_peft_available
@@ -36,6 +37,7 @@ def prompt_function():
     return ("cabbages", {})
 
 
+@pytest.mark.low_priority
 @require_diffusers
 class AlignPropTrainerTester(unittest.TestCase):
     """
