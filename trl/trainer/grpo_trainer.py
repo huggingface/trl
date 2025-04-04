@@ -16,8 +16,9 @@ import os
 import textwrap
 import warnings
 from collections import defaultdict
+from collections.abc import Sized
 from contextlib import nullcontext
-from typing import Any, Callable, Optional, Sized, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.utils.data
