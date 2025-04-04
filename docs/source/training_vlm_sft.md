@@ -1,6 +1,6 @@
 # Fine-tuning a Multimodal Model Using SFT (Single or Multi-Image Dataset)
 
-![Single Image + Text](./training_vlm_sft_training_procedure_single_image.png)  
+![VLM SFT training procedure](./training_vlm_sft_training_procedure.png)  
 
 ## Overview  
 
