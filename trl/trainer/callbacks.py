@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import pandas as pd
 import torch
@@ -210,7 +210,7 @@ class RichProgressCallback(TrainerCallback):
 
 
 def _win_rate_completions_df(
-    state: TrainerState, prompts: List[str], completions: List[str], winner_indices: List[str]
+    state: TrainerState, prompts: list[str], completions: list[str], winner_indices: list[str]
 ) -> pd.DataFrame:
     global_step = [str(state.global_step)] * len(prompts)
     data = list(zip(global_step, prompts, completions, winner_indices))
