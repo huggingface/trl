@@ -18,8 +18,9 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable, Optional, Union
+from typing import Optional, Union
 
 import yaml
 from transformers import HfArgumentParser
