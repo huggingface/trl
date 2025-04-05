@@ -25,7 +25,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
@@ -46,7 +45,6 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import is_peft_available
-from transformers.utils.deprecation import deprecate_kwarg
 
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
@@ -66,6 +64,7 @@ from .utils import (
     peft_module_casting_to_bf16,
     prepare_deepspeed,
     print_rich_table,
+    selective_log_softmax,
     truncate_response,
 )
 
@@ -98,14 +97,6 @@ class PolicyAndValueWrapper(nn.Module):
 class PPOTrainer(Trainer):
     _tag_names = ["trl", "ppo"]
 
-    @deprecate_kwarg("config", "0.15.0", "args", warn_if_greater_or_equal_version=True, raise_if_both_names=True)
-    @deprecate_kwarg(
-        "tokenizer", "0.15.0", "processing_class", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
-    @deprecate_kwarg("policy", "0.15.0", "model", warn_if_greater_or_equal_version=True, raise_if_both_names=True)
-    @deprecate_kwarg(
-        "ref_policy", "0.15.0", "ref_model", warn_if_greater_or_equal_version=True, raise_if_both_names=True
-    )
     def __init__(
         self,
         args: PPOConfig,
@@ -138,10 +129,18 @@ class PPOTrainer(Trainer):
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
 
-        self.policy_model.generation_config.eos_token_id = (
-            None  # disable `pad_token_id` and `eos_token_id` because we just want to
-        )
-        self.policy_model.generation_config.pad_token_id = None  # generate tokens without truncation / padding
+        # Handle stop token settings: update policy model's generation_config to use provided stop token
+        if args.stop_token and args.stop_token_id:
+            raise ValueError("You cannot set both `stop_token` and `stop_token_id`.")
+        elif args.stop_token:
+            if args.stop_token == "eos":
+                self.policy_model.generation_config.eos_token_id = self.stop_token_id = processing_class.eos_token_id
+            else:
+                raise ValueError(
+                    f"Unknown `stop_token` {args.stop_token}. Allowed values are: `'eos'` and `None` (no stop token)."
+                )
+        else:
+            self.policy_model.generation_config.eos_token_id = self.stop_token_id = args.stop_token_id  # None or int
 
         # peft support
         if not is_peft_available() and peft_config is not None:
@@ -196,9 +195,9 @@ class PPOTrainer(Trainer):
             args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
         if args.whiten_rewards:
-            assert (
-                args.local_mini_batch_size >= 8
-            ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
+            assert args.local_mini_batch_size >= 8, (
+                f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
+            )
         # `per_rank_rollout_batch_size` is our `args.local_batch_size`
         # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
         args.num_total_batches = math.ceil(
@@ -218,8 +217,6 @@ class PPOTrainer(Trainer):
         for module in [self.policy_model, self.ref_model, self.value_model, self.reward_model]:
             if module is not None:
                 disable_dropout_in_model(module)
-        if args.stop_token and args.stop_token == "eos":
-            args.stop_token_id = processing_class.eos_token_id
         self.model = PolicyAndValueWrapper(self.policy_model, self.value_model)
         self.model.config = self.policy_model.config  # needed for pushing to hub
         self.create_optimizer_and_scheduler(
@@ -311,9 +308,11 @@ class PPOTrainer(Trainer):
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
-        with self.accelerator.unwrap_model(
-            self.model.policy
-        ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
+        with (
+            self.accelerator.unwrap_model(self.model.policy).disable_adapter()
+            if self.is_peft_model and not self.ref_adapter_name
+            else nullcontext()
+        ):
             if self.ref_adapter_name:
                 self.model.policy.set_adapter(self.ref_adapter_name)
             yield
@@ -412,7 +411,9 @@ class PPOTrainer(Trainer):
                 scores = []
                 sequence_lengths = []
                 values = []
-                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                with unwrap_model_for_generation(
+                    self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                ) as unwrapped_model:
                     query_responses, logitss = batch_generation(
                         unwrapped_model.policy,
                         queries,
@@ -426,9 +427,8 @@ class PPOTrainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
-                    all_logprob = F.log_softmax(logits, dim=-1)
-                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del logits, all_logprob
+                    logprob = selective_log_softmax(logits, response)
+                    del logits
                     torch.cuda.empty_cache()
 
                     if ref_policy is None:
@@ -438,16 +438,15 @@ class PPOTrainer(Trainer):
                         ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
-                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                    del ref_output, ref_logits, ref_all_logprob
+                    ref_logprob = selective_log_softmax(ref_logits, response)
+                    del ref_output, ref_logits
                     torch.cuda.empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
-                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                    if self.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
                         postprocessed_response = truncate_response(
-                            args.stop_token_id, processing_class.pad_token_id, response
+                            self.stop_token_id, processing_class.pad_token_id, response
                         )
 
                     # Response Processing 2. run reward model on the truncated responses
@@ -546,8 +545,7 @@ class PPOTrainer(Trainer):
                             output, vpred_temp = forward(model, mb_query_responses, processing_class.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
                             logits /= args.temperature + 1e-7
-                            new_all_logprobs = F.log_softmax(logits, dim=-1)
-                            new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
+                            new_logprobs = selective_log_softmax(logits, mb_responses)
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
@@ -598,7 +596,7 @@ class PPOTrainer(Trainer):
                     # del everything and empty cache
                     # fmt: off
                     del (
-                        output, vpred_temp, logits, new_all_logprobs, new_logprobs, vpred, vpredclipped,
+                        output, vpred_temp, logits, new_logprobs, vpred, vpredclipped,
                         vf_losses1, vf_losses2, vf_loss, vf_clipfrac, logprobs_diff, ratio, pg_losses, pg_losses2, pg_loss_max,
                         pg_loss, loss, pg_clipfrac, prob_dist, entropy, approxkl, mb_return,
                         mb_advantage, mb_values, mb_responses, mb_query_responses, mb_logprobs,
@@ -686,7 +684,9 @@ class PPOTrainer(Trainer):
         )
 
         table = defaultdict(list)
-        with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+        with unwrap_model_for_generation(
+            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+        ) as unwrapped_model:
             for batch in self.eval_dataloader:
                 query = batch["input_ids"]
                 with torch.no_grad():
@@ -700,9 +700,9 @@ class PPOTrainer(Trainer):
                     )
                     response = query_response[:, context_length:]
                     postprocessed_response = response
-                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                    if self.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
                         postprocessed_response = truncate_response(
-                            args.stop_token_id, processing_class.pad_token_id, response
+                            self.stop_token_id, processing_class.pad_token_id, response
                         )
                     table["query"].extend(
                         gather_object(processing_class.batch_decode(query, skip_special_tokens=True))
@@ -745,10 +745,10 @@ class PPOTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """

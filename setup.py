@@ -21,7 +21,7 @@ Note:
 
 Simple check list for release from AllenNLP repo: https://github.com/allenai/allennlp/blob/master/setup.py
 
-To create the package for pypi.
+To create the package for PyPI.
 
 0. Prerequisites:
    - Dependencies:
@@ -36,7 +36,7 @@ To create the package for pypi.
 
 2. Commit these changes: "git commit -m 'Release: VERSION'"
 
-3. Add a tag in git to mark the release: "git tag VERSION -m 'Add tag VERSION for pypi'"
+3. Add a tag in git to mark the release: "git tag VERSION -m 'Add tag VERSION for PyPI'"
    Push the tag to remote: git push --tags origin main
 
 4. Build both the sources and the wheel. Do not change anything in setup.py between
@@ -50,16 +50,14 @@ To create the package for pypi.
    For the sources, run: "python setup.py sdist"
    You should now have a /dist directory with both .whl and .tar.gz source versions.
 
-5. Check that everything looks correct by uploading the package to the pypi test server:
+5. Check that everything looks correct by uploading the package to the PyPI test server:
 
    twine upload dist/* -r pypitest --repository-url=https://test.pypi.org/legacy/
 
    Check that you can install it in a virtualenv/notebook by running:
-   pip install huggingface_hub fsspec aiohttp
-   pip install -U tqdm
-   pip install -i https://testpypi.python.org/pypi evaluate
+   pip install -i https://testpypi.python.org/pypi trl
 
-6. Upload the final version to actual pypi:
+6. Upload the final version to actual PyPI:
    twine upload dist/* -r pypi
 
 7. Fill release notes in the tag in github once everything is looking hunky-dory.
@@ -71,26 +69,26 @@ To create the package for pypi.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.14.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.17.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "accelerate>=0.34.0",
-    "datasets>=2.21.0",
+    "datasets>=3.0.0",
     "rich",  # rich shouldn't be a required package for trl, we should remove it from here
     "transformers>=4.46.0",
 ]
 EXTRAS = {
-    # Windows support is partially supported with DeepSpeed https://github.com/microsoft/DeepSpeed/tree/master#windows
-    "deepspeed": ["deepspeed>=0.14.4; sys_platform != 'win32'"],
+    "deepspeed": ["deepspeed>=0.14.4"],
     "diffusers": ["diffusers>=0.18.0"],
     "judges": ["openai>=1.23.2", "llm-blender>=0.0.2"],
-    # liger-kernel depends on triton, which is only available on Linux https://github.com/triton-lang/triton#compatibility
-    "liger": ["liger-kernel>=0.4.0; sys_platform != 'win32'"],
+    "liger": ["liger-kernel>=0.5.6"],
     "mergekit": ["mergekit>=0.0.5.1"],
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],
     "scikit": ["scikit-learn"],
+    "bco": ["scikit-learn", "joblib"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
+    "vllm": ["vllm>=0.7.0", "fastapi", "pydantic", "requests", "uvicorn"],
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
@@ -122,7 +120,7 @@ setup(
     package_data={
         "trl": ["templates/*.md"],
     },
-    packages=find_packages(exclude={"tests", "tests.slow"}),
+    packages=find_packages(exclude={"tests", "tests.slow", "trl.templates"}),
     install_requires=REQUIRED_PKGS,
     extras_require=EXTRAS,
     python_requires=">=3.9",
@@ -131,7 +129,7 @@ setup(
     zip_safe=False,
     version=__version__,
     description="Train transformer language models with reinforcement learning.",
-    keywords="ppo, transformers, huggingface, gpt2, language modeling, rlhf",
+    keywords="transformers, huggingface, language modeling, post-training, rlhf, sft, dpo, grpo",
     author="Leandro von Werra",
     author_email="leandro.vonwerra@gmail.com",
 )

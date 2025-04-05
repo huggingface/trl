@@ -26,12 +26,11 @@ import datasets
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 import torch.utils.data
 from accelerate import Accelerator, PartialState
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
-from rich.console import Console
-from rich.table import Table
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import IterableDataset
 from transformers import (
@@ -51,8 +50,15 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
+from ..import_utils import is_rich_available
 from ..trainer.model_config import ModelConfig
 
+
+if is_rich_available():
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
 
 if is_comet_available():
     import comet_ml
@@ -139,7 +145,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     warnings.warn(
                         f"Could not find response key `{self.response_template}` in the following instance: "
                         f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
-                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        "calculation. Note, if this happens often, consider increasing the `max_length`.",
                         UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
@@ -166,7 +172,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     warnings.warn(
                         f"Could not find response key `{self.response_template}` in the following instance: "
                         f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
-                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        "calculation. Note, if this happens often, consider increasing the `max_length`.",
                         UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
@@ -181,7 +187,7 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                     warnings.warn(
                         f"Could not find instruction key `{self.instruction_template}` in the following instance: "
                         f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
-                        "calculation. Note, if this happens often, consider increasing the `max_seq_length`.",
+                        "calculation. Note, if this happens often, consider increasing the `max_length`.",
                         UserWarning,
                     )
                     batch["labels"][i, :] = self.ignore_index
@@ -223,11 +229,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
                         flattened_position_ids.size(), device=flattened_position_ids.device, dtype=torch.int32
                     ),
                 )
-            )
+            ).unsqueeze(0)
             batch["cu_seq_lens_k"] = batch["cu_seq_lens_q"]
 
             # Determine maximum sequence lengths to prevent graph breaks during further computations.
-            batch["max_length_k"] = flattened_position_ids.max().item() + 1
+            batch["max_length_k"] = torch.tensor([flattened_position_ids.max().item() + 1])
             batch["max_length_q"] = batch["max_length_k"]
 
         return batch
@@ -914,6 +920,7 @@ def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
         lora_dropout=model_args.lora_dropout,
         bias="none",
         use_rslora=model_args.use_rslora,
+        use_dora=model_args.use_dora,
         modules_to_save=model_args.lora_modules_to_save,
     )
 
@@ -993,9 +1000,15 @@ class OnPolicyConfig(TrainingArguments):
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
         stop_token (`str` or `None`, *optional*, defaults to `None`):
-            Stop token.
+            Specifies the stop token to use for text generation. This parameter is mutually exclusive with
+            `stop_token_id`.
+
+            - `None`: No stop token is applied, unless `stop_token_id` is specified.
+            - `'eos'`: Uses the tokenizer's `eos_token`.
+
         stop_token_id (`int` or `None`, *optional*, defaults to `None`):
-            Truncation token id.
+            Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
+            unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
@@ -1054,11 +1067,17 @@ class OnPolicyConfig(TrainingArguments):
     )
     stop_token: Optional[Literal["eos"]] = field(
         default=None,
-        metadata={"help": "Stop token."},
+        metadata={
+            "help": "Specifies the stop token to use for text generation. This parameter is mutually exclusive with "
+            "`stop_token_id`."
+        },
     )
     stop_token_id: Optional[int] = field(
         default=None,
-        metadata={"help": "Truncation token id."},
+        metadata={
+            "help": "Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is "
+            "applied, unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`."
+        },
     )
     temperature: float = field(
         default=0.7,
@@ -1569,3 +1588,175 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     experiment = comet_ml.get_running_experiment()
     if experiment is not None:
         experiment.log_table(tabular_data=table, filename=name)
+
+
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """
+    Shift non-zero elements in the mask and corresponding tensors to the left.
+
+    This function operates on a binary mask and any number of additional tensors with the same dimensions as the mask.
+    For each row, non-zero values are shifted to the leftmost positions. Then, columns that contain only zeros across
+    all rows are truncated from the mask and tensors. Visually, this operation can be represented as follows:
+
+    ```
+    [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+     [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+    ```
+
+    Args:
+
+        mask (`torch.Tensor`):
+            2D tensor (binary mask) with shape `(N, M)`.
+        *tensors (`torch.Tensor`)
+            One or more 2D tensors with the same shape as `mask`. These tensors will be processed alongside `mask`,
+            with non-zero values shifted and excess zero columns truncated in the same manner.
+
+    Returns:
+        `torch.Tensor`:
+            Updated binary mask with non-zero values flushed to the left and trailing zero columns removed.
+        `*torch.Tensor`
+            Updated tensors, processed in the same way as the mask.
+
+    Example:
+    ```python
+    >>> mask = torch.tensor([[0, 0, 1, 1, 1],
+    ...                      [0, 1, 1, 0, 0]])
+    >>> tensor = torch.tensor([[9, 9, 2, 3, 4],
+    ...                        [9, 5, 6, 9, 9]])
+    >>> new_mask, new_tensor = flush_left(mask, tensor)
+    >>> print(new_mask)
+    tensor([[1, 1, 1],
+            [1, 1, 0]])
+    >>> print(new_tensor)
+    tensor([[2, 3, 4],
+            [5, 6, 0]])
+    ```
+    """
+    # Create copy of mask and tensors
+    mask = mask.clone()
+    tensors = [t.clone() for t in tensors]
+
+    # Shift non-zero values to the left
+    for i in range(mask.size(0)):
+        first_one_idx = torch.nonzero(mask[i])[0].item()
+        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
+        for tensor in tensors:
+            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+
+    # Get the first column idx that is all zeros and remove every column after that
+    empty_cols = torch.sum(mask, dim=0) == 0
+    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
+    mask = mask[:, :first_empty_col]
+    for i, tensor in enumerate(tensors):
+        tensors[i] = tensor[:, :first_empty_col]
+
+    if not tensors:
+        return mask
+    else:
+        return mask, *tensors
+
+
+def selective_log_softmax(logits, index):
+    """
+    A memory-efficient implementation of the common `log_softmax -> gather` operation.
+
+    This function is equivalent to the following naive implementation:
+    ```python
+    logps = torch.gather(logits.log_softmax(-1), dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
+    ```
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+        index (`torch.Tensor`):
+            Index tensor of shape `(...)`, specifying the positions to gather from the log-softmax output.
+
+    Returns:
+        `torch.Tensor`:
+            Gathered log probabilities with the same shape as `index`.
+    """
+    if logits.dtype in [torch.float32, torch.float64]:
+        selected_logits = torch.gather(logits, dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
+        # loop to reduce peak mem consumption
+        logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
+        per_token_logps = selected_logits - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
+    else:
+        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficent approach
+        per_token_logps = []
+        for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
+            row_logps = F.log_softmax(row_logits, dim=-1)
+            row_per_token_logps = row_logps.gather(dim=-1, index=row_labels.unsqueeze(-1)).squeeze(-1)
+            per_token_logps.append(row_per_token_logps)
+        per_token_logps = torch.stack(per_token_logps)
+    return per_token_logps
+
+
+def print_prompt_completions_sample(
+    prompts: list[str], completions: list[str], rewards: dict[str, list[float]], step: int, num_samples: int = None
+) -> None:
+    """
+    Print out a sample of model completions to the console with multiple reward metrics.
+
+    This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
+    during training. It requires the `rich` library to be installed.
+
+    Args:
+        prompts (`list[str]`):
+            List of prompts.
+        completions (`list[str]`):
+            List of completions corresponding to the prompts.
+        rewards (`dict[str, list[float]]`):
+            Dictionary where keys are reward names and values are lists of rewards.
+        step (`int`):
+            Current training step number, used in the output title.
+        num_samples (`int` or `None`, *optional*, defaults to `None`):
+            Number of random samples to display. If `None` (default), all items will be displayed.
+
+    Example:
+    ```python
+    >>> from trl.trainer.utils import print_prompt_completions_sample
+    >>> prompts = ["The sky is", "The sun is"]
+    >>> completions = [" blue.", " in the sky."]
+    >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+    >>> print_prompt_completions_sample(prompts, completions, rewards, 42)
+    ╭────────────────────── Step 42 ───────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
+    │ └────────────┴──────────────┴─────────────┴────────┘ │
+    ╰──────────────────────────────────────────────────────╯
+    ```
+    """
+    console = Console()
+    table = Table(show_header=True, header_style="bold white", expand=True)
+
+    # Add columns
+    table.add_column("Prompt", style="bright_yellow")
+    table.add_column("Completion", style="bright_green")
+    for reward_name in rewards.keys():
+        table.add_column(reward_name, style="bold cyan", justify="right")
+
+    # Some basic input validation
+    if num_samples is not None:
+        if num_samples >= len(prompts):
+            num_samples = None
+        elif num_samples <= 0:
+            return
+
+    # Subsample data if num_samples is specified
+    if num_samples is not None:
+        indices = random.sample(range(len(prompts)), num_samples)
+        prompts = [prompts[i] for i in indices]
+        completions = [completions[i] for i in indices]
+        rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
+
+    for i in range(len(prompts)):
+        reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
+        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values)
+        table.add_section()  # Adds a separator between rows
+
+    panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
+    console.print(panel)

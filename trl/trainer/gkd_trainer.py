@@ -36,7 +36,7 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..models import PreTrainedModelWrapper
 from ..models.utils import unwrap_model_for_generation
@@ -54,8 +54,6 @@ from .utils import (
 if is_deepspeed_available():
     import deepspeed
 
-if is_liger_kernel_available():
-    from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 if is_peft_available():
     from peft import PeftConfig
@@ -78,7 +76,6 @@ class GKDTrainer(SFTTrainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
@@ -86,9 +83,9 @@ class GKDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
     ):
-        # add remove_unused_columns=False to the the dataclass args
+        # add remove_unused_columns=False to the dataclass args
         args.remove_unused_columns = False
-        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_seq_length)
+        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
 
         super().__init__(
             model,
@@ -97,7 +94,6 @@ class GKDTrainer(SFTTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
@@ -121,10 +117,7 @@ class GKDTrainer(SFTTrainer):
             )
 
         if isinstance(teacher_model, str):
-            if args.use_liger:
-                teacher_model = AutoLigerKernelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
-            else:
-                teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
+            teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
         # Disable dropout in the model
         if args.disable_dropout:
@@ -158,6 +151,14 @@ class GKDTrainer(SFTTrainer):
         ):
             self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
 
+    def _prepare_dataset(self, dataset, *args):
+        # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
+        # need to keep the messages column as it is. We use the following workaround to keep the messages column.
+        dataset = dataset.add_column("_messages", dataset["messages"])
+        dataset = super()._prepare_dataset(dataset, *args)
+        dataset = dataset.rename_column("_messages", "messages")
+        return dataset
+
     @staticmethod
     def generalized_jsd_loss(
         student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
@@ -186,21 +187,26 @@ class GKDTrainer(SFTTrainer):
         student_log_probs = F.log_softmax(student_logits, dim=-1)
         teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
-        # Compute the log of the mixture distribution
-        # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
-        beta = torch.tensor(beta, dtype=student_log_probs.dtype)
-        mixture_log_probs = torch.logsumexp(
-            torch.stack([student_log_probs + torch.log(beta), teacher_log_probs + torch.log(1 - beta)]),
-            dim=0,
-        )
+        if beta == 0:
+            jsd = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
+        elif beta == 1:
+            jsd = F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
+        else:
+            # Compute the log of the mixture distribution
+            # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
+            beta = torch.tensor(beta, dtype=student_log_probs.dtype)
+            mixture_log_probs = torch.logsumexp(
+                torch.stack([student_log_probs + torch.log(1 - beta), teacher_log_probs + torch.log(beta)]),
+                dim=0,
+            )
 
-        # Compute KL divergences using F.kl_div
-        # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
-        kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
-        kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
+            # Compute KL divergences using F.kl_div
+            # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
+            kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
+            kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
 
-        # Compute the Generalized Jensen-Shannon Divergence
-        jsd = beta * kl_teacher + (1 - beta) * kl_student
+            # Compute the Generalized Jensen-Shannon Divergence
+            jsd = beta * kl_teacher + (1 - beta) * kl_student
 
         # Masking
         if labels is not None:
@@ -346,10 +352,10 @@ class GKDTrainer(SFTTrainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """

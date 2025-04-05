@@ -37,6 +37,10 @@ class OnlineDPOConfig(TrainingArguments):
             Name of the judge to use. Either `judge` or `reward_model_path` must be set, but not both.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
+        max_length (`int`, *optional*, defaults to `256`):
+            Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If the
+            sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the completion as
+            possible.
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
@@ -58,6 +62,14 @@ class OnlineDPOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
+        use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
+        gpu_memory_utilization (`float`, *optional*, defaults to `0.55`):
+            The vLLM memory utilization. The default value is 0.55.
+        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
+            improving generation speed. However, disabling this option allows training models that exceed the VRAM
+            capacity of a single GPU, albeit at the cost of slower generation.
     """
 
     learning_rate: float = field(
@@ -83,6 +95,14 @@ class OnlineDPOConfig(TrainingArguments):
         default=64,
         metadata={"help": "Maximum number of tokens to generate per completion."},
     )
+    max_length: int = field(
+        default=512,
+        metadata={
+            "help": "Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If "
+            "the sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the "
+            "completion as possible."
+        },
+    )
     temperature: float = field(
         default=0.9,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
@@ -100,8 +120,8 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={
             "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
             "the reference model. For the IPO loss (`loss_type='ipo'`), β is the regularization parameter denoted by "
-            "τ in the [paper](https://huggingface.co/papers/2310.12036). If a list of floats is provided then the β is "
-            "selected for each new epoch and the last β is used for the rest of the epochs."
+            "τ in the [paper](https://huggingface.co/papers/2310.12036). If a list of floats is provided then the β "
+            "is selected for each new epoch and the last β is used for the rest of the epochs."
         },
     )
     loss_type: str = field(
@@ -118,6 +138,27 @@ class OnlineDPOConfig(TrainingArguments):
     disable_dropout: bool = field(
         default=True,
         metadata={"help": "Whether to disable dropout in the model."},
+    )
+    use_vllm: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use vLLM for generating completions. Requires vLLM to be installed "
+            "(`pip install vllm`)."
+        },
+    )
+    gpu_memory_utilization: Optional[float] = field(
+        default=0.55,
+        metadata={
+            "help": "The vLLM memory utilization. The default value is 0.55.",
+        },
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
+            "generation, improving generation speed. However, disabling this option allows training models that "
+            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation."
+        },
     )
 
     def __post_init__(self):

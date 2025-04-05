@@ -24,8 +24,12 @@ from trl.data_utils import (
     extract_prompt,
     is_conversational,
     maybe_apply_chat_template,
+    maybe_convert_to_chatml,
     maybe_extract_prompt,
     maybe_unpair_preference_dataset,
+    pack_dataset,
+    pack_examples,
+    truncate_dataset,
     unpair_preference_dataset,
 )
 
@@ -41,7 +45,7 @@ class IsConversationalTester(unittest.TestCase):
         {  # Prompt only
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
         },
-        {  # Pompt-completion
+        {  # Prompt-completion
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
             "completion": [{"role": "assistant", "content": "It is blue."}],
         },
@@ -110,7 +114,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         {  # Prompt only
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
         },
-        {  # Pompt-completion
+        {  # Prompt-completion
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
             "completion": [{"role": "assistant", "content": "It is blue."}],
         },
@@ -153,7 +157,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         # Checking if the result is a dictionary
         self.assertIsInstance(result, dict)
 
-        # The chat template should be applied to the the following keys
+        # The chat template should be applied to the following keys
         for key in ["prompt", "chosen", "rejected", "completion"]:
             if key in example:
                 self.assertIn(key, result)
@@ -179,7 +183,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         # Checking if the result is a dictionary
         self.assertIsInstance(result, dict)
 
-        # The chat template should be applied to the the following keys
+        # The chat template should be applied to the following keys
         for key in ["prompt", "chosen", "rejected", "completion"]:
             if key in example:
                 self.assertIn(key, result)
@@ -390,6 +394,171 @@ class ExtractPromptTester(unittest.TestCase):
             self.example_explicit_prompt_standard,
             "The prompt should remain unchanged.",
         )
+
+
+class TestPackExamples(unittest.TestCase):
+    def test_larger_chunks(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        seq_length = 5
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4, 5], [6, 7, 8]],
+            "attention_mask": [[0, 1, 1, 0, 0], [1, 1, 1]],
+        }
+        result = pack_examples(examples, seq_length)
+        self.assertEqual(result, expected_output)
+
+    def test_smaller_chunks(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        seq_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [3, 4], [5, 6], [7, 8]],
+            "attention_mask": [[0, 1], [1, 0], [0, 1], [1, 1]],
+        }
+        result = pack_examples(examples, seq_length)
+        self.assertEqual(result, expected_output)
+
+    def test_with_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 3
+        expected_output = {
+            "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
+        }
+        dataset = dataset.map(pack_examples, batched=True, fn_kwargs={"seq_length": seq_length})
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+
+class TestPackDataset(unittest.TestCase):
+    def test_with_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 3
+        expected_output = {
+            "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length)
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        seq_length = 3
+        expected_output = {
+            "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length)
+        num_examples = len(examples[next(iter(examples))])
+        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+
+class TestTruncateExamples(unittest.TestCase):
+    def test_with_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        num_examples = len(examples[next(iter(examples))])
+        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+    def test_with_extra_column(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+            "my_column": ["a", "b", "c"],
+        }
+        dataset = Dataset.from_dict(examples)
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+            "my_column": ["a", "b", "c"],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+
+class TestMaybeConvertToChatML(unittest.TestCase):
+    def test_with_conversations_key(self):
+        # Particular case where the key is "conversations": we rename it to "messages"
+        example = {
+            "conversations": [
+                {"from": "user", "value": "What color is the sky?"},
+                {"from": "assistant", "value": "It is blue."},
+            ]
+        }
+        expected_output = {
+            "messages": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ]
+        }
+        self.assertEqual(maybe_convert_to_chatml(example), expected_output)
+
+    def test_without_conversations_key(self):
+        # Same as before, but we don't rename the keys
+        example = {
+            "prompt": [{"from": "user", "value": "What color is the sky?"}],
+            "completion": [{"from": "assistant", "value": "It is blue."}],
+        }
+        expected_output = {
+            "prompt": [{"role": "user", "content": "What color is the sky?"}],
+            "completion": [{"role": "assistant", "content": "It is blue."}],
+        }
+        self.assertEqual(maybe_convert_to_chatml(example), expected_output)
+
+    def test_not_conversional(self):
+        # When not needed, the example should remain unchanged
+        example = {"text": "The sky is blue."}
+        self.assertEqual(maybe_convert_to_chatml(example), example)
+
+    def test_already_chatml(self):
+        # When the example is already in ChatML format, it should remain unchanged
+        example = {
+            "messages": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ]
+        }
+        self.assertEqual(maybe_convert_to_chatml(example), example)
 
 
 # Run the tests
