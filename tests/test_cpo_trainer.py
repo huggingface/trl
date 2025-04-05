@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -89,11 +89,10 @@ class CPOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                # check the params have changed - ignore 0 biases
-                if param.sum() != 0:
+                if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.equal(param, new_param))
 
     @parameterized.expand(
@@ -147,10 +146,44 @@ class CPOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # check the params have changed
+            # Check that the parameters have changed
             for n, param in previous_trainable_params.items():
                 if "lora" in n:
                     new_param = trainer.model.get_parameter(n)
-                    # check the params have changed - ignore 0 biases
-                    if param.sum() != 0:
+                    if param.sum() != 0:  # ignore 0 biases
                         self.assertFalse(torch.equal(param, new_param))
+
+    def test_compute_metrics(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer.pad_token = tokenizer.eos_token
+
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        def dummy_compute_metrics(*args, **kwargs):
+            return {"test": 0.0}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = CPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                remove_unused_columns=False,
+                do_eval=True,
+                eval_strategy="steps",
+                eval_steps=1,
+                per_device_eval_batch_size=2,
+                report_to="none",
+            )
+
+            trainer = CPOTrainer(
+                model=model,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                compute_metrics=dummy_compute_metrics,
+            )
+
+            trainer.train()
+
+            self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)

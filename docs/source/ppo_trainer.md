@@ -26,6 +26,8 @@ python examples/scripts/ppo/ppo.py \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
+    --sft_model_path EleutherAI/pythia-1b-deduped \
+    --reward_model_path EleutherAI/pythia-1b-deduped \
     --missing_eos_penalty 1.0
 ```
 
@@ -50,13 +52,13 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 * `val/ratio_var`: The variance of the `val/ratio`, indicating the variability in policy changes.
 * `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
 * `lr`: lr: The current learning rate used by the optimizer.
-* `episode`: episode: The current global step or episode count in the training process.
+* `episode`: episode: The current episode count in the training process.
 
 
 ## Cookbook
 
 * Debugging TIP: `objective/rlhf_reward`: this is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
-* Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try undertand why this is happening and try to fix it.
+* Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try understand why this is happening and try to fix it.
 * Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
 * Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
 * Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which subtracts a static scalar penalty from the score of completions that do not end with an EOS token. This can help the model learn to generate more coherent completions.

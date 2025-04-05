@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -44,6 +44,7 @@ from .utils import (
     generate_model_card,
     get_comet_experiment_url,
     get_reward,
+    selective_log_softmax,
     truncate_right,
 )
 from .xpo_config import XPOConfig
@@ -274,8 +275,7 @@ class XPOTrainer(OnlineDPOTrainer):
         def compute_logprobs_for_data(m, data):
             output = m(data["input_ids"], attention_mask=data["attention_mask"])
             logits = output.logits[:, context_length - 1 : -1]
-            logprobs = F.log_softmax(logits, dim=-1)
-            token_logprobs = torch.gather(logprobs, 2, data["input_ids"][:, context_length:].unsqueeze(-1)).squeeze(-1)
+            token_logprobs = selective_log_softmax(logits, data["input_ids"][:, context_length:])
             return token_logprobs
 
         # Compute logprobs for model completions
@@ -360,7 +360,7 @@ class XPOTrainer(OnlineDPOTrainer):
     ):
         # Helper function to gather and compute mean
         def gather_mean(tensor):
-            return self.accelerator.gather(tensor).mean().item()
+            return self.accelerator.gather_for_metrics(tensor).mean().item()
 
         # Log losses
         self.stats["loss/dpo"].append(gather_mean(dpo_losses))
@@ -525,10 +525,10 @@ class XPOTrainer(OnlineDPOTrainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """

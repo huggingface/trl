@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ def process_log_file(log):
                 try:
                     data = json.loads(line)
                     test_name = data.get("nodeid", "")
-                    duration = f'{data["duration"]:.4f}' if "duration" in data else "N/A"
+                    duration = f"{data['duration']:.4f}" if "duration" in data else "N/A"
                     outcome = data.get("outcome", "")
 
                     if test_name:

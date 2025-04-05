@@ -161,6 +161,8 @@ prompt_only_example = {"prompt": "The sky is"}
 prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
 ```
 
+For examples of prompt-only datasets, refer to the [Prompt-only datasets collection](https://huggingface.co/collections/trl-lib/prompt-only-datasets-677ea25245d20252cea00368).
+
 <Tip>
 
 While both the prompt-only and language modeling types are similar, they differ in how the input is handled. In the prompt-only type, the prompt represents a partial input that expects the model to complete or continue, while in the language modeling type, the input is treated as a complete sentence or sequence. These two types are processed differently by TRL. Below is an example showing the difference in the output of the `apply_chat_template` function for each type:
@@ -199,6 +201,8 @@ prompt_completion_example = {"prompt": [{"role": "user", "content": "What color 
                              "completion": [{"role": "assistant", "content": "It is blue."}]}
 ```
 
+For examples of prompt-completion datasets, refer to the [Prompt-completion datasets collection](https://huggingface.co/collections/trl-lib/prompt-completion-datasets-677ea2bb20bbb6bdccada216).
+
 #### Preference
 
 A preference dataset is used for tasks where the model is trained to choose between two or more possible completions to the same prompt. This dataset includes a `"prompt"`, a `"chosen"` completion, and a `"rejected"` completion. The model is trained to select the `"chosen"` response over the `"rejected"` response.
@@ -223,6 +227,8 @@ preference_example = {"chosen": [{"role": "user", "content": "What color is the 
                                    {"role": "assistant", "content": "It is green."}]}
 ```
 
+For examples of preference datasets, refer to the [Preference datasets collection](https://huggingface.co/collections/trl-lib/preference-datasets-677e99b581018fcad9abd82c).
+
 Some preference datasets can be found with [the tag `dpo` on Hugging Face Hub](https://huggingface.co/datasets?other=dpo). You can also explore the [librarian-bots' DPO Collections](https://huggingface.co/collections/librarian-bots/direct-preference-optimization-datasets-66964b12835f46289b6ef2fc) to identify preference datasets.
 
 #### Unpaired preference
@@ -238,6 +244,8 @@ unpaired_preference_example = {"prompt": [{"role": "user", "content": "What colo
                                "label": True}
 ```
 
+For examples of unpaired preference datasets, refer to the [Unpaired preference datasets collection](https://huggingface.co/collections/trl-lib/unpaired-preference-datasets-677ea22bf5f528c125b0bcdf).
+
 #### Stepwise supervision
 
 A stepwise (or process) supervision dataset is similar to an [unpaired preference](#unpaired-preference) dataset but includes multiple steps of completions, each with its own label. This structure is useful for tasks that need detailed, step-by-step labeling, such as reasoning tasks. By evaluating each step separately and providing targeted labels, this approach helps identify precisely where the reasoning is correct and where errors occur, allowing for targeted feedback on each part of the reasoning process.
@@ -250,6 +258,8 @@ stepwise_example = {
 }
 ```
 
+For examples of stepwise supervision datasets, refer to the [Stepwise supervision datasets collection](https://huggingface.co/collections/trl-lib/stepwise-supervision-datasets-677ea27fd4c5941beed7a96e).
+
 ## Which dataset type to use?
 
 Choosing the right dataset type depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset types supported by each TRL trainer.
@@ -260,6 +270,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`CPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
 | [`DPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
 | [`GKDTrainer`]          | [Prompt-completion](#prompt-completion)                                                                |
+| [`GRPOTrainer`]         | [Prompt-only](#prompt-only)                                                                            |
 | [`IterativeSFTTrainer`] | [Unpaired preference](#unpaired-preference)                                                            |
 | [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                                                                            |
@@ -330,7 +341,7 @@ dataset = dataset.map(apply_chat_template, fn_kwargs={"tokenizer": tokenizer})
 
 <Tip warning={true}>
 
-We recommend using the [`apply_chat_template`] function instead of calling `tokenizer.apply_chat_template` directly. Handling chat templates for non-language modeling datasets can be tricky and may result in errors, such as mistakenly placing a system prompt in the middle conversation.
+We recommend using the [`apply_chat_template`] function instead of calling `tokenizer.apply_chat_template` directly. Handling chat templates for non-language modeling datasets can be tricky and may result in errors, such as mistakenly placing a system prompt in the middle of a conversation.
 For additional examples, see [#1930 (comment)](https://github.com/huggingface/trl/pull/1930#issuecomment-2292908614). The [`apply_chat_template`] is designed to handle these intricacies and ensure the correct application of chat templates for various tasks.
 
 </Tip>
@@ -578,6 +589,14 @@ dataset = unpair_preference_dataset(dataset)
  'label': True}
 ```
 
+<Tip warning={true}>
+
+Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
+Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
+This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
+
+</Tip>
+
 ### From preference to language modeling dataset
 
 To convert a preference dataset into a language modeling dataset, remove the rejected, concatenate the prompt and the chosen into the `"text"` column.
@@ -711,9 +730,17 @@ dataset = unpair_preference_dataset(dataset)
  'label': True}
 ```
 
+<Tip warning={true}>
+
+Keep in mind that the `"chosen"` and `"rejected"` completions in a preference dataset can be both good or bad.
+Before applying [`unpair_preference_dataset`], please ensure that all `"chosen"` completions can be labeled as good and all `"rejected"` completions as bad.
+This can be ensured by checking absolute rating of each completion, e.g. from a reward model.
+
+</Tip>
+
 ### From unpaired preference to language modeling dataset
 
-To convert an unpaired preference dataset into a language modeling dataset, concatenate the prompt and the completion into the `"text"` column, and remove the prompt, completion and label columns.
+To convert an unpaired preference dataset into a language modeling dataset, concatenate prompts with good completions into the `"text"` column, and remove the prompt, completion and label columns.
 
 ```python
 from datasets import Dataset
@@ -727,7 +754,7 @@ dataset = Dataset.from_dict({
 def concatenate_prompt_completion(example):
     return {"text": example["prompt"] + example["completion"]}
 
-dataset = dataset.map(concatenate_prompt_completion).remove_columns(["prompt", "completion", "label"])
+dataset = dataset.filter(lambda x: x["label"]).map(concatenate_prompt_completion).remove_columns(["prompt", "completion", "label"])
 ```
 
 ```python
@@ -737,7 +764,7 @@ dataset = dataset.map(concatenate_prompt_completion).remove_columns(["prompt", "
 
 ### From unpaired preference to prompt-completion dataset
 
-To convert an unpaired preference dataset into a prompt-completion dataset, remove the label columns.
+To convert an unpaired preference dataset into a prompt-completion dataset, filter for good labels, then remove the label columns.
 
 ```python
 from datasets import Dataset
@@ -748,7 +775,7 @@ dataset = Dataset.from_dict({
     "label": [True, True, False, False],
 })
 
-dataset = dataset.remove_columns(["label"])
+dataset = dataset.filter(lambda x: x["label"]).remove_columns(["label"])
 ```
 
 ```python
@@ -779,7 +806,7 @@ dataset = dataset.remove_columns(["completion", "label"])
 
 ### From stepwise supervision to language modeling dataset
 
-To convert a stepwise supervision dataset into a language modeling dataset, concatenate the prompt and the completions into the `"text"` column.
+To convert a stepwise supervision dataset into a language modeling dataset, concatenate prompts with good completions into the `"text"` column.
 
 ```python
 from datasets import Dataset
@@ -795,7 +822,7 @@ def concatenate_prompt_completions(example):
     completion = "".join(example["completions"])
     return {"text": example["prompt"] + completion}
 
-dataset = dataset.map(concatenate_prompt_completions, remove_columns=["prompt", "completions", "labels"])
+dataset = dataset.filter(lambda x: all(x["labels"])).map(concatenate_prompt_completions, remove_columns=["prompt", "completions", "labels"])
 ```
 
 ```python
@@ -805,7 +832,7 @@ dataset = dataset.map(concatenate_prompt_completions, remove_columns=["prompt", 
 
 ### From stepwise supervision to prompt completion dataset
 
-To convert a stepwise supervision dataset into a prompt-completion dataset, join the completions and remove the labels.
+To convert a stepwise supervision dataset into a prompt-completion dataset, join the good completions and remove the labels.
 
 ```python
 from datasets import Dataset
@@ -821,7 +848,7 @@ def join_completions(example):
     completion = "".join(example["completions"])
     return {"completion": completion}
 
-dataset = dataset.map(join_completions, remove_columns=["completions", "labels"])
+dataset = dataset.filter(lambda x: all(x["labels"])).map(join_completions, remove_columns=["completions", "labels"])
 ```
 
 ```python
