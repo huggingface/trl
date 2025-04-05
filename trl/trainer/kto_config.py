@@ -28,7 +28,7 @@ class KTOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        learning_rate (`float`, *optional*, defaults to `5e-7`):
+        learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
         max_length (`int` or `None`, *optional*, defaults to `1024`):
@@ -78,6 +78,11 @@ class KTOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use Liger loss. It requires liger-kernel to be installed.
+        base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
+            Name of the attribute in the model that contains the base model. This is used to get the base model from
+            the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
     """
 
     learning_rate: float = field(
@@ -192,4 +197,16 @@ class KTOConfig(TrainingArguments):
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use Liger loss. It requires liger-kernel to be installed."},
+    )
+    base_model_attribute_name: str = field(
+        default="model",
+        metadata={
+            "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
+            "model from the model when the model does not have a `get_decoder` method in the case when "
+            "`use_liger_loss` is `True`."
+        },
     )

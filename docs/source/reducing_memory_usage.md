@@ -94,6 +94,41 @@ Packing may cause batch contamination, where adjacent sequences influence one an
 
 </Tip>
 
+## Padding-free
+
+Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
+
+<div class="flex justify-center">
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/padding-free.png" alt="Padding-free batching" width="600"/>
+</div>
+
+<Tip warning={true}>
+
+It's highly recommended to use padding-free batching with **Flash Attention 2**. Otherwise, you may encounter batch contamination issues.
+
+</Tip>
+
+<hfoptions id="padding-free">
+<hfoption id="DPO">
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
+```
+
+</hfoption>
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_implementation": "flash_attention_2"})
+```
+
+</hfoption>
+</hfoptions>
+
 ## Disabling model gathering for generation in online methods
 
 When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to out-of-memory (OOM) errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
@@ -101,6 +136,15 @@ When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Onl
 If you encounter this issue, you can disable the gathering of model weights for generation by setting the following parameter:
 
 <hfoptions id="ds3_gather_for_generation">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., ds3_gather_for_generation=False)
+```
+
+</hfoption>
 <hfoption id="Online DPO">
 
 ```python

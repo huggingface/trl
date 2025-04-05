@@ -42,6 +42,7 @@ if is_peft_available():
 
 
 @require_torch_accelerator
+@require_peft
 class SFTTrainerSlowTester(unittest.TestCase):
     def setUp(self):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
@@ -105,7 +106,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -140,7 +140,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -177,7 +176,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -213,7 +211,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -250,7 +247,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -294,7 +290,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device_map)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -334,7 +329,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -380,7 +374,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             if tokenizer.chat_template is None:
                 model, tokenizer = setup_chat_format(model, tokenizer)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -412,7 +405,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 max_steps=2,
                 packing=packing,
                 max_length=self.max_length,
-                use_liger=True,
+                use_liger_kernel=True,
             )
 
             trainer = SFTTrainer(
