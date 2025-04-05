@@ -461,6 +461,7 @@ def main(script_args: ScriptArguments):
         
         This endpoint emulates the OpenAI API format while using vLLM for generation.
         """
+        print(request)
         request_id = f"req-{uuid.uuid4().hex}"
         timestamp = time.time()
         
