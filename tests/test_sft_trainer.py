@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import copy
-import os
 import tempfile
 import unittest
 
@@ -302,7 +301,6 @@ class SFTTrainerTester(unittest.TestCase):
 
             assert trainer.state.log_history[-1]["train_loss"] is not None
 
-
     def test_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Shoud work as SFTTrainer natively supports conversational lm dataset
@@ -407,8 +405,6 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 output_dir=tmp_dir,
@@ -426,7 +422,6 @@ class SFTTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -465,7 +460,6 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -486,7 +480,6 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -506,7 +499,6 @@ class SFTTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 output_dir=tmp_dir,
@@ -523,7 +515,6 @@ class SFTTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
 
     def test_with_multiple_eval_datasets(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -550,7 +541,6 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_data1_loss"])
             self.assertIsNotNone(trainer.state.log_history[1]["eval_data2_loss"])
-
 
     def test_data_collator_completion_lm(self):
         response_template = "### Response:\n"
