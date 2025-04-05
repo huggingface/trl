@@ -410,6 +410,19 @@ class GRPOTrainer(Trainer):
         self.use_vllm = args.use_vllm
         self.use_liger_loss = args.use_liger_loss
 
+        # Datasets
+        if (
+            isinstance(train_dataset, IterableDataset)
+            or isinstance(eval_dataset, IterableDataset)
+            or (
+                isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
+            )
+        ):
+            # See https://github.com/huggingface/trl/issues/3213
+            raise NotImplementedError(
+                "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
+            )
+
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
