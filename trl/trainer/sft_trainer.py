@@ -228,6 +228,19 @@ class SFTTrainer(Trainer):
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model_id)
 
+        # Model
+        if args.model_init_kwargs is not None and not isinstance(model, str):
+            warnings.warn(
+                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
+                "The `model_init_kwargs` will be ignored."
+            )
+        if isinstance(model, str):
+            model = self._create_model_from_path(model, args)
+
+        # PEFT configuration and model wrapping
+        if peft_config is not None:
+            model = self._prepare_peft_model(model, peft_config, args)
+
         # Data collator
         if args.padding_free:
             if data_collator is not None:
@@ -266,19 +279,6 @@ class SFTTrainer(Trainer):
                     "in the vocabulary before using it as a padding token."
                 )
             data_collator = DataCollatorForLanguageModeling(pad_token_id)
-
-        # Model
-        if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
-                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
-                "The `model_init_kwargs` will be ignored."
-            )
-        if isinstance(model, str):
-            model = self._create_model_from_path(model, args)
-
-        # PEFT configuration and model wrapping
-        if peft_config is not None:
-            model = self._prepare_peft_model(model, peft_config, args)
 
         # Dataset
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
