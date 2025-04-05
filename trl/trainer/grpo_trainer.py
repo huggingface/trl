@@ -15,9 +15,10 @@
 import os
 import textwrap
 import warnings
-from collections import defaultdict
+from collections import defaultdict, deque
+from collections.abc import Sized
 from contextlib import nullcontext
-from typing import Any, Callable, Optional, Sized, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.utils.data
@@ -39,7 +40,7 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
+from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -63,6 +64,8 @@ if is_deepspeed_available():
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 if is_wandb_available():
     import wandb
@@ -405,6 +408,7 @@ class GRPOTrainer(Trainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
+        self.use_liger_loss = args.use_liger_loss
 
         # Datasets
         if (
@@ -437,11 +441,21 @@ class GRPOTrainer(Trainer):
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
-        # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._total_train_tokens = 0
-        self.log_completions = args.log_completions
-        self.num_completions_to_print = args.num_completions_to_print
+        if self.use_liger_loss:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
+                )
+            if is_peft_model(model):
+                raise ValueError("Liger loss is not supported with a PEFT model.")
+
+            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
+                beta=self.beta,
+                epsilon_low=self.epsilon_low,
+                epsilon_high=self.epsilon_high,
+                temperature=self.temperature,
+                use_ref_model=self.ref_model is not None,
+            )
 
         super().__init__(
             model=model,
@@ -454,10 +468,29 @@ class GRPOTrainer(Trainer):
             optimizers=optimizers,
         )
 
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
+        self.log_completions = args.log_completions
+        self.num_completions_to_print = args.num_completions_to_print
+        # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
+        # final optimization step.
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.gradient_accumulation_steps
+        self._textual_logs = {
+            "prompt": deque(maxlen=maxlen),
+            "completion": deque(maxlen=maxlen),
+            "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
+        }
+
         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
         num_processes = self.accelerator.num_processes
         global_batch_size = args.per_device_train_batch_size * num_processes
         possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+        if self.num_generations < 2:
+            raise ValueError(
+                f"GRPO requires at least 2 generations per prompt to calculate the advantages. "
+                f"You provided {self.num_generations}, which is less than the minimum required."
+            )
         if self.num_generations not in possible_values:
             raise ValueError(
                 f"The global train batch size ({num_processes} x {args.per_device_train_batch_size}) must be evenly "
@@ -494,7 +527,7 @@ class GRPOTrainer(Trainer):
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
 
-            self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
+            self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
@@ -615,13 +648,22 @@ class GRPOTrainer(Trainer):
 
         return model
 
+    @profiling_decorator
+    def _get_last_hidden_state(self, model, input_ids, attention_mask, logits_to_keep=None):
+        # unwrap the model to access the model.model
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
+        if logits_to_keep is not None:
+            last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+        return last_hidden_state
+
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
         # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
         logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
         logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-
         input_ids = input_ids[:, -logits_to_keep:]
         # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
         # See https://github.com/huggingface/trl/issues/2770
@@ -878,26 +920,26 @@ class GRPOTrainer(Trainer):
         mode = "eval" if self.control.should_evaluate else "train"
 
         if mode == "train":
-            self._total_train_tokens += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+            self.state.num_input_tokens_seen += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
+        self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # log completion lengths, mean, min, max
         agg_completion_mask = self.accelerator.gather_for_metrics(completion_mask.sum(1))
-        self._metrics[mode]["mean_completion_length"].append(agg_completion_mask.float().mean().item())
-        self._metrics[mode]["min_completion_length"].append(agg_completion_mask.float().min().item())
-        self._metrics[mode]["max_completion_length"].append(agg_completion_mask.float().max().item())
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_mask.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_mask.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_mask.float().max().item())
 
         # identify sequences that terminated with EOS and log their lengths
         agg_terminated_with_eos = self.accelerator.gather_for_metrics(is_eos.any(dim=1))
         term_completion_mask = agg_completion_mask[agg_terminated_with_eos]
         clipped_completions_ratio = 1 - len(term_completion_mask) / len(agg_completion_mask)
-        self._metrics[mode]["clipped_completions_ratio"].append(clipped_completions_ratio)
+        self._metrics[mode]["completions/clipped_ratio"].append(clipped_completions_ratio)
         if len(term_completion_mask) == 0:
             # edge case where no completed sequences are found
             term_completion_mask = torch.zeros(1, device=device)
-        self._metrics[mode]["mean_terminated_completion_length"].append(term_completion_mask.float().mean().item())
-        self._metrics[mode]["min_terminated_completion_length"].append(term_completion_mask.float().min().item())
-        self._metrics[mode]["max_terminated_completion_length"].append(term_completion_mask.float().max().item())
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_mask.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_mask.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_mask.float().max().item())
 
         # Get the names of the reward functions
         reward_func_names = []
@@ -917,53 +959,67 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
-        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
-            prompts_to_log = gather_object(prompts_text)
-            completions_to_log = gather_object(completions_text)
-            rewards_to_log = {
-                reward_func_name: rewards_per_func[:, i] for i, reward_func_name in enumerate(reward_func_names)
-            }
-
-            if self.accelerator.is_main_process:
-                if is_rich_available():
-                    print_prompt_completions_sample(
-                        prompts_to_log,
-                        completions_to_log,
-                        rewards_to_log,
-                        self.state.global_step,
-                        self.num_completions_to_print,
-                    )
-                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                    import pandas as pd
-
-                    # For logging
-                    table = {
-                        "step": [str(self.state.global_step)] * len(rewards),
-                        "prompt": prompts_to_log,
-                        "completion": completions_to_log,
-                        "reward": rewards.tolist(),
-                    }
-                    df = pd.DataFrame(table)
-                    if self.args.wandb_log_unique_prompts:
-                        df = df.drop_duplicates(subset=["prompt"])
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
+        # Log prompt and completion texts
+        self._textual_logs["prompt"].extend(gather_object(prompts_text))
+        self._textual_logs["completion"].extend(gather_object(completions_text))
+        for i, name in enumerate(reward_func_names):
+            self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
         return {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
+            "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
-            "advantages": advantages,
         }
+
+    def compute_liger_loss(self, model, inputs):
+        # Compute the per-token log probabilities for the model
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+
+        # get the last hidden state of the model
+        last_hidden_state = self._get_last_hidden_state(model, input_ids, attention_mask, logits_to_keep)
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        # compute loss and metrics using liger grpo loss
+        loss, metrics = self.liger_grpo_loss(
+            _input=last_hidden_state,
+            lin_weight=unwrapped_model.lm_head.weight,
+            selected_token_ids=completion_ids,
+            attention_mask=completion_mask,
+            advantages=inputs["advantages"],
+            bias=unwrapped_model.lm_head.bias,
+            ref_per_token_logps=inputs["ref_per_token_logps"],
+            old_per_token_logps=inputs["old_per_token_logps"],
+        )
+        # Extract metrics from the liger_grpo_loss output
+        # KL divergence is the first metric when beta is non-zero
+        mean_kl = metrics[0] if self.beta != 0.0 else None
+        clip_ratio = metrics[-1]
+
+        mode = "eval" if self.control.should_evaluate else "train"
+        if self.beta != 0.0:
+            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
+        return loss
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
-        # Compute the per-token log probabilities for the model
+        if self.use_liger_loss:
+            # Compute the loss using the liger grpo loss
+            return self.compute_liger_loss(model, inputs)
+        else:
+            return self._compute_loss(model, inputs)
 
+    def _compute_loss(self, model, inputs):
+        # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
@@ -1031,6 +1087,30 @@ class GRPOTrainer(Trainer):
         else:  # transformers<=4.46
             super().log(logs)
         self._metrics[mode].clear()
+
+        if self.accelerator.is_main_process:
+            if is_rich_available():
+                print_prompt_completions_sample(
+                    self._textual_logs["prompt"],
+                    self._textual_logs["completion"],
+                    self._textual_logs["rewards"],
+                    self.state.global_step,
+                    self.num_completions_to_print,
+                )
+
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                import pandas as pd
+
+                table = {
+                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
+                    "prompt": self._textual_logs["prompt"],
+                    "completion": self._textual_logs["completion"],
+                    **self._textual_logs["rewards"],
+                }
+                df = pd.DataFrame(table)
+                if self.args.wandb_log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
+                wandb.log({"completions": wandb.Table(dataframe=df)})
 
     def create_model_card(
         self,
