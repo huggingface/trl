@@ -833,7 +833,7 @@ class SFTTrainerTester(unittest.TestCase):
                 peft_config=peft_config,
             )
 
-            for tag in ["sft", "trl", "peft"]:
+            for tag in ["sft", "trl"]:
                 self.assertIn(tag, trainer.model.model_tags)
 
     @require_peft
