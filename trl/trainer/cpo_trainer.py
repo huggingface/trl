@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ from contextlib import nullcontext
 from typing import Any, Callable, Literal, Optional, Union
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.amp as amp
 import torch.nn as nn
@@ -40,6 +41,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     Trainer,
+    is_comet_available,
     is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
@@ -55,8 +57,10 @@ from .utils import (
     disable_dropout_in_model,
     generate_model_card,
     get_comet_experiment_url,
+    log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
+    selective_log_softmax,
 )
 
 
@@ -200,10 +204,10 @@ class CPOTrainer(Trainer):
 
                 model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
-        if args.generate_during_eval and not is_wandb_available():
+        if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
             raise ValueError(
-                "`generate_during_eval=True` requires Weights and Biases to be installed."
-                " Please install `wandb` to resolve."
+                "`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+                " Please install `wandb` or `comet-ml` to resolve."
             )
 
         if model is not None:
@@ -321,7 +325,7 @@ class CPOTrainer(Trainer):
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
-        with PartialState().local_main_process_first():
+        with PartialState().main_process_first():
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(
@@ -353,6 +357,11 @@ class CPOTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
@@ -703,7 +712,7 @@ class CPOTrainer(Trainer):
         # dummy token; we'll ignore the losses on these tokens later
         labels[labels == label_pad_token_id] = 0
 
-        per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+        per_token_logps = selective_log_softmax(logits, labels)
 
         if average_log_prob:
             return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
@@ -814,15 +823,25 @@ class CPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
-        metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
-        metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean().cpu()
-        metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().cpu()
-        metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.detach().mean().cpu()
-        metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.detach().mean().cpu()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
-        metrics[f"{prefix}nll_loss"] = policy_nll_loss.detach().mean().cpu()
+        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather_for_metrics(chosen_rewards).mean().item()
+        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather_for_metrics(rejected_rewards).mean().item()
+        metrics[f"{prefix}rewards/accuracies"] = self.accelerator.gather_for_metrics(reward_accuracies).mean().item()
+        metrics[f"{prefix}rewards/margins"] = (
+            self.accelerator.gather_for_metrics(chosen_rewards - rejected_rewards).mean().item()
+        )
+        metrics[f"{prefix}logps/rejected"] = (
+            self.accelerator.gather_for_metrics(policy_rejected_logps).detach().mean().item()
+        )
+        metrics[f"{prefix}logps/chosen"] = (
+            self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean().item()
+        )
+        metrics[f"{prefix}logits/rejected"] = (
+            self.accelerator.gather_for_metrics(policy_rejected_logits.detach().mean()).mean().item()
+        )
+        metrics[f"{prefix}logits/chosen"] = (
+            self.accelerator.gather_for_metrics(policy_chosen_logits.detach().mean()).mean().item()
+        )
+        metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean().item()
 
         if self.aux_loss_enabled:
             loss += self.aux_loss_coef * aux_loss
@@ -898,8 +917,8 @@ class CPOTrainer(Trainer):
             "eval_logits/chosen": metrics["eval_logits/chosen"],
             "eval_logits/rejected": metrics["eval_logits/rejected"],
         }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
+        logits = [v for k, v in logits_dict.items() if k not in ignore_keys]
+        logits = torch.tensor(logits, device=self.accelerator.device)
         labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
@@ -936,18 +955,20 @@ class CPOTrainer(Trainer):
 
             policy_output_decoded = self.generate_from_model(self.model, random_batch)
 
-            self.log(
-                {
-                    "game_log": wandb.Table(
-                        columns=["Prompt", "Policy"],
-                        rows=[
-                            [prompt, pol[len(prompt) :]]
-                            for prompt, pol in zip(random_batch["prompt"], policy_output_decoded)
-                        ],
-                    )
-                }
+            table = pd.DataFrame(
+                columns=["Prompt", "Policy"],
+                data=[
+                    [prompt, pol[len(prompt) :]] for prompt, pol in zip(random_batch["prompt"], policy_output_decoded)
+                ],
             )
-            self.state.log_history.pop()
+            if "wandb" in self.args.report_to:
+                wandb.log({"game_log": wandb.Table(data=table)})
+
+            if "comet_ml" in self.args.report_to:
+                log_table_to_comet_experiment(
+                    name="game_log.csv",
+                    table=table,
+                )
 
         # Base evaluation
         initial_output = super().evaluation_loop(
@@ -1011,10 +1032,10 @@ class CPOTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str`, *optional*, defaults to `None`):
-                The name of the model.
-            dataset_name (`str`, *optional*, defaults to `None`):
-                The name of the dataset used for training.
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
             tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
                 Tags to be associated with the model card.
         """

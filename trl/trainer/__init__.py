@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,6 +36,8 @@ _import_structure = {
     "dpo_trainer": ["DPOTrainer"],
     "gkd_config": ["GKDConfig"],
     "gkd_trainer": ["GKDTrainer"],
+    "grpo_config": ["GRPOConfig"],
+    "grpo_trainer": ["GRPOTrainer"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
         "AllTrueJudge",
@@ -105,6 +107,8 @@ if TYPE_CHECKING:
     from .dpo_trainer import DPOTrainer
     from .gkd_config import GKDConfig
     from .gkd_trainer import GKDTrainer
+    from .grpo_config import GRPOConfig
+    from .grpo_trainer import GRPOTrainer
     from .iterative_sft_trainer import IterativeSFTTrainer
     from .judges import (
         AllTrueJudge,

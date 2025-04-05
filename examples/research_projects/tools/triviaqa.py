@@ -1,4 +1,4 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
+# Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -157,7 +157,7 @@ text_env = TextEnvironment(
     exact_match_reward,
     prompt,
     generation_kwargs=generation_kwargs,
-    max_tool_reponse=400,
+    max_tool_response=400,
 )
 
 
