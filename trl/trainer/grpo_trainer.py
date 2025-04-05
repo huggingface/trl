@@ -15,7 +15,7 @@
 import os
 import textwrap
 import warnings
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
@@ -444,11 +444,6 @@ class GRPOTrainer(Trainer):
                 use_ref_model=self.ref_model is not None,
             )
 
-        # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self.log_completions = args.log_completions
-        self.num_completions_to_print = args.num_completions_to_print
-
         super().__init__(
             model=model,
             args=args,
@@ -459,6 +454,20 @@ class GRPOTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
+        self.log_completions = args.log_completions
+        self.num_completions_to_print = args.num_completions_to_print
+        # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
+        # final optimization step.
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.gradient_accumulation_steps
+        self._textual_logs = {
+            "prompt": deque(maxlen=maxlen),
+            "completion": deque(maxlen=maxlen),
+            "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
+        }
 
         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
         num_processes = self.accelerator.num_processes
@@ -937,63 +946,11 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
-        # Log completions when we complete a full gradient accumulation cycle
-        # For logging across the gradient accumulation steps, we need to accumulate the data
-        is_last_step_in_grad_accum = (
-            self._step % self.args.gradient_accumulation_steps == self.args.gradient_accumulation_steps - 1
-        )
-        should_log_completions = (
-            self.log_completions
-            and self.state.global_step % self.args.logging_steps == 0
-            and is_last_step_in_grad_accum
-        )
-
-        # Collect data for logging throughout the accumulation steps
-        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
-            if not hasattr(self, "_accumulated_prompts"):
-                self._accumulated_prompts = []
-                self._accumulated_completions = []
-                self._accumulated_rewards = {name: [] for name in reward_func_names}
-
-            # Gather and accumulate the data from this step
-            prompts_this_step = gather_object(prompts_text)
-            completions_this_step = gather_object(completions_text)
-
-            if self.accelerator.is_main_process:
-                self._accumulated_prompts.extend(prompts_this_step)
-                self._accumulated_completions.extend(completions_this_step)
-                for i, name in enumerate(reward_func_names):
-                    self._accumulated_rewards[name].extend(rewards_per_func[:, i].tolist())
-
-        # Log the accumulated data when we finish a grad accumulation cycle
-        if should_log_completions and self.accelerator.is_main_process:
-            if is_rich_available():
-                print_prompt_completions_sample(
-                    self._accumulated_prompts,
-                    self._accumulated_completions,
-                    self._accumulated_rewards,
-                    self.state.global_step,
-                    self.num_completions_to_print,
-                )
-
-            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                import pandas as pd
-
-                table = {
-                    "step": [str(self.state.global_step)] * len(self._accumulated_prompts),
-                    "prompt": self._accumulated_prompts,
-                    "completion": self._accumulated_completions,
-                    "reward": [sum(rewards) for rewards in zip(*self._accumulated_rewards.values())],
-                }
-                df = pd.DataFrame(table)
-                if self.args.wandb_log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
-                wandb.log({"completions": wandb.Table(dataframe=df)})
-
-            # Reset the accumulated data after logging
-            self._accumulated_prompts = []
-            self._accumulated_completions = []
-            self._accumulated_rewards = {name: [] for name in reward_func_names}
+        # Log prompt and completion texts
+        self._textual_logs["prompt"].extend(gather_object(prompts_text))
+        self._textual_logs["completion"].extend(gather_object(completions_text))
+        for i, name in enumerate(reward_func_names):
+            self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
         return {
             "prompt_ids": prompt_ids,
@@ -1117,6 +1074,30 @@ class GRPOTrainer(Trainer):
         else:  # transformers<=4.46
             super().log(logs)
         self._metrics[mode].clear()
+
+        if self.accelerator.is_main_process:
+            if is_rich_available():
+                print_prompt_completions_sample(
+                    self._textual_logs["prompt"],
+                    self._textual_logs["completion"],
+                    self._textual_logs["rewards"],
+                    self.state.global_step,
+                    self.num_completions_to_print,
+                )
+
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                import pandas as pd
+
+                table = {
+                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
+                    "prompt": self._textual_logs["prompt"],
+                    "completion": self._textual_logs["completion"],
+                    **self._textual_logs["rewards"],
+                }
+                df = pd.DataFrame(table)
+                if self.args.wandb_log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
+                wandb.log({"completions": wandb.Table(dataframe=df)})
 
     def create_model_card(
         self,
