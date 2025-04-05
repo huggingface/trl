@@ -33,6 +33,7 @@ from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 
 def formatting_prompts_func(example):
@@ -59,6 +60,34 @@ if is_vision_available():
     from PIL import Image as PILImage
 
 
+class TestDataCollatorForLanguageModeling(unittest.TestCase):
+    def test_collate_padding(self):
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+        output = collator(examples)
+
+        expected_input_ids = torch.tensor([[1, 2, 3], [4, 5, 0]])
+        expected_attention_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        expected_labels = torch.tensor([[1, 2, 3], [4, 5, -100]])
+
+        self.assertEqual(output["input_ids"].tolist(), expected_input_ids.tolist())
+        self.assertEqual(output["attention_mask"].tolist(), expected_attention_mask.tolist())
+        self.assertEqual(output["labels"].tolist(), expected_labels.tolist())
+
+    def test_collate_no_padding(self):
+        collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5, 6]}]
+        output = collator(examples)
+
+        expected_input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        expected_attention_mask = torch.tensor([[1, 1, 1], [1, 1, 1]])
+        expected_labels = torch.tensor([[1, 2, 3], [4, 5, 6]])
+
+        self.assertEqual(output["input_ids"].tolist(), expected_input_ids.tolist())
+        self.assertEqual(output["attention_mask"].tolist(), expected_attention_mask.tolist())
+        self.assertEqual(output["labels"].tolist(), expected_labels.tolist())
+
+
 class SFTTrainerTester(unittest.TestCase):
     r""" """
 
@@ -66,7 +95,6 @@ class SFTTrainerTester(unittest.TestCase):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
         self.dummy_dataset = Dataset.from_dict(
             {
                 "question": [

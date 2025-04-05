@@ -115,14 +115,13 @@ When  \\( \mu = 1 \\) (default in TRL), the clipped surrogate objective simplifi
 ## Logged metrics
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
-- `mean_completion_length`: The average length of generated completions.
-- `min_completion_length`: The maximum length of generated completions.
-- `max_completion_length`: The minimun length of generated completions.
-- `mean_terminated_completion_length`: The average length of generated completions that terminate with EOS.
-- `min_terminated_completion_length`: The maximum length of generated completions that terminate with EOS.
-- `max_terminated_completion_length`: The minimun length of generated completions that terminate with EOS.
-- `max_terminated_completion_length`: The minimun length of generated completions that terminate with EOS.
-- `clipped_completions_ratio` :  The ratio of trucated (clipped) completions.
+- `completions/mean_length`: The average length of generated completions.
+- `completions/min_length`: The minimun length of generated completions.
+- `completions/max_length`: The maximum length of generated completions.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
+- `completions/min_terminated_length`: The minimun length of generated completions that terminate with EOS.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
+- `completions/clipped_ratio` :  The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after applying reward weights.

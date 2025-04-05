@@ -15,7 +15,7 @@
 import contextlib
 import functools
 import time
-from typing import Generator
+from collections.abc import Generator
 
 from transformers import Trainer, is_wandb_available
 

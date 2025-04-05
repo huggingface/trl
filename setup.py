@@ -81,7 +81,7 @@ EXTRAS = {
     "deepspeed": ["deepspeed>=0.14.4"],
     "diffusers": ["diffusers>=0.18.0"],
     "judges": ["openai>=1.23.2", "llm-blender>=0.0.2"],
-    "liger": ["liger-kernel>=0.5.5"],
+    "liger": ["liger-kernel>=0.5.6"],
     "mergekit": ["mergekit>=0.0.5.1"],
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],

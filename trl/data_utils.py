@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import functools
-from typing import Any, Callable, Optional, Sequence, TypeVar, Union
+from collections.abc import Sequence
+from typing import Any, Callable, Optional, TypeVar, Union
 
 import numpy as np
 import pyarrow as pa
