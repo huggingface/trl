@@ -14,7 +14,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Literal
+from typing import Literal, Optional
 
 from ..trainer.utils import OnPolicyConfig
 
@@ -91,7 +91,9 @@ class PPOConfig(OnPolicyConfig):
     )
     kl_estimator: Literal["k1", "k3"] = field(
         default="k1",
-        metadata={"help": "Which estimator for KL-Divergence to use - either 'k1' (straightforward, unbiased) or 'k3' (lower variance, unbiased, appears to be a strictly better estimator)."},
+        metadata={
+            "help": "Which estimator for KL-Divergence to use - either 'k1' (straightforward, unbiased) or 'k3' (lower variance, unbiased, appears to be a strictly better estimator)."
+        },
     )
     cliprange: float = field(
         default=0.2,
