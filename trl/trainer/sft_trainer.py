@@ -134,7 +134,7 @@ class SFTTrainer(Trainer):
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         formatting_func (`Optional[Callable]`):
-            A batched formatting function applied to the dataset before tokenization.
+            Formatting function applied to the dataset before tokenization.
     """
 
     _tag_names = ["trl", "sft"]
@@ -413,7 +413,18 @@ class SFTTrainer(Trainer):
                 def _func(example):
                     return {"text": formatting_func(example)}
 
-                dataset = dataset.map(_func, batched=True, **map_kwargs)
+                try:
+                    dataset = dataset.map(_func, batched=False, **map_kwargs)
+                except Exception as e:
+                    warnings.warn(
+                        f"Failed to apply the formatting function due to the following error: {e}. This may be "
+                        "because the function is designed for batched input. Please update it to process one example "
+                        "at a time (i.e., accept and return a single example). For now, we will attempt to apply the "
+                        "function in batched mode, but note that batched formatting is deprecated and will be removed "
+                        "in version 0.21.",
+                        DeprecationWarning,
+                    )
+                    dataset = dataset.map(_func, batched=True, **map_kwargs)
 
             # If the dataset is prompt-completion, convert it to language modeling type
             first_example = next(iter(dataset))
