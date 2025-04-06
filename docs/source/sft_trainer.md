@@ -72,12 +72,9 @@ dataset = load_dataset("lucasmccabe-lmi/CodeAlpaca-20k", split="train")
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
 tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
 
-def formatting_prompts_func(example):
-    output_texts = []
-    for i in range(len(example['instruction'])):
-        text = f"### Question: {example['instruction'][i]}\n ### Answer: {example['output'][i]}"
-        output_texts.append(text)
-    return output_texts
+def formatting_prompt_func(example):
+    return f"### Question: {example['instruction']}\n ### Answer: {example['output']}"
+
 
 response_template = " ### Answer:"
 collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer)
@@ -86,7 +83,7 @@ trainer = SFTTrainer(
     model,
     train_dataset=dataset,
     args=SFTConfig(output_dir="/tmp"),
-    formatting_func=formatting_prompts_func,
+    formatting_func=formatting_prompt_func,
     data_collator=collator,
 )
 
@@ -246,17 +243,14 @@ Let us assume your dataset has two fields, `question` and `answer`. Therefore yo
 ```python
 ...
 def formatting_prompts_func(example):
-    output_texts = []
-    for i in range(len(example['question'])):
-        text = f"### Question: {example['question'][i]}\n ### Answer: {example['answer'][i]}"
-        output_texts.append(text)
-    return output_texts
+    return f"### Question: {example['question']}\n ### Answer: {example['answer']}"
+
 
 trainer = SFTTrainer(
     model,
     args=training_args,
     train_dataset=dataset,
-    formatting_func=formatting_prompts_func,
+    formatting_func=formatting_prompt_func,
 )
 
 trainer.train()
@@ -288,19 +282,16 @@ If you don't want to pack your `eval_dataset`, you can pass `eval_packing=False`
 If your dataset has several fields that you want to combine, for example if the dataset has `question` and `answer` fields and you want to combine them, you can pass a formatting function to the trainer that will take care of that. For example:
 
 ```python
-def formatting_prompts_func(example):
-    output_texts = []
-    for i in range(len(example['question'])):
-        text = f"### Question: {example['question'][i]}\n ### Answer: {example['answer'][i]}"
-        output_texts.append(text)
-    return output_texts
+def formatting_func(example):
+    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
+    return text
 
 training_args = SFTConfig(packing=True)
 trainer = SFTTrainer(
     "facebook/opt-350m",
     train_dataset=dataset,
     args=training_args,
-    formatting_func=formatting_prompts_func
+    formatting_func=formatting_func
 )
 
 trainer.train()
