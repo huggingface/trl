@@ -46,7 +46,7 @@ Cite TRL as:
 ```bibtex
 {% raw %}@misc{vonwerra2022trl,
 	title        = {{TRL: Transformer Reinforcement Learning}},
-	author       = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallouédec},
+	author       = {Leandro von Werra and Younes Belkada and Lewis Tunstall and Edward Beeching and Tristan Thrush and Nathan Lambert and Shengyi Huang and Kashif Rasul and Quentin Gallou{\'e}dec},
 	year         = 2020,
 	journal      = {GitHub repository},
 	publisher    = {GitHub},
