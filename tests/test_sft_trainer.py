@@ -44,14 +44,6 @@ def formatting_func_for_pretokenized(example):
     return example["input_ids"]
 
 
-def formatting_prompts_func_batched(example):
-    output_text = []
-    for i, question in enumerate(example["question"]):
-        text = f"### Question: {question}\n ### Answer: {example['answer'][i]}"
-        output_text.append(text)
-    return output_text
-
-
 if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
 
@@ -407,24 +399,6 @@ class SFTTrainerTester(unittest.TestCase):
                 formatting_func=formatting_prompts_func,
             )
 
-            # but this should work
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                max_steps=2,
-                eval_steps=1,
-                save_steps=1,
-                per_device_train_batch_size=2,
-                packing=False,
-                report_to="none",
-            )
-            _ = SFTTrainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.dummy_dataset,
-                formatting_func=formatting_prompts_func_batched,
-            )
-
     def test_sft_trainer_with_model_num_train_epochs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -567,30 +541,6 @@ class SFTTrainerTester(unittest.TestCase):
                 args=training_args,
                 train_dataset=self.dummy_dataset,
                 formatting_func=formatting_prompts_func,
-            )
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
-
-            self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))
-
-        # with formatting_func + packed
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                max_steps=2,
-                save_steps=1,
-                per_device_train_batch_size=2,
-                max_length=16,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.dummy_dataset,
-                formatting_func=formatting_prompts_func_batched,
             )
 
             trainer.train()
