@@ -127,3 +127,143 @@ class AiderAgentManager(AgentManager):
 ### Training Signal Quality
 - **Problem**: Different agent approaches may produce inconsistent training signals
 - **Solution**: Consider normalization techniques for rewards across different agent types
+
+# GRPO with Agent Integration
+
+## Current Architecture
+
+The integration of agents with GRPO training follows a "multiprocessing pool" approach for agent deployment:
+
+1. **Agent Manager Base Class**
+   - Provides an abstraction layer between GRPO trainer and agent implementations
+   - Uses `multiprocessing.Pool` for parallel agent execution
+   - Handles process isolation to prevent state contamination between agents
+   - Implements timeout mechanism to prevent training stalls
+
+2. **GRPO Trainer Integration**
+   - Works alongside vLLM rather than replacing it
+   - Handles the distribution of unique prompts across processes
+   - Ensures proper synchronization between processes for reward computation
+   - Properly converts completions back into token IDs for the training loop
+
+3. **API Spoofing Approach**
+   - Agent frameworks (like Aider) typically use OpenAI-compatible API endpoints
+   - We redirect these calls to our vLLM server by setting `OPENAI_API_BASE`
+   - This allows the model being trained to be used inside the agent scaffolding
+
+## Conversation History Challenges
+
+### Problem Statement
+
+Capturing complete conversation histories from agents presents several critical challenges:
+
+1. **Asynchronous Termination**
+   - Different agents may make varying numbers of API calls
+   - Some agents complete their tasks quickly while others take much longer
+   - Need to know when an agent is truly "done" vs just thinking/processing
+
+2. **Hierarchical Agent Structures**
+   - Modern agent frameworks often employ hierarchies of sub-agents
+   - Each sub-agent may have its own conversation context and system prompt
+   - The "main" conversation might branch into multiple parallel conversations
+   - Need to track which responses belong to which conversation thread
+
+3. **Conversation Continuity**
+   - Ensuring that each step in a conversation properly builds on previous context
+   - Detecting when information is lost or context is reset
+   - Handling cases where agents reconstruct or modify past conversation history
+
+4. **Thread Identification**
+   - Properly attributing API requests to specific agent instances
+   - Maintaining the relationship between requests and responses
+   - Ensuring all conversation parts are captured even with concurrent execution
+
+## Proposed Solutions
+
+### Solution 1: API Middleware Proxy
+
+Implement a proxy server that sits between the agent and the vLLM server:
+
+```
+Agent Framework → API Proxy → vLLM Server
+   (Aider)        (captures)    (generates)
+```
+
+**Implementation:**
+- Create a lightweight FastAPI server that mimics the OpenAI API
+- Add request ID and thread ID headers to track conversation flows
+- Maintain an in-memory database of all requests/responses by thread
+- After completion, return the full conversation history to the GRPO trainer
+
+**Advantages:**
+- Non-invasive to agent frameworks - just change the API endpoint
+- Captures all API calls regardless of agent implementation details
+- Preserves the complete call sequence and timestamps
+
+**Challenges:**
+- Extra network hop adds latency
+- Maintaining the proxy adds complexity
+- Need to handle connection failures
+
+### Solution 2: Conversation State Manager
+
+Create a centralized conversation state manager to track all API interactions:
+
+**Implementation:**
+- Use process-local variable to store an agent ID in each worker process
+- Monkey-patch the `requests` library in agent processes to intercept API calls
+- Implement callbacks to send conversation data back to a central service
+- Maintain a mapping of agent ID → conversation history
+
+**Advantages:**
+- No network overhead
+- Works with any agent that uses standard HTTP libraries
+- Can handle hierarchical agents by tracking conversation threads
+
+**Challenges:**
+- More invasive modification to the execution environment
+- May not work with all agent implementations
+- Requires careful cleanup to prevent memory leaks
+
+### Solution 3: Post-Processing Approach
+
+Instead of trying to track the conversation in real-time, extract it from the completed agent:
+
+**Implementation:**
+- Allow agents to run to completion normally
+- After completion, ask the agent to export its full conversation history
+- For agent frameworks that don't support history export, scrape logs or memory
+- Reconstruct token sequences from the conversation history
+
+**Advantages:**
+- Simplest implementation
+- Most compatible with varied agent implementations
+- Allows natural agent operation without interference
+
+**Challenges:**
+- Relies on agent's ability to export its history
+- May miss some details of the conversation
+- Less control during execution
+
+## Recommended Approach
+
+A hybrid approach combining elements from Solutions 1 and 3:
+
+1. Use a lightweight API middleware proxy to track base API calls
+2. Allow for agent-specific history export methods as an enhancement
+3. Implement detection for conversation discontinuities
+4. Use a timeout mechanism to handle agents that don't terminate cleanly
+
+This approach provides the best balance of:
+- Robust conversation capture
+- Compatibility with different agent frameworks
+- Minimal interference with agent operation
+- Clean integration with GRPO training
+
+## Next Steps
+
+1. Implement the API middleware proxy
+2. Add conversation history extraction functionality to the AgentManager
+3. Enhance the GRPO trainer to properly handle conversation-based completions
+4. Add support for agent-specific reward calculation based on conversation quality
+5. Implement robust error handling and timeouts for agent processes

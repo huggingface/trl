@@ -714,6 +714,8 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
+            all_inputs = gather_object(inputs)
+            
             if self.accelerator.is_main_process:
                 
                 if not self.agent_manager:
@@ -736,16 +738,20 @@ class GRPOTrainer(Trainer):
                 else:
                     # TODO: Double check all this
                     # Since we are no longer doing prompt->completion, we cannot simply specify n=num_generations to our
-                    # generate method. Instead, we simply treat each duplicate prompt as a separate prompt.
+                    # generate method. Instead, we simply treat each duplicate prompt as a separate prompt.                    
                     with profiling_context(self, "AgentManager.deploy"):
-                        completion_ids = self.agent_manager.deploy(
-                            prompts=inputs,  # (Agent, Dataset) is a tuple, e.g. a coding agent will have a repo_url to clone
+                        completion_texts = self.agent_manager.deploy(
+                            prompts=all_inputs,  # (Agent, Dataset) is a tuple, e.g. a coding agent will have a repo_url to clone
                             timeout=self.max_completion_length / 60  # Assume 60 tokens per second
                             # One issue is that with an arbitrary agent scaffolding in the loop, we cannot easily
                             # control generation parameters.
-                    )
+                        )
+                        
+                        # TODO: Probably need to fix the format
+                        completion_ids = [self.processing_class.encode(text, add_special_tokens=False) for text in completion_texts]
             else:
                 completion_ids = [None] * len(all_prompts_text)
+                
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
             # corresponding slice.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
