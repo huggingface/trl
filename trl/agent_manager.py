@@ -1,7 +1,7 @@
 import os
-import shutil
 import logging
 import multiprocessing
+from functools import partial
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 from contextlib import redirect_stdout, redirect_stderr
@@ -32,17 +32,34 @@ class AgentManager(ABC):
         self.vllm_url = vllm_url
 
     @abstractmethod
-    def deploy(self, prompts: List[Dict[str, Any]]) -> List[str]:
+    def _process_prompt(self, prompt: Dict[str, Any]) -> str:
+        """Process a single prompt and return a completion"""
+        ...
+    
+    def deploy(self, prompts: List[Dict[str, Any]], timeout: int = 300) -> List[str]:
         """
         Deploy parallel agents to process the given prompts, returning completion IDs.
         
         Args:
             prompts: List of prompts to process
+            timeout: Maximum time in seconds to wait for all prompts to complete
             
         Returns:
             List of completion IDs that can be used by GRPO
         """
-        ...
+        with multiprocessing.Pool() as pool:
+            # Start async processing of all prompts
+            result = pool.map_async(partial(self._process_prompt), prompts)  # partial for pickling reasons
+            
+            try:
+                # Wait for results with timeout
+                completions = result.get(timeout=timeout)
+                return completions
+            except multiprocessing.TimeoutError:
+                # Log warning and return partial results if timeout occurs
+                logger.warning(f"Agent timeout reached after {timeout} seconds. Returning partial results.")
+                # Get whatever results are ready
+                return result._value if hasattr(result, '_value') else []
         
 
 class AiderAgentManager(AgentManager):
@@ -54,7 +71,7 @@ class AiderAgentManager(AgentManager):
         os.environ["OPENAI_API_BASE"] = self.vllm_url  # Aider uses this
         os.environ["OPENAI_API_KEY"] = "dummy-key"
     
-    def _process(self, prompt: Dict[str, Any]) -> str:
+    def _process_prompt(self, prompt: Dict[str, Any]) -> str:
         """Process a single prompt and return a completion"""
         
         assert "repo_url" in prompt and "repo_commit_hash" in prompt and "description" in prompt, "Data should contain repo_url, repo_commit_hash and description"
@@ -79,6 +96,3 @@ class AiderAgentManager(AgentManager):
         finally:
             clean_repo_dir(temp_folder)
             os.chdir(original_dir)
-    
-    def deploy(self, prompts: List[Dict[str, Any]]) -> List[str]:
-        ...
