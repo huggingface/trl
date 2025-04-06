@@ -41,6 +41,8 @@ from transformers import (
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
+from trl.agent_manager import AgentManager
+
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
@@ -270,6 +272,10 @@ class GRPOTrainer(Trainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+        agent_manager ([`AgentManager`], *optional*, defaults to `None`):
+            If provided, then it overrides the normal vllm_client.generate method. The manager wraps a pre-existing LLM
+            scaffolding (such as an Aider Coder) to directly train the model inside the scaffolding it would be used
+            in a production environment.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -286,6 +292,8 @@ class GRPOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        # Agent manager
+        agent_manager: Optional[AgentManager] = None,  # if provided, then used (overrides the normal vllm_client.generate method)
     ):
         # Args
         if args is None:
@@ -441,6 +449,7 @@ class GRPOTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+        self.agent_manager = agent_manager
 
         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
         num_processes = self.accelerator.num_processes
