@@ -142,6 +142,14 @@ class PPOTrainer(Trainer):
         else:
             self.policy_model.generation_config.eos_token_id = self.stop_token_id = args.stop_token_id  # None or int
 
+        # Check that the kl estimator is valid
+        if self.args.kl_estimator not in {"k1", "k3"}:
+            raise ValueError(
+                "kl_estimator must be either 'k1' (straightforward, unbiased) or 'k3' (lower variance, unbiased, "
+                "appears to be a strictly better estimator). See "
+                "[Approximating KL Divergence](http://joschu.net/blog/kl-approx.html) for details."
+            )
+
         # peft support
         if not is_peft_available() and peft_config is not None:
             raise ImportError(
@@ -496,7 +504,9 @@ class PPOTrainer(Trainer):
                 values = torch.masked_fill(values, padding_mask_p1, 0)
 
                 # 4. compute rewards
-                kl = logprobs - ref_logprobs
+                # Formula used by http://joschu.net/blog/kl-approx.html for the k1 and k3 estimators
+                logr = ref_logprobs - logprobs
+                kl = -logr if args.kl_estimator == "k1" else (logr.exp() - 1) - logr  # Else statement is k3
                 non_score_reward = -args.kl_coef * kl
                 rewards = non_score_reward.clone()
                 actual_start = torch.arange(rewards.size(0), device=rewards.device)
