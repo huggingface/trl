@@ -52,7 +52,7 @@ This dataset is designed for tasks where the model must reason over multiple ima
 
 In this section, we build the script needed to fine-tune a multimodal model for both **Single Image + Text** and **Multi-Image + Text** use cases.  
 
-### **Setting Up the Environment**  
+### Setting Up the Environment
 
 Before fine-tuning, we need to install the required dependencies. Let's start by setting up the environment:  
 
@@ -225,7 +225,7 @@ model = AutoModelForImageTextToText.from_pretrained(
 processor = AutoProcessor.from_pretrained(model_id)
 ```
 
-Next, we set up [Quantized Low-Rank Adaptation (QLoRA)](https://arxiv.org/abs/2305.14314), an efficient fine-tuning technique for Large Language Models (LLMs) and Vision-Language Models (VLMs).  
+Next, we set up [Quantized Low-Rank Adaptation (QLoRA)](https://huggingface.co/papers/2305.14314), an efficient fine-tuning technique for Large Language Models (LLMs) and Vision-Language Models (VLMs).  
 
 ```python
 from peft import LoraConfig, get_peft_model
@@ -246,7 +246,7 @@ peft_config = LoraConfig(
 )
 ```
 
-With QLoRA now set up, we need to define the training arguments for SFT. The `SFTConfig` class simplifies this process, providing an easy way to adjust parameters based on our specific needs.  
+With QLoRA now set up, we need to define the training arguments for SFT. The [`SFTConfig`] class simplifies this process, providing an easy way to adjust parameters based on our specific needs.  
 
 ```python
 from trl import SFTConfig
