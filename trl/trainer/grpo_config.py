@@ -15,6 +15,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
+import transformers
+from packaging import version
 from transformers import TrainingArguments
 
 
@@ -141,7 +143,12 @@ class GRPOConfig(TrainingArguments):
             Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all
             prompts are logged.
     """
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    if version.parse(transformers.__version__) <= version.parse("4.50.3"):
+        from transformers.training_args import _VALID_DICT_FIELDS
+        _VALID_DICT_FIELDS.append("model_init_kwargs")
+    else:
+        _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[Union[dict, str]] = field(
