@@ -151,7 +151,7 @@ This constant is recommended to be the maximum completion length. To use this fo
 - `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
 - `completions/min_terminated_length`: The minimun length of generated completions that terminate with EOS.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
-- `completions/clipped_ratio` :  The ratio of truncated (clipped) completions.
+- `completions/clipped_ratio` : The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after applying reward weights.
