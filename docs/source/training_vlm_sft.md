@@ -1,6 +1,6 @@
 # Fine-tuning a Multimodal Model Using SFT (Single or Multi-Image Dataset)
 
-![VLM SFT training procedure](./training_vlm_sft_training_procedure.png)  
+![VLM SFT training procedure](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/training_vlm_sft_training_procedure.png)  
 
 ## Overview  
 
@@ -57,14 +57,8 @@ In this section, we build the script needed to fine-tune a multimodal model for 
 Before fine-tuning, we need to install the required dependencies. Let's start by setting up the environment:  
 
 ```bash
-# Install the required libraries
+# Install the required libraries. Futher details: https://huggingface.co/docs/trl/installation 
 pip install -U -q trl bitsandbytes peft hf_xet
-
-# Alternative: Install a specific Transformers release with zero-day model support  
-# pip install git+https://github.com/huggingface/transformers@v4.49.0-Gemma-3  
-
-# Optional: Install the latest development version of TRL  
-# pip install git+https://github.com/huggingface/trl.git  
 ```
 
 Once all dependencies are installed, we need to log in to the **Hugging Face Hub**. Since **Gemma 3** is a gated model, access permissions are required.  
@@ -85,7 +79,7 @@ This guide supports both use cases, so refer to the **Single Image + Text** or *
 
 #### **Single Image + Text**
 
-![Single Image + Text](./training_vlm_sft_training_procedure_single_image.png)  
+![Single Image + Text](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/training_vlm_sft_training_procedure_single_image.png)  
 
 In this case, each sample in a batch consists of a **single image paired with text**. Since the dataset is already formatted for supervised fine-tuning (SFT), we can directly load it using `load_dataset`.
 
@@ -100,7 +94,7 @@ dataset = load_dataset(dataset_name)
 
 #### **Multi-Image + Text (or Interleaving)**  
 
-![Multi-Image + Text](./training_vlm_sft_training_procedure_multi_image.png)  
+![Multi-Image + Text](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/training_vlm_sft_training_procedure_multi_image.png)  
 
 Gemma 3 also supports **Multi-Image + Text** scenarios, where:  
 
