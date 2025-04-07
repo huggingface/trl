@@ -30,7 +30,7 @@ The model (referred to as the **"assistant"**) responds based on both the **visu
   height="560px"
 ></iframe>
 
-### **FanqingM/MMIU-Benchmark Dataset (Multi-Image + Text)**  
+### FanqingM/MMIU-Benchmark Dataset (Multi-Image + Text)
 
 The **FanqingM/MMIU-Benchmark** dataset consists of:  
 
@@ -48,7 +48,7 @@ This dataset is designed for tasks where the model must reason over multiple ima
   height="560px"
 ></iframe>
 
-## **Developing a Fine-Tuning Script for Multimodal SFT**  
+## Developing a Fine-Tuning Script for Multimodal SFT
 
 In this section, we build the script needed to fine-tune a multimodal model for both **Single Image + Text** and **Multi-Image + Text** use cases.  
 
@@ -58,7 +58,7 @@ Before fine-tuning, we need to install the required dependencies. Let's start by
 
 ```bash
 # Install the required libraries
-pip install -U -q trl transformers datasets bitsandbytes peft accelerate hf_xet
+pip install -U -q trl bitsandbytes peft hf_xet
 
 # Alternative: Install a specific Transformers release with zero-day model support  
 # pip install git+https://github.com/huggingface/transformers@v4.49.0-Gemma-3  
@@ -264,7 +264,6 @@ training_args = SFTConfig(
     bf16=True,                                                      # Enable bfloat16 precision for training to save memory and speed up computations.
     push_to_hub=True,                                               # Automatically push the fine-tuned model to Hugging Face Hub after training.
     gradient_checkpointing_kwargs={"use_reentrant": False},         # Set gradient checkpointing to non-reentrant to avoid issues.
-    dataset_text_field="",                                          # Placeholder for dataset text field (needed by the collator).
     dataset_kwargs={"skip_prepare_dataset": True},                  # Skip dataset preparation to handle preprocessing manually.
 )
 
