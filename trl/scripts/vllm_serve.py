@@ -17,7 +17,6 @@ import time
 import uuid
 import argparse
 import logging
-import threading
 from dataclasses import dataclass, field
 from typing import Optional, Sequence, Dict, List, Any
 
@@ -264,10 +263,6 @@ def main(script_args: ScriptArguments):
     )
 
     app = FastAPI()
-
-    # Simple buffer to store all request-response pairs
-    request_buffer = []
-    buffer_lock = threading.Lock()
     
     # Define the endpoints for the model server
     @app.get("/health/")
@@ -529,51 +524,8 @@ def main(script_args: ScriptArguments):
             )
         )
         
-        # Store request and response in buffer
-        with buffer_lock:
-            request_buffer.append({
-                "request_id": request_id,
-                "timestamp": timestamp,
-                "request": {
-                    "messages": [{"role": msg.role, "content": msg.content} for msg in request.messages],
-                    "temperature": request.temperature,
-                    "top_p": request.top_p,
-                    "max_tokens": request.max_tokens,
-                    "n": request.n,
-                },
-                "response": {
-                    "generated_texts": generated_texts,
-                    "usage": {
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": total_tokens
-                    }
-                }
-            })
-        
         return response
-    
-    class BufferedRequestsResponse(BaseModel):
-        count: int
-        data: List[Dict[str, Any]]
-    
-    @app.post("/v1/get_buffered_requests", response_model=BufferedRequestsResponse)
-    async def get_buffered_requests():
-        """
-        Returns all buffered requests and responses, then resets the buffer.
-        """
-        with buffer_lock:
-            # Copy the buffer
-            data = request_buffer.copy()
-            count = len(data)
-            
-            # Clear the buffer
-            request_buffer.clear()
-        
-        return BufferedRequestsResponse(
-            count=count,
-            data=data
-        )
+
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)

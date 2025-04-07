@@ -148,7 +148,6 @@ class APIProxy:
             
             self.conversations[agent_id].add_exchange(request, response)
     
-    # TODO: we are relying on race conditions and "dictionary ordering"
     def get_conversation_histories(self) -> Dict[str, str]:
         """Get and reset the conversation histories for all agents (should be called after .deploy() finishes"""
         histories = {agent_id: self.conversations[agent_id].get_completion_history() for agent_id in self.conversations}

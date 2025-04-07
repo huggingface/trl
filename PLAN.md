@@ -35,7 +35,7 @@ The `AgentManager` will serve as a coordinator for ephemeral agents that exist o
        ├── Create ephemeral resources (repos, endpoints)
        ├── Deploy N parallel agents
        │   ├── Agent 1 (e.g., Aider instance)
-       │   ├── Agent 2 (different approach)
+       │   ├── Agent 2 
        │   └── ... 
        ├── Monitor progress & conversation history
        ├── Await all completions
@@ -43,59 +43,6 @@ The `AgentManager` will serve as a coordinator for ephemeral agents that exist o
        ├── Clean up resources
        └── Return structured completions
    ```
-
-## Implementation Details
-
-```python
-class AgentManager(ABC):
-    def __init__(self, vllm_port=8000):
-        self.vllm_port = vllm_port
-        self.endpoints = {}  # Tracks active endpoints
-
-    @abstractmethod
-    def deploy(self, data: Dict[str, Any]) -> List[str]:
-        """Deploy agents to process the given data, returning completion IDs"""
-        pass
-        
-    def _create_endpoint(self, agent_id):
-        """Creates a unique endpoint for an agent that records history"""
-        port = self._allocate_port()
-        # Setup FastAPI endpoint that proxies to vLLM and records history
-        # ...
-        return port
-        
-    def _cleanup(self):
-        """Release all resources used by agents"""
-        # Stop all endpoints, remove temp directories, etc.
-```
-
-## Specialized Implementations
-
-```python
-class AiderAgentManager(AgentManager):
-    def deploy(self, data: Dict[str, Any]) -> List[str]:
-        # Clone repos into temporary directories
-        repo_paths = self._clone_repos(data)
-        
-        # Initialize Aider instances, each with its own endpoint
-        agents = []
-        for repo_path in repo_paths:
-            agent_id = str(uuid.uuid4())
-            port = self._create_endpoint(agent_id)
-            agent = self._create_aider_agent(repo_path, port)
-            agents.append(agent)
-            
-        # Run all agents in parallel
-        completion_futures = [self._run_agent(agent) for agent in agents]
-        
-        # Wait for all to complete
-        completions = await asyncio.gather(*completion_futures)
-        
-        # Clean up
-        self._cleanup()
-        
-        return completions
-```
 
 ## Concerns and Potential Issues
 
@@ -123,10 +70,6 @@ class AiderAgentManager(AgentManager):
 ### Error Handling
 - **Problem**: Agent failures should not crash the entire training process
 - **Solution**: Implement graceful degradation and robust error reporting
-
-### Training Signal Quality
-- **Problem**: Different agent approaches may produce inconsistent training signals
-- **Solution**: Consider normalization techniques for rewards across different agent types
 
 # GRPO with Agent Integration
 
