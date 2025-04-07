@@ -17,7 +17,7 @@ We demonstrate the fine-tuning process using two datasets, but these principles 
 
 To address both **Single Image + Text** and **Multi-Image + Text** scenarios, we use two datasets that are well-suited for this task.  
 
-### **HuggingFaceH4/llava-instruct-mix-vsft Dataset (Image + Text)**  
+### HuggingFaceH4/llava-instruct-mix-vsft Dataset (Image + Text)
 
 This dataset is a reformatted version of [LLaVA Instruct Mix](https://huggingface.co/datasets/theblackcat102/llava-instruct-mix). It consists of conversations where a user provides both **text** and a **single image** as input.  
 
