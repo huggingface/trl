@@ -816,17 +816,17 @@ class GRPOTrainer(Trainer):
             truncated_completions = ~is_eos.any(dim=1)
 
 
-            if self.accelerator.is_main_process and self.state.global_step < 10: 
+            if self.accelerator.is_main_process and self.state.global_step % 10 == 0:
                 print(f"Total truncated completions: {len(truncated_completions)}")
-                print(f"Original mask sum: {completion_mask.sum().item()}")
- 
+                print(f"Sum Mask Before truncation_completion: {completion_mask.sum().item()}")
+
             # Zero out the completion mask for truncated samples
             completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
             
             # Print the effect of masking
             if self.accelerator.is_main_process and self.state.global_step < 10:
-                print(f"Mask sum after truncation: {completion_mask.sum().item()}")
-                print("===========================================\n")
+                print(f"Sum Mask After truncation_completion: {completion_mask.sum().item()}")
+                print("="*50)
             #completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
             
         
