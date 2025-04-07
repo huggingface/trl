@@ -259,10 +259,8 @@ training_args = SFTConfig(
     push_to_hub=True,                                               # Automatically push the fine-tuned model to Hugging Face Hub after training.
     gradient_checkpointing_kwargs={"use_reentrant": False},         # Set gradient checkpointing to non-reentrant to avoid issues.
     dataset_kwargs={"skip_prepare_dataset": True},                  # Skip dataset preparation to handle preprocessing manually.
+    remove_unused_columns=False,                         # Ensure unused columns are not removed in the collator (important for batch processing).
 )
-
-training_args.remove_unused_columns = False                         # Ensure unused columns are not removed in the collator (important for batch processing).
-
 ```
 
 The `collate_fn` is responsible for processing and preparing individual examples to form a batch.  
