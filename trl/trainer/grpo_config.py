@@ -118,7 +118,7 @@ class GRPOConfig(TrainingArguments):
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             Whether to mask the loss for completions that are truncated due to exceeding the maximum completion length.
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
-            incorrectly penalized and introducing noise during training.
+            incorrectly penalized and introducing noise during training. 
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
@@ -311,7 +311,7 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to mask the loss for samples that were truncated due to exceeding the maximum completion "
             "length. When enabled, truncated completions are excluded from loss calculation, preventing them from being "
-            "penalized for being too long."
+            "penalized for being too long. According to [DAPO](https://huggingface.co/papers/2503.14476) paper, this is a good practice for training stability."
         },
     )
     sync_ref_model: bool = field(
