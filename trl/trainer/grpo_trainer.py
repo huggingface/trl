@@ -411,7 +411,6 @@ class GRPOTrainer(Trainer):
         self.use_liger_loss = args.use_liger_loss
         self.mask_truncated_completions = args.mask_truncated_completions
 
-
         # Datasets
         if (
             isinstance(train_dataset, IterableDataset)
@@ -423,7 +422,7 @@ class GRPOTrainer(Trainer):
             # See https://github.com/huggingface/trl/issues/3213
             raise NotImplementedError(
                 "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
-            ) 
+            )
 
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
@@ -811,12 +810,12 @@ class GRPOTrainer(Trainer):
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-        
+
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
             truncated_completions = ~is_eos.any(dim=1)
             completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
-            
+
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
 
@@ -981,7 +980,7 @@ class GRPOTrainer(Trainer):
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
         }
-        
+
     def compute_liger_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -1054,7 +1053,7 @@ class GRPOTrainer(Trainer):
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
-        
+
         # Use the completion mask directly since truncated samples are already handled
         loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
 
