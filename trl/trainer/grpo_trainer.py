@@ -810,26 +810,11 @@ class GRPOTrainer(Trainer):
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
         
-        # If mask_truncated_completions is enabled, modify the completion_mask to zero out truncated completions
+        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
-            # A completion is truncated if it has no EOS token
             truncated_completions = ~is_eos.any(dim=1)
-
-
-            if self.accelerator.is_main_process and self.state.global_step % 10 == 0:
-                print(f"Total truncated completions: {len(truncated_completions)}")
-                print(f"Sum Mask Before truncation_completion: {completion_mask.sum().item()}")
-
-            # Zero out the completion mask for truncated samples
             completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
             
-            # Print the effect of masking
-            if self.accelerator.is_main_process and self.state.global_step < 10:
-                print(f"Sum Mask After truncation_completion: {completion_mask.sum().item()}")
-                print("="*50)
-            #completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
-            
-        
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
 
@@ -1078,6 +1063,7 @@ class GRPOTrainer(Trainer):
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
+        # Compute the clip ratio
         is_clipped = ((coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)) | (
             (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
         )
