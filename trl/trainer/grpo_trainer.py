@@ -449,7 +449,13 @@ class GRPOTrainer(Trainer):
                     "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
                 )
             if is_peft_model(model):
-                raise ValueError("Liger loss is not supported with a PEFT model.")
+                raise TypeError("Liger loss is not supported with a PEFT model.")
+
+            if self.loss_type != "bnpo":
+                raise ValueError(
+                    f"The provided loss type (`{self.loss_type}`) is not supported with `use_liger_loss`. Liger loss "
+                    "only supports `bnpo` for now."
+                )
 
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
