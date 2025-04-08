@@ -1028,7 +1028,8 @@ class GRPOTrainer(Trainer):
             raise ValueError("The GRPOTrainer does not support returning outputs")
         if self.use_liger_loss:
             # Compute the loss using the liger grpo loss
-            return self.compute_liger_loss(model, inputs)
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
         else:
             return self._compute_loss(model, inputs)
 
