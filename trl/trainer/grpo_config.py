@@ -38,6 +38,9 @@ class GRPOConfig(TrainingArguments):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`GRPOTrainer`] is provided as a string.
 
+        use_peft_as_reference (`bool`, *optional*, defaults to `False`):
+            When True, for PEFT models (e.g., LoRA) that may already have fine-tuned weights, the reference model is created directly from the full model including the PEFT/LoRA (or quantized) weights. This stabilizes the KL divergence during GRPO tuning.
+
         > Parameters that control the data preprocessing
 
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
@@ -149,6 +152,13 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `GRPOTrainer` is provided as a string."
+        },
+    )
+
+    use_peft_as_reference: bool = field(
+        default=False,
+        metadata={
+            "help": "When True, for PEFT models (e.g., LoRA) that may already have fine-tuned weights, the reference model is created directly from the full model including the PEFT/LoRA (or quantized) weights. This stabilizes the KL divergence during GRPO tuning."
         },
     )
 

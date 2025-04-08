@@ -29,7 +29,7 @@ from .testing_utils import require_vllm
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel
+    from peft import LoraConfig, PeftModel, get_peft_model
 
 
 class RepeatRandomSamplerTester(unittest.TestCase):
@@ -915,3 +915,30 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_peft
+    def test_peft_use_as_reference_flag_true(self):
+        # Test that for a pre-finetuned PEFT model with use_peft_as_reference=True, ref_model is set
+        base_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        peft_config = LoraConfig()  # use default config
+        model = get_peft_model(
+            base_model, peft_config
+        )  # construct a peft model outside of GRPOTrainer to simulate a pre-finetuned PEFT model
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=32,
+                use_peft_as_reference=True,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+            self.assertIsNotNone(trainer.ref_model, "Expected ref_model to be set when use_peft_as_reference is True.")
