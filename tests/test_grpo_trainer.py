@@ -14,6 +14,7 @@
 
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 from datasets import load_dataset
@@ -915,3 +916,93 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @patch("transformers.generation.utils.GenerationMixin.generate")
+    def test_training_with_mask_truncated_completions(self, mock_generate):
+        """Test that training works with mask_truncated_completions=True parameter."""
+
+        # We mock the generate method because the model's random weights make it extremely unlikely to produce a
+        # sequence containing the EOS token within the allowed max_completion_length. As a result, all tokens are
+        # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
+        def fake_generate(prompt_ids, **kwargs):
+            # pad_token_id = 151643; eos_token_id = 151645
+            completions_ids = torch.tensor(
+                [
+                    [1, 2, 3, 4, 5, 6, 7, 8],  # this one is truncated
+                    [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
+                    [12, 13, 14, 15, 16, 17, 18, 151645],  # particular case, eos is generated just within the limit
+                ],
+                device=prompt_ids.device,
+            )
+            return torch.cat([prompt_ids, completions_ids], dim=1)
+
+        mock_generate.side_effect = fake_generate
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                mask_truncated_completions=True,  # Enable masking of truncated completions
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_mask_truncated_completions_all_masked(self):
+        """
+        Test that when all generated completions are truncated (i.e., none contain an EOS token), and
+        mask_truncated_completions=True, the model receives no effective learning signal and therefore does not update
+        its parameters.
+
+        Here, we don't mock the generate method, be we rely on the fact that the model the probability of generating
+        the EOS token is extremely low, so all generated completions are truncated.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                mask_truncated_completions=True,  # Enable masking of truncated completions
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
