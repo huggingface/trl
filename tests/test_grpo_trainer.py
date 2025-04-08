@@ -930,13 +930,13 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,
                 per_device_train_batch_size=3,
                 num_generations=3,
-                max_completion_length=10,
+                max_completion_length=8,
                 mask_truncated_completions=True,  # Enable masking of truncated completions
                 report_to="none",
             )
 
             trainer = GRPOTrainer(
-                model="Qwen/Qwen2.5-0.5B",
+                model="Qwen/Qwen2.5-0.5B-Instruct",
                 reward_funcs=reward_func,
                 args=training_args,
                 train_dataset=dataset,
