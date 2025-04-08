@@ -572,6 +572,7 @@ class GRPOTrainer(Trainer):
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
+                # set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
                 self.reward_funcs[i] = self.accelerator.prepare_model(
                     reward_func, evaluation_mode=True, device_placement=True
                 )
