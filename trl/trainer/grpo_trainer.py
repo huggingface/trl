@@ -1057,7 +1057,9 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        if self.loss_type == "bnpo":
+        if self.loss_type == "grpo":
+            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1)).mean()
+        elif self.loss_type == "bnpo":
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
         elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
