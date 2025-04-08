@@ -17,7 +17,7 @@ import os
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Type, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -208,7 +208,7 @@ class SFTTrainer(Trainer):
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        optimizer_cls_and_kwargs: Optional[tuple[Type[torch.optim.Optimizer], dict[str, Any]]] = None,
+        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Union[Callable[[dict], str], Callable[[dict], list[str]]]] = None,
@@ -227,6 +227,19 @@ class SFTTrainer(Trainer):
         # Handle the tokenizer
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model_id)
+
+        # Model
+        if args.model_init_kwargs is not None and not isinstance(model, str):
+            warnings.warn(
+                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
+                "The `model_init_kwargs` will be ignored."
+            )
+        if isinstance(model, str):
+            model = self._create_model_from_path(model, args)
+
+        # PEFT configuration and model wrapping
+        if peft_config is not None:
+            model = self._prepare_peft_model(model, peft_config, args)
 
         # Data collator
         if args.padding_free:
@@ -266,19 +279,6 @@ class SFTTrainer(Trainer):
                     "in the vocabulary before using it as a padding token."
                 )
             data_collator = DataCollatorForLanguageModeling(pad_token_id)
-
-        # Model
-        if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
-                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
-                "The `model_init_kwargs` will be ignored."
-            )
-        if isinstance(model, str):
-            model = self._create_model_from_path(model, args)
-
-        # PEFT configuration and model wrapping
-        if peft_config is not None:
-            model = self._prepare_peft_model(model, peft_config, args)
 
         # Dataset
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)

@@ -15,9 +15,10 @@
 import os
 import textwrap
 import warnings
-from collections import defaultdict
+from collections import defaultdict, deque
+from collections.abc import Sized
 from contextlib import nullcontext
-from typing import Any, Callable, Optional, Sized, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.utils.data
@@ -420,6 +421,19 @@ class GRPOTrainer(Trainer):
         self.use_vllm = args.use_vllm
         self.use_liger_loss = args.use_liger_loss
 
+        # Datasets
+        if (
+            isinstance(train_dataset, IterableDataset)
+            or isinstance(eval_dataset, IterableDataset)
+            or (
+                isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
+            )
+        ):
+            # See https://github.com/huggingface/trl/issues/3213
+            raise NotImplementedError(
+                "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
+            )
+
         # Multi-step
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
@@ -454,12 +468,6 @@ class GRPOTrainer(Trainer):
                 use_ref_model=self.ref_model is not None,
             )
 
-        # Initialize the metrics
-        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._total_train_tokens = 0
-        self.log_completions = args.log_completions
-        self.num_completions_to_print = args.num_completions_to_print
-
         super().__init__(
             model=model,
             args=args,
@@ -471,10 +479,29 @@ class GRPOTrainer(Trainer):
             optimizers=optimizers,
         )
 
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
+        self.log_completions = args.log_completions
+        self.num_completions_to_print = args.num_completions_to_print
+        # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
+        # final optimization step.
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.gradient_accumulation_steps
+        self._textual_logs = {
+            "prompt": deque(maxlen=maxlen),
+            "completion": deque(maxlen=maxlen),
+            "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
+        }
+
         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
         num_processes = self.accelerator.num_processes
         global_batch_size = args.per_device_train_batch_size * num_processes
         possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+        if self.num_generations < 2:
+            raise ValueError(
+                f"GRPO requires at least 2 generations per prompt to calculate the advantages. "
+                f"You provided {self.num_generations}, which is less than the minimum required."
+            )
         if self.num_generations not in possible_values:
             raise ValueError(
                 f"The global train batch size ({num_processes} x {args.per_device_train_batch_size}) must be evenly "
@@ -511,7 +538,7 @@ class GRPOTrainer(Trainer):
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
 
-            self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
+            self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
@@ -904,8 +931,8 @@ class GRPOTrainer(Trainer):
         mode = "eval" if self.control.should_evaluate else "train"
 
         if mode == "train":
-            self._total_train_tokens += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+            self.state.num_input_tokens_seen += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
+        self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # log completion lengths, mean, min, max
         agg_completion_mask = self.accelerator.gather_for_metrics(completion_mask.sum(1))
@@ -943,63 +970,11 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
-        # Log completions when we complete a full gradient accumulation cycle
-        # For logging across the gradient accumulation steps, we need to accumulate the data
-        is_last_step_in_grad_accum = (
-            self._step % self.args.gradient_accumulation_steps == self.args.gradient_accumulation_steps - 1
-        )
-        should_log_completions = (
-            self.log_completions
-            and self.state.global_step % self.args.logging_steps == 0
-            and is_last_step_in_grad_accum
-        )
-
-        # Collect data for logging throughout the accumulation steps
-        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
-            if not hasattr(self, "_accumulated_prompts"):
-                self._accumulated_prompts = []
-                self._accumulated_completions = []
-                self._accumulated_rewards = {name: [] for name in reward_func_names}
-
-            # Gather and accumulate the data from this step
-            prompts_this_step = gather_object(prompts_text)
-            completions_this_step = gather_object(completions_text)
-
-            if self.accelerator.is_main_process:
-                self._accumulated_prompts.extend(prompts_this_step)
-                self._accumulated_completions.extend(completions_this_step)
-                for i, name in enumerate(reward_func_names):
-                    self._accumulated_rewards[name].extend(rewards_per_func[:, i].tolist())
-
-        # Log the accumulated data when we finish a grad accumulation cycle
-        if should_log_completions and self.accelerator.is_main_process:
-            if is_rich_available():
-                print_prompt_completions_sample(
-                    self._accumulated_prompts,
-                    self._accumulated_completions,
-                    self._accumulated_rewards,
-                    self.state.global_step,
-                    self.num_completions_to_print,
-                )
-
-            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                import pandas as pd
-
-                table = {
-                    "step": [str(self.state.global_step)] * len(self._accumulated_prompts),
-                    "prompt": self._accumulated_prompts,
-                    "completion": self._accumulated_completions,
-                    "reward": [sum(rewards) for rewards in zip(*self._accumulated_rewards.values())],
-                }
-                df = pd.DataFrame(table)
-                if self.args.wandb_log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
-                wandb.log({"completions": wandb.Table(dataframe=df)})
-
-            # Reset the accumulated data after logging
-            self._accumulated_prompts = []
-            self._accumulated_completions = []
-            self._accumulated_rewards = {name: [] for name in reward_func_names}
+        # Log prompt and completion texts
+        self._textual_logs["prompt"].extend(gather_object(prompts_text))
+        self._textual_logs["completion"].extend(gather_object(completions_text))
+        for i, name in enumerate(reward_func_names):
+            self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
         return {
             "prompt_ids": prompt_ids,
@@ -1123,6 +1098,30 @@ class GRPOTrainer(Trainer):
         else:  # transformers<=4.46
             super().log(logs)
         self._metrics[mode].clear()
+
+        if self.accelerator.is_main_process:
+            if is_rich_available():
+                print_prompt_completions_sample(
+                    self._textual_logs["prompt"],
+                    self._textual_logs["completion"],
+                    self._textual_logs["rewards"],
+                    self.state.global_step,
+                    self.num_completions_to_print,
+                )
+
+            if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
+                import pandas as pd
+
+                table = {
+                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
+                    "prompt": self._textual_logs["prompt"],
+                    "completion": self._textual_logs["completion"],
+                    **self._textual_logs["rewards"],
+                }
+                df = pd.DataFrame(table)
+                if self.args.wandb_log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
+                wandb.log({"completions": wandb.Table(dataframe=df)})
 
     def create_model_card(
         self,
