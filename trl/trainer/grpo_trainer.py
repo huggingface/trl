@@ -959,6 +959,19 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
+        # Get the length of the completions for "accuracy_reward" function
+        if "accuracy_reward" in reward_func_names:
+            accuracy_reward_idx = reward_func_names.index("accuracy_reward")
+            accuracy_reward = rewards_per_func[:, accuracy_reward_idx]
+
+            length_correct = agg_completion_mask[accuracy_reward == 1.0].float().nanmean()
+            if not torch.isnan(length_correct):
+                self._metrics[mode]["length_correct"].append(length_correct.item())
+
+            length_incorrect = agg_completion_mask[accuracy_reward == 0.0].float().nanmean()
+            if not torch.isnan(length_incorrect):
+                self._metrics[mode]["length_incorrect"].append(length_incorrect.item())
+
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
