@@ -918,7 +918,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
     def test_training_with_mask_truncated_completions(self):
         """Test that training works with mask_truncated_completions=True parameter."""
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
             """Reward function that rewards completions with more unique characters."""
