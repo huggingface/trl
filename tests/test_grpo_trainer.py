@@ -930,7 +930,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,
                 per_device_train_batch_size=3,
                 num_generations=3,
-                max_completion_length=8,
+                max_completion_length=1,
                 mask_truncated_completions=True,  # Enable masking of truncated completions
                 report_to="none",
             )
