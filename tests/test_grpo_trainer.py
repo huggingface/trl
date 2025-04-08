@@ -920,24 +920,19 @@ class GRPOTrainerTester(unittest.TestCase):
         """Test that training works with mask_truncated_completions=True parameter."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards completions with more unique characters."""
-            return [float(len(set(completion))) for completion in completions]
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
                 mask_truncated_completions=True,  # Enable masking of truncated completions
                 report_to="none",
             )
-
             trainer = GRPOTrainer(
-                model="Qwen/Qwen2.5-0.5B-Instruct",
-                reward_funcs=reward_func,
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
             )
