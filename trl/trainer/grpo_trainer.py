@@ -50,12 +50,12 @@ from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, un
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
+    _ForwardRedirection,
     generate_model_card,
     get_comet_experiment_url,
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
-    _ForwardRedirection,
 )
 
 
@@ -443,7 +443,7 @@ class GRPOTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
-        self._forward_redirection = _ForwardRedirection() 
+        self._forward_redirection = _ForwardRedirection()
         if self.use_liger_loss:
             if not is_liger_kernel_available():
                 raise ImportError(
@@ -572,7 +572,9 @@ class GRPOTrainer(Trainer):
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
-                self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True, device_placement=True)
+                self.reward_funcs[i] = self.accelerator.prepare_model(
+                    reward_func, evaluation_mode=True, device_placement=True
+                )
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -804,7 +806,7 @@ class GRPOTrainer(Trainer):
                         unwrapped_model.generate,
                         prompt_ids,
                         attention_mask=prompt_mask,
-                        generation_config=self.generation_config
+                        generation_config=self.generation_config,
                     )
                 else:
                     prompt_completion_ids = unwrapped_model.generate(
