@@ -137,6 +137,7 @@ This structure can be translated into code like this:
 ```python
 import os
 import zipfile
+import io
 from datasets import DatasetDict
 from huggingface_hub import hf_hub_download, list_repo_files
 from PIL import Image
@@ -212,11 +213,12 @@ bnb_config = BitsAndBytesConfig(
 model = AutoModelForImageTextToText.from_pretrained(
     model_id, 
     device_map="auto", 
-    torch_dtype=torch.bfloat16, 
-    attn_implementation="eager", 
+    torch_dtype=torch.bfloat16,
+    attn_implementation="eager", # Important (Ref:https://github.com/huggingface/transformers/blob/c15a7adb283fa984a40558c7fe7bed30ae975cdd/src/transformers/models/gemma3/modeling_gemma3.py#L934)
     quantization_config=bnb_config
 )
 processor = AutoProcessor.from_pretrained(model_id)
+processor.tokenizer.padding_side = "right"
 ```
 
 Next, we set up [Quantized Low-Rank Adaptation (QLoRA)](https://huggingface.co/papers/2305.14314), an efficient fine-tuning technique for Large Language Models (LLMs) and Vision-Language Models (VLMs).  
@@ -248,8 +250,8 @@ from trl import SFTConfig
 training_args = SFTConfig(
     output_dir="gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft",     # Directory to save the model and push to the Hub. Use a specific repository id (e.g., gemma-3-4b-it-trl-sft-MMIU-Benchmark for multi-image datasets).
     num_train_epochs=1,                                             # Set the number of epochs to train the model.
-    per_device_train_batch_size=1,                                  # Batch size for each device (e.g., GPU) during training.
-    gradient_accumulation_steps=1,                                  # Number of steps before performing a backward/update pass to accumulate gradients.
+    per_device_train_batch_size=8,                                  # Batch size for each device (e.g., GPU) during training.
+    gradient_accumulation_steps=4,                                  # Number of steps before performing a backward/update pass to accumulate gradients.
     gradient_checkpointing=True,                                    # Enable gradient checkpointing to reduce memory usage during training.
     optim="adamw_torch_fused",                                      # Use the fused AdamW optimizer for better performance.
     logging_steps=10,                                               # Frequency of logging training progress (log every 10 steps).
@@ -281,6 +283,7 @@ This process is similar across different dataset types, with a minor variation i
 - **Multi-Image + Text** → A **list of lists of images** is used, where each batch element contains multiple images.  
 
 ```python
+from PIL import Image
 
 # For multi-image cases
 def process_vision_info(messages: list[dict]) -> list[Image.Image]:
@@ -302,10 +305,11 @@ def process_vision_info(messages: list[dict]) -> list[Image.Image]:
     return image_inputs
 
 def collate_fn(examples):
-    texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+    texts = [processor.apply_chat_template(example["messages"], tokenize=False, add_generation_prompt=False).strip() for example in examples]
     if "images" in examples[0]:  # single-image
         images = [
-            img.convert("RGB") if img.mode == "RGBA" else img for example in examples for img in example["images"]
+            [img.convert("RGB") if img.mode == "RGBA" else img for img in example["images"]]
+            for example in examples
         ]
     else:  # multi-image
         images = [process_vision_info(example["messages"]) for example in examples]
@@ -343,7 +347,7 @@ trainer = SFTTrainer(
     args=training_args,
     data_collator=collate_fn,
     train_dataset=dataset["train"],
-    processing_class=processor.tokenizer,
+    processing_class=processor,
     peft_config=peft_config,
 )
 
