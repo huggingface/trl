@@ -972,31 +972,11 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
-        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
-            prompts_to_log = gather_object(prompts_text)
-            completions_to_log = gather_object(completions_text)
-            rewards_to_log = rewards.tolist()
-
-            if self.accelerator.is_main_process:
-                if is_rich_available():
-                    print_prompt_completions_sample(
-                        prompts_to_log,
-                        completions_to_log,
-                        rewards_to_log,
-                        self.state.global_step,
-                    )
-                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                    import pandas as pd
-
-                    # For logging
-                    table = {
-                        "step": [str(self.state.global_step)] * len(rewards),
-                        "prompt": prompts_to_log,
-                        "completion": completions_to_log,
-                        "reward": rewards.tolist(),
-                    }
-                    df = pd.DataFrame(table)
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
+        # Log prompt and completion texts
+        self._textual_logs["prompt"].extend(gather_object(prompts_text))
+        self._textual_logs["completion"].extend(gather_object(completions_text))
+        for i, name in enumerate(reward_func_names):
+            self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
         return {
             "prompt_ids": prompt_ids,
