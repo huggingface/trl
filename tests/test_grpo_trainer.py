@@ -23,8 +23,9 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.import_utils import is_vllm_available
 from trl.trainer.grpo_trainer import RepeatRandomSampler
+
+from .testing_utils import require_vllm
 
 
 if is_peft_available():
@@ -153,7 +154,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -215,7 +216,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 eval_strategy="steps",
                 eval_steps=2,
                 report_to="none",
@@ -239,7 +240,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 num_iterations=2,
                 report_to="none",
             )
@@ -273,7 +274,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -319,7 +320,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,
                 per_device_train_batch_size=3,
                 num_generations=3,
-                max_completion_length=32,
+                max_completion_length=8,
                 gradient_checkpointing=True,  # Enable gradient checkpointing
                 report_to="none",
             )
@@ -367,7 +368,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -403,7 +404,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -439,7 +440,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -478,7 +479,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -517,7 +518,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,
                 per_device_train_batch_size=3,
                 num_generations=3,
-                max_completion_length=32,
+                max_completion_length=8,
                 report_to="none",
             )
 
@@ -562,7 +563,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 reward_weights=[0.7, 0.3],  # weight of reward_func1 and reward_func2 respectively
             )
@@ -603,7 +604,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -642,7 +643,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -663,7 +664,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm(self):
         """Test that training works with vLLM for generation."""
@@ -675,7 +676,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
             )
@@ -706,7 +707,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 sync_ref_model=True,
                 ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
                 report_to="none",
@@ -738,7 +739,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -759,9 +760,9 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
     @unittest.skip("We should add a mock for the vLLM server.")
     @require_peft
+    @require_vllm
     def test_training_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")  # tiny model is too small for vLLM
@@ -774,7 +775,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
             )
@@ -806,7 +807,7 @@ class GRPOTrainerTester(unittest.TestCase):
                     # We expect the peft params to be different (except for the base layer)
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_guided_decoding(self):
         """Test that training works with vLLM for generation with guided decoding."""
@@ -818,7 +819,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
                 vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
@@ -851,7 +852,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 top_p=0.9,
                 top_k=10,
@@ -877,7 +878,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
@@ -889,7 +890,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
                 top_p=0.9,
@@ -925,7 +926,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 scale_rewards=False,
                 report_to="none",
             )
