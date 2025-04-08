@@ -35,7 +35,7 @@ class GRPOConfig(TrainingArguments):
     Parameters:
         > Parameters that control the model and reference model
 
-        model_init_kwargs (`str, dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        model_init_kwargs (`str`, `dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`GRPOTrainer`] is provided as a string.
 
