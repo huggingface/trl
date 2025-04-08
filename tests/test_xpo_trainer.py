@@ -21,9 +21,9 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import XPOConfig, XPOTrainer, is_llm_blender_available
+from trl import XPOConfig, XPOTrainer
 
-from .testing_utils import RandomPairwiseJudge
+from .testing_utils import RandomPairwiseJudge, require_llm_blender
 
 
 if is_peft_available():
@@ -160,7 +160,7 @@ class TestXPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_llm_blender_available(), "llm-blender is not available")
+    @require_llm_blender
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_xpo_trainer_judge_training(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
