@@ -44,6 +44,7 @@ _import_structure = {
         "is_rich_available",
         "is_unsloth_available",
         "is_vllm_available",
+        "is_ring_attn_available",
     ],
     "models": [
         "SUPPORTED_ARCHITECTURES",
@@ -52,6 +53,7 @@ _import_structure = {
         "PreTrainedModelWrapper",
         "create_reference_model",
         "setup_chat_format",
+        "register_ring_attn",
     ],
     "trainer": [
         "AlignPropConfig",
@@ -145,6 +147,7 @@ if TYPE_CHECKING:
         is_llm_blender_available,
         is_mergekit_available,
         is_rich_available,
+        is_ring_attn_available,
         is_unsloth_available,
         is_vllm_available,
     )
@@ -155,6 +158,7 @@ if TYPE_CHECKING:
         PreTrainedModelWrapper,
         create_reference_model,
         setup_chat_format,
+        register_ring_attn,
     )
     from .scripts import ScriptArguments, TrlParser, init_zero_verbose
     from .trainer import (

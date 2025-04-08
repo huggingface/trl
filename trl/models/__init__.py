@@ -27,6 +27,7 @@ _import_structure = {
         "setup_chat_format",
         "unwrap_model_for_generation",
     ],
+    "ring_attn": ["register_ring_attn"],
 }
 
 try:
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
         setup_chat_format,
         unwrap_model_for_generation,
     )
-
+    from .ring_attn import register_ring_attn
     try:
         if not is_diffusers_available():
             raise OptionalDependencyNotAvailable()
