@@ -40,7 +40,6 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.integrations.fsdp import is_fsdp_managed_module
 from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
@@ -559,6 +558,7 @@ class GRPOTrainer(Trainer):
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
+
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
