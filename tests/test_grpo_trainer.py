@@ -914,3 +914,40 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_mask_truncated_completions(self):
+        """Test that training works with mask_truncated_completions=True parameter."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards completions with more unique characters."""
+            return [float(len(set(completion))) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  
+                per_device_train_batch_size=3,  
+                num_generations=3,
+                max_completion_length=10, 
+                mask_truncated_completions=True,  # Enable masking of truncated completions
+                report_to="none",
+            )
+            
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
