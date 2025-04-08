@@ -573,9 +573,8 @@ class SFTTrainer(Trainer):
             if "attention_mask" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             elif "position_ids" in inputs:
-                num_tokens_in_batch = (
-                    self.accelerator.gather_for_metrics(torch.tensor(inputs["position_ids"].size(1))).sum().item()
-                )
+                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
             self._total_train_tokens += num_tokens_in_batch
