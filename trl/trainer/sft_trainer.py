@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import transformers
 from accelerate import PartialState
@@ -332,6 +333,40 @@ class SFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             **super_init_kwargs,
         )
+
+        # Register Ring Attention for Sequence Parallelism if configured
+        if (
+            hasattr(self.args, "sequence_parallel_degree")
+            and self.args.sequence_parallel_degree
+            and self.args.sequence_parallel_degree > 1
+        ):
+            if not dist.is_initialized():
+                warnings.warn(
+                    "torch.distributed is not initialized. Cannot register Ring Attention for Sequence Parallelism.",
+                    UserWarning,
+                )
+            else:
+                try:
+                    # Lazily import to avoid circular dependency issues if ring_attn imports Trainer parts later
+                    from ..models.ring_attn import register_ring_attn
+
+                    self.log(
+                        {
+                            "message": f"Attempting to register Ring Attention with sequence parallel degree: {self.args.sequence_parallel_degree}"
+                        }
+                    )
+                    register_ring_attn(
+                        sequence_parallel_degree=self.args.sequence_parallel_degree,
+                        heads_k_stride=self.args.heads_k_stride,  # register_ring_attn handles default if None
+                    )
+                    self.log({"message": "Ring Attention registered successfully."})
+                except ImportError:
+                    warnings.warn(
+                        "Could not import `register_ring_attn` from `trl.models.ring_attn`. Ring Attention will not be enabled.",
+                        ImportWarning,
+                    )
+                except Exception as e:
+                    warnings.warn(f"Failed to register Ring Attention: {e}", RuntimeWarning)
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):

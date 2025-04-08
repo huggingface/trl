@@ -37,6 +37,12 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
+        use_liger (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to use Liger kernel for sequence parallelism.
+        sequence_parallel_degree (`int` or `None`, *optional*, defaults to `None`):
+            Degree of sequence parallelism for ring attention.
+        heads_k_stride (`int` or `None`, *optional*, defaults to `None`):
+            Sequence parallelism K head stride size for ring attention. Defaults to 1 if sequence parallelism is enabled.
 
         > Parameters that control the data preprocessing
 
@@ -76,6 +82,22 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `SFTTrainer` is provided as a string."
+        },
+    )
+    use_liger: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.18.0. Use `use_liger_kernel` "
+            "instead."
+        },
+    )
+    sequence_parallel_degree: Optional[int] = field(
+        default=None, metadata={"help": "Degree of sequence parallelism for ring attention."}
+    )
+    heads_k_stride: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Sequence parallelism K head stride size for ring attention. Defaults to 1 if sequence parallelism is enabled."
         },
     )
 
@@ -167,13 +189,6 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.20.0. Use `max_length` instead."
-        },
-    )
-    use_liger: Optional[bool] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. Use `use_liger_kernel` "
-            "instead."
         },
     )
 

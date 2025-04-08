@@ -85,6 +85,7 @@ EXTRAS = {
     "mergekit": ["mergekit>=0.0.5.1"],
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],
+    "ring_attn": ["ring-flash-attn"],
     "scikit": ["scikit-learn"],
     "bco": ["scikit-learn", "joblib"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
