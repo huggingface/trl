@@ -132,6 +132,7 @@ $$
 \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right)
 $$
 A higher value means more tokens were affected by clipping, limiting how much the policy can change.
+
 ## Customization
 
 ### Speed up training with vLLM-powered generation

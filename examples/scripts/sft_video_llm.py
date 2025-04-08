@@ -50,6 +50,7 @@ from typing import Any
 
 import requests
 import torch
+import wandb
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
