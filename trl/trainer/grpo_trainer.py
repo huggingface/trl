@@ -453,7 +453,6 @@ class GRPOTrainer(Trainer):
             if is_peft_model(model):
                 raise ValueError("Liger loss is not supported with a PEFT model.")
 
-            self.use_liger_grpo_loss = args.use_liger_grpo_loss
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
