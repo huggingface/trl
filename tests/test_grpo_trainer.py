@@ -926,14 +926,14 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,  
-                per_device_train_batch_size=3,  
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
                 num_generations=3,
-                max_completion_length=10, 
+                max_completion_length=10,
                 mask_truncated_completions=True,  # Enable masking of truncated completions
                 report_to="none",
             )
-            
+
             trainer = GRPOTrainer(
                 model="Qwen/Qwen2.5-0.5B",
                 reward_funcs=reward_func,

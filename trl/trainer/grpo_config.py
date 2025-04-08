@@ -117,7 +117,7 @@ class GRPOConfig(TrainingArguments):
             difficulty bias.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
-            incorrectly penalized and introducing noise during training. According to the [DAPO](https://huggingface.co/papers/2503.14476)paper,this is a good practice for training stability.  
+            incorrectly penalized and introducing noise during training. According to the [DAPO](https://huggingface.co/papers/2503.14476)paper,this is a good practice for training stability.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
@@ -311,7 +311,7 @@ class GRPOConfig(TrainingArguments):
             "help": "When enabled, truncated completions are excluded from the loss calculation, preventing them from being "
             "incorrectly penalized and introducing noise during training. According to the [DAPO](https://huggingface.co/papers/2503.14476) paper,"
             "this is a good practice for training stability."
-        },       
+        },
     )
     sync_ref_model: bool = field(
         default=False,
