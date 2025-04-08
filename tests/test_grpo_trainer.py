@@ -174,7 +174,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @parameterized.expand([("bnpo",), ("drgrpo",)])
+    @parameterized.expand([("bnpo",), ("dr_grpo",)])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

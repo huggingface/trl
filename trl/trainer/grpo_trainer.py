@@ -1059,7 +1059,7 @@ class GRPOTrainer(Trainer):
 
         if self.loss_type == "bnpo":
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
-        elif self.loss_type == "drgrpo":
+        elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")

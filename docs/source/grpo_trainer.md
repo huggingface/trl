@@ -139,7 +139,7 @@ $$
 \mathcal{L}_{\text{Dr. GRPO}}(\theta) = - \frac{1}{LG} \sum_{i=1}^G \sum_{t=1}^{|o_i|} l_{i,t},
 $$
 
-This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="drgrpo"` in the [`GRPOConfig`].
+This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
 ## Logged metrics
 
