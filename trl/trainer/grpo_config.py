@@ -115,6 +115,10 @@ class GRPOConfig(TrainingArguments):
             applied. The [Dr. GRPO](https://github.com/sail-sg/understand-r1-zero/blob/main/understand-r1-zero.pdf)
             paper recommends not scaling the rewards, as scaling by the standard deviation introduces a question-level
             difficulty bias.
+        mask_truncated_completions (`bool`, *optional*, defaults to `False`):
+            When enabled, truncated completions are excluded from the loss calculation, preventing them from being
+            incorrectly penalized and introducing noise during training. According to the
+            [DAPO](https://huggingface.co/papers/2503.14476) paper, this is a good practice for training stability.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
@@ -300,6 +304,14 @@ class GRPOConfig(TrainingArguments):
             "the rewards are normalized by the standard deviation, ensuring they have unit variance. If `False`, no "
             "scaling is applied. The Dr. GRPO paper recommends not scaling the rewards, as scaling by the standard "
             "deviation introduces a question-level difficulty bias."
+        },
+    )
+    mask_truncated_completions: bool = field(
+        default=False,
+        metadata={
+            "help": "When enabled, truncated completions are excluded from the loss calculation, preventing them from "
+            "being incorrectly penalized and introducing noise during training. According to the DAPO paper, this is "
+            "a good practice for training stability."
         },
     )
     sync_ref_model: bool = field(
