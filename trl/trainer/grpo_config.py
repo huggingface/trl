@@ -117,17 +117,17 @@ class GRPOConfig(TrainingArguments):
         loss_type (`str`, *optional*, defaults to `"bnpo"`):
             Specifies the loss formulation to use. Supported values are:
 
-            - `"grpo"`: Token-level losses are aggregated by normalizing by the sequence length. This method is not
-                recommended due to length bias.
-            - `"bnpo"`: Token-level losses are aggregated by normalizing number of active token in the local batch.
+            - `"grpo"`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to
+                length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
+                with negative advantages.
+            - `"bnpo"`: Aggregates token-level losses by normalizing number of active token in the local batch.
                 Note that normalization is performed over the local batch only, so results may slightly vary depending
                 on the local batch size, despite a constant effective batch size. When using
                 `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
-            - `"dr_grpo"`: Token-level losses are aggregated by normalizing with a global constant. This method was
+            - `"dr_grpo"`: Aggregates token-level losses by normalizing with a global constant. This method was
                 introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.14476) to eliminate length bias.
                 The value of the constant corresponds to `max_completion_length`.
 
-            The original GRPO loss is not supported due to severe length bias that favors short completions.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
@@ -319,13 +319,14 @@ class GRPOConfig(TrainingArguments):
         default="bnpo",
         metadata={
             "help": "Specifies the loss formulation to use. Supported values are `grpo`, `bnpo`, and `dr_grpo`. "
-            "`'grpo'`: Token-level losses are aggregated by normalizing by the sequence length. This method is not "
-            "recommended due to length bias. "
-            "`'bnpo'`: Token-level losses are aggregated by normalizing number of active token in the local batch. "
+            "`'grpo'`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to "
+            "length bias—this approach tends to prefer shorter completions with positive advantages and longer ones "
+            "with negative advantages. "
+            "`'bnpo'`: Aggregates token-level losses by normalizing number of active token in the local batch. "
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
             "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
-            "`'dr_grpo'`: Token-level losses are aggregated by normalizing with a global constant. This method was "
+            "`'dr_grpo'`: Aggregates token-level losses by normalizing with a global constant. This method was "
             "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
             "`max_completion_length`."
         },
