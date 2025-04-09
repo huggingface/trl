@@ -25,6 +25,7 @@ import torch.distributed as dist
 
 from trl import TrlParser
 from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
+from trl.api_utils import ChatCompletionRequest, ChatCompletionResponse
 
 
 if is_fastapi_available():
@@ -416,41 +417,9 @@ def main(script_args: ScriptArguments):
         llm.collective_rpc("close_communicator")
         return {"message": "Request received, closing communicator"}
 
-    # OpenAI compatibility endpoint
-    class ChatMessage(BaseModel):
-        role: str
-        content: str
 
-    class OpenAIRequest(BaseModel):
-        model: str
-        messages: list[ChatMessage]
-        temperature: float = 1.0
-        top_p: float = 1.0
-        n: int = 1
-        max_tokens: int = 16
-        stream: bool = False
-        stop: Optional[list[str]] = None
-
-    class OpenAIResponseChoice(BaseModel):
-        index: int
-        message: ChatMessage
-        finish_reason: str
-
-    class OpenAIResponseUsage(BaseModel):
-        prompt_tokens: int
-        completion_tokens: int
-        total_tokens: int
-
-    class OpenAIResponse(BaseModel):
-        id: str
-        object: str
-        created: int
-        model: str
-        choices: list[OpenAIResponseChoice]
-        usage: OpenAIResponseUsage
-
-    @app.post("/v1/chat/completions", response_model=OpenAIResponse)
-    async def openai_chat_completions(request: OpenAIRequest):
+    @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
+    async def openai_chat_completions(request: ChatCompletionRequest):
         """
         OpenAI-compatible chat completions endpoint.
         
@@ -477,7 +446,7 @@ def main(script_args: ScriptArguments):
         
         # Configure sampling parameters
         sampling_params = SamplingParams(
-            n=request.n,
+            n=1,
             temperature=request.temperature,
             top_p=request.top_p,
             max_tokens=request.max_tokens,
@@ -487,44 +456,13 @@ def main(script_args: ScriptArguments):
         # vllm generate calls into the LLM engine which does dynamic batching for us
         outputs = llm.generate([full_prompt], sampling_params=sampling_params)
         
-        # Format response to match OpenAI's schema
-        choices = []
-        completion_tokens = 0
-        generated_texts = []
-        
-        for i, output in enumerate(outputs[0].outputs):
-            completion_tokens += len(output.token_ids)
-            generated_text = output.text
-            generated_texts.append(generated_text)
-            choices.append(
-                OpenAIResponseChoice(
-                    index=i,
-                    message=ChatMessage(
-                        role="assistant",
-                        content=generated_text
-                    ),
-                    finish_reason="stop" if output.finish_reason == "stop" else "length"
-                )
-            )
-        
-        # Calculate token counts (approximate)
-        prompt_tokens = len(llm.llm_engine.tokenizer.encode(full_prompt))
-        total_tokens = prompt_tokens + completion_tokens
-        
-        response = OpenAIResponse(
-            id=f"chatcmpl-{request_id}",
+        return ChatCompletionResponse(
+            id=request_id,
             object="chat.completion",
             created=int(timestamp),
             model=request.model,
-            choices=choices,
-            usage=OpenAIResponseUsage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens
-            )
+            choices=[],
         )
-        
-        return response
 
 
     # Start the server
