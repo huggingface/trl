@@ -42,7 +42,7 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -617,7 +617,7 @@ class GRPOTrainer(Trainer):
             batch_size = self.args.eval_batch_size
             data_collator = self.data_collator
 
-        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+        if isinstance(train_dataset, datasets.Dataset):
             train_dataset = self._remove_unused_columns(train_dataset, description="training")
         else:
             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
@@ -676,7 +676,7 @@ class GRPOTrainer(Trainer):
             batch_size = self.args.eval_batch_size
             data_collator = self.data_collator
 
-        if is_datasets_available() and isinstance(eval_dataset, datasets.Dataset):
+        if isinstance(eval_dataset, datasets.Dataset):
             eval_dataset = self._remove_unused_columns(eval_dataset, description="evaluation")
         else:
             data_collator = self._get_collator_with_removed_columns(data_collator, description="evaluation")
