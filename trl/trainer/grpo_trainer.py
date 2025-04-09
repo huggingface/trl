@@ -50,6 +50,7 @@ from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
+    disable_dropout_in_model,
     generate_model_card,
     get_comet_experiment_url,
     pad,
@@ -347,6 +348,12 @@ class GRPOTrainer(Trainer):
         else:
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
+
+        # Disable dropout in the models
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
 
         # Processing class
         if processing_class is None:
