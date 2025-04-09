@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ import os
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Type, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -208,7 +208,7 @@ class SFTTrainer(Trainer):
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        optimizer_cls_and_kwargs: Optional[tuple[Type[torch.optim.Optimizer], dict[str, Any]]] = None,
+        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Union[Callable[[dict], str], Callable[[dict], list[str]]]] = None,
@@ -227,6 +227,19 @@ class SFTTrainer(Trainer):
         # Handle the tokenizer
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model_id)
+
+        # Model
+        if args.model_init_kwargs is not None and not isinstance(model, str):
+            warnings.warn(
+                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
+                "The `model_init_kwargs` will be ignored."
+            )
+        if isinstance(model, str):
+            model = self._create_model_from_path(model, args)
+
+        # PEFT configuration and model wrapping
+        if peft_config is not None:
+            model = self._prepare_peft_model(model, peft_config, args)
 
         # Data collator
         if args.padding_free:
@@ -266,19 +279,6 @@ class SFTTrainer(Trainer):
                     "in the vocabulary before using it as a padding token."
                 )
             data_collator = DataCollatorForLanguageModeling(pad_token_id)
-
-        # Model
-        if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
-                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
-                "The `model_init_kwargs` will be ignored."
-            )
-        if isinstance(model, str):
-            model = self._create_model_from_path(model, args)
-
-        # PEFT configuration and model wrapping
-        if peft_config is not None:
-            model = self._prepare_peft_model(model, peft_config, args)
 
         # Dataset
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
@@ -353,8 +353,8 @@ class SFTTrainer(Trainer):
                 f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
             )
         # Disable caching if gradient checkpointing is enabled (not supported)
-        if args.gradient_checkpointing:
-            model_init_kwargs["use_cache"] = False
+        # if args.gradient_checkpointing:
+        #     model_init_kwargs["use_cache"] = False
 
         # Create model
         model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
@@ -473,12 +473,21 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
 
-                batched = isinstance(formatting_func(next(iter(dataset))), list)
-
                 def _func(example):
                     return {"text": formatting_func(example)}
 
-                dataset = dataset.map(_func, batched=batched, **map_kwargs)
+                try:
+                    dataset = dataset.map(_func, batched=False, **map_kwargs)
+                except Exception as e:
+                    warnings.warn(
+                        f"Failed to apply the formatting function due to the following error: {e}. This may be "
+                        "because the function is designed for batched input. Please update it to process one example "
+                        "at a time (i.e., accept and return a single example). For now, we will attempt to apply the "
+                        "function in batched mode, but note that batched formatting is deprecated and will be removed "
+                        "in version 0.21.",
+                        DeprecationWarning,
+                    )
+                    dataset = dataset.map(_func, batched=True, **map_kwargs)
 
             # If the dataset is prompt-completion, convert it to language modeling type
             first_example = next(iter(dataset))
@@ -564,9 +573,8 @@ class SFTTrainer(Trainer):
             if "attention_mask" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             elif "position_ids" in inputs:
-                num_tokens_in_batch = (
-                    self.accelerator.gather_for_metrics(torch.tensor(inputs["position_ids"].size(1))).sum().item()
-                )
+                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
             self._total_train_tokens += num_tokens_in_batch

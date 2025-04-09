@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -170,64 +170,70 @@ class DPOTrainerTester(unittest.TestCase):
         self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    @parameterized.expand(
-        [
-            ("qwen", "sigmoid", True),
-            ("t5", "hinge", False),
-            ("qwen", "ipo", False),
-            ("t5", "ipo", True),
-            ("qwen", "aot_pair", True),
-            ("t5", "aot_pair", False),
-            ("qwen", "aot", True),
-            ("t5", "aot", False),
-            ("qwen", "bco_pair", False),
-            ("t5", "bco_pair", True),
-            ("qwen", "sppo_hard", False),
-            ("t5", "sppo_hard", True),
-            ("qwen", "nca_pair", False),
-            ("t5", "nca_pair", True),
-            ("qwen", "robust", True),
-            ("qwen", "exo_pair", False),
-            ("t5", "exo_pair", True),
-            ("qwen", "apo_zero", True),
-            ("t5", "apo_down", False),
-            ("qwen", "discopop", False),
-        ]
-    )
-    def test_dpo_trainer(self, name, loss_type, pre_compute):
+    def test_train(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                loss_type=loss_type,
-                precompute_ref_log_probs=pre_compute,
                 report_to="none",
             )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-            if name == "qwen":
-                model = self.model
-                ref_model = self.ref_model
-                tokenizer = self.tokenizer
-            elif name == "t5":
-                model = self.t5_model
-                ref_model = self.t5_ref_model
-                tokenizer = self.t5_tokenizer
-
             trainer = DPOTrainer(
-                model=model,
-                ref_model=ref_model,
+                model=model_id,
                 args=training_args,
                 processing_class=tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the parameters have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:  # ignore 0 biases
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+
+    @parameterized.expand(
+        [
+            ("sigmoid",),
+            ("hinge",),
+            ("ipo",),
+            ("exo_pair",),
+            ("nca_pair",),
+            ("robust",),
+            ("bco_pair",),
+            ("sppo_hard",),
+            ("aot",),
+            ("aot_pair",),
+            ("discopop",),
+            ("apo_zero",),
+            ("apo_down",),
+        ]
+    )
+    def test_train_loss_types(self, loss_type):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                learning_rate=9e-1,
+                loss_type=loss_type,
+                report_to="none",
+            )
+            trainer = DPOTrainer(
+                model=model_id,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dataset,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -243,31 +249,21 @@ class DPOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     def test_dpo_trainer_with_weighting(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
                 learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                loss_type="sigmoid",
-                precompute_ref_log_probs=False,
                 use_weighting=True,
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
             trainer = DPOTrainer(
                 model=self.model,
-                ref_model=self.ref_model,
                 args=training_args,
                 processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
+                train_dataset=dataset,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -479,7 +475,7 @@ class DPOTrainerTester(unittest.TestCase):
                 learning_rate=9e-1,
                 eval_strategy="steps",
                 beta=0.1,
-                dataset_num_proc=5,
+                dataset_num_proc=2,
                 report_to="none",
             )
 
@@ -1243,7 +1239,7 @@ class DPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 do_eval=True,
                 eval_strategy="steps",
-                eval_steps=1,
+                eval_steps=3,
                 per_device_eval_batch_size=2,
                 report_to="none",
             )

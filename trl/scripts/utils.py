@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,8 +18,9 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable, Optional, Union
+from typing import Optional, Union
 
 import yaml
 from transformers import HfArgumentParser

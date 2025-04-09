@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,8 +15,9 @@
 import argparse
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Optional
 
 import torch
 import torch.distributed as dist

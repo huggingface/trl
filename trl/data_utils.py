@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import functools
-from typing import Any, Callable, Optional, Sequence, TypeVar, Union
+from collections.abc import Sequence
+from typing import Any, Callable, Optional, TypeVar, Union
 
 import numpy as np
 import pyarrow as pa
