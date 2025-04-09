@@ -349,10 +349,10 @@ class GRPOTrainer(Trainer):
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
 
+        # Disable dropout in the model
         if args.disable_dropout:
-            if isinstance(model, nn.Module):
-                disable_dropout_in_model(model)
-            if self.ref_model is not None and isinstance(self.ref_model, nn.Module):
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
         # Processing class
@@ -367,10 +367,6 @@ class GRPOTrainer(Trainer):
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
-                if args.disable_dropout:
-                    if isinstance(reward_funcs[i], nn.Module):
-                        disable_dropout_in_model(reward_funcs[i])
-
         self.reward_funcs = reward_funcs
 
         # Reward weights
