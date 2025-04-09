@@ -58,7 +58,7 @@ Before fine-tuning, we need to install the required dependencies. Let's start by
 
 ```bash
 # Install the required libraries. Futher details: https://huggingface.co/docs/trl/installation 
-pip install -U -q trl bitsandbytes peft hf_xet
+pip install -U -q trl bitsandbytes peft hf_xet tensorboard
 ```
 
 Once all dependencies are installed, we need to log in to the **Hugging Face Hub**. Since **Gemma 3** is a gated model, access permissions are required.  
@@ -250,8 +250,8 @@ from trl import SFTConfig
 training_args = SFTConfig(
     output_dir="gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft",     # Directory to save the model and push to the Hub. Use a specific repository id (e.g., gemma-3-4b-it-trl-sft-MMIU-Benchmark for multi-image datasets).
     num_train_epochs=1,                                             # Set the number of epochs to train the model.
-    per_device_train_batch_size=8,                                  # Batch size for each device (e.g., GPU) during training.
-    gradient_accumulation_steps=4,                                  # Number of steps before performing a backward/update pass to accumulate gradients.
+    per_device_train_batch_size=8,                                  # Batch size for each device (e.g., GPU) during training. multi-image -> per_device_train_batch_size=1
+    gradient_accumulation_steps=4,                                  # Number of steps before performing a backward/update pass to accumulate gradients. multi-image -> gradient_accumulation_steps=1
     gradient_checkpointing=True,                                    # Enable gradient checkpointing to reduce memory usage during training.
     optim="adamw_torch_fused",                                      # Use the fused AdamW optimizer for better performance.
     logging_steps=10,                                               # Frequency of logging training progress (log every 10 steps).
@@ -259,9 +259,10 @@ training_args = SFTConfig(
     learning_rate=2e-05,                                            # Learning rate for training.
     bf16=True,                                                      # Enable bfloat16 precision for training to save memory and speed up computations.
     push_to_hub=True,                                               # Automatically push the fine-tuned model to Hugging Face Hub after training.
+    report_to="tensorboard",                                        # Automatically report metrics to tensorboard.
     gradient_checkpointing_kwargs={"use_reentrant": False},         # Set gradient checkpointing to non-reentrant to avoid issues.
     dataset_kwargs={"skip_prepare_dataset": True},                  # Skip dataset preparation to handle preprocessing manually.
-    remove_unused_columns=False,                         # Ensure unused columns are not removed in the collator (important for batch processing).
+    remove_unused_columns=False,                                    # Ensure unused columns are not removed in the collator (important for batch processing).
 )
 ```
 
@@ -346,7 +347,7 @@ trainer = SFTTrainer(
     model=model,
     args=training_args,
     data_collator=collate_fn,
-    train_dataset=dataset["train"],
+    train_dataset=dataset["train"], # multi-image -> train_dataset=dataset["test"],
     processing_class=processor,
     peft_config=peft_config,
 )
