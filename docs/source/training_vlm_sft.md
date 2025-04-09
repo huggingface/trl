@@ -214,7 +214,7 @@ model = AutoModelForImageTextToText.from_pretrained(
     model_id, 
     device_map="auto", 
     torch_dtype=torch.bfloat16,
-    attn_implementation="eager", # Important (Ref:https://github.com/huggingface/transformers/blob/c15a7adb283fa984a40558c7fe7bed30ae975cdd/src/transformers/models/gemma3/modeling_gemma3.py#L934)
+    attn_implementation="eager", # Important (Ref: https://github.com/huggingface/transformers/blob/c15a7adb283fa984a40558c7fe7bed30ae975cdd/src/transformers/models/gemma3/modeling_gemma3.py#L934)
     quantization_config=bnb_config
 )
 processor = AutoProcessor.from_pretrained(model_id)
@@ -227,7 +227,6 @@ Next, we set up [Quantized Low-Rank Adaptation (QLoRA)](https://huggingface.co/p
 from peft import LoraConfig, get_peft_model
 
 # Configure QLoRA
-
 peft_config = LoraConfig(
     lora_alpha=16,
     lora_dropout=0.05,
@@ -309,7 +308,7 @@ def collate_fn(examples):
     texts = [processor.apply_chat_template(example["messages"], tokenize=False, add_generation_prompt=False).strip() for example in examples]
     if "images" in examples[0]:  # single-image
         images = [
-            [img.convert("RGB") if img.mode == "RGBA" else img for img in example["images"]]
+            [img.convert("RGB") for img in example["images"]]
             for example in examples
         ]
     else:  # multi-image
@@ -363,11 +362,11 @@ We save the fine-tuned model to the Hub, making it easily accessible for future 
 <!-- Add Wandb training results -->
 ### Results
 
-During and after trainig, we can inspect the results using **Weights & Biases (Wandb)** or **TensorBoard**.
+During and after trainig, we can inspect the results using **Weights & Biases (Wandb)** or **TensorBoard**. For example:
 
-#### Single Image+Text
+* [**gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft (Single Image+Text)**](https://huggingface.co/sergiopaniego/gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft)
 
-#### Multi-Images+Text or Interleaving
+* [**gemma-3-4b-it-trl-sft-MMIU-Benchmark (Multi-Images+Text or Interleaving)**](https://huggingface.co/sergiopaniego/gemma-3-4b-it-trl-sft-MMIU-Benchmark)
 
 ## Limitations  
 
