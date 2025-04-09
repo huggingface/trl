@@ -73,7 +73,7 @@ __version__ = "0.17.1.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc
 
 REQUIRED_PKGS = [
     "accelerate>=0.34.0",
-    "datasets>=3.0.0",
+    "datasets",  # riskily removed >=3.0.0
     "rich",  # rich shouldn't be a required package for trl, we should remove it from here
     "transformers>=4.46.0",
 ]
@@ -90,7 +90,7 @@ EXTRAS = {
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
     "vllm": ["vllm>=0.7.0", "fastapi", "pydantic", "requests", "uvicorn"],
     "vlm": ["Pillow"],
-    "agent": ["vllm>=0.7.0", "fastapi", "pydantic", "requests", "uvicorn", "aider-chat==0.28.0"],
+    "agent": ["vllm>=0.7.0", "fastapi", "pydantic", "requests", "uvicorn", "aider-chat"], 
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
