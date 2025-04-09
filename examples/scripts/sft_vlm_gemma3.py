@@ -161,12 +161,12 @@ def main():
     )
 
     def collate_fn(examples):
-        texts = [processor.apply_chat_template(example["messages"], tokenize=False, add_generation_prompt=False).strip() for example in examples]
+        texts = [
+            processor.apply_chat_template(example["messages"], tokenize=False, add_generation_prompt=False).strip()
+            for example in examples
+        ]
         if "images" in examples[0]:  # single-image
-            images = [
-                [img.convert("RGB") for img in example["images"]]
-                for example in examples
-            ]
+            images = [[img.convert("RGB") for img in example["images"]] for example in examples]
         else:  # multi-image
             images = [process_vision_info(example["messages"]) for example in examples]
 
