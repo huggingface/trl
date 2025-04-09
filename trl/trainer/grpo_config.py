@@ -350,6 +350,8 @@ class GRPOConfig(TrainingArguments):
             "`'dr_grpo'`: Aggregates token-level losses by normalizing with a global constant. This method was "
             "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
             "`max_completion_length`."
+        },
+    )
     mask_truncated_completions: bool = field(
         default=False,
         metadata={
