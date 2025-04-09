@@ -1,23 +1,23 @@
 import os
 import uuid
 import logging
+import threading
 import multiprocessing
-from functools import partial
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from contextlib import redirect_stdout, redirect_stderr
 
 import requests
-
 from aider.coders import Coder
 from aider.io import InputOutput
 from aider.models import Model
+from vllm.entrypoints.openai.protocol import ChatCompletionRequest, ChatCompletionResponse
 
 from .git_utils import clone_repo_at_commit, clean_repo_dir
-from .api_utils import APIProxy
 
 logger = logging.getLogger(__name__)
-    
+
+
 
 class AgentManager(ABC):
     """
@@ -36,82 +36,88 @@ class AgentManager(ABC):
             vllm_url: URL of the vLLM server (including protocol, host and port)
         """
         self.vllm_url = vllm_url
-        
-        # Start the API proxy
-        self.api_proxy = APIProxy(vllm_url)
-        self.proxy_url = self.api_proxy.start()
-        logger.info(f"API Proxy started at {self.proxy_url}")
+        self.conversations: Dict[str, Tuple[ChatCompletionRequest, ChatCompletionResponse]] = {}  # for now we assume that request T, contains request and response at T-1
+        self.lock = threading.RLock()  # For thread-safe access to conversations
         
     @abstractmethod
-    def process_one(self, data: Dict[str, Any]) -> str:
+    def process_one(self, data: Dict[str, Any]):
         """Process a single prompt and return a completion"""
         ...
         
     def _process_one(self, agent_id: str, data: Dict[str, Any]) -> None:
         """
-        Calls the abstract .process_one() while adding a custom 
+        Calls the abstract .process_one() while adding conversation tracking
         
         Args:
-            agent_prompt_tuple: Tuple of (agent_id, prompt)
-        """
-        # Add a custom header for all requests from this process
-        # Monkey patch requests to add our custom header
-        # This happens inside a multiprocessing pool, so my best guess is that 
+            agent_id: Unique identifier for this agent
+            data: Data containing the prompt and any additional information
+        """        
+        # Monkey patch requests to track conversations
         original_request = requests.request
         
         def patched_request(method, url, **kwargs):
-            headers = kwargs.get("headers", {})
-            headers["X-Agent-ID"] = agent_id
-            kwargs["headers"] = headers
-            return original_request(method, url, **kwargs)
+            # Make the original request
+            response = original_request(method, url, **kwargs)
+            
+            # If it was a chat completion request, and the response is ok, track the conversation
+            if url.endswith("/v1/chat/completions") and response.status_code == 200:
+                request_data = kwargs.get("json", {})
+                response_data = response.json()
+                
+                # Update conversation tracker
+                with self.lock:
+                    self.conversations[agent_id] = (request_data, response_data)
+            
+            return response
         
         requests.request = patched_request
         
-        return self.process_one(data)
+        try:
+            return self.process_one(data)
+        finally:
+            # Restore original request function
+            requests.request = original_request
+    
+    def _get_and_clear_histories(self) -> List[List[Dict[str, str]]]:
+        """Get all conversation histories and clear the tracking data. Uses self.agent_ids to match the order of the prompts."""
+        with self.lock:
+            histories = []
+            for agent_id in self.agent_ids:
+                latest_request, latest_response = self.conversations[agent_id]
+                messages = latest_request.messages + [{'role': 'assistant', 'content': latest_response.choices[0].message.content}]
+                histories.append(messages)
             
-    def deploy(self, prompts: List[Dict[str, Any]], timeout: int = 300) -> List[str]:
+            # Clear the conversations
+            self.conversations = {}
+            
+            return histories
+            
+    def deploy(self, prompts: List[Dict[str, Any]], timeout: int = 300) -> List[List[Dict[str, str]]]:
         """
-        Deploy parallel agents to process the given prompts, returning completion IDs.
+        Deploy parallel agents to process the given prompts, returning histories.
         
         Args:
             prompts: List of prompts to process
             timeout: Maximum time in seconds to wait for all prompts to complete
             
         Returns:
-            List of completion IDs that can be used by GRPO
+            List of histories (same order as prompts)
         """
         # Generate agent IDs for tracking
-        agent_ids = [str(uuid.uuid4()) for _ in range(len(prompts))]
-        
-        # Prepare prompts with agent IDs
-        agent_prompts = [(agent_id, prompt) for agent_id, prompt in zip(agent_ids, prompts)]
+        self.agent_ids = [str(uuid.uuid4()) for _ in range(len(prompts))]
         
         # Process all prompts in parallel
         with multiprocessing.Pool() as pool:
             # Start async processing of all prompts
-            result = pool.map_async(partial(self._process_one), agent_prompts)  # partial for pickling reasons
+            result = pool.starmap_async(self._process_one, [(agent_id, prompt) for agent_id, prompt in zip(self.agent_ids, prompts)])
             
             try:
                 # Wait for results with timeout
                 result.get(timeout=timeout)
             except multiprocessing.TimeoutError:
-                # Log warning if timeout occurs
                 logger.warning(f"Agent timeout reached after {timeout} seconds.")
         
-        # Collect conversation histories from the proxy
-        completions = []
-        histories = self.api_proxy.get_conversation_histories()
-        for agent_id in agent_ids:
-            history = histories[agent_id]
-            # For agents that didn't complete or had no history, use a placeholder
-            if not history:
-                raise ValueError(f"No history for agent {agent_id}")
-           
-            # Join all completions for this agent
-            completions.append(history)  # TODO: probably better to return a {role:, content:} list
-        
-        return completions
-    
+        return self._get_and_clear_histories()
 
 class AiderAgentManager(AgentManager):
     """Example implementation for Aider coding agents"""
@@ -122,7 +128,7 @@ class AiderAgentManager(AgentManager):
         os.environ["OPENAI_API_BASE"] = self.vllm_url  # Aider uses this
         os.environ["OPENAI_API_KEY"] = "dummy-key"
     
-    def process_one(self, prompt: Dict[str, Any]) -> str:
+    def process_one(self, prompt: Dict[str, Any]):
         """Process a single prompt and return a completion"""
         
         assert "repo_url" in prompt and "repo_commit_hash" in prompt and "description" in prompt, "Data should contain repo_url, repo_commit_hash and description"
@@ -142,9 +148,6 @@ class AiderAgentManager(AgentManager):
                     io = InputOutput(yes=True)
                 )
                 coder.run(prompt["description"])
-            
-            # The API proxy tracks all the exchanges, so we don't need to return anything here
-            return ""
         
         finally:
             clean_repo_dir(temp_folder)

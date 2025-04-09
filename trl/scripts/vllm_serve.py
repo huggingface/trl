@@ -449,6 +449,12 @@ def main(script_args: ScriptArguments):
         
         This endpoint emulates the OpenAI API format while using vLLM for generation.
         """
+        if request.stream if hasattr(request, 'stream') else False:
+            logger.warning("Streaming mode requested but not supported in this implementation.")
+            
+        if request.tools if hasattr(request, 'tools') else None:
+            logger.warning("Tools requested but not supported in this implementation.")
+    
         request_id = f"chatcmpl-{uuid.uuid4().hex}"
         timestamp = int(time.time())
          
@@ -465,12 +471,6 @@ def main(script_args: ScriptArguments):
             stop=request.stop if hasattr(request, 'stop') else None,
         )
         
-        if request.stream if hasattr(request, 'stream') else False:
-            # Log warning that streaming is not supported in this implementation
-            logger.warning("Streaming mode requested but not supported in this implementation. Falling back to non-streaming mode.")
-            # Continue with non-streaming approach
-        
-        # Generate completions for non-streaming mode
         outputs = llm.generate([full_prompt], sampling_params=sampling_params)
         
         # Extract generated text

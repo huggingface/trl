@@ -736,17 +736,25 @@ class GRPOTrainer(Trainer):
                             guided_decoding_regex=self.guided_decoding_regex,
                         )
                 else:
-                    # TODO: Double check all this
-                    # Since we are no longer doing prompt->completion, we cannot simply specify n=num_generations to our
+                    # Since we are no longer doing prompt -> n completions, we cannot simply specify n=num_generations to our
                     # generate method. Instead, we simply treat each duplicate prompt as a separate prompt.                    
                     with profiling_context(self, "AgentManager.deploy"):
-                        pass
-                        # completion_ids = self.agent_manager.deploy(
-                        #     prompts=all_inputs,  # (Agent, Dataset) is a tuple, e.g. a coding agent will have a repo_url to clone
-                        #     timeout=self.max_completion_length / 60  # Assume 60 tokens per second
-                        #     # One issue is that with an arbitrary agent scaffolding in the loop, we cannot easily
-                        #     # control generation parameters.
-                        # )
+                        # Agents deployed in paralell, returns when last finishes or timeout is reached
+                        agent_histories = self.agent_manager.deploy(
+                            prompts=all_inputs,
+                            timeout=self.max_completion_length / 60  # Assume 60 tokens per second
+                        )
+                        # Format agent histories into a list of messages
+                        agent_histories_formatted = [maybe_apply_chat_template(history, self.processing_class)["messages"] for history in agent_histories]
+                        # Should have the same exact dtype as the normal vllm_client.generate() output (TODO: Double check)
+                        completion_ids = self.processing_class(
+                            text=agent_histories_formatted,
+                            return_tensors="pt",
+                            padding=True,
+                            padding_side="left",
+                            add_special_tokens=False
+                        )["input_ids"]
+                        
             else:
                 completion_ids = [None] * len(all_prompts_text)
                 
