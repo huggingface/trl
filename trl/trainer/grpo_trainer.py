@@ -40,12 +40,12 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_deepspeed_available, is_rich_available, is_vllm_available
+from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
