@@ -360,13 +360,18 @@ class SFTTrainer(Trainer):
                         heads_k_stride=self.args.heads_k_stride,  # register_ring_attn handles default if None
                     )
                     self.log({"message": "Ring Attention registered successfully."})
+                    self.use_ring_attn = True
                 except ImportError:
                     warnings.warn(
                         "Could not import `register_ring_attn` from `trl.models.ring_attn`. Ring Attention will not be enabled.",
                         ImportWarning,
                     )
+                    self.use_ring_attn = False
                 except Exception as e:
                     warnings.warn(f"Failed to register Ring Attention: {e}", RuntimeWarning)
+                    self.use_ring_attn = False
+        else:
+            self.use_ring_attn = False
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
@@ -590,6 +595,12 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "eval" if self.control.should_evaluate else "train"
+
+        if self.use_ring_attn:
+            from ..models.ring_attn import update_ring_attn_params
+
+            update_ring_attn_params(inputs)
+
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )

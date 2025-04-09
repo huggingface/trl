@@ -1,6 +1,8 @@
 import logging
 
+import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from ..import_utils import is_ring_attn_available
 
@@ -55,14 +57,13 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int | None
 
     world_size = dist.get_world_size()
     if sequence_parallel_degree > world_size:
-         raise ValueError(
+        raise ValueError(
             f"sequence_parallel_degree ({sequence_parallel_degree}) "
             f"must be less than or equal to world_size ({world_size})"
         )
     if world_size % sequence_parallel_degree != 0:
         raise ValueError(
-            f"sequence_parallel_degree ({sequence_parallel_degree}) "
-            f"must evenly divide world_size ({world_size})"
+            f"sequence_parallel_degree ({sequence_parallel_degree}) must evenly divide world_size ({world_size})"
         )
 
     rank = dist.get_rank()
@@ -106,9 +107,7 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int | None
     if is_ring_attn_available():
         from ring_flash_attn import substitute_hf_flash_attn
 
-        substitute_hf_flash_attn(
-            process_group=get_ring_attn_group(), heads_k_stride=heads_k_stride
-        )
+        substitute_hf_flash_attn(process_group=get_ring_attn_group(), heads_k_stride=heads_k_stride)
         logger.info("Successfully substituted HF flash attention with ring flash attention.")
     else:
         logger.error(
@@ -118,3 +117,80 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int | None
         # Reset the group if substitution fails to avoid inconsistent state
         set_ring_attn_group(None)
         raise ImportError("Could not import `substitute_hf_flash_attn` from `ring_flash_attn`.")
+
+
+def get_cu_seqlens_from_pos_ids(
+    position_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """generate a cumulative sequence length mask for flash attention using pos ids"""
+    if len(position_ids.shape) == 1:
+        position_ids = position_ids.unsqueeze(0)
+
+    device = position_ids.device
+    results = []
+    max_seq_lens = []
+
+    for row in position_ids:
+        # Count the number of consecutive zeros from the right side
+        padding_length = (row == 0).int().flip(dims=[0]).cumprod(dim=0).sum().item()
+
+        # Adjust the row to exclude padding
+        adjusted_row = row[:-padding_length] if padding_length else row.clone()
+
+        # Find where the position resets to 0 (indicating a new sequence)
+        seq_starts = torch.cat(
+            [
+                torch.tensor([True], dtype=torch.bool, device=device),
+                adjusted_row[1:] == 0,
+            ]
+        )
+        # Get the indices where the sequence starts
+        start_indices = torch.cat(
+            [
+                torch.nonzero(seq_starts).unbind(dim=1)[0],
+                torch.tensor([len(adjusted_row)], dtype=torch.int32, device=device),
+            ]
+        )
+        # Calculate the sequence lengths
+        seq_lengths = start_indices[1:] - start_indices[:-1]
+        # Calculate the cumulative sequence lengths
+        cu_seqlens = torch.cat([torch.tensor([0], dtype=torch.int32, device=device), seq_lengths.cumsum(0)])
+        # Append the padding length to the cumulative sequence lengths
+        if padding_length:
+            cu_seqlens = torch.cat([cu_seqlens, torch.tensor([len(row)], dtype=torch.int32, device=device)])
+        max_seq_len = (cu_seqlens[1:] - cu_seqlens[:-1]).max()
+        results.append(cu_seqlens)
+        max_seq_lens.append(max_seq_len)
+
+    # Find the maximum value across all tensors
+    max_value = max(t.max() for t in results)
+
+    # Find the length of the longest tensor
+    max_length = max(t.size(0) for t in results)
+
+    # Pad each tensor to the same length and collect them in a list
+    padded_results = [F.pad(t, (0, max_length - t.size(0)), "constant", max_value) for t in results]
+
+    return torch.stack(padded_results).to(dtype=torch.int32), torch.stack(max_seq_lens)
+
+
+def update_ring_attn_params(batch: dict[str, torch.Tensor]):
+    """
+    Calculate the cumulative sequence lengths for the current forward pass and pass the
+    value to the substituted `ring_flash_attn`.
+
+    Args:
+        batch: A dictionary with a batch of data. May or may not contain `position_ids`
+            data; if not, we compute it.
+    """
+    from ring_flash_attn import update_ring_flash_attn_params
+
+    input_ids = batch["input_ids"]
+    position_ids = batch.get("position_ids")
+    if position_ids is None:
+        seq_len = input_ids.shape[1]
+        position_ids = torch.arange(0, seq_len, dtype=torch.long, device=input_ids.device).unsqueeze(0)
+
+    cu_seqlens, _ = get_cu_seqlens_from_pos_ids(position_ids)
+    cu_seqlens = cu_seqlens.squeeze().to(device=torch.cuda.current_device())
+    update_ring_flash_attn_params(cu_seqlens, get_ring_attn_group())
