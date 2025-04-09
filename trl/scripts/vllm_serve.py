@@ -25,7 +25,6 @@ import torch.distributed as dist
 
 from trl import TrlParser
 from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
-from trl.api_utils import ChatCompletionRequest, ChatCompletionResponse
 
 
 if is_fastapi_available():
@@ -47,6 +46,18 @@ if is_vllm_available():
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
     from vllm.worker.worker import Worker
+    # Import vLLM's OpenAI protocol models
+    from vllm.entrypoints.openai.protocol import (
+        ChatCompletionRequest,
+        ChatCompletionResponse,
+        CompletionRequest, 
+        CompletionResponse,
+        ModelCard,
+        ModelList,
+        ChatMessage,
+        ChatCompletionResponseChoice,
+        UsageInfo
+    )
 else:
     Worker = object
 
@@ -289,6 +300,20 @@ def main(script_args: ScriptArguments):
         """
         return {"tensor_parallel_size": llm.llm_engine.parallel_config.tensor_parallel_size}
 
+    @app.get("/v1/models")
+    async def list_models():
+        """
+        OpenAI-compatible models endpoint that returns the available models.
+        """
+        model_id = script_args.model.split('/')[-1] if '/' in script_args.model else script_args.model
+        model = ModelCard(
+            id=model_id,
+            object="model",
+            created=int(time.time()),
+            owned_by="user",
+        )
+        return ModelList(data=[model], object="list")
+
     class GenerateRequest(BaseModel):
         prompts: list[str]
         n: int = 1
@@ -417,53 +442,134 @@ def main(script_args: ScriptArguments):
         llm.collective_rpc("close_communicator")
         return {"message": "Request received, closing communicator"}
 
-
-    @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
+    @app.post("/v1/chat/completions")
     async def openai_chat_completions(request: ChatCompletionRequest):
         """
         OpenAI-compatible chat completions endpoint.
         
         This endpoint emulates the OpenAI API format while using vLLM for generation.
         """
-        print(request)
-        request_id = f"req-{uuid.uuid4().hex}"
-        timestamp = time.time()
-        
-        # Format prompt from messages
-        prompts = []
-        for msg in request.messages:
-            if msg.role == "system":
-                prompt = f"<|system|>\n{msg.content}\n"
-            elif msg.role == "user":
-                prompt = f"<|user|>\n{msg.content}\n"
-            elif msg.role == "assistant":
-                prompt = f"<|assistant|>\n{msg.content}\n"
-            else:
-                prompt = f"{msg.role}: {msg.content}\n"
-            prompts.append(prompt)
-        
-        full_prompt = "".join(prompts) + "<|assistant|>\n"
+        request_id = f"chatcmpl-{uuid.uuid4().hex}"
+        timestamp = int(time.time())
+         
+        # ensure standardized format
+        messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        full_prompt = llm.get_tokenizer().apply_chat_template(messages, tokenize=False)
         
         # Configure sampling parameters
         sampling_params = SamplingParams(
-            n=1,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            max_tokens=request.max_tokens,
-            stop=request.stop,
+            n=request.n if hasattr(request, 'n') else 1,
+            temperature=request.temperature if hasattr(request, 'temperature') else 1.0,
+            top_p=request.top_p if hasattr(request, 'top_p') else 1.0,
+            max_tokens=request.max_tokens if hasattr(request, 'max_tokens') else 256,
+            stop=request.stop if hasattr(request, 'stop') else None,
         )
         
-        # vllm generate calls into the LLM engine which does dynamic batching for us
+        if request.stream if hasattr(request, 'stream') else False:
+            # Log warning that streaming is not supported in this implementation
+            logger.warning("Streaming mode requested but not supported in this implementation. Falling back to non-streaming mode.")
+            # Continue with non-streaming approach
+        
+        # Generate completions for non-streaming mode
         outputs = llm.generate([full_prompt], sampling_params=sampling_params)
+        
+        # Extract generated text
+        choices = []
+        for i, output in enumerate(outputs[0].outputs):
+            generated_text = output.text
+            
+            # Create choice object
+            choice = ChatCompletionResponseChoice(
+                index=i,
+                message=ChatMessage(
+                    role="assistant",
+                    content=generated_text,
+                ),
+                finish_reason="done" if output.finished else "stop"
+            )
+            choices.append(choice)
+        
+        # Calculate token counts for usage information
+        prompt_tokens = len(outputs[0].prompt_token_ids)
+        completion_tokens = sum(len(output.token_ids) for output in outputs[0].outputs)
+        total_tokens = prompt_tokens + completion_tokens
         
         return ChatCompletionResponse(
             id=request_id,
             object="chat.completion",
-            created=int(timestamp),
+            created=timestamp,
             model=request.model,
-            choices=[],
+            choices=choices,
+            usage=UsageInfo(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            ),
         )
 
+    # Add a completions endpoint (not just chat completions)
+    @app.post("/v1/completions")
+    async def openai_completions(request: CompletionRequest):
+        """
+        OpenAI-compatible completions endpoint.
+        
+        This endpoint emulates the OpenAI API format while using vLLM for generation.
+        """
+        request_id = f"cmpl-{uuid.uuid4().hex}"
+        timestamp = int(time.time())
+        
+        # Use the prompt directly
+        prompt = request.prompt if isinstance(request.prompt, str) else request.prompt[0]
+        
+        # Configure sampling parameters
+        sampling_params = SamplingParams(
+            n=request.n if hasattr(request, 'n') else 1,
+            temperature=request.temperature if hasattr(request, 'temperature') else 1.0,
+            top_p=request.top_p if hasattr(request, 'top_p') else 1.0,
+            max_tokens=request.max_tokens if hasattr(request, 'max_tokens') else 16,
+            stop=request.stop if hasattr(request, 'stop') else None,
+        )
+        
+        # Check for streaming
+        if hasattr(request, 'stream') and request.stream:
+            logger.warning("Streaming mode requested but not supported in this implementation. Falling back to non-streaming mode.")
+        
+        # Generate completions
+        outputs = llm.generate([prompt], sampling_params=sampling_params)
+        
+        # Extract generated text
+        choices = []
+        for i, output in enumerate(outputs[0].outputs):
+            generated_text = output.text
+            
+            # Create choice object
+            choices.append({
+                "text": generated_text,
+                "index": i,
+                "logprobs": None,
+                "finish_reason": "stop" if output.finish_reason == "stop" else output.finish_reason,
+            })
+        
+        # Calculate token counts for usage information
+        prompt_tokens = len(outputs[0].prompt_token_ids)
+        completion_tokens = sum(len(output.token_ids) for output in outputs[0].outputs)
+        total_tokens = prompt_tokens + completion_tokens
+        
+        # Create the response
+        response = CompletionResponse(
+            id=request_id,
+            object="text_completion",
+            created=timestamp,
+            model=request.model,
+            choices=choices,
+            usage=UsageInfo(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            ),
+        )
+        
+        return response
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)

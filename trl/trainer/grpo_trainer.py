@@ -740,15 +740,13 @@ class GRPOTrainer(Trainer):
                     # Since we are no longer doing prompt->completion, we cannot simply specify n=num_generations to our
                     # generate method. Instead, we simply treat each duplicate prompt as a separate prompt.                    
                     with profiling_context(self, "AgentManager.deploy"):
-                        completion_texts = self.agent_manager.deploy(
-                            prompts=all_inputs,  # (Agent, Dataset) is a tuple, e.g. a coding agent will have a repo_url to clone
-                            timeout=self.max_completion_length / 60  # Assume 60 tokens per second
-                            # One issue is that with an arbitrary agent scaffolding in the loop, we cannot easily
-                            # control generation parameters.
-                        )
-                        
-                        # TODO: Probably need to fix the format
-                        completion_ids = [self.processing_class.encode(text, add_special_tokens=False) for text in completion_texts]
+                        pass
+                        # completion_ids = self.agent_manager.deploy(
+                        #     prompts=all_inputs,  # (Agent, Dataset) is a tuple, e.g. a coding agent will have a repo_url to clone
+                        #     timeout=self.max_completion_length / 60  # Assume 60 tokens per second
+                        #     # One issue is that with an arbitrary agent scaffolding in the loop, we cannot easily
+                        #     # control generation parameters.
+                        # )
             else:
                 completion_ids = [None] * len(all_prompts_text)
                 
