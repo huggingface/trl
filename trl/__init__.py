@@ -157,8 +157,8 @@ if TYPE_CHECKING:
         AutoModelForSeq2SeqLMWithValueHead,
         PreTrainedModelWrapper,
         create_reference_model,
-        setup_chat_format,
         register_ring_attn,
+        setup_chat_format,
     )
     from .scripts import ScriptArguments, TrlParser, init_zero_verbose
     from .trainer import (

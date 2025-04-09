@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import dataclasses
+import math
 import os
 import warnings
 from collections import defaultdict
@@ -110,11 +111,22 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
         labels = [torch.tensor(example["input_ids"]) for example in examples]
 
+        # Determine max length in the batch
+        max_len = max(len(ids) for ids in input_ids)
+
+        # Adjust padding length for sequence parallelism if needed
+        padded_len = max_len
+        if self.sequence_parallel_degree > 1:
+            # Calculate the smallest multiple of sequence_parallel_degree >= max_len
+            padded_len = math.ceil(max_len / self.sequence_parallel_degree) * self.sequence_parallel_degree
+
         # Pad
         output = {}
-        output["input_ids"] = pad(input_ids, padding_value=self.pad_token_id, padding_side="right")
-        output["attention_mask"] = pad(attention_mask, padding_value=0, padding_side="right")
-        output["labels"] = pad(labels, padding_value=-100, padding_side="right")
+        output["input_ids"] = pad(
+            input_ids, padding_value=self.pad_token_id, padding_side="right", target_length=padded_len
+        )
+        output["attention_mask"] = pad(attention_mask, padding_value=0, padding_side="right", target_length=padded_len)
+        output["labels"] = pad(labels, padding_value=-100, padding_side="right", target_length=padded_len)
 
         if self.sequence_parallel_degree > 1:
             # Get local (start, end) for sequence parallelism slicing
