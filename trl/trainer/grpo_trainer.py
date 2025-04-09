@@ -764,7 +764,7 @@ class GRPOTrainer(Trainer):
                 # prompt individually.
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                 with profiling_context(self, "vLLM.generate"):
-                    completion_ids_list = self.vllm_client.generate(
+                    completion_ids = self.vllm_client.generate(
                         prompts=ordered_set_of_prompts,
                         n=self.num_generations,
                         repetition_penalty=self.repetition_penalty,
@@ -776,18 +776,18 @@ class GRPOTrainer(Trainer):
                         guided_decoding_regex=self.guided_decoding_regex,
                     )
             else:
-                completion_ids_list = [None] * len(all_prompts_text)
+                completion_ids = [None] * len(all_prompts_text)
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
             # corresponding slice.
-            completion_ids_list = broadcast_object_list(completion_ids_list, from_process=0)
+            completion_ids = broadcast_object_list(completion_ids, from_process=0)
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
                 (self.accelerator.process_index + 1) * len(prompts),
             )
-            completion_ids_list = completion_ids_list[process_slice]
+            completion_ids = completion_ids[process_slice]
 
             # Pad the completions, and concatenate them with the prompts
-            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
@@ -878,11 +878,9 @@ class GRPOTrainer(Trainer):
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
                     # Repeat all input columns (but "prompt" and "completion") to match the number of generations
-                    keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
+                    keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
                     reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
-                    output_reward_func = reward_func(
-                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
-                    )
+                    output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
 
