@@ -79,7 +79,7 @@ REQUIRED_PKGS = [
 ]
 EXTRAS = {
     "deepspeed": ["deepspeed>=0.14.4"],
-    "diffusers": ["diffusers>=0.18.0"],
+    "diffusers": ["diffusers>=0.18.0,<0.33.0"],  # Temp set <0.33.0 due to ftfy optional dep issue breaking doc builds
     "judges": ["openai>=1.23.2", "llm-blender>=0.0.2"],
     "liger": ["liger-kernel>=0.5.6"],
     "mergekit": ["mergekit>=0.0.5.1"],
