@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ import itertools
 import tempfile
 import unittest
 
+import pytest
 import torch
 from accelerate.utils.memory import release_memory
 from datasets import load_dataset
@@ -35,6 +36,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
+@pytest.mark.slow
 @require_torch_accelerator
 @require_peft
 class DPOTrainerSlowTester(unittest.TestCase):

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ import gc
 import tempfile
 import unittest
 
+import pytest
 import torch
 from accelerate.utils.memory import release_memory
 from datasets import load_dataset
@@ -28,6 +29,7 @@ from trl import GRPOConfig, GRPOTrainer
 from .testing_constants import MODELS_TO_TEST
 
 
+@pytest.mark.slow
 @require_torch_accelerator
 class GRPOTrainerSlowTester(unittest.TestCase):
     def setUp(self):

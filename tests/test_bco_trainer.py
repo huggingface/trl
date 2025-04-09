@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,8 +20,9 @@ import torch
 from accelerate import Accelerator
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import require_peft
+from transformers.utils import is_peft_available
 
 from trl import BCOConfig, BCOTrainer
 from trl.trainer.bco_trainer import _process_tokens, _tokenize
@@ -29,67 +30,35 @@ from trl.trainer.bco_trainer import _process_tokens, _tokenize
 from .testing_utils import require_no_wandb, require_sklearn
 
 
+if is_peft_available():
+    from peft import LoraConfig
+
+
 class BCOTrainerTester(unittest.TestCase):
-    def setUp(self):
-        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
-        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-        # get embedding model
-        model_id = "trl-internal-testing/tiny-BartModel"
-        self.embedding_model = AutoModel.from_pretrained(model_id)
-        self.embedding_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-    @parameterized.expand(
-        [
-            ("qwen", True, True, "standard_unpaired_preference"),
-            ("qwen", True, False, "standard_unpaired_preference"),
-            ("qwen", False, True, "standard_unpaired_preference"),
-            ("qwen", False, False, "standard_unpaired_preference"),
-            ("qwen", True, True, "conversational_unpaired_preference"),
-        ]
-    )
+    @parameterized.expand([("standard_unpaired_preference"), ("conversational_unpaired_preference")])
     @require_sklearn
-    def test_bco_trainer(self, name, pre_compute, eval_dataset, config_name):
+    def test_train(self, config_name):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
-                eval_strategy="steps" if eval_dataset else "no",
-                beta=0.1,
-                precompute_ref_log_probs=pre_compute,
+                remove_unused_columns=False,  # warning raised if not set to False
+                learning_rate=0.1,  # increase the learning rate to speed up the test
                 report_to="none",
             )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
-
-            if name == "qwen":
-                model = self.model
-                ref_model = self.ref_model
-                tokenizer = self.tokenizer
-            elif name == "t5":
-                model = self.t5_model
-                ref_model = self.t5_ref_model
-                tokenizer = self.t5_tokenizer
 
             trainer = BCOTrainer(
                 model=model,
                 ref_model=ref_model,
                 args=training_args,
                 processing_class=tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"] if eval_dataset else None,
+                train_dataset=dataset,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -105,61 +74,129 @@ class BCOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     @require_sklearn
-    def test_bco_trainer_with_ref_model_is_model(self):
+    def test_train_with_precompute(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
+                remove_unused_columns=False,  # warning raised if not set to False
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                precompute_ref_log_probs=True,
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+            trainer = BCOTrainer(
+                model=model,
+                ref_model=ref_model,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the parameters have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:  # ignore 0 biases
+                    self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
+
+    @require_sklearn
+    def test_train_eval(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = BCOConfig(
+                output_dir=tmp_dir,
+                remove_unused_columns=False,  # warning raised if not set to False
+                eval_strategy="steps",
+                eval_steps=3,
+                report_to="none",
+            )
+
+            trainer = BCOTrainer(
+                model=model,
+                ref_model=ref_model,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dataset["train"],
+                eval_dataset=dataset["test"],
+            )
+
+            trainer.train()
+
+    @require_sklearn
+    def test_init_with_ref_model_is_model(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = BCOConfig(
+                output_dir=tmp_dir,
+                remove_unused_columns=False,  # warning raised if not set to False
+                report_to="none",
+            )
 
             with self.assertRaises(ValueError):
                 BCOTrainer(
-                    model=self.model,
-                    ref_model=self.model,  # ref_model can't be the same as model
+                    model=model,
+                    ref_model=model,  # ref_model can't be the same as model
                     args=training_args,
-                    processing_class=self.tokenizer,
-                    train_dataset=dummy_dataset["train"],
+                    processing_class=tokenizer,
+                    train_dataset=dataset,
                 )
 
     @require_sklearn
     def test_tokenize_and_process_tokens(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
+                remove_unused_columns=False,  # warning raised if not set to False
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
             trainer = BCOTrainer(
-                model=self.model,
-                ref_model=self.ref_model,
+                model=model,
+                ref_model=ref_model,
                 args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
+                processing_class=tokenizer,
+                train_dataset=dataset,
             )
 
-            train_dataset = dummy_dataset["train"]
-            tokenized_dataset = train_dataset.map(
+            tokenized_dataset = dataset.map(
                 _tokenize,
                 fn_kwargs={"tokenizer": trainer.tokenizer},
                 batched=True,
                 batch_size=2,
             )
-            self.assertListEqual(tokenized_dataset["prompt"], train_dataset["prompt"])
-            self.assertListEqual(tokenized_dataset["completion"], train_dataset["completion"])
-            self.assertListEqual(tokenized_dataset["label"], train_dataset["label"])
+            self.assertListEqual(tokenized_dataset["prompt"], dataset["prompt"])
+            self.assertListEqual(tokenized_dataset["completion"], dataset["completion"])
+            self.assertListEqual(tokenized_dataset["label"], dataset["label"])
             self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
             self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
             self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [27261, 13])
@@ -174,10 +211,10 @@ class BCOTrainerTester(unittest.TestCase):
                 "label_pad_token_id": trainer.label_pad_token_id,
                 "max_prompt_length": trainer.max_prompt_length,
             }
-            processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
-            self.assertListEqual(processed_dataset["prompt"], train_dataset["prompt"])
-            self.assertListEqual(processed_dataset["completion"], train_dataset["completion"])
-            self.assertListEqual(processed_dataset["label"], train_dataset["label"])
+            processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs)
+            self.assertListEqual(processed_dataset["prompt"], dataset["prompt"])
+            self.assertListEqual(processed_dataset["completion"], dataset["completion"])
+            self.assertListEqual(processed_dataset["label"], dataset["label"])
             self.assertListEqual(processed_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
             self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
             self.assertListEqual(
@@ -189,28 +226,26 @@ class BCOTrainerTester(unittest.TestCase):
             )
 
     @require_sklearn
-    def test_bco_trainer_without_providing_ref_model(self):
+    def test_train_without_providing_ref_model(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
+                remove_unused_columns=False,  # warning raised if not set to False
+                learning_rate=0.1,  # increase the learning rate to speed up the test
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
             trainer = BCOTrainer(
-                model=self.model,
-                ref_model=None,
+                model=model,
                 args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
+                processing_class=tokenizer,
+                train_dataset=dataset,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -226,38 +261,41 @@ class BCOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
 
     @require_sklearn
-    def test_bco_trainer_udm(self):
+    def test_train_udm(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # Get embedding model
+        embedding_model_id = "trl-internal-testing/tiny-BartModel"
+        embedding_model = AutoModel.from_pretrained(embedding_model_id)
+        embedding_tokenizer = AutoTokenizer.from_pretrained(embedding_model_id)
+
+        def embed_prompt(input_ids, attention_mask, model):
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+
+            return outputs.last_hidden_state.mean(dim=1)
+
+        embedding_model = Accelerator().prepare_model(embedding_model)
+        embedding_func = partial(embed_prompt, model=embedding_model)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
+                remove_unused_columns=False,  # warning raised if not set to False
+                learning_rate=0.1,  # increase the learning rate to speed up the test
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
-            def embed_prompt(input_ids, attention_mask, model):
-                outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-
-                return outputs.last_hidden_state.mean(dim=1)
-
-            embedding_model = Accelerator().prepare_model(self.embedding_model)
-            embedding_func = partial(embed_prompt, model=embedding_model)
-
             trainer = BCOTrainer(
-                model=self.model,
-                ref_model=None,
+                model=model,
                 args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
+                processing_class=tokenizer,
+                train_dataset=dataset,
                 embedding_func=embedding_func,
-                embedding_tokenizer=self.embedding_tokenizer,
+                embedding_tokenizer=embedding_tokenizer,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -274,38 +312,27 @@ class BCOTrainerTester(unittest.TestCase):
 
     @require_sklearn
     @require_peft
-    def test_bco_trainer_without_providing_ref_model_with_lora(self):
-        from peft import LoraConfig
+    def test_train_without_providing_ref_model_with_lora(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
+                remove_unused_columns=False,  # warning raised if not set to False
+                learning_rate=0.1,  # increase the learning rate to speed up the test
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
             trainer = BCOTrainer(
-                model=self.model,
-                ref_model=None,
+                model=model,
                 args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
+                processing_class=tokenizer,
+                train_dataset=dataset,
                 peft_config=lora_config,
             )
 
@@ -324,21 +351,22 @@ class BCOTrainerTester(unittest.TestCase):
 
     @require_sklearn
     @require_no_wandb
-    def test_bco_trainer_generate_during_eval_no_wandb(self):
+    def test_generate_during_eval_no_wandb(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
+                remove_unused_columns=False,  # warning raised if not set to False
                 eval_strategy="steps",
-                beta=0.1,
+                eval_steps=3,
                 generate_during_eval=True,
                 report_to="none",
             )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
             with self.assertRaisesRegex(
                 ValueError,
@@ -346,53 +374,35 @@ class BCOTrainerTester(unittest.TestCase):
                 " Please install `wandb` or `comet-ml` to resolve.",
             ):
                 BCOTrainer(
-                    model=self.model,
-                    ref_model=None,
+                    model=model,
                     args=training_args,
-                    processing_class=self.tokenizer,
-                    train_dataset=dummy_dataset["train"],
-                    eval_dataset=dummy_dataset["test"],
+                    processing_class=tokenizer,
+                    train_dataset=dataset["train"],
+                    eval_dataset=dataset["test"],
                 )
 
     @require_sklearn
     @require_peft
-    def test_bco_lora_save(self):
-        from peft import LoraConfig, get_peft_model
+    def test_lora_train_and_save(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        model_peft = get_peft_model(model, lora_config)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
+                remove_unused_columns=False,  # warning raised if not set to False
                 report_to="none",
             )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
-
-            # bco train lora model with a lora config
             trainer = BCOTrainer(
-                model=model_peft,
-                ref_model=None,
+                model=model,
                 args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
+                processing_class=tokenizer,
+                train_dataset=dataset["train"],
                 peft_config=lora_config,
             )
 
@@ -403,19 +413,16 @@ class BCOTrainerTester(unittest.TestCase):
             trainer.save_model()
 
             # assert that the model is loaded without giving OSError
-            try:
-                AutoModelForCausalLM.from_pretrained(tmp_dir)
-            except OSError:
-                self.fail("Loading the saved peft adapter failed")
+            AutoModelForCausalLM.from_pretrained(tmp_dir)
 
     @require_sklearn
     def test_compute_metrics(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        tokenizer.pad_token = tokenizer.eos_token
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
         def dummy_compute_metrics(*args, **kwargs):
             return {"test": 0.0}
@@ -423,12 +430,9 @@ class BCOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 output_dir=tmp_dir,
-                remove_unused_columns=False,
-                per_device_train_batch_size=2,
-                do_eval=True,
+                remove_unused_columns=False,  # warning raised if not set to False
                 eval_strategy="steps",
-                eval_steps=1,
-                per_device_eval_batch_size=2,
+                eval_steps=3,
                 report_to="none",
             )
 
@@ -437,8 +441,8 @@ class BCOTrainerTester(unittest.TestCase):
                 ref_model=ref_model,
                 args=training_args,
                 processing_class=tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
+                train_dataset=dataset["train"],
+                eval_dataset=dataset["test"],
                 compute_metrics=dummy_compute_metrics,
             )
 
