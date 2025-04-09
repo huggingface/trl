@@ -102,6 +102,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     pad_token_id: int
     return_tensors: str = "pt"
+    sequence_parallel_degree: int = 1
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
@@ -115,7 +116,31 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output["attention_mask"] = pad(attention_mask, padding_value=0, padding_side="right")
         output["labels"] = pad(labels, padding_value=-100, padding_side="right")
 
+        if self.sequence_parallel_degree > 1:
+            # Get local (start, end) for sequence parallelism slicing
+            total_seq_len = output["input_ids"].shape[1]
+            slice_size = total_seq_len // self.local_world_size
+            start = self.local_rank * slice_size
+            end = start + slice_size
+
+            from ..models.ring_attn import update_ring_attn_params
+
+            update_ring_attn_params(output)
+            keys_to_slice = ["input_ids", "attention_mask", "labels", "position_ids"]
+            for key in keys_to_slice:
+                if key in output:
+                    output[key] = output[key][:, start:end]
+
         return output
+
+    def __post_init__(self):
+        if self.sequence_parallel_degree > 1:
+            from ..models.ring_attn import get_ring_attn_group
+
+            # Get information about our position in the SP group
+            sp_group = get_ring_attn_group()
+            self.local_rank = dist.get_rank(group=sp_group)
+            self.local_world_size = dist.get_world_size(group=sp_group)
 
 
 class SFTTrainer(Trainer):
@@ -266,7 +291,9 @@ class SFTTrainer(Trainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
-            data_collator = DataCollatorForLanguageModeling(pad_token_id)
+            data_collator = DataCollatorForLanguageModeling(
+                pad_token_id, sequence_parallel_degree=args.sequence_parallel_degree
+            )
 
         # Model
         if args.model_init_kwargs is not None and not isinstance(model, str):
@@ -360,18 +387,13 @@ class SFTTrainer(Trainer):
                         heads_k_stride=self.args.heads_k_stride,  # register_ring_attn handles default if None
                     )
                     self.log({"message": "Ring Attention registered successfully."})
-                    self.use_ring_attn = True
                 except ImportError:
                     warnings.warn(
                         "Could not import `register_ring_attn` from `trl.models.ring_attn`. Ring Attention will not be enabled.",
                         ImportWarning,
                     )
-                    self.use_ring_attn = False
                 except Exception as e:
                     warnings.warn(f"Failed to register Ring Attention: {e}", RuntimeWarning)
-                    self.use_ring_attn = False
-        else:
-            self.use_ring_attn = False
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
@@ -595,11 +617,6 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "eval" if self.control.should_evaluate else "train"
-
-        if self.use_ring_attn:
-            from ..models.ring_attn import update_ring_attn_params
-
-            update_ring_attn_params(inputs)
 
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
