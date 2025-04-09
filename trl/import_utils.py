@@ -28,7 +28,7 @@ LIGER_KERNEL_MIN_VERSION = "0.5.6"
 _deepspeed_available = _is_package_available("deepspeed")
 _diffusers_available = _is_package_available("diffusers")
 _fastapi_available = _is_package_available("fastapi")
-_is_liger_kernel_available, _liger_kernel_version = _is_package_available("liger-kernel", return_version=True)
+_is_liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
 _llm_blender_available = _is_package_available("llm_blender")
 _mergekit_available = _is_package_available("mergekit")
 _pydantic_available = _is_package_available("pydantic")
