@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import unittest
 import torch
 from transformers.utils import is_peft_available
 
-from trl import is_diffusers_available
+from trl.import_utils import is_diffusers_available
 
 from .testing_utils import require_diffusers
 
