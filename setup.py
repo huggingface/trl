@@ -90,7 +90,7 @@ EXTRAS = {
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
     "vllm": ["vllm>=0.7.0", "fastapi", "pydantic", "requests", "uvicorn"],
     "vlm": ["Pillow"],
-    "agent": ["vllm>=0.7.0", "fastapi", "pydantic", "requests", "uvicorn", "aider-chat"],
+    "agent": ["vllm>=0.7.0", "fastapi", "pydantic", "requests", "uvicorn", "aider-chat==0.28.0"],
 }
 EXTRAS["dev"] = []
 for reqs in EXTRAS.values():
