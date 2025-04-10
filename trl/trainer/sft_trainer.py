@@ -602,6 +602,11 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
                 dataset = pack_dataset(dataset, args.max_length, map_kwargs)
+                # pad the very last item in the batch to the rest
+                if len(dataset) > 1:
+                    dataset[-1]["input_ids"] = dataset[-1]["input_ids"] + [processing_class.pad_token_id] * (
+                        len(dataset[0]["input_ids"]) - len(dataset[-1]["input_ids"])
+                    )
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
