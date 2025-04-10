@@ -416,6 +416,8 @@ class GRPOTrainer(Trainer):
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
         self.use_liger_loss = args.use_liger_loss
+        self.loss_type = args.loss_type
+        self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
 
         # Datasets
@@ -455,7 +457,13 @@ class GRPOTrainer(Trainer):
                     "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
                 )
             if is_peft_model(model):
-                raise ValueError("Liger loss is not supported with a PEFT model.")
+                raise TypeError("Liger loss is not supported with a PEFT model.")
+
+            if self.loss_type != "bnpo":
+                raise ValueError(
+                    f"The provided loss type (`{self.loss_type}`) is not supported with `use_liger_loss`. Liger loss "
+                    "only supports `bnpo` for now."
+                )
 
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
@@ -480,6 +488,7 @@ class GRPOTrainer(Trainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
+        self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
@@ -757,7 +766,7 @@ class GRPOTrainer(Trainer):
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
         # Generate completions using either vLLM or regular generation
-        if self.args.use_vllm:
+        if self.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
@@ -919,7 +928,7 @@ class GRPOTrainer(Trainer):
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
-        if self.args.scale_rewards:
+        if self.scale_rewards:
             advantages = advantages / (std_grouped_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
@@ -1061,7 +1070,14 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        if self.loss_type == "grpo":
+            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
@@ -1102,7 +1118,7 @@ class GRPOTrainer(Trainer):
             super().log(logs)
         self._metrics[mode].clear()
 
-        if self.accelerator.is_main_process:
+        if self.accelerator.is_main_process and self.log_completions:
             if is_rich_available():
                 print_prompt_completions_sample(
                     self._textual_logs["prompt"],
@@ -1122,7 +1138,7 @@ class GRPOTrainer(Trainer):
                     **self._textual_logs["rewards"],
                 }
                 df = pd.DataFrame(table)
-                if self.args.wandb_log_unique_prompts:
+                if self.wandb_log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
                 wandb.log({"completions": wandb.Table(dataframe=df)})
 
