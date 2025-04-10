@@ -18,7 +18,6 @@ from .git_utils import clone_repo_at_commit, clean_repo_dir
 logger = logging.getLogger(__name__)
 
 
-
 class AgentManager(ABC):
     """
     Base class for agent managers that coordinate ephemeral agents during GRPO training.
@@ -27,7 +26,19 @@ class AgentManager(ABC):
     agents that process prompts and return completions. Each agent exists only for the
     duration of a single training example.
     """
-    
+    @abstractmethod
+    def deploy(self, prompts: List[Dict[str, Any]], timeout: int = 300) -> List[List[Dict[str, str]]]:
+        """
+        Deploy parallel agents to process the given prompts, returning histories.
+        """
+        ...
+        
+class ApptainerAgentManager(AgentManager):
+    """Agent manager that uses apptainer to parallelize agent deployments."""
+    ...
+
+class MultiProcessAgentManager(AgentManager):
+    """Agent manager that uses multiple processes to parallelize agent deployments."""
     def __init__(self, vllm_url: str = "http://localhost:8000"):
         """
         Initialize the agent manager.
@@ -119,7 +130,7 @@ class AgentManager(ABC):
         
         return self._get_and_clear_histories()
 
-class AiderAgentManager(AgentManager):
+class MultiProcessAider(MultiProcessAgentManager):
     """Example implementation for Aider coding agents"""
     
     def __init__(self, vllm_url: str = "http://localhost:8000"):
@@ -152,3 +163,7 @@ class AiderAgentManager(AgentManager):
         finally:
             clean_repo_dir(temp_folder)
             os.chdir(original_dir)
+            
+class ApptainerAider(ApptainerAgentManager):
+    """Agent manager that uses apptainer containers to parallelize agent deployments."""
+    ...

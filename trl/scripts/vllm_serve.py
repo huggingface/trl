@@ -18,7 +18,7 @@ import uuid
 import argparse
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Sequence, Dict, List, Any
+from typing import Optional, Sequence
 
 import torch
 import torch.distributed as dist
@@ -442,7 +442,7 @@ def main(script_args: ScriptArguments):
         llm.collective_rpc("close_communicator")
         return {"message": "Request received, closing communicator"}
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
     async def openai_chat_completions(request: ChatCompletionRequest):
         """
         OpenAI-compatible chat completions endpoint.
