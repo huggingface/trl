@@ -17,6 +17,7 @@ import signal
 import subprocess
 import unittest
 
+import psutil
 import pytest
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import require_torch_multi_gpu
@@ -29,7 +30,7 @@ from .testing_utils import require_3_gpus
 @pytest.mark.slow
 @require_torch_multi_gpu
 class TestVLLMClientServer(unittest.TestCase):
-    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
     def setUpClass(cls):
@@ -89,19 +90,23 @@ class TestVLLMClientServer(unittest.TestCase):
     def tearDownClass(cls):
         super().tearDownClass()
 
-        # Check if the process is still running
-        if cls.server_process.poll() is None:
-            try:
-                os.kill(cls.server_process.pid, signal.SIGTERM)
-                cls.server_process.wait()
-            except ProcessLookupError:
-                pass  # Process already gone — safe to ignore
+        # Close the client
+        cls.client.close_communicator()
+
+        # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
+        # kill the server process and its children explicitly.
+        parent = psutil.Process(cls.server_process.pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            child.send_signal(signal.SIGTERM)
+        cls.server_process.terminate()
+        cls.server_process.wait()
 
 
 @pytest.mark.slow
 @require_3_gpus
 class TestVLLMClientServerTP(unittest.TestCase):
-    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
     def setUpClass(cls):
@@ -146,10 +151,14 @@ class TestVLLMClientServerTP(unittest.TestCase):
     def tearDownClass(cls):
         super().tearDownClass()
 
-        # Check if the process is still running
-        if cls.server_process.poll() is None:
-            try:
-                os.kill(cls.server_process.pid, signal.SIGTERM)
-                cls.server_process.wait()
-            except ProcessLookupError:
-                pass  # Process already gone — safe to ignore
+        # Close the client
+        cls.client.close_communicator()
+
+        # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
+        # kill the server process and its children explicitly.
+        parent = psutil.Process(cls.server_process.pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            child.send_signal(signal.SIGTERM)
+        cls.server_process.terminate()
+        cls.server_process.wait()
