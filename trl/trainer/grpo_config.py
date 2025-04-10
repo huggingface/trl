@@ -116,7 +116,7 @@ class GRPOConfig(TrainingArguments):
         scale_rewards (`bool`, *optional*, defaults to `True`):
             Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), the rewards
             are normalized by the standard deviation, ensuring they have unit variance. If `False`, no scaling is
-            applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.14476) recommends not scaling the rewards,
+            applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends not scaling the rewards,
             as scaling by the standard deviation introduces a question-level difficulty bias.
         loss_type (`str`, *optional*, defaults to `"bnpo"`):
             Specifies the loss formulation to use. Supported values are:
@@ -129,7 +129,7 @@ class GRPOConfig(TrainingArguments):
                 on the local batch size, despite a constant effective batch size. When using
                 `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
             - `"dr_grpo"`: Aggregates token-level losses by normalizing with a global constant. This method was
-                introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.14476) to eliminate length bias.
+                introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
                 The value of the constant corresponds to `max_completion_length`.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
