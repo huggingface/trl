@@ -60,6 +60,7 @@ class WeightSyncWorkerExtension:
     efficient GPU-based communication using NCCL. The primary purpose of this class is to receive updated model weights
     from a client process and distribute them to all worker processes participating in model inference.
     """
+
     # The following attributes are initialized when `init_communicator` method is called.
     pynccl_comm = None  # Communicator for weight updates
     client_rank = None  # Source rank for broadcasting updated weights
