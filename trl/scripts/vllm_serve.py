@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import time
-import uuid
 import argparse
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -24,7 +22,12 @@ import torch
 import torch.distributed as dist
 
 from trl import TrlParser
-from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
+from trl.import_utils import (
+    is_fastapi_available,
+    is_pydantic_available,
+    is_uvicorn_available,
+    is_vllm_available,
+)
 
 
 if is_fastapi_available():
@@ -46,18 +49,6 @@ if is_vllm_available():
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
     from vllm.worker.worker import Worker
-    # Import vLLM's OpenAI protocol models
-    from vllm.entrypoints.openai.protocol import (
-        ChatCompletionRequest,
-        ChatCompletionResponse,
-        CompletionRequest, 
-        CompletionResponse,
-        ModelCard,
-        ModelList,
-        ChatMessage,
-        ChatCompletionResponseChoice,
-        UsageInfo
-    )
 else:
     Worker = object
 
@@ -106,13 +97,17 @@ class WeightSyncWorker(Worker):
                 Total number of participating processes in the update group.
         """
         if self.pynccl_comm is not None:
-            raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
+            raise RuntimeError(
+                "Weight update group already initialized. Call close_communicator first."
+            )
 
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
         # Create a stateless process group to manage communication between training processes and vLLM workers.
-        pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
+        pg = StatelessProcessGroup.create(
+            host=host, port=port, rank=rank, world_size=world_size
+        )
 
         # Initialize the NCCL-based communicator for weight synchronization.
         self.pynccl_comm = PyNcclCommunicator(pg, device=self.device)
@@ -120,7 +115,9 @@ class WeightSyncWorker(Worker):
         # The client process that sends updated weights has the highest rank (world_size - 1).
         self.client_rank = world_size - 1
 
-    def update_named_param(self, name: str, dtype: torch.dtype, shape: Sequence[int]) -> None:
+    def update_named_param(
+        self, name: str, dtype: torch.dtype, shape: Sequence[int]
+    ) -> None:
         """
         Receives updated weights from the client process and updates the named parameter in the model.
 
@@ -133,13 +130,17 @@ class WeightSyncWorker(Worker):
                 Shape of the weight tensor.
         """
         if self.pynccl_comm is None:
-            raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
+            raise RuntimeError(
+                "Communicator not initialized. Call `init_communicator` first."
+            )
 
         # Allocate memory for the incoming weight tensor on the correct device.
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
         # Use NCCL to broadcast the updated weights from the client (src) to all workers.
-        self.pynccl_comm.broadcast(weight, src=self.client_rank, stream=torch.cuda.current_stream())
+        self.pynccl_comm.broadcast(
+            weight, src=self.client_rank, stream=torch.cuda.current_stream()
+        )
         self.pynccl_comm.group.barrier()
 
         # Load the received weights into the model.
@@ -194,7 +195,9 @@ class ScriptArguments:
     model: str = field(metadata={"help": "Model name or path to load the model from."})
     revision: Optional[str] = field(
         default=None,
-        metadata={"help": "Revision to use for the model. If not specified, the default branch will be used."},
+        metadata={
+            "help": "Revision to use for the model. If not specified, the default branch will be used."
+        },
     )
     tensor_parallel_size: int = field(
         default=1,
@@ -258,7 +261,9 @@ def main(script_args: ScriptArguments):
         )
 
     if not is_vllm_available():
-        raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
+        raise ImportError(
+            "vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`."
+        )
 
     llm = LLM(
         model=script_args.model,
@@ -275,7 +280,7 @@ def main(script_args: ScriptArguments):
     )
 
     app = FastAPI()
-    
+
     # Define the endpoints for the model server
     @app.get("/health/")
     async def health():
@@ -298,21 +303,9 @@ def main(script_args: ScriptArguments):
         {"tensor_parallel_size": 8}
         ```
         """
-        return {"tensor_parallel_size": llm.llm_engine.parallel_config.tensor_parallel_size}
-
-    @app.get("/v1/models")
-    async def list_models():
-        """
-        OpenAI-compatible models endpoint that returns the available models.
-        """
-        model_id = script_args.model.split('/')[-1] if '/' in script_args.model else script_args.model
-        model = ModelCard(
-            id=model_id,
-            object="model",
-            created=int(time.time()),
-            owned_by="user",
-        )
-        return ModelList(data=[model], object="list")
+        return {
+            "tensor_parallel_size": llm.llm_engine.parallel_config.tensor_parallel_size
+        }
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
@@ -354,7 +347,9 @@ def main(script_args: ScriptArguments):
 
         # Guided decoding, if enabled
         if request.guided_decoding_regex is not None:
-            guided_decoding = GuidedDecodingParams(backend="outlines", regex=request.guided_decoding_regex)
+            guided_decoding = GuidedDecodingParams(
+                backend="outlines", regex=request.guided_decoding_regex
+            )
         else:
             guided_decoding = None
 
@@ -370,7 +365,11 @@ def main(script_args: ScriptArguments):
             guided_decoding=guided_decoding,
         )
         all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
-        completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
+        completion_ids = [
+            list(output.token_ids)
+            for outputs in all_outputs
+            for output in outputs.outputs
+        ]
         return {"completion_ids": completion_ids}
 
     class InitCommunicatorRequest(BaseModel):
@@ -379,7 +378,9 @@ def main(script_args: ScriptArguments):
         world_size: int
 
     @app.post("/init_communicator/")
-    async def init_communicator(request: InitCommunicatorRequest, background_tasks: BackgroundTasks):
+    async def init_communicator(
+        request: InitCommunicatorRequest, background_tasks: BackgroundTasks
+    ):
         """
         Initializes the communicator for synchronizing model weights between a client and multiple server
         workers.
@@ -403,7 +404,9 @@ def main(script_args: ScriptArguments):
         shape: list[int]
 
     @app.post("/update_named_param/")
-    async def update_named_param(request: UpdateWeightsRequest, background_tasks: BackgroundTasks):
+    async def update_named_param(
+        request: UpdateWeightsRequest, background_tasks: BackgroundTasks
+    ):
         """
         Updates the model weights with the provided tensor.
 
@@ -422,7 +425,11 @@ def main(script_args: ScriptArguments):
         # And with background_tasks.add_task we need to call it this way:
         # background_tasks.add_task(llm.collective_rpc, "update_named_param", args=("name", torch.float32, (10, 10)))
         dtype = torch.__getattribute__(request.dtype.split(".")[-1])
-        background_tasks.add_task(llm.collective_rpc, "update_named_param", args=(request.name, dtype, request.shape))
+        background_tasks.add_task(
+            llm.collective_rpc,
+            "update_named_param",
+            args=(request.name, dtype, request.shape),
+        )
 
         return {"message": "Request received, updating named parameter"}
 
@@ -432,7 +439,10 @@ def main(script_args: ScriptArguments):
         Resets the prefix cache for the model.
         """
         success = llm.llm_engine.reset_prefix_cache()
-        return {"message": "Request received, resetting prefix cache status: " + str(success)}
+        return {
+            "message": "Request received, resetting prefix cache status: "
+            + str(success)
+        }
 
     @app.post("/close_communicator/")
     async def close_communicator():
@@ -442,71 +452,6 @@ def main(script_args: ScriptArguments):
         llm.collective_rpc("close_communicator")
         return {"message": "Request received, closing communicator"}
 
-    @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-    async def openai_chat_completions(request: ChatCompletionRequest):
-        """
-        OpenAI-compatible chat completions endpoint.
-        
-        This endpoint emulates the OpenAI API format while using vLLM for generation.
-        """
-        if request.stream if hasattr(request, 'stream') else False:
-            logger.warning("Streaming mode requested but not supported in this implementation.")
-            
-        if request.tools if hasattr(request, 'tools') else None:
-            logger.warning("Tools requested but not supported in this implementation.")
-    
-        request_id = f"chatcmpl-{uuid.uuid4().hex}"
-        timestamp = int(time.time())
-         
-        # ensure standardized format
-        messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
-        full_prompt = llm.get_tokenizer().apply_chat_template(messages, tokenize=False)
-        
-        # Configure sampling parameters
-        sampling_params = SamplingParams(
-            n=request.n if hasattr(request, 'n') else 1,
-            temperature=request.temperature if hasattr(request, 'temperature') else 1.0,
-            top_p=request.top_p if hasattr(request, 'top_p') else 1.0,
-            max_tokens=request.max_tokens if hasattr(request, 'max_tokens') else 256,
-            stop=request.stop if hasattr(request, 'stop') else None,
-        )
-        
-        outputs = llm.generate([full_prompt], sampling_params=sampling_params)
-        
-        # Extract generated text
-        choices = []
-        for i, output in enumerate(outputs[0].outputs):
-            generated_text = output.text
-            
-            # Create choice object
-            choice = ChatCompletionResponseChoice(
-                index=i,
-                message=ChatMessage(
-                    role="assistant",
-                    content=generated_text,
-                ),
-                finish_reason="done" if output.finished else "stop"
-            )
-            choices.append(choice)
-        
-        # Calculate token counts for usage information
-        prompt_tokens = len(outputs[0].prompt_token_ids)
-        completion_tokens = sum(len(output.token_ids) for output in outputs[0].outputs)
-        total_tokens = prompt_tokens + completion_tokens
-        
-        return ChatCompletionResponse(
-            id=request_id,
-            object="chat.completion",
-            created=timestamp,
-            model=request.model,
-            choices=choices,
-            usage=UsageInfo(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-            ),
-        )
-
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
 
@@ -515,7 +460,11 @@ def main(script_args: ScriptArguments):
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
     if subparsers is not None:
-        parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=ScriptArguments)
+        parser = subparsers.add_parser(
+            "vllm-serve",
+            help="Run the vLLM serve script",
+            dataclass_types=ScriptArguments,
+        )
     else:
         parser = TrlParser(ScriptArguments)
     return parser
