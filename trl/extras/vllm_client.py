@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -260,9 +260,15 @@ class VLLMClient:
         Closes the weight update group and cleans up the communication group.
         """
         url = f"http://{self.host}:{self.server_port}/close_communicator/"
-        response = self.session.post(url)
-        if response.status_code != 200:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+        try:
+            response = self.session.post(url)
+        except ConnectionError:
+            # The server might be already down, so we don't need to close the communicator
+            pass
+        else:
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
 
 # Example usage

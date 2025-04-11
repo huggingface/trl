@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 import random
 import unittest
 
+import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
@@ -83,6 +84,13 @@ def require_no_wandb(test_case):
     Decorator marking a test that requires no wandb. Skips the test if wandb is available.
     """
     return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
+
+
+def require_3_gpus(test_case):
+    """
+    Decorator marking a test that requires at least num_gpus GPUs. Skips the test if num_gpus is not available.
+    """
+    return unittest.skipUnless(torch.cuda.device_count() > 3, "test requires at least 3 GPUs")(test_case)
 
 
 class RandomBinaryJudge(BaseBinaryJudge):

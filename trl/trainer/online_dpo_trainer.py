@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -173,6 +173,7 @@ class OnlineDPOTrainer(Trainer):
         self.reward_model = reward_model
         self.reward_processing_class = reward_processing_class
         self.judge = judge
+        self.is_encoder_decoder = model.config.is_encoder_decoder
 
         if args.missing_eos_penalty is not None and judge is not None:
             raise ValueError("`missing_eos_penalty` is not supported when `judge` is provided.")
@@ -470,7 +471,7 @@ class OnlineDPOTrainer(Trainer):
         # policies with different tokenizers / chat templates.
         inputs = [{"prompt": prompt} for prompt in prompts]
         inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
-        inputs = [self.tokenize_row(x, model.config.is_encoder_decoder, self.processing_class) for x in inputs]
+        inputs = [self.tokenize_row(x, self.is_encoder_decoder, self.processing_class) for x in inputs]
         inputs = self.data_collator(inputs)
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model

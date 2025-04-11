@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,17 +40,18 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 from torch.distributed.fsdp import FullyShardedDataParallel
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_deepspeed_available, is_rich_available, is_vllm_available
+from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     _ForwardRedirection,
+    disable_dropout_in_model,
     generate_model_card,
     get_comet_experiment_url,
     pad,
@@ -349,6 +350,12 @@ class GRPOTrainer(Trainer):
             # If PEFT configuration is not provided, create a reference model based on the initial model.
             self.ref_model = create_reference_model(model)
 
+        # Disable dropout in the models
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
+
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
@@ -410,6 +417,9 @@ class GRPOTrainer(Trainer):
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
         self.use_liger_loss = args.use_liger_loss
+        self.loss_type = args.loss_type
+        self.scale_rewards = args.scale_rewards
+        self.mask_truncated_completions = args.mask_truncated_completions
 
         # Datasets
         if (
@@ -450,7 +460,13 @@ class GRPOTrainer(Trainer):
                     "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
                 )
             if is_peft_model(model):
-                raise ValueError("Liger loss is not supported with a PEFT model.")
+                raise TypeError("Liger loss is not supported with a PEFT model.")
+
+            if self.loss_type != "bnpo":
+                raise ValueError(
+                    f"The provided loss type (`{self.loss_type}`) is not supported with `use_liger_loss`. Liger loss "
+                    "only supports `bnpo` for now."
+                )
 
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
@@ -475,6 +491,7 @@ class GRPOTrainer(Trainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
+        self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
@@ -755,7 +772,7 @@ class GRPOTrainer(Trainer):
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
         # Generate completions using either vLLM or regular generation
-        if self.args.use_vllm:
+        if self.use_vllm:
             # First, have main process load weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
@@ -816,6 +833,11 @@ class GRPOTrainer(Trainer):
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
+        if self.mask_truncated_completions:
+            truncated_completions = ~is_eos.any(dim=1)
+            completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
@@ -913,7 +935,7 @@ class GRPOTrainer(Trainer):
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
-        if self.args.scale_rewards:
+        if self.scale_rewards:
             advantages = advantages / (std_grouped_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
@@ -1054,21 +1076,29 @@ class GRPOTrainer(Trainer):
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
-        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
+
+        if self.loss_type == "grpo":
+            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
-            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).nanmean().item())
 
         # Compute the clip ratio
         is_clipped = ((coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)) | (
             (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
         )
         clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
+        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).nanmean().item())
         return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
@@ -1095,7 +1125,7 @@ class GRPOTrainer(Trainer):
             super().log(logs)
         self._metrics[mode].clear()
 
-        if self.accelerator.is_main_process:
+        if self.accelerator.is_main_process and self.log_completions:
             if is_rich_available():
                 print_prompt_completions_sample(
                     self._textual_logs["prompt"],
@@ -1115,7 +1145,7 @@ class GRPOTrainer(Trainer):
                     **self._textual_logs["rewards"],
                 }
                 df = pd.DataFrame(table)
-                if self.args.wandb_log_unique_prompts:
+                if self.wandb_log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
                 wandb.log({"completions": wandb.Table(dataframe=df)})
 

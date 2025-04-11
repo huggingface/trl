@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -353,8 +353,8 @@ class SFTTrainer(Trainer):
                 f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
             )
         # Disable caching if gradient checkpointing is enabled (not supported)
-        if args.gradient_checkpointing:
-            model_init_kwargs["use_cache"] = False
+        # if args.gradient_checkpointing:
+        #     model_init_kwargs["use_cache"] = False
 
         # Create model
         model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
@@ -573,9 +573,8 @@ class SFTTrainer(Trainer):
             if "attention_mask" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             elif "position_ids" in inputs:
-                num_tokens_in_batch = (
-                    self.accelerator.gather_for_metrics(torch.tensor(inputs["position_ids"].size(1))).sum().item()
-                )
+                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
             self._total_train_tokens += num_tokens_in_batch
