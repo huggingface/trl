@@ -93,7 +93,10 @@ def main():
     elif args.command == "vllm-serve":
         (script_args,) = parser.parse_args_and_config()
         vllm_serve_main(script_args)
+        
+    # Make the vllm-serve-openai-endpoint subparser
 
 
 if __name__ == "__main__":
     main()
+    
