@@ -88,7 +88,7 @@ EXTRAS = {
     "scikit": ["scikit-learn"],
     "bco": ["scikit-learn", "joblib"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
-    "vllm": ["vllm>=0.7.0", "fastapi", "pydantic", "requests", "uvicorn"],
+    "vllm": ["vllm>=0.8.3", "fastapi", "pydantic", "requests", "uvicorn"],
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []
