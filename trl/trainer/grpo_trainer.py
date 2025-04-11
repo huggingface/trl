@@ -27,6 +27,7 @@ from accelerate.utils import broadcast_object_list, gather, gather_object, is_pe
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
+from torch.distributed.fsdp import FullyShardedDataParallel
 from torch.utils.data import Sampler
 from transformers import (
     AutoModelForCausalLM,
@@ -41,7 +42,7 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
-from torch.distributed.fsdp import FullyShardedDataParallel
+
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
@@ -817,7 +818,11 @@ class GRPOTrainer(Trainer):
             with unwrap_model_for_generation(
                 self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
             ) as unwrapped_model:
-                with FullyShardedDataParallel.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext():
+                with (
+                    FullyShardedDataParallel.summon_full_params(self.model_wrapped, recurse=False)
+                    if self.is_fsdp_enabled
+                    else nullcontext()
+                ):
                     prompt_completion_ids = unwrapped_model.generate(
                         prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                     )
