@@ -463,18 +463,14 @@ class GRPOTrainer(Trainer):
             if is_peft_model(model):
                 raise TypeError("Liger loss is not supported with a PEFT model.")
 
-            if self.loss_type != "bnpo":
-                raise ValueError(
-                    f"The provided loss type (`{self.loss_type}`) is not supported with `use_liger_loss`. Liger loss "
-                    "only supports `bnpo` for now."
-                )
-
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
                 temperature=self.temperature,
                 use_ref_model=self.ref_model is not None,
+                loss_type=self.loss_type,
+                max_completion_length=self.max_completion_length,
             )
 
         super().__init__(
