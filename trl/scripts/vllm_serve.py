@@ -356,7 +356,7 @@ def main(script_args: ScriptArguments):
 
         Example response:
         ```json
-        {"completion_ids": [[101, 102, 103], [201, 202, 203]], "dp_rank": 0, "dp_size": 2, "start_idx": 0, "end_idx": 1}
+        {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
         ```
         """
 
