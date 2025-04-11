@@ -784,20 +784,21 @@ class GRPOTrainer(Trainer):
                 # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                 # prompt individually.
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-                completion_ids = self.environment.generate(
-                    vllm_client=self.vllm_client,
-                    prompts=ordered_set_of_prompts,
-                    generation_config=VLLMClientGenerationConfig(
-                        n=self.num_generations,
-                        repetition_penalty=self.repetition_penalty,
-                        temperature=self.temperature,
-                        top_p=self.top_p,
-                        top_k=-1 if self.top_k is None else self.top_k,
-                        min_p=0.0 if self.min_p is None else self.min_p,
-                        max_tokens=self.max_completion_length,
-                        guided_decoding_regex=self.guided_decoding_regex,
+                with profiling_context(self, "vLLM.generate"):
+                    completion_ids = self.environment.generate(
+                        vllm_client=self.vllm_client,
+                        prompts=ordered_set_of_prompts,
+                        generation_config=VLLMClientGenerationConfig(
+                            n=self.num_generations,
+                            repetition_penalty=self.repetition_penalty,
+                            temperature=self.temperature,
+                            top_p=self.top_p,
+                            top_k=-1 if self.top_k is None else self.top_k,
+                            min_p=0.0 if self.min_p is None else self.min_p,
+                            max_tokens=self.max_completion_length,
+                            guided_decoding_regex=self.guided_decoding_regex,
+                        )
                     )
-                )
             else:
                 completion_ids = [None] * len(all_prompts_text)
             # Broadcast the completions from the main process to all processes, ensuring each process receives its
