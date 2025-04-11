@@ -15,7 +15,7 @@
 import argparse
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Sequence, Union
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -39,6 +39,7 @@ if is_uvicorn_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+    from vllm.inputs import TokensPrompt
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
@@ -276,7 +277,7 @@ def main(script_args: ScriptArguments):
         return {"tensor_parallel_size": llm.llm_engine.vllm_config.parallel_config.tensor_parallel_size}
 
     class GenerateRequest(BaseModel):
-        prompts: list[str]
+        prompts: Union[list[str], list[list[int]]]
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -330,7 +331,11 @@ def main(script_args: ScriptArguments):
             max_tokens=request.max_tokens,
             guided_decoding=guided_decoding,
         )
-        all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
+        if isinstance(request.prompts[0], str):
+            all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
+        else:
+            vllm_input_ids = [TokensPrompt(prompt_token_ids=v) for v in request.prompts]
+            all_outputs = llm.generate(vllm_input_ids, sampling_params=sampling_params)
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         return {"completion_ids": completion_ids}
 

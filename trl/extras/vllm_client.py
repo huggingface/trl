@@ -15,7 +15,7 @@
 import atexit
 import logging
 import time
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 from torch import nn
@@ -131,7 +131,7 @@ class VLLMClient:
 
     def generate(
         self,
-        prompts: list[str],
+        prompts: Union[list[str], list[list[int]]],
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
