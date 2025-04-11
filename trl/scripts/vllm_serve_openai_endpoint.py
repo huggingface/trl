@@ -12,16 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+TRL Script for Running a vLLM OpenAI-Compatible API Server with Weight Synchronization.
+
+This script provides a RESTful API server that is compatible with the OpenAI API
+standard, built upon the vLLM library. It largely mirrors the functionality of
+vLLM's own `vllm.entrypoints.openai.api_server` but extends it with crucial
+endpoints specifically designed for TRL's online training or reinforcement
+learning workflows.
+
+Core Functionality Leveraged from vLLM OpenAI Server:
+- Uses `vllm.entrypoints.openai.api_server.build_app` to create the base FastAPI app.
+- Uses `vllm.entrypoints.openai.api_server.init_app_state` to initialize server state.
+- Uses `vllm.entrypoints.openai.api_server.build_async_engine_client` for engine setup.
+- Uses `vllm.entrypoints.openai.api_server.serve_http` to run the Uvicorn server.
+- The overall `run_server` function structure is adapted from the original script.
+
+TRL-Specific Additions & Differences from `trl/scripts/vllm_serve.py`:
+- This script adds endpoints for TRL weight synchronization (`/init_communicator/`,
+  `/update_named_param/`, etc.), enabling dynamic model updates during training or RL.
+  The underlying mechanism (`collective_rpc`) closely mirrors the implementation
+  in the original `trl/scripts/vllm_serve.py`.
+- However, unlike the original `trl/scripts/vllm_serve.py`, this script adopts
+  the standard vLLM OpenAI API server structure (`build_app`, `init_app_state`).
+- As a result, it leverages the standard OpenAI-compatible endpoints
+  (e.g., `/v1/chat/completions`, `/v1/completions`) for inference and does *not*
+  include the custom synchronous `/generate` endpoint previously found in
+  `trl/scripts/vllm_serve.py`.
+
+Usage:
+This script is intended to be run as a standalone server process that TRL
+components can interact with via HTTP requests to perform inference (using
+standard OpenAI API calls) and synchronize weights (using the TRL-specific endpoints).
+"""
+
 import os
 import signal
-import argparse
-import logging
-
 
 import torch
-import torch.distributed as dist
 
-from trl import TrlParser
 from trl.import_utils import (
     is_fastapi_available,
     is_pydantic_available,
@@ -48,7 +77,6 @@ if not is_vllm_available():
 
 from vllm.logger import init_logger
 from vllm.utils import FlexibleArgumentParser, set_ulimit, is_valid_ipv6_address
-from vllm.sampling_params import GuidedDecodingParams
 from vllm.v1.engine.async_llm import AsyncLLM
 from vllm.reasoning import ReasoningParserManager
 from vllm.entrypoints.openai.tool_parsers import ToolParserManager
