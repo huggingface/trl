@@ -60,6 +60,9 @@ class WeightSyncWorkerExtension:
     efficient GPU-based communication using NCCL. The primary purpose of this class is to receive updated model weights
     from a client process and distribute them to all worker processes participating in model inference.
     """
+    # The following attributes are initialized when `init_communicator` method is called.
+    pynccl_comm = None  # Communicator for weight updates
+    client_rank = None  # Source rank for broadcasting updated weights
 
     def init_communicator(self, host: str, port: int, world_size: int) -> None:
         """
@@ -76,7 +79,7 @@ class WeightSyncWorkerExtension:
             world_size (`int`):
                 Total number of participating processes in the update group.
         """
-        if hasattr(self, "pynccl_comm") and self.pynccl_comm is not None:
+        if self.pynccl_comm is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
         # Get the rank of the current worker in the global world group.
@@ -103,7 +106,7 @@ class WeightSyncWorkerExtension:
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
-        if not hasattr(self, "pynccl_comm") or self.pynccl_comm is None:
+        if self.pynccl_comm is None:
             raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
 
         # Allocate memory for the incoming weight tensor on the correct device.
@@ -123,7 +126,7 @@ class WeightSyncWorkerExtension:
         This method deletes the NCCL communicator to release associated resources.
         """
 
-        if hasattr(self, "pynccl_comm") and self.pynccl_comm is not None:
+        if self.pynccl_comm is not None:
             del self.pynccl_comm
             self.pynccl_comm = None  # Ensure attribute is reset to None
             self.client_rank = None  # Ensure attribute is reset to None
