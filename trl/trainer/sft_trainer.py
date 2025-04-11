@@ -148,7 +148,7 @@ class SFTTrainer(Trainer):
         args ([`SFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator (`DataCollator`, *optional*):
-            Function to use to form a batch from a list of elements of the prcessed `train_dataset` or `eval_dataset`.
+            Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~transformers.default_data_collator`] if no `processing_class` is provided, an instance
             of [`~transformers.DataCollatorWithPadding`] otherwise if the processing_class is a feature extractor or
             tokenizer.
