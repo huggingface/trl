@@ -20,6 +20,7 @@ from collections.abc import Sized
 from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
 
+import datasets
 import torch
 import torch.utils.data
 import transformers
@@ -27,7 +28,7 @@ from accelerate.utils import broadcast_object_list, gather, gather_object, is_pe
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
-from torch.utils.data import Sampler
+from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -40,7 +41,8 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
+from transformers.trainer_utils import seed_worker
+from transformers.utils import is_datasets_available, is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -181,6 +183,34 @@ def nanstd(tensor: torch.Tensor) -> torch.Tensor:
     count = torch.sum(~torch.isnan(tensor))  # Count of non-NaN values
     variance *= count / (count - 1)  # Bessel's correction
     return torch.sqrt(variance)
+
+
+def split_tensor_dict(
+    tensor_dict: dict[str, Optional[torch.Tensor]], num_chunks: int
+) -> list[dict[str, Optional[torch.Tensor]]]:
+    """
+    Splits a dictionary of tensors along the first dimension into `num_chunks` equal parts.
+
+    Example:
+        >>> x = torch.arange(12).reshape(6, 2)
+        >>> y = torch.arange(6).reshape(6, 1)
+        >>> tensor_dict = {"x": x, "y": y}
+        >>> split_tensor_dict(tensor_dict, 3)
+        [
+            {"x": tensor([[0, 1], [2, 3]]), "y": tensor([[0], [1]])},
+            {"x": tensor([[4, 5], [6, 7]]), "y": tensor([[2], [3]])},
+            {"x": tensor([[ 8,  9], [10, 11]]), "y": tensor([[4], [5]])}
+        ]
+    """
+    first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
+    chunk_size = first_tensor.shape[0] // num_chunks
+    return [
+        {
+            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
+            for key, tensor in tensor_dict.items()
+        }
+        for i in range(num_chunks)
+    ]
 
 
 class GRPOTrainer(Trainer):
@@ -441,7 +471,7 @@ class GRPOTrainer(Trainer):
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
         # `_get_train_sampler` and `_prepare_inputs`.
-        self._buffered_inputs = [None] * args.gradient_accumulation_steps
+        self._buffered_inputs = None
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
@@ -594,6 +624,42 @@ class GRPOTrainer(Trainer):
         if self._signature_columns is None:
             self._signature_columns = ["prompt"]
 
+    # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
+    # Instead of returning a standard per-step batch, our dataloader loads an *accumulated* batch
+    # (i.e., `per_device_batch_size × gradient_accumulation_steps`). This allows us to generate completions
+    # once per optimization step—rather than once per gradient accumulation step—which is significantly more efficient.
+    # The only change from the original implementation is multiplying the batch size by `gradient_accumulation_steps`.
+    # Thus, `_prepare_inputs` is called with the accumulated batch size, and it handles the splitting internally.
+    # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
+    # modification.As a result, some parts of the method aren't relevant to GRPO, but we keep them to stay one line
+    # apart from the super method, ensuring easier maintenance in the future.
+    def get_train_dataloader(self):
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        train_dataset = self.train_dataset
+        data_collator = self.data_collator
+        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+
+        dataloader_params = {
+            "batch_size": self._train_batch_size * self.args.gradient_accumulation_steps,  # < this is the change
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_train_sampler()
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["worker_init_fn"] = seed_worker
+            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
     def _get_train_sampler(self) -> Sampler:
         # Returns a sampler that
         # 1. ensures each prompt is repeated across multiple processes. This guarantees that identical prompts are
@@ -605,22 +671,19 @@ class GRPOTrainer(Trainer):
 
         # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
         # second row shows the second sampled batch, and so on.
+        #                                    |      Iteration 0      |      Iteration 1      |
+        #                                    |   GPU 0   |   GPU 1   |   GPU 0   |   GPU 1   |
         #
-        #                                     |     GPU 0     |     GPU 1     |     GPU 2    |
+        #               global_step   step    <-───>  num_generations=2
+        #                                     <-───────> per_device_train_batch_size=3
+        #  grad_accum=2  ▲   0          0     [0   0   1   1   2   2]  3   3   4   4   5   5   ▲
+        #                ▼   0          1      0   0   1   1   2   2 [ 3   3   4   4   5   5]  |
+        #                                                                                      |  num_iterations=2
+        #                    1          2     [0   0   1   1   2   2]  3   3   4   4   5   5   |
+        #                    1          3      0   0   1   1   2   2 [ 3   3   4   4   5   5]  ▼
         #
-        #               global_step   step     <───────>  num_generations=3
-        #                                      <───────────> per_device_train_batch_size=4
-        #                ▲   0          0      0   0   0   1   1   1   2   2   2   3   3   3  │
-        #  grad_accum=3  │   0          1      4   4   4   5   5   5   6   6   6   7   7   7  │ Generate completions for each prompt
-        #                ▼   0          2      8   8   8   9   9   9  10  10  10  11  11  11  │
-        #
-        #                    1          3      0   0   0   1   1   1   2   2   2   3   3   3  │ The sampled prompts are the same as in the first iteration
-        #                    1          4      4   4   4   5   5   5   6   6   6   7   7   7  │ Reuse the completions (here, once, because num_iterations=2)
-        #                    1          5      8   8   8   9   9   9  10  10  10  11  11  11  │
-        #
-        #                    2          6     12  12  12  13  13  13  14  14  14  15  15  15
-        #                    2          7     16  16  16  17  17  17  18  18  18  19  19  19
-        #                    2          8     20  20  20  21  21  21  22  22  22  23  23  23
+        #                    2          4     [6   6   7   7   8   8]  9   9  10  10  11  11
+        #                    2          5      6   6   7   7   8   8 [ 9   9  10  10  11  11]
         #                                          ...
         effective_batch_size = (
             self.args.per_device_train_batch_size
@@ -631,7 +694,7 @@ class GRPOTrainer(Trainer):
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
             batch_size=effective_batch_size // self.num_generations,
-            repeat_count=self.num_iterations,
+            repeat_count=self.num_iterations * self.args.gradient_accumulation_steps,
             seed=self.args.seed,
         )
 
@@ -732,21 +795,35 @@ class GRPOTrainer(Trainer):
             self.vllm_client.reset_prefix_cache()
 
     @profiling_decorator
-    def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
+    def _prepare_inputs(
+        self, accumulated_local_batch: dict[str, Union[torch.Tensor, Any]]
+    ) -> dict[str, Union[torch.Tensor, Any]]:
+        # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
+        # During training:
+        #   - Receives the accumulated local batch (Per-GPU batch size × Gradient accumulation steps)
+        #     from the modified training dataloader instead of the standard local batch
+        #   - Generates completions once for the entire accumulated batch and splits it into smaller batches
+        #   - Buffers these completions and returns the appropriate slice for the current accumulation step
+        #   - Optimizes by regenerating completions only periodically (every gradient_accumulation_steps * num_iterations)
+        # During evaluation:
+        #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
+        #   - Completions are generated for each batch without buffering or reuse
+        # Returns a single local batch in both cases.
+
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
-            buffer_index = self._step % self.args.gradient_accumulation_steps
-            buffered_inputs = self._buffered_inputs[buffer_index]
-            if self.state.global_step % self.num_iterations == 0 or buffered_inputs is None:
-                # buffered_inputs=None can occur when resuming from a checkpoint
-                inputs = self._generate_and_score_completions(inputs)
-                self._buffered_inputs[buffer_index] = inputs
-            else:
-                inputs = buffered_inputs
+            generate_every = self.args.gradient_accumulation_steps * self.num_iterations
+            if self._step % generate_every == 0 or self._buffered_inputs is None:
+                # self._buffered_inputs=None can occur when resuming from a checkpoint
+                accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
+                self._buffered_inputs = split_tensor_dict(
+                    accumulated_local_batch, self.args.gradient_accumulation_steps
+                )
+            inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
             self._step += 1
         else:
-            # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
-            inputs = self._generate_and_score_completions(inputs)
+            # In evaluation, there is neither gradient accumulation, nor multiple iterations
+            inputs = self._generate_and_score_completions(accumulated_local_batch)
         return inputs
 
     def _generate_and_score_completions(
