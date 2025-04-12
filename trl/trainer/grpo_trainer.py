@@ -671,19 +671,20 @@ class GRPOTrainer(Trainer):
 
         # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
         # second row shows the second sampled batch, and so on.
-        #                                    |      Iteration 0      |      Iteration 1      |
-        #                                    |   GPU 0   |   GPU 1   |   GPU 0   |   GPU 1   |
         #
-        #               global_step   step    <-───>  num_generations=2
-        #                                     <-───────> per_device_train_batch_size=3
-        #  grad_accum=2  ▲   0          0     [0   0   1   1   2   2]  3   3   4   4   5   5   ▲
-        #                ▼   0          1      0   0   1   1   2   2 [ 3   3   4   4   5   5]  |
-        #                                                                                      |  num_iterations=2
-        #                    1          2     [0   0   1   1   2   2]  3   3   4   4   5   5   |
-        #                    1          3      0   0   1   1   2   2 [ 3   3   4   4   5   5]  ▼
+        #                                      |     Accum step 0      |     Accum step 1      |
+        #                                      |   GPU 0   |   GPU 1   |   GPU 0   |   GPU 1   |
         #
-        #                    2          4     [6   6   7   7   8   8]  9   9  10  10  11  11
-        #                    2          5      6   6   7   7   8   8 [ 9   9  10  10  11  11]
+        #                 global_step   step    <-───>  num_generations=2
+        #                                       <-───────> per_device_train_batch_size=3
+        #  grad_accum    ▲  ▲  0          0     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
+        #     =2         ▼  |  0          1      0   0   1   1   2   2 [ 3   3   4   4   5   5]   <- Take the stored generations and use the second slice to compute the loss
+        #                   |
+        #                   |  1          2     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Take the stored generations and use the first slice to compute the loss
+        #  num_iterations=2 ▼  1          3      0   0   1   1   2   2 [ 3   3   4   4   5   5]   <- Take the stored generations and use the second slice to compute the loss
+        #
+        #                      2          4     [6   6   7   7   8   8]  9   9  10  10  11  11    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
+        #                      2          5      6   6   7   7   8   8 [ 9   9  10  10  11  11]   <- ...
         #                                          ...
         effective_batch_size = (
             self.args.per_device_train_batch_size
