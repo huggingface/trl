@@ -43,13 +43,14 @@ if is_vllm_available():
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
-    from multiprocessing import Process
+
 logger = logging.getLogger(__name__)
 
 # We use CUDA with multiprocessing, so we must use the 'spawn' start method. Otherwise, we will get the following
 # error: RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use
 # the 'spawn' start method
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
 
 class WeightSyncWorkerExtension:
     """
@@ -144,8 +145,6 @@ class ScriptArguments:
             Revision to use for the model. If not specified, the default branch will be used.
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
-        data_parallel_size (`int`, *optional*, defaults to `1`):
-            Number of data parallel workers to use.
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
@@ -175,10 +174,6 @@ class ScriptArguments:
     tensor_parallel_size: int = field(
         default=1,
         metadata={"help": "Number of tensor parallel workers to use."},
-    )
-    data_parallel_size: int = field(
-        default=1,
-        metadata={"help": "Number of data parallel workers to use."},
     )
     host: str = field(
         default="0.0.0.0",
@@ -220,6 +215,7 @@ class ScriptArguments:
         },
     )
 
+
 def main(script_args: ScriptArguments):
     if not is_fastapi_available():
         raise ImportError(
@@ -238,45 +234,6 @@ def main(script_args: ScriptArguments):
 
     if not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
-
-    os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
-    os.environ["VLLM_DP_RANK_LOCAL"] = str(local_dp_rank)
-    os.environ["VLLM_DP_SIZE"] = str(dp_size)
-    # Setup data parallelism environment variables if enabled
-    dp_size = script_args.data_parallel_size
-    tp_size = script_args.tensor_parallel_size
-    node_size = script_args.node_size # 1 in single-node setup
-    node_rank = script_args.node_rank # 0 in single-node setup
-    
-    if node_size > 1:
-        raise ValueError("Multi-node not supported yet. Please set node_size to 1.")
-        # Calculate local and global ranks
-    assert dp_size % node_size == 0, "data_parallel_size should be divisible by node_size"
-    dp_per_node = dp_size // node_size
-
-    procs = []
-    for local_dp_rank, global_dp_rank in enumerate(
-            range(dp_per_node, (node_rank + 1) * dp_per_node)):
-        proc = Process(target=main,
-                       args=(script_args.model, dp_size, local_dp_rank,
-                             global_dp_rank,tp_size)
-                       )
-        proc.start()
-        procs.append(proc)
-        
-    exit_code = 0
-    for proc in procs:
-        proc.join(timeout=300)
-        if proc.exitcode is None:
-            print(f"Killing process {proc.pid} that "
-                  f"didn't stop within 5 minutes.")
-            proc.kill()
-            exit_code = 1
-        elif proc.exitcode:
-            exit_code = proc.exitcode
-
-    exit(exit_code)
-
 
     llm = LLM(
         model=script_args.model,
@@ -331,8 +288,6 @@ def main(script_args: ScriptArguments):
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
-        dp_rank: Optional[int] = None
-
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -346,8 +301,6 @@ def main(script_args: ScriptArguments):
         Returns:
             `GenerateResponse`:
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
-                - `dp_rank` (`int`, optional): The data parallel rank of this server (if data parallelism is enabled).
-                - `dp_size` (`int`, optional): The total number of data parallel ranks (if data parallelism is enabled).
 
         Example request:
         ```json
@@ -359,21 +312,6 @@ def main(script_args: ScriptArguments):
         {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
         ```
         """
-
-        # with DP, each rank should process different prompts.
-        # each rank processes a different part of the dataset.
-        # therefore we partition prompts across ranks
-        prompts = request.prompts
-        prompts_per_rank = len(prompts) // dp_size
-        start = global_dp_rank * prompts_per_rank
-        end = start + prompts_per_rank
-        all_prompts = prompts[start:end]
-        
-        if len(all_prompts) == 0:
-            # if the rank has no prompts to process, set a placeholder prompt
-            all_prompts = ["Placeholder"]
-            
-        print(f"DP rank {global_dp_rank} needs to process {len(all_prompts)} prompts")
 
         # Guided decoding, if enabled
         if request.guided_decoding_regex is not None:
@@ -389,10 +327,10 @@ def main(script_args: ScriptArguments):
             top_p=request.top_p,
             top_k=request.top_k,
             min_p=request.min_p,
-            max_tokens=[request.max_tokens][global_dp_rank % 2],
+            max_tokens=request.max_tokens,
             guided_decoding=guided_decoding,
         )
-        all_outputs = llm.generate(all_prompts, sampling_params=sampling_params)
+        all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         return {"completion_ids": completion_ids}
 
