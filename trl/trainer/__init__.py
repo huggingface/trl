@@ -14,12 +14,10 @@
 
 from typing import TYPE_CHECKING
 
-from .agents.environments import Environment, DefaultEnvironment, VLLMClientGenerationConfig
 from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
 
 
 _import_structure = {
-    "agents.environments": ["Environment", "DefaultEnvironment", "VLLMClientGenerationConfig"],
     "alignprop_config": ["AlignPropConfig"],
     "alignprop_trainer": ["AlignPropTrainer"],
     "bco_config": ["BCOConfig"],
@@ -91,7 +89,6 @@ else:
     _import_structure["ddpo_trainer"] = ["DDPOTrainer"]
 
 if TYPE_CHECKING:
-    from .agents.environments import Environment, DefaultEnvironment, VLLMClientGenerationConfig
     from .alignprop_config import AlignPropConfig
     from .alignprop_trainer import AlignPropTrainer
     from .bco_config import BCOConfig

@@ -36,7 +36,7 @@ _import_structure = {
         "unpair_preference_dataset",
     ],
     "environment": ["TextEnvironment", "TextHistory"],
-    "extras": ["BestOfNSampler"],
+    "extras": ["BestOfNSampler","VLLMClient"],
     "models": [
         "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
@@ -130,7 +130,7 @@ if TYPE_CHECKING:
         unpair_preference_dataset,
     )
     from .environment import TextEnvironment, TextHistory
-    from .extras import BestOfNSampler
+    from .extras import BestOfNSampler, VLLMClient
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,

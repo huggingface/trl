@@ -19,10 +19,12 @@ from ..import_utils import _LazyModule
 
 _import_structure = {
     "best_of_n_sampler": ["BestOfNSampler"],
+    "vllm_client": ["VLLMClient"],
 }
 
 if TYPE_CHECKING:
     from .best_of_n_sampler import BestOfNSampler
+    from .vllm_client import VLLMClient
 else:
     import sys
 
