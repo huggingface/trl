@@ -40,7 +40,17 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
+from transformers.utils import (is_peft_available, 
+    is_sagemaker_mp_enabled, 
+    is_apex_available,
+    is_torch_mlu_available,
+    is_torch_mps_available,
+    is_torch_musa_available,
+    is_torch_npu_available,
+    is_torch_xpu_available,
+    is_accelerate_available,
+    logging)
+from transformers.training_args import OptimizerNames
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -68,8 +78,30 @@ if is_peft_available():
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
+if is_apex_available():
+    from apex import amp
+
+if is_accelerate_available():
+    from accelerate.utils import (
+        DistributedType,
+    )
+
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+    from smdistributed.modelparallel import __version__ as SMP_VERSION
+
+    IS_SAGEMAKER_MP_POST_1_10 = version.parse(SMP_VERSION) >= version.parse("1.10")
+
+    from .trainer_pt_utils import smp_forward_backward, smp_forward_only, smp_gather, smp_nested_concat
+else:
+    IS_SAGEMAKER_MP_POST_1_10 = False
+
 if is_wandb_available():
     import wandb
+
+
+
+logger = logging.get_logger(__name__)
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -419,6 +451,7 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.num_generations_chunks = args.num_generations_chunks if args.num_generations_chunks is not None else args.num_generations
 
         # Datasets
         if (
@@ -996,7 +1029,85 @@ class GRPOTrainer(Trainer):
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
         }
+    
+    def training_step(
+        self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch=None
+    ) -> torch.Tensor:
+        """
+        Perform a training step on a batch of inputs.
 
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (`nn.Module`):
+                The model to train.
+            inputs (`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument `labels`. Check your model's documentation for all accepted arguments.
+
+        Return:
+            `torch.Tensor`: The tensor with training loss on this batch.
+        """
+        model.train()
+        if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
+            self.optimizer.train()
+
+        inputs = self._prepare_inputs(inputs)
+        if is_sagemaker_mp_enabled():
+            loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
+            return loss_mb.reduce_mean().detach().to(self.args.device)
+
+        losses = []
+        kwargs = {}
+        # For LOMO optimizers you need to explicitly use the learnign rate
+        if self.args.optim in [OptimizerNames.LOMO, OptimizerNames.ADALOMO]:
+            kwargs["learning_rate"] = self._get_learning_rate()
+
+        with self.compute_loss_context_manager():
+            for loss in self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch):
+                if self.args.n_gpu > 1:
+                    loss = loss.mean()  # mean() to average on multi-gpu parallel training
+
+                if self.use_apex:
+                    with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                        scaled_loss.backward()
+                else:
+                    # Finally we need to normalize the loss for reporting
+                    if not self.model_accepts_loss_kwargs and self.compute_loss_func is None:
+                        loss = loss / self.args.gradient_accumulation_steps
+
+                    # Turning off loss scaling w.r.t. gradient accumulation when DeepSpeed is enabled
+                    # https://github.com/huggingface/transformers/pull/35808
+                    if self.accelerator.distributed_type == DistributedType.DEEPSPEED:
+                        kwargs["scale_wrt_gas"] = False
+
+                    self.accelerator.backward(loss, **kwargs)
+                losses.append(loss.detach())
+
+        del inputs
+        if (
+            self.args.torch_empty_cache_steps is not None
+            and self.state.global_step % self.args.torch_empty_cache_steps == 0
+        ):
+            if is_torch_xpu_available():
+                torch.xpu.empty_cache()
+            elif is_torch_mlu_available():
+                torch.mlu.empty_cache()
+            elif is_torch_musa_available():
+                torch.musa.empty_cache()
+            elif is_torch_npu_available():
+                torch.npu.empty_cache()
+            elif is_torch_mps_available():
+                torch.mps.empty_cache()
+            else:
+                torch.cuda.empty_cache()
+
+        
+
+        return sum(losses) / len(losses)
+        
     def compute_liger_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -1006,29 +1117,37 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         # get the last hidden state of the model
-        last_hidden_state = self._get_last_hidden_state(model, input_ids, attention_mask, logits_to_keep)
         unwrapped_model = self.accelerator.unwrap_model(model)
+        mean_kls = []
+        clip_ratios = []
         # compute loss and metrics using liger grpo loss
-        loss, metrics = self.liger_grpo_loss(
-            _input=last_hidden_state,
-            lin_weight=unwrapped_model.lm_head.weight,
-            selected_token_ids=completion_ids,
-            attention_mask=completion_mask,
-            advantages=inputs["advantages"],
-            bias=unwrapped_model.lm_head.bias,
-            ref_per_token_logps=inputs["ref_per_token_logps"],
-            old_per_token_logps=inputs["old_per_token_logps"],
-        )
-        # Extract metrics from the liger_grpo_loss output
-        # KL divergence is the first metric when beta is non-zero
-        mean_kl = metrics[0] if self.beta != 0.0 else None
-        clip_ratio = metrics[-1]
+        for i in range(0, inputs["advantages"].size(0), self.num_generations_chunks):
+            last_hidden_state = self._get_last_hidden_state(model, input_ids[i:i+self.num_generations_chunks], attention_mask[i:i+self.num_generations_chunks], logits_to_keep)
+            loss, metrics = self.liger_grpo_loss(
+                _input=last_hidden_state,
+                lin_weight=unwrapped_model.lm_head.weight,
+                selected_token_ids=completion_ids[i:i+self.num_generations_chunks],
+                attention_mask=completion_mask[i:i+self.num_generations_chunks],
+                advantages=inputs["advantages"][i:i+self.num_generations_chunks],
+                bias=unwrapped_model.lm_head.bias,
+                ref_per_token_logps=inputs["ref_per_token_logps"][i:i+self.num_generations_chunks],
+                old_per_token_logps=inputs["old_per_token_logps"][i:i+self.num_generations_chunks],
+            )
+            yield loss 
+            # Extract metrics from the liger_grpo_loss output
+            # KL divergence is the first metric when beta is non-zero
+            mean_kl = metrics[0] if self.beta != 0.0 else None
+            clip_ratio = metrics[-1]
+            mean_kls.append(mean_kl)
+            clip_ratios.append(clip_ratio)
 
         mode = "eval" if self.control.should_evaluate else "train"
         if self.beta != 0.0:
-            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
-        return loss
+            mean_kls = [self.accelerator.gather_for_metrics(mean_kl).mean().item() for mean_kl in mean_kls]
+            self._metrics[mode]["kl"].append(sum(mean_kls) / len(mean_kls))
+        
+        clip_ratios = [self.accelerator.gather_for_metrics(clip_ratio).mean().item() for clip_ratio in clip_ratios]
+        self._metrics[mode]["clip_ratio"].append(sum(clip_ratios) / len(clip_ratios))
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1048,51 +1167,71 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
-
-        # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
-
+        mean_kls = []
+        clip_ratios = []
         # Compute the loss
-        advantages = inputs["advantages"]
-        # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
-        # _generate_and_score_completions) and use per_token_logps.detach() instead.
-        old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
-        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-        if self.beta != 0.0:
-            per_token_loss = per_token_loss + self.beta * per_token_kl
+        for i in range(0, inputs["advantages"].size(0), self.num_generations_chunks):
 
-        if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-        elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-        else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
+            per_token_logps = self._get_per_token_logps(model, 
+                                                        input_ids[i:i+self.num_generations_chunks], 
+                                                        attention_mask[i:i+self.num_generations_chunks], 
+                                                        logits_to_keep)
+            completion_mask_slice = completion_mask[i:i+self.num_generations_chunks]
+            # Compute the KL divergence between the model and the reference model
+            if self.beta != 0.0:
+                ref_per_token_logps = inputs["ref_per_token_logps"][i:i+self.num_generations_chunks]
+                per_token_kl = (
+                    torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+                )
+
+                
+            advantages = inputs["advantages"][i:i+self.num_generations_chunks]
+            # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
+            # _generate_and_score_completions) and use per_token_logps.detach() instead.
+            old_per_token_logps = inputs["old_per_token_logps"][i:i+self.num_generations_chunks] if self.num_iterations > 1 else per_token_logps.detach()
+            coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+            per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+            if self.beta != 0.0:
+                per_token_loss = per_token_loss + self.beta * per_token_kl
+
+            if self.loss_type == "grpo":
+                loss = ((per_token_loss * completion_mask_slice).sum(-1) / completion_mask_slice.sum(-1).clamp(min=1.0)).mean()
+            elif self.loss_type == "bnpo":
+                loss = (per_token_loss * completion_mask_slice).sum() / completion_mask_slice.sum().clamp(min=1.0)
+            elif self.loss_type == "dr_grpo":
+                loss = (per_token_loss * completion_mask_slice).sum() / (inputs["advantages"].size(0) * self.max_completion_length)
+            else:
+                raise ValueError(f"Unknown loss type: {self.loss_type}")
+            
+            if self.beta != 0.0:
+                mean_kl = (per_token_kl * completion_mask_slice).sum() / completion_mask_slice.sum()
+                mean_kls.append(mean_kl)
+
+            # Compute the clip ratio
+            is_clipped = ((coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)) | (
+                (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+            )
+            clip_ratio = (is_clipped * completion_mask_slice).sum() / completion_mask_slice.sum()
+            clip_ratios.append(clip_ratio)
+            yield loss
 
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
 
-        if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
-            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).nanmean().item())
+        if self.beta != 0.0:     
+            mean_kl_sum = 0  
+            for mean_kl in mean_kls:
+                mean_kl_sum += self.accelerator.gather_for_metrics(mean_kl).nanmean().item()
+            self._metrics[mode]["kl"].append(mean_kl_sum / len(mean_kls))
 
-        # Compute the clip ratio
-        is_clipped = ((coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)) | (
-            (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
-        )
-        clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).nanmean().item())
-        return loss
+        clip_ratio_sum = 0
+        for cr in clip_ratios:
+            clip_ratio_sum += self.accelerator.gather_for_metrics(cr).nanmean().item()
+        self._metrics[mode]["clip_ratio"].append(clip_ratio_sum / len(clip_ratios))
+
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
         inputs = self._prepare_inputs(inputs)
