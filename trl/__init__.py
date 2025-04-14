@@ -20,7 +20,7 @@ from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffus
 
 
 _import_structure = {
-    "agents.environments": ["Environment", "DefaultEnvironment", "VLLMClientGenerationConfig"],
+    "agents.environments": ["Environment", "DefaultEnvironment", "CodeAgentEnvironment","VLLMClientGenerationConfig"],
     "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
     "data_utils": [
         "apply_chat_template",
@@ -139,7 +139,7 @@ if TYPE_CHECKING:
         create_reference_model,
         setup_chat_format,
     )
-    from .agents.environments import Environment, DefaultEnvironment, VLLMClientGenerationConfig
+    from .agents.environments import Environment, DefaultEnvironment, CodeAgentEnvironment, VLLMClientGenerationConfig
     from .scripts import ScriptArguments, TrlParser, init_zero_verbose
     from .trainer import (
         AlignPropConfig,

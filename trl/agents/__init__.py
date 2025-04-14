@@ -1,7 +1,8 @@
-from .environments import Environment, DefaultEnvironment, VLLMClientGenerationConfig
+from .environments import Environment, DefaultEnvironment, CodeAgentEnvironment, VLLMClientGenerationConfig
 
 __all__ = [
     "Environment",
-    "DefaultEnvironment", 
+    "DefaultEnvironment",
+    "CodeAgentEnvironment",
     "VLLMClientGenerationConfig",
 ]
