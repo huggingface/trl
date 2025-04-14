@@ -52,15 +52,7 @@ class DefaultEnvironment(Environment):
             
         return vllm_client.generate(
             prompts=prompts,
-            n=generation_config.n,
-            repetition_penalty=generation_config.repetition_penalty,
-            temperature=generation_config.temperature,
-            top_p=generation_config.top_p,
-            top_k=generation_config.top_k,
-            min_p=generation_config.min_p,
-            max_tokens=generation_config.max_tokens,
-            guided_decoding_regex=generation_config.guided_decoding_regex,
-            stop=generation_config.stop
+            **vars(generation_config),
         )
 
 class CodeAgentEnvironment(Environment):
