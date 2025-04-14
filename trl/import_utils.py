@@ -35,7 +35,6 @@ _uvicorn_available = _is_package_available("uvicorn")
 _uvloop_available = _is_package_available("uvloop")
 _vllm_available = _is_package_available("vllm")
 _joblib_available = _is_package_available("joblib")
-_aider_available = _is_package_available("aider")
 
 
 def is_deepspeed_available() -> bool:
@@ -88,10 +87,6 @@ def is_vllm_available() -> bool:
 
 def is_joblib_available() -> bool:
     return _joblib_available
-
-
-def is_aider_available() -> bool:
-    return _aider_available
 
 
 class _LazyModule(ModuleType):

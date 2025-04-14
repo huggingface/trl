@@ -41,7 +41,7 @@ from transformers import (
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import is_peft_available
 
-from trl.agent_manager import AgentManager
+from trl.extras.agent_manager import AgentManager
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -743,6 +743,13 @@ class GRPOTrainer(Trainer):
                         agent_histories = self.agent_manager.deploy(
                             prompts=all_inputs,
                             timeout=self.max_completion_length / 60  # Assume 60 tokens per second
+                            repetition_penalty=self.repetition_penalty,
+                            temperature=self.temperature,
+                            top_p=self.top_p,
+                            top_k=-1 if self.top_k is None else self.top_k,
+                            min_p=0.0 if self.min_p is None else self.min_p,
+                            max_tokens=self.max_completion_length,
+                            guided_decoding_regex=self.guided_decoding_regex,
                         )
                         # Format agent histories into a list of messages
                         agent_histories_formatted = [maybe_apply_chat_template(history, self.processing_class)["messages"] for history in agent_histories]
