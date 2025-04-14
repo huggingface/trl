@@ -13,29 +13,19 @@ class VLLMClientGenerationConfig:
     min_p: float
     max_tokens: int
     guided_decoding_regex: Optional[str] = None
+    stop: Optional[List[str]] = None
 
 class Environment(abc.ABC):
     """Base environment that implements standard VLLM generation"""
     
-    def __init__(self, vllm_client: Any):
-        """Initialize environment with VLLM client
-        
-        Args:
-            vllm_client: VLLM client instance
-        """
-        self.vllm_client = vllm_client
-    
     @abc.abstractmethod
-    def generate(
-        self,
-        prompts: List[str],
-        generation_config: VLLMClientGenerationConfig, 
-    ) -> List:
+    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List:
         """Generate responses using VLLM
 
         Args:
+            vllm_client: VLLM client instance
+            generation_config: Configuration for generation parameters
             prompts: Input prompts for generation
-            generation_config: VLLM generation parameters
             
         Returns:
             completion_ids: Generated token ids
@@ -45,21 +35,29 @@ class Environment(abc.ABC):
 class DefaultEnvironment(Environment):
     """Default environment that implements standard VLLM generation"""
     
-    def generate(
-        self,
-        prompts: List[str],
-        generation_config: VLLMClientGenerationConfig, 
-    ) -> List:
+    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List:
         """Generate responses using VLLM
 
         Args:
+            vllm_client: VLLM client instance
+            generation_config: Configuration for generation parameters
             prompts: Input prompts for generation
-            generation_config: VLLM generation parameters
             
         Returns:
             completion_ids: Generated token ids
         """
-        return self.vllm_client.generate(
+        if generation_config is None:
+            raise ValueError("Generation config must be provided to the generate method")
+            
+        return vllm_client.generate(
             prompts=prompts,
-            **vars(generation_config)
+            n=generation_config.n,
+            repetition_penalty=generation_config.repetition_penalty,
+            temperature=generation_config.temperature,
+            top_p=generation_config.top_p,
+            top_k=generation_config.top_k,
+            min_p=generation_config.min_p,
+            max_tokens=generation_config.max_tokens,
+            guided_decoding_regex=generation_config.guided_decoding_regex,
+            stop=generation_config.stop
         )

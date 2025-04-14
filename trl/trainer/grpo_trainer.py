@@ -328,7 +328,7 @@ class GRPOTrainer(Trainer):
                 )
             
         # Initialize the default environment if none provided
-        self.environment = environment
+        self.environment = environment()
 
         if peft_config is not None:
             if not is_peft_available():
@@ -779,28 +779,30 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             all_prompts_text = gather_object(prompts_text)
+            # In the _generate_and_score_completions method
             if self.accelerator.is_main_process:
-                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                # prompt individually.
+                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts...
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-
-                # Initialize environment with vllm_client before use
-                environment = self.environment(vllm_client=self.vllm_client)
-
+            
+                # Set up the vLLM generation configuration
+                generation_config = VLLMClientGenerationConfig(
+                    n=self.num_generations,
+                    repetition_penalty=self.repetition_penalty,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    top_k=-1 if self.top_k is None else self.top_k,
+                    min_p=0.0 if self.min_p is None else self.min_p,
+                    max_tokens=self.max_completion_length,
+                    guided_decoding_regex=self.guided_decoding_regex,
+                    stop=None 
+                )
+                
+                # Generate completions directly with the environment instance
                 with profiling_context(self, "vLLM.generate"):
-                    completion_ids = environment.generate(
-                        prompts=ordered_set_of_prompts,
-                        generation_config=VLLMClientGenerationConfig(
-                            n=self.num_generations,
-                            repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
-                            top_p=self.top_p,
-                            top_k=-1 if self.top_k is None else self.top_k,
-                            min_p=0.0 if self.min_p is None else self.min_p,
-                            max_tokens=self.max_completion_length,
-                            guided_decoding_regex=self.guided_decoding_regex,
-                        )
+                    completion_ids = self.environment.generate(
+                        vllm_client=self.vllm_client,
+                        generation_config=generation_config,
+                        prompts=ordered_set_of_prompts
                     )
             else:
                 completion_ids = [None] * len(all_prompts_text)
