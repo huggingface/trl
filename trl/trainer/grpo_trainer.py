@@ -358,6 +358,8 @@ class GRPOTrainer(Trainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+            if processing_class.pad_token is None and processing_class.eos_token is not None:
+                processing_class.pad_token = processing_class.eos_token
 
         # Reward functions
         if not isinstance(reward_funcs, list):
