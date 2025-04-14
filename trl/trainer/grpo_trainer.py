@@ -1086,7 +1086,7 @@ class GRPOTrainer(Trainer):
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).nanmean().item())
 
-        # Compute the clip ratio
+        # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
         is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
@@ -1095,19 +1095,19 @@ class GRPOTrainer(Trainer):
         high_clip = (is_high_clipped * completion_mask).sum() / completion_mask.sum()
         clip_ratio = (is_region_clipped * completion_mask).sum() / completion_mask.sum()
 
-        self._metrics[mode]["clip_probabilities/low_mean"].append(
+        self._metrics[mode]["clip_ratio/low_mean"].append(
             self.accelerator.gather_for_metrics(low_clip).nanmean().item()
         )
-        self._metrics[mode]["clip_probabilities/low_min"].append(
+        self._metrics[mode]["clip_ratio/low_min"].append(
             torch.min(self.accelerator.gather_for_metrics(low_clip)).item()
         )
-        self._metrics[mode]["clip_probabilities/high_mean"].append(
+        self._metrics[mode]["clip_ratio/high_mean"].append(
             self.accelerator.gather_for_metrics(high_clip).nanmean().item()
         )
-        self._metrics[mode]["clip_probabilities/high_max"].append(
+        self._metrics[mode]["clip_ratio/high_max"].append(
             torch.max(self.accelerator.gather_for_metrics(high_clip)).item()
         )
-        self._metrics[mode]["clip_probabilities/region_mean"].append(
+        self._metrics[mode]["clip_ratio/region_mean"].append(
             self.accelerator.gather_for_metrics(clip_ratio).nanmean().item()
         )
         return loss
