@@ -18,19 +18,19 @@ from inspect import getsource
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, List
 
-# from dataclasses import dataclass
-# from e2b_code_interpreter import AsyncSandbox
-from ..import_utils import is_e2b_available, is_langchain_experimental_available
+from dataclasses import dataclass
+from e2b_code_interpreter import AsyncSandbox
+#from ..import_utils import is_e2b_available, is_langchain_experimental_available
 
 
-if is_e2b_available():
-    from e2b_code_interpreter import AsyncSandbox
+#if is_e2b_available():
+#    from e2b_code_interpreter import AsyncSandbox
 
-if is_langchain_experimental_available():
-    from langchain_experimental.utilities import PythonREPL
+#if is_langchain_experimental_available():
+#    from langchain_experimental.utilities import PythonREPL
 
-if TYPE_CHECKING:
-    from vllm import LLM, SamplingParams
+#if TYPE_CHECKING:
+#    from vllm import LLM, SamplingParams
 
 default_system_prompt = "You can answer questions and solve problems. If running code helps, write it inside <code> </code>, and you will see the result. Example: To calculate 2 + 2, write <code> print(2 + 2) </code>."
 
@@ -100,6 +100,7 @@ class E2BExecutor:
     def __init__(self, api_key: str, template: str = None, max_concurrent: int = 5):
         """
         Initialize the E2BExecutor for parallel code execution.
+        Tests the connection by running a simple hello world code.
 
         Args:
             api_key (`str`): Your E2B API Key.
@@ -110,6 +111,15 @@ class E2BExecutor:
         self.template = template
         self.max_concurrent = max_concurrent
         self.semaphore = asyncio.Semaphore(max_concurrent)
+
+        # Run a test code to validate connection
+        validation_code = "print('Hello, E2B connection test successful')"
+        result = self.execute([validation_code])[0]
+        
+        if "successful" not in result:
+            raise ConnectionError(f"E2B connection test failed. Response: {result}")
+        
+        print("E2B connection validated successfully.")
 
     async def _execute_single(self, code: str) -> str:
         """Execute a single code snippet in a sandbox"""
@@ -351,4 +361,3 @@ def generate_agent_responses(
 
 # parsing and tokenizing the completion since outputs with use_agent is the full chat
 #completion_ids = [tuple(self.processing_class.encode(output[len(prompt) :].strip(), add_special_tokens=False))for prompt, output in zip(all_prompts_text, outputs)
-                    ]
