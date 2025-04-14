@@ -786,7 +786,7 @@ class GRPOTrainer(Trainer):
             
                 # Set up the vLLM generation configuration
                 generation_config = VLLMClientGenerationConfig(
-                    n=self.num_generations,
+                    n=self.num_generations, 
                     repetition_penalty=self.repetition_penalty,
                     temperature=self.temperature,
                     top_p=self.top_p,
