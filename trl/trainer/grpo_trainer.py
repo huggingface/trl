@@ -1235,11 +1235,13 @@ class GRPOTrainer(Trainer):
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
         inputs = self._prepare_inputs(inputs)
+        losses = []
         with torch.no_grad():
             with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs)
-            loss = loss.mean().detach()
-        return loss, None, None
+                for loss in self.compute_loss(model, inputs):
+                    loss = loss.mean().detach()
+                    losses.append(loss)
+        return sum(losses) / len(losses), None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "eval" if self.control.should_evaluate else "train"
