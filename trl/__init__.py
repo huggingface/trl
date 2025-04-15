@@ -45,9 +45,6 @@ _import_structure = {
         "is_unsloth_available",
         "is_vllm_available",
     ],
-    "logging_utils": [
-        "build_html_table",
-    ],
     "models": [
         "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
@@ -150,11 +147,6 @@ if TYPE_CHECKING:
         is_rich_available,
         is_unsloth_available,
         is_vllm_available,
-    )
-    from .logging_utils import (
-        TRLLogger,
-        create_logger,
-        log_trainer_config,
     )
     from .models import (
         SUPPORTED_ARCHITECTURES,
