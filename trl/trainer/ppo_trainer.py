@@ -328,12 +328,12 @@ class PPOTrainer(Trainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        import pdb;pdb.set_trace()
+        # import pdb;pdb.set_trace()
         # Handle the None case here so that we can have subfolders for policy and value
-        if output_dir is None:
-            output_dir = self.args.output_dir
-            if output_dir is None:
-                raise ValueError("No output directory specified for saving the model")
+        # if output_dir is None:
+        #     output_dir = self.args.output_dir
+        #     if output_dir is None:
+        #         raise ValueError("No output directory specified for saving the model")
             
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
