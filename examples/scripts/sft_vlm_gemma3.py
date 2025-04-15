@@ -22,7 +22,7 @@ accelerate launch \
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
-    --output_dir gemma-3-4b-it-trl-sft-ChartQA \
+    --output_dir gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft \
     --bf16 \
     --torch_dtype bfloat16 \
     --use_peft \
