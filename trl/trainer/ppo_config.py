@@ -58,6 +58,8 @@ class PPOConfig(OnPolicyConfig):
             Discount factor.
         lam (`float`, *optional*, defaults to `0.95`):
             Lambda value for GAE.
+        save_value_model (`bool`, *optional*, defaults to `False`):
+            Whether the value model (also known as the critic model) should be saved when the policy model is saved.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -120,6 +122,10 @@ class PPOConfig(OnPolicyConfig):
     lam: float = field(
         default=0.95,
         metadata={"help": "Lambda value for GAE."},
+    )
+    save_value_model: bool = field(
+        default=False,
+        metadata={"help": "Whether the value model (also known as the critic model) should be saved when the policy model is saved."}
     )
     ds3_gather_for_generation: bool = field(
         default=True,

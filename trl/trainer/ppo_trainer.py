@@ -328,19 +328,40 @@ class PPOTrainer(Trainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+        # Handle the None case here so that we can have subfolders for policy and value
+        if output_dir is None:
+            output_dir = self.args.output_dir
+            if output_dir is None:
+                raise ValueError("No output directory specified for saving the model")
+            
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
 
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
             self.deepspeed = self.model
-
-        super().save_model(output_dir, _internal_call)
+        policy_output_dir = output_dir if not self.args.save_value_model else output_dir + "/policy_model"
+        super().save_model(policy_output_dir, _internal_call)
 
         self.model = backup_model
 
         if self.is_deepspeed_enabled:
             self.deepspeed = backup_deepspeed
+        
+        if self.args.save_value_model:
+            backup_model = self.model
+            self.model = self.model.value_model
+
+            if self.is_deepspeed_enabled:
+                backup_deepspeed = self.deepspeed
+                self.deepspeed = self.model
+            value_output_dir = output_dir if not self.args.save_value_model else output_dir + "/value_model"
+            super().save_model(value_output_dir, _internal_call)
+
+            self.model = backup_model
+
+            if self.is_deepspeed_enabled:
+                self.deepspeed = backup_deepspeed 
 
     def train(self):
         args = self.args
