@@ -228,6 +228,18 @@ class SFTTrainer(Trainer):
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model_id)
 
+        if args.eos_token is not None:
+            eos_token = args.eos_token
+            eos_token_id = processing_class.convert_tokens_to_ids(eos_token)
+            if eos_token_id is None:
+                raise ValueError(
+                    f"The specified `eos_token` ('{eos_token}') is not found in the vocabulary of the given "
+                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
+                    "in the vocabulary before using it as an EOS token."
+                )
+            processing_class.eos_token = eos_token
+            processing_class.eos_token_id = eos_token_id
+
         # Model
         if args.model_init_kwargs is not None and not isinstance(model, str):
             warnings.warn(
