@@ -25,6 +25,7 @@ import torch.utils.data
 import transformers
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from torch.utils.data import DataLoader
 from packaging import version
 from torch import nn
 from torch.utils.data import Sampler
@@ -437,11 +438,9 @@ class GRPOTrainer(Trainer):
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
-        # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
-        self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
         # `_get_train_sampler` and `_prepare_inputs`.
-        self._buffered_inputs = [None] * args.gradient_accumulation_steps
+        self._buffered_inputs = []
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
@@ -735,15 +734,21 @@ class GRPOTrainer(Trainer):
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
-            buffer_index = self._step % self.args.gradient_accumulation_steps
-            buffered_inputs = self._buffered_inputs[buffer_index]
-            if self.state.global_step % self.num_iterations == 0 or buffered_inputs is None:
-                # buffered_inputs=None can occur when resuming from a checkpoint
-                inputs = self._generate_and_score_completions(inputs)
-                self._buffered_inputs[buffer_index] = inputs
+            if len(self._buffered_inputs) > 0:
+                inputs = self._buffered_inputs.pop(0)
             else:
-                inputs = buffered_inputs
-            self._step += 1
+                generations = self._generate_and_score_completions(inputs)
+                
+                gen_dataset = Dataset.from_dict(generations)
+                mini_batch_dataloader = DataLoader(
+                    gen_dataset,
+                    batch_size=self.args.per_device_train_batch_size,
+                    shuffle=True,  # we technically don't need to shuffle due to grad acc, but we may move to clipped loss later
+                    drop_last=True,
+                )
+                for num_iters in range(self.args.num_iterations):
+                    for mini_batch in mini_batch_dataloader:
+                        self._buffered_inputs.append(mini_batch)
         else:
             # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
             inputs = self._generate_and_score_completions(inputs)
