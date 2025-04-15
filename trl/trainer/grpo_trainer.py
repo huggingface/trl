@@ -732,31 +732,47 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
+        def collate_fn(features):
+            out = {}
+            for key in features[0].keys():
+                if type(features[0][key]) == float or type(features[0][key][0]) == float:
+                    out[key] = torch.tensor([f[key] for f in features], dtype=torch.float32)
+                elif type(features[0][key][0]) == int:
+                    out[key] = torch.stack([torch.LongTensor(f[key]) for f in features], dim=0)
+                else:
+                    raise KeyError(
+                        f"Unsupported type {type(features[0][key])} for key {key}. Supported types are:  float, list[float], list[int]."
+                    )
+            return out
+        
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
-            if len(self._buffered_inputs) > 0:
-                inputs = self._buffered_inputs.pop(0)
-            else:
-                generations = self._generate_and_score_completions(inputs)
-                
+            if len(self._buffered_inputs) == 0:
+                generations = None
+                while generations is None:
+                    generations = self._generate_and_score_completions(inputs)
                 gen_dataset = Dataset.from_dict(generations)
                 mini_batch_dataloader = DataLoader(
                     gen_dataset,
                     batch_size=self.args.per_device_train_batch_size,
-                    shuffle=True,  # we technically don't need to shuffle due to grad acc, but we may move to clipped loss later
+                    shuffle=True,  # we technically don't need to shuffle due to grad acc, but we will decouple later
                     drop_last=True,
+                    collate_fn=collate_fn,
                 )
                 for num_iters in range(self.args.num_iterations):
                     for mini_batch in mini_batch_dataloader:
                         self._buffered_inputs.append(mini_batch)
+            inputs = self._buffered_inputs.pop(0)
         else:
             # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
             inputs = self._generate_and_score_completions(inputs)
-        return inputs
+        return {
+            k: v.to(self.accelerator.device) for k, v in inputs.items()
+        }
 
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
-    ) -> dict[str, Union[torch.Tensor, Any]]:
+    ) -> dict[str, Union[torch.Tensor, Any]] | None:
         device = self.accelerator.device
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
@@ -843,15 +859,9 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         with torch.no_grad():
-            # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
-            # computation here, and use per_token_logps.detach() instead.
-            if self.num_iterations > 1:
-                old_per_token_logps = self._get_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep
-                )
-            else:
-                old_per_token_logps = None
-
+            old_per_token_logps = self._get_per_token_logps(
+                self.model, prompt_completion_ids, attention_mask, logits_to_keep
+            )
             if self.beta == 0.0:
                 ref_per_token_logps = None
             elif self.ref_model is not None:
