@@ -584,7 +584,28 @@ class GRPOTrainer(Trainer):
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
-
+                
+         
+        mega_batch_size = (
+            self.args.per_device_train_batch_size
+            * self.accelerator.num_processes
+            * self.args.gradient_accumulation_steps
+            * self.num_generations
+        )
+        self._per_device_mega_batch_size = mega_batch_size // self.accelerator.num_processes
+        gen_sampler = RepeatRandomSampler(
+            data_source=self.train_dataset,
+            mini_repeat_count=self.num_generations,
+            batch_size=mega_batch_size,
+            repeat_count=1, # We only need to sample once for the generation
+            seed=self.args.seed,
+        )
+        self._gen_dataloader = DataLoader(
+            self.train_dataset,
+            sampler=gen_sampler,
+            batch_size=mega_batch_size,
+            collate_fn=lambda x: x,
+        )
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -731,7 +752,7 @@ class GRPOTrainer(Trainer):
             self.vllm_client.reset_prefix_cache()
 
     @profiling_decorator
-    def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
+    def _prepare_inputs(self, _unused_inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         def collate_fn(features):
             out = {}
             for key in features[0].keys():
@@ -740,14 +761,21 @@ class GRPOTrainer(Trainer):
                 elif type(features[0][key][0]) == int:
                     out[key] = torch.stack([torch.LongTensor(f[key]) for f in features], dim=0)
                 else:
-                    raise KeyError(
-                        f"Unsupported type {type(features[0][key])} for key {key}. Supported types are:  float, list[float], list[int]."
-                    )
+                    raise KeyError(f"Unsupported type {type(features[0][key])} for key {key}")
             return out
         
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
             if len(self._buffered_inputs) == 0:
+                def repeat_generator():
+                    while True:
+                        yield from self._gen_dataloader
+
+                iter_dataloader = iter(repeat_generator())
+                inputs = next(iter_dataloader)
+                process_index = self.accelerator.process_index
+                inputs = inputs[process_index*self._per_device_mega_batch_size:(process_index+1)*self._per_device_mega_batch_size]
+                
                 generations = None
                 while generations is None:
                     generations = self._generate_and_score_completions(inputs)
