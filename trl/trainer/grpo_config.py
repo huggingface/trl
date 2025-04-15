@@ -50,8 +50,8 @@ class GRPOConfig(TrainingArguments):
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `8`):
-            Number of generations per prompt to sample. The global batch size (num_processes * per_device_batch_size)
-            must be divisible by this value.
+            Number of generations per prompt to sample. The effective batch size (num_processes * 
+            per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -205,8 +205,8 @@ class GRPOConfig(TrainingArguments):
     num_generations: Optional[int] = field(
         default=8,
         metadata={
-            "help": "Number of generations to sample. The global batch size (num_processes * per_device_batch_size) "
-            "must be divisible by this value."
+            "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size "
+            "* gradient_accumulation_steps) must be evenly divisible by this value."
         },
     )
     max_completion_length: Optional[int] = field(
