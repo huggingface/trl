@@ -529,29 +529,35 @@ class GRPOTrainer(Trainer):
             "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
         }
 
-        # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
-        num_processes = self.accelerator.num_processes
-        global_batch_size = args.per_device_train_batch_size * num_processes
-        possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+        # Check if the effective batch size can be divided by the number of generations
         if self.num_generations < 2:
             raise ValueError(
-                f"GRPO requires at least 2 generations per prompt to calculate the advantages. "
-                f"You provided {self.num_generations}, which is less than the minimum required."
+                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                f"{self.num_generations}, which is less than the minimum required."
             )
+        num_processes = self.accelerator.num_processes
+        effective_batch_size = args.per_device_train_batch_size * num_processes * args.gradient_accumulation_steps
+        possible_values = [
+            n_gen for n_gen in range(2, effective_batch_size + 1) if (effective_batch_size) % n_gen == 0
+        ]
         if self.num_generations not in possible_values:
             raise ValueError(
-                f"The global train batch size ({num_processes} x {args.per_device_train_batch_size}) must be evenly "
-                f"divisible by the number of generations per prompt ({self.num_generations}). Given the current train "
-                f"batch size, the valid values for the number of generations are: {possible_values}."
+                f"The effective train batch size ({num_processes} x {args.per_device_train_batch_size} x "
+                f"{args.gradient_accumulation_steps}) must be evenly divisible by the number of generations per "
+                f"prompt ({self.num_generations}). Given the current effective train batch size, the valid values for "
+                f"the number of generations are: {possible_values}."
             )
         if self.args.eval_strategy != "no":
-            global_batch_size = args.per_device_eval_batch_size * num_processes
-            possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+            effective_batch_size = args.per_device_eval_batch_size * num_processes
+            possible_values = [
+                n_gen for n_gen in range(2, effective_batch_size + 1) if (effective_batch_size) % n_gen == 0
+            ]
             if self.num_generations not in possible_values:
                 raise ValueError(
-                    f"The global eval batch size ({num_processes} x {args.per_device_eval_batch_size}) must be evenly "
-                    f"divisible by the number of generations per prompt ({self.num_generations}). Given the current "
-                    f"eval batch size, the valid values for the number of generations are: {possible_values}."
+                    f"The effective eval batch size ({num_processes} x {args.per_device_eval_batch_size}) must be "
+                    f"evenly divisible by the number of generations per prompt ({self.num_generations}). Given the "
+                    "current effective eval batch size, the valid values for the number of generations are: "
+                    f"{possible_values}."
                 )
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
