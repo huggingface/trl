@@ -237,7 +237,6 @@ class SFTTrainer(Trainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
                     "in the vocabulary before using it as an EOS token."
                 )
-            processing_class.eos_token = eos_token
             processing_class.eos_token_id = eos_token_id
 
         # Model
