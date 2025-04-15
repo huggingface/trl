@@ -328,6 +328,7 @@ class PPOTrainer(Trainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+        import pdb;pdb.set_trace()
         # Handle the None case here so that we can have subfolders for policy and value
         if output_dir is None:
             output_dir = self.args.output_dir
@@ -340,7 +341,7 @@ class PPOTrainer(Trainer):
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
             self.deepspeed = self.model
-        policy_output_dir = output_dir if not self.args.save_value_model else output_dir + "/policy_model"
+        policy_output_dir = output_dir if not self.args.save_value_model else os.path.join(output_dir, "policy_model")
         super().save_model(policy_output_dir, _internal_call)
 
         self.model = backup_model
@@ -355,7 +356,7 @@ class PPOTrainer(Trainer):
             if self.is_deepspeed_enabled:
                 backup_deepspeed = self.deepspeed
                 self.deepspeed = self.model
-            value_output_dir = output_dir if not self.args.save_value_model else output_dir + "/value_model"
+            value_output_dir = output_dir if not self.args.save_value_model else os.path.join(output_dir, "value_model")
             super().save_model(value_output_dir, _internal_call)
 
             self.model = backup_model
