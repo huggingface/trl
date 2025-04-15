@@ -776,9 +776,7 @@ class GRPOTrainer(Trainer):
                 process_index = self.accelerator.process_index
                 inputs = inputs[process_index*self._per_device_mega_batch_size:(process_index+1)*self._per_device_mega_batch_size]
                 
-                generations = None
-                while generations is None:
-                    generations = self._generate_and_score_completions(inputs)
+                generations = self._generate_and_score_completions(inputs)
                 gen_dataset = Dataset.from_dict(generations)
                 mini_batch_dataloader = DataLoader(
                     gen_dataset,
