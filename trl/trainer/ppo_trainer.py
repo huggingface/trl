@@ -328,23 +328,16 @@ class PPOTrainer(Trainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        # import pdb;pdb.set_trace()
         # Handle the None case here so that we can have subfolders for policy and value
-        # if output_dir is None:
-        #     output_dir = self.args.output_dir
-        #     if output_dir is None:
-        #         raise ValueError("No output directory specified for saving the model")
-        times_called = getattr(self, "_save_model_count", 0)    
-        times_called += 1
-        setattr(self, '_save_model_count', times_called)
-        print(f"save_model has been called {times_called} time")
-        print(f"{output_dir=}")
-        print(f"{type(self.model)=}")
+        if output_dir is None:
+            output_dir = self.args.output_dir
+            if output_dir is None:
+                raise ValueError("No output directory specified for saving the model")
+        # I am unsure whether this early return is legal. Line 4814 in Trainer.py says that save_model has to be executed on all processes for TPU training. Previously, save_model would be called while self.model was set to self.model.policy, resulting in errors. Including this line gets rid of those errors and the model still gets uploaded.
         if not hasattr(self.model, 'policy'):
             return
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
-        print("Accessed policy, continuing")
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
             self.deepspeed = self.model
@@ -367,7 +360,6 @@ class PPOTrainer(Trainer):
             value_output_dir = output_dir if not self.args.save_value_model else os.path.join(output_dir, "value_model")
             print(" to " + value_output_dir)
             super().save_model(value_output_dir, _internal_call)
-            print("reseting model to the combined")
             self.model = backup_model
 
             if self.is_deepspeed_enabled:
