@@ -350,7 +350,6 @@ class PPOTrainer(Trainer):
             self.deepspeed = backup_deepspeed
         
         if self.args.save_value_model:
-            print("SAVING VALUE MODEL", end="")
             backup_model = self.model
             self.model = self.model.value_model
 
@@ -358,7 +357,6 @@ class PPOTrainer(Trainer):
                 backup_deepspeed = self.deepspeed
                 self.deepspeed = self.model
             value_output_dir = output_dir if not self.args.save_value_model else os.path.join(output_dir, "value_model")
-            print(" to " + value_output_dir)
             super().save_model(value_output_dir, _internal_call)
             self.model = backup_model
 
