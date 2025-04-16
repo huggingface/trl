@@ -334,7 +334,14 @@ class PPOTrainer(Trainer):
         #     output_dir = self.args.output_dir
         #     if output_dir is None:
         #         raise ValueError("No output directory specified for saving the model")
-            
+        times_called = getattr(self, "_save_model_count", 0)    
+        times_called += 1
+        setattr(self, '_save_model_count', times_called)
+        print(f"save_model has been called {times_called} time")
+        print(f"{output_dir=}")
+        print(f"{type(self.model)=}")
+        if not hasattr(self.model, 'policy'):
+            return
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
         print("Accessed policy, continuing")
@@ -364,7 +371,7 @@ class PPOTrainer(Trainer):
             self.model = backup_model
 
             if self.is_deepspeed_enabled:
-                self.deepspeed = backup_deepspeed 
+                self.deepspeed = backup_deepspeed
 
     def train(self):
         args = self.args
