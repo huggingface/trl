@@ -59,7 +59,7 @@ class PPOConfig(OnPolicyConfig):
         lam (`float`, *optional*, defaults to `0.95`):
             Lambda value for GAE.
         save_value_model (`bool`, *optional*, defaults to `False`):
-            Whether the value model (also known as the critic model) should be saved when the policy model is saved.
+            Whether the value model (also known as the critic model) should be saved when the policy model is saved. If `False`, the folder will contain the files for the policy only. If `True`, the folder will contain sub-folders for the policy and value model. You can import them by specifying the subfolder using a keyword argument: `from_pretrained(repo_id, subfolder=subfolder)`
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
@@ -125,7 +125,7 @@ class PPOConfig(OnPolicyConfig):
     )
     save_value_model: bool = field(
         default=False,
-        metadata={"help": "Whether the value model (also known as the critic model) should be saved when the policy model is saved."}
+        metadata={"help": "Whether the value model (also known as the critic model) should be saved when the policy model is saved. If `False`, the folder will contain the files for the policy only. If `True`, the folder will contain sub-folders for the policy and value model. You can import them by specifying the subfolder using a keyword argument: `from_pretrained(repo_id, subfolder=subfolder)`"}
     )
     ds3_gather_for_generation: bool = field(
         default=True,

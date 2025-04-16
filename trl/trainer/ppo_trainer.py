@@ -107,7 +107,7 @@ class PPOTrainer(Trainer):
         ref_model: Optional[nn.Module],
         reward_model: nn.Module,
         train_dataset: Dataset,
-        value_model: nn.Module,
+        value_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         # less commonly used
@@ -333,14 +333,16 @@ class PPOTrainer(Trainer):
             output_dir = self.args.output_dir
             if output_dir is None:
                 raise ValueError("No output directory specified for saving the model")
-        # I am unsure whether this early return is legal. Line 4814 in Trainer.py says that save_model has to be executed on all processes for TPU training. Previously, save_model would be called while self.model was set to self.model.policy, resulting in errors. Including this line gets rid of those errors and the model still gets uploaded.
+        # I am unsure whether this early return is legal. Line 4814 in Trainer.py says that save_model has to be executed on all processes for TPU training. Previously, save_model would be called in parallel while one process had already set self.model to self.model.policy, resulting in errors. Including this line gets rid of those errors and the model still gets uploaded.
         if not hasattr(self.model, 'policy'):
             return
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
+
         if self.is_deepspeed_enabled:
             backup_deepspeed = self.deepspeed
             self.deepspeed = self.model
+
         policy_output_dir = output_dir if not self.args.save_value_model else os.path.join(output_dir, "policy_model")
         super().save_model(policy_output_dir, _internal_call)
 
@@ -356,7 +358,7 @@ class PPOTrainer(Trainer):
             if self.is_deepspeed_enabled:
                 backup_deepspeed = self.deepspeed
                 self.deepspeed = self.model
-            value_output_dir = output_dir if not self.args.save_value_model else os.path.join(output_dir, "value_model")
+            value_output_dir = os.path.join(output_dir, "value_model")
             super().save_model(value_output_dir, _internal_call)
             self.model = backup_model
 
