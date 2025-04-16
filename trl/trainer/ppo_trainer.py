@@ -334,7 +334,7 @@ class PPOTrainer(Trainer):
             if output_dir is None:
                 raise ValueError("No output directory specified for saving the model")
         # I am unsure whether this early return is legal. Line 4814 in Trainer.py says that save_model has to be executed on all processes for TPU training. Previously, save_model would be called in parallel while one process had already set self.model to self.model.policy, resulting in errors. Including this line gets rid of those errors and the model still gets uploaded.
-        if not hasattr(self.model, 'policy'):
+        if not hasattr(self.model, "policy"):
             return
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
@@ -350,7 +350,7 @@ class PPOTrainer(Trainer):
 
         if self.is_deepspeed_enabled:
             self.deepspeed = backup_deepspeed
-        
+
         if self.args.save_value_model:
             backup_model = self.model
             self.model = self.model.value_model

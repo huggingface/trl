@@ -125,7 +125,9 @@ class PPOConfig(OnPolicyConfig):
     )
     save_value_model: bool = field(
         default=False,
-        metadata={"help": "Whether the value model (also known as the critic model) should be saved when the policy model is saved. If `False`, the folder will contain the files for the policy only. If `True`, the folder will contain sub-folders for the policy and value model. You can import them by specifying the subfolder using a keyword argument: `from_pretrained(repo_id, subfolder=subfolder)`"}
+        metadata={
+            "help": "Whether the value model (also known as the critic model) should be saved when the policy model is saved. If `False`, the folder will contain the files for the policy only. If `True`, the folder will contain sub-folders for the policy and value model. You can import them by specifying the subfolder using a keyword argument: `from_pretrained(repo_id, subfolder=subfolder)`"
+        },
     )
     ds3_gather_for_generation: bool = field(
         default=True,
