@@ -13,10 +13,13 @@
 # limitations under the License.
 
 import argparse
+import asyncio
 import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from itertools import chain
+from multiprocessing import Pipe, Process
 from typing import Optional
 
 import torch
@@ -90,6 +93,10 @@ class WeightSyncWorkerExtension:
             world_size (`int`):
                 Total number of participating processes in the update group.
         """
+        # Print the GPU id of the current worker and the kwargs
+        print(
+            f"Worker {self.device} initializing communicator with host: {host}, port: {port}, world_size: {world_size}"
+        )
         if self.pynccl_comm is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
@@ -185,6 +192,10 @@ class ScriptArguments:
         default=1,
         metadata={"help": "Number of tensor parallel workers to use."},
     )
+    data_parallel_size: int = field(
+        default=1,
+        metadata={"help": "Number of data parallel workers to use."},
+    )
     host: str = field(
         default="0.0.0.0",
         metadata={"help": "Host address to run the server on."},
@@ -226,6 +237,39 @@ class ScriptArguments:
     )
 
 
+def llm_worker(script_args, data_parallel_rank, conn):
+    os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
+    os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
+    os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
+    os.environ["VLLM_DP_MASTER_PORT"] = "37607"
+
+    llm = LLM(
+        model=script_args.model,
+        revision=script_args.revision,
+        tensor_parallel_size=script_args.tensor_parallel_size,
+        gpu_memory_utilization=script_args.gpu_memory_utilization,
+        dtype=script_args.dtype,
+        # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
+        # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
+        # This is particularly useful here because we generate completions from the same prompts.
+        enable_prefix_caching=script_args.enable_prefix_caching,
+        max_model_len=script_args.max_model_len,
+        enforce_eager=True,  # dp requires eager mode
+        worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+    )
+
+    while True:
+        msg = conn.recv()
+        if msg == "STOP":
+            break
+
+        method = msg.get("method")
+        kwargs = msg.get("kwargs", {})
+        print(f"Worker {data_parallel_rank} received request: {method}, {kwargs}")
+        result = getattr(llm, method)(**kwargs)
+        conn.send(result)
+
+
 def main(script_args: ScriptArguments):
     if not is_fastapi_available():
         raise ImportError(
@@ -245,19 +289,15 @@ def main(script_args: ScriptArguments):
     if not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
-    llm = LLM(
-        model=script_args.model,
-        revision=script_args.revision,
-        tensor_parallel_size=script_args.tensor_parallel_size,
-        gpu_memory_utilization=script_args.gpu_memory_utilization,
-        dtype=script_args.dtype,
-        # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
-        # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
-        # This is particularly useful here because we generate completions from the same prompts.
-        enable_prefix_caching=script_args.enable_prefix_caching,
-        max_model_len=script_args.max_model_len,
-        worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
-    )
+    conns = []
+    procs = []
+
+    for rank in range(script_args.data_parallel_size):
+        parent_conn, child_conn = Pipe()
+        p = Process(target=llm_worker, args=(script_args, rank, child_conn))
+        p.start()
+        conns.append(parent_conn)
+        procs.append(p)
 
     app = FastAPI()
 
@@ -283,7 +323,23 @@ def main(script_args: ScriptArguments):
         {"tensor_parallel_size": 8}
         ```
         """
-        return {"tensor_parallel_size": llm.llm_engine.vllm_config.parallel_config.tensor_parallel_size}
+        return {"tensor_parallel_size": script_args.tensor_parallel_size}
+
+    @app.get("/get_data_parallel_size/")
+    async def get_data_parallel_size():
+        """
+        Retrieves the data parallel size from the LLM engine.
+
+        Returns:
+            `dict`:
+                A dictionary containing the data parallel size.
+
+        Example response:
+        ```json
+        {"data_parallel_size": 4}
+        ```
+        """
+        return {"data_parallel_size": script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
@@ -298,6 +354,21 @@ def main(script_args: ScriptArguments):
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
+
+    def chunk_list(lst, n):
+        """Split list `lst` into `n` evenly distributed sublists.
+
+        Example:
+            >>> chunk_list([1, 2, 3, 4, 5, 6], 2)
+            [[1, 2, 3], [4, 5, 6]]
+            >>> chunk_list([1, 2, 3, 4, 5, 6], 4)
+            [[1, 2], [3, 4], [5], [6]]
+            >>> chunk_list([1, 2, 3, 4, 5, 6], 8)
+            [[1], [2], [3], [4], [5], [6]]
+        """
+        n = min(n, len(lst))
+        k, r = divmod(len(lst), n)
+        return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -340,7 +411,23 @@ def main(script_args: ScriptArguments):
             max_tokens=request.max_tokens,
             guided_decoding=guided_decoding,
         )
-        all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
+        # Evenly distribute prompts across DP ranks
+        chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+
+        # Create a list of tasks for each connection
+        loop = asyncio.get_running_loop()
+        tasks = []
+        for con, prompts in zip(conns, chunked_prompts):
+            # Send the request to the worker
+            kwargs = {"prompts": prompts, "sampling_params": sampling_params}
+            task = loop.run_in_executor(None, con.send, {"method": "generate", "kwargs": kwargs})
+            tasks.append(task)
+
+        # Run all tasks concurrently
+        all_outputs = await asyncio.gather(*tasks)
+
+        # Flatten and combine all results
+        all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         return {"completion_ids": completion_ids}
 
@@ -350,7 +437,7 @@ def main(script_args: ScriptArguments):
         world_size: int
 
     @app.post("/init_communicator/")
-    async def init_communicator(request: InitCommunicatorRequest, background_tasks: BackgroundTasks):
+    async def init_communicator(request: InitCommunicatorRequest):
         """
         Initializes the communicator for synchronizing model weights between a client and multiple server
         workers.
@@ -361,11 +448,20 @@ def main(script_args: ScriptArguments):
                 - `port` (`int`): Port number to be used for communication.
                 - `world_size` (`int`): Total number of participating processes in the group.
         """
-        background_tasks.add_task(
-            llm.collective_rpc,
-            "init_communicator",
-            args=(request.host, request.port, script_args.tensor_parallel_size + 1),
-        )
+        world_size = script_args.tensor_parallel_size * script_args.data_parallel_size
+
+        loop = asyncio.get_running_loop()
+        tasks = []
+        for conn in conns:
+            # The function is called this way: init_communicator(host, port, world_size)
+            # So with collect_rpc we need to call it this way:
+            # llm.collective_rpc("init_communicator", args=(host, port, world_size))
+            # And with run_in_executor we need to call it this way:
+            # conn.send({"method": "init_communicator", "kwargs": {"args":(host, port, world_size)}})
+            kwargs = {"method": "init_communicator", "args": (request.host, request.port, world_size)}
+            task = loop.run_in_executor(None, conn.send, {"method": "collective_rpc", "kwargs": kwargs})
+            tasks.append(task)
+
         return {"message": "Request received, initializing communicator"}
 
     class UpdateWeightsRequest(BaseModel):
@@ -415,6 +511,12 @@ def main(script_args: ScriptArguments):
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
+
+    # When the server stops, we need to stop all the workers
+    for conn in conns:
+        conn.send("STOP")
+    for p in procs:
+        p.join()
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
