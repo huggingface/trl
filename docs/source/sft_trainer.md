@@ -2,10 +2,7 @@
 
 [![](https://img.shields.io/badge/All_models-SFT-blue)](https://huggingface.co/models?other=sft,trl) [![](https://img.shields.io/badge/smol_course-Chapter_1-yellow)](https://github.com/huggingface/smol-course/tree/main/1_instruction_tuning)
 
-Supervised fine-tuning (or SFT for short) is a crucial step in RLHF. In TRL we provide an easy-to-use API to create your SFT models and train them with few lines of code on your dataset.
-
-Check out a complete flexible example at [`trl/scripts/sft.py`](https://github.com/huggingface/trl/tree/main/trl/scripts/sft.py).
-Experimental support for Vision Language Models is also included in the example [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_vlm.py).
+Supervised fine-tuning (or SFT for short) is the most common step in post-training foundation models, and also one of the most effective. In TRL, we provide a simple API to train SFT models in a few lines of code; for a complete training script, check out [`trl/scripts/sft.py`](https://github.com/huggingface/trl/tree/main/trl/scripts/sft.py). Experimental support for Vision Language Models is also included in the example [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_vlm.py).
 
 ## Quickstart
 
@@ -116,8 +113,6 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-Make sure to have a `pad_token_id` which is different from `eos_token_id` which can result in the model not properly predicting EOS (End of Sentence) tokens during generation.
-
 #### Using token_ids directly for `response_template`
 
 Some tokenizers like Llama 2 (`meta-llama/Llama-2-XXb-hf`) tokenize sequences differently depending on whether they have context or not. For example:
@@ -178,8 +173,10 @@ tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
 
 # Set up the chat format with default 'chatml' format
 model, tokenizer = setup_chat_format(model, tokenizer)
-
 ```
+
+> [!WARNING]
+> Some base models, like those from Qwen, have a predefined chat template in the model's tokenizer. In these cases it is not necessary to apply `setup_chat_format()`, as the tokenizer already handles the formatting. However, it is necessary to align the EOS token with the chat template to ensure the model's responses terminate correctly. In these cases, specify `eos_token` in `SFTConfig`; for example, to SFT `Qwen/Qwen2.5-1.5B` one should set `eos_token="<|im_end|>"`.
 
 With our model and tokenizer set up, we can now fine-tune our model on a conversational dataset. Below is an example of how a dataset can be formatted for fine-tuning. 
 
