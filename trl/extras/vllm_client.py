@@ -304,7 +304,7 @@ class SimpleClient(VLLMClient):
             if guided_decoding_regex is not None:
                 payload["guided_decoding_regex"] = guided_decoding_regex
                 
-            resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+            resp = requests.post(url, json=payload, headers=headers, timeout=timeoaut)
             resp.raise_for_status()
             resp_data = resp.json()
             return resp_data["choices"][0]["message"]["content"]

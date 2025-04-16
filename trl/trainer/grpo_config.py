@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,11 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 
+import transformers
+from packaging import version
 from transformers import TrainingArguments
 
 
@@ -34,9 +35,12 @@ class GRPOConfig(TrainingArguments):
     Parameters:
         > Parameters that control the model and reference model
 
-        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        model_init_kwargs (`str`, `dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`GRPOTrainer`] is provided as a string.
+        disable_dropout (`bool`, *optional*, defaults to `False`):
+            Whether to disable dropout in the model. This is useful for training with a reference model, as it
+            prevents the model from generating different logprobs for the same input.
 
         > Parameters that control the data preprocessing
 
@@ -112,9 +116,25 @@ class GRPOConfig(TrainingArguments):
         scale_rewards (`bool`, *optional*, defaults to `True`):
             Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), the rewards
             are normalized by the standard deviation, ensuring they have unit variance. If `False`, no scaling is
-            applied. The [Dr. GRPO](https://github.com/sail-sg/understand-r1-zero/blob/main/understand-r1-zero.pdf)
-            paper recommends not scaling the rewards, as scaling by the standard deviation introduces a question-level
-            difficulty bias.
+            applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends not scaling the rewards,
+            as scaling by the standard deviation introduces a question-level difficulty bias.
+        loss_type (`str`, *optional*, defaults to `"bnpo"`):
+            Specifies the loss formulation to use. Supported values are:
+
+            - `"grpo"`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to
+                length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
+                with negative advantages.
+            - `"bnpo"`: Aggregates token-level losses by normalizing number of active token in the local batch.
+                Note that normalization is performed over the local batch only, so results may slightly vary depending
+                on the local batch size, despite a constant effective batch size. When using
+                `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
+            - `"dr_grpo"`: Aggregates token-level losses by normalizing with a global constant. This method was
+                introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
+                The value of the constant corresponds to `max_completion_length`.
+        mask_truncated_completions (`bool`, *optional*, defaults to `False`):
+            When enabled, truncated completions are excluded from the loss calculation, preventing them from being
+            incorrectly penalized and introducing noise during training. According to the
+            [DAPO](https://huggingface.co/papers/2503.14476) paper, this is a good practice for training stability.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
@@ -128,6 +148,8 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use the Liger GRPO loss.
 
         > Parameters that control the logging
 
@@ -136,14 +158,31 @@ class GRPOConfig(TrainingArguments):
             installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
         num_completions_to_print (`int` or `None`, *optional*, defaults to `None`):
             Number of completions to print with `rich`. If `None`, all completions are logged.
+        wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
+            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all
+            prompts are logged.
     """
 
+    if version.parse(transformers.__version__) <= version.parse("4.50.3"):
+        from transformers.training_args import _VALID_DICT_FIELDS
+
+        _VALID_DICT_FIELDS.append("model_init_kwargs")
+    else:
+        _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
     # Parameters that control the model and reference model
-    model_init_kwargs: Optional[dict] = field(
+    model_init_kwargs: Optional[Union[dict, str]] = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `GRPOTrainer` is provided as a string."
+        },
+    )
+    disable_dropout: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to disable dropout in the model. This is useful for training with a reference model, as "
+            "it prevents the model from generating different logprobs for the same input."
         },
     )
 
@@ -297,6 +336,30 @@ class GRPOConfig(TrainingArguments):
             "deviation introduces a question-level difficulty bias."
         },
     )
+    loss_type: str = field(
+        default="bnpo",
+        metadata={
+            "help": "Specifies the loss formulation to use. Supported values are `grpo`, `bnpo`, and `dr_grpo`. "
+            "`'grpo'`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to "
+            "length bias—this approach tends to prefer shorter completions with positive advantages and longer ones "
+            "with negative advantages. "
+            "`'bnpo'`: Aggregates token-level losses by normalizing number of active token in the local batch. "
+            "Note that normalization is performed over the local batch only, so results may slightly vary depending "
+            "on the local batch size, despite a constant effective batch size. When using "
+            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
+            "`'dr_grpo'`: Aggregates token-level losses by normalizing with a global constant. This method was "
+            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
+            "`max_completion_length`."
+        },
+    )
+    mask_truncated_completions: bool = field(
+        default=False,
+        metadata={
+            "help": "When enabled, truncated completions are excluded from the loss calculation, preventing them from "
+            "being incorrectly penalized and introducing noise during training. According to the DAPO paper, this is "
+            "a good practice for training stability."
+        },
+    )
     sync_ref_model: bool = field(
         default=False,
         metadata={
@@ -318,6 +381,10 @@ class GRPOConfig(TrainingArguments):
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
+    )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use the Liger GRPO loss."},
     )
 
     # Parameters that control the logging

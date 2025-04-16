@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import pandas as pd
 import torch
@@ -210,7 +210,7 @@ class RichProgressCallback(TrainerCallback):
 
 
 def _win_rate_completions_df(
-    state: TrainerState, prompts: List[str], completions: List[str], winner_indices: List[str]
+    state: TrainerState, prompts: list[str], completions: list[str], winner_indices: list[str]
 ) -> pd.DataFrame:
     global_step = [str(state.global_step)] * len(prompts)
     data = list(zip(global_step, prompts, completions, winner_indices))
