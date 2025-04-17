@@ -192,7 +192,7 @@ class CodeAgentEnvironment(Environment):
                     if code:
                         code_batch.append(code)
                         # Store the conversation *before* adding output tag, map by original index
-                        code_conversations_map[idx] = full_conversation_segment + self.stop_string # Add stop string back if removed
+                        code_conversations_map[idx] = full_conversation_segment
                     else:
                             # Code tags present but extraction failed? Treat as complete for now.
                             print(f"  Warning: Code tags found but extraction failed. Completing conversation.")
