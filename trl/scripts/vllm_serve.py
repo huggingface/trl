@@ -373,7 +373,7 @@ def main(script_args: ScriptArguments):
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
 
-    def chunk_list(lst, n):
+    def chunk_list(lst : list, n : int) -> list[list[int]]:
         """Split list `lst` into `n` evenly distributed sublists.
 
         Example:
