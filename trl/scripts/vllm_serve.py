@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from itertools import chain
 from multiprocessing import Pipe, Process
+from multiprocessing.connection import Connection
 from typing import Optional
 
 import torch
@@ -237,7 +238,7 @@ class ScriptArguments:
     )
 
 
-def llm_worker(script_args : ScriptArguments, data_parallel_rank : int, connection : Pipe) -> None:
+def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, connection: Connection) -> None:
     # Set required environment variables for DP to work with vLLM
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
