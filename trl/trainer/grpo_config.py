@@ -214,6 +214,15 @@ class GRPOConfig(TrainingArguments):
         default=0.04,
         metadata={"help": "KL coefficient."},
     )
+
+    epsilon_low: float = field(
+        default=0.2,
+        metadata={"help": "Value to clip at 1-epsilon."},
+    )
+    epsilon_high: float = field(
+        default=0.28,
+        metadata={"help": "Value to clip at 1+epsilon. Generally set this higher than epsilon_low based on DAPO paper results."},
+    )
     reward_weights: Optional[list[float]] = field(
         default=None,
         metadata={

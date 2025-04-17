@@ -352,6 +352,10 @@ class QwenGRPOTrainer(Trainer):
         self._metrics = defaultdict(list)
         self.log_completions = args.log_completions
 
+        # intialize epsilon
+        self.epsilon_low = args.epsilon_low
+        self.epsilon_high = args.epsilon_high
+
         super().__init__(
             model=model,
             args=args,
@@ -706,7 +710,7 @@ class QwenGRPOTrainer(Trainer):
                 new_pixel_values = new_pixel_values.to(device)
                 new_image_grid_thw = new_image_grid_thw.to(device)
                 pixel_values = torch.cat([pixel_values, new_pixel_values], dim=0)
-                image_grid_thw = torch.cat([image_grid_thw, new_image_grid_thw], dim=0)            
+                image_grid_thw = torch.cat([image_grid_thw, new_image_grid_thw], dim=0)
         else:
             raise ValueError("Attempted to generate with HF. Only supporting vllm now.")
 
@@ -912,7 +916,13 @@ class QwenGRPOTrainer(Trainer):
 
         # x - x.detach() allows for preserving gradients from x
         advantages = inputs["advantages"]
-        per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
+        coef_1 = torch.exp(per_token_logps - per_token_logps.detach())
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+        per_token_loss = torch.min(per_token_loss1, per_token_loss2)
+
         per_token_loss = -(per_token_loss - self.beta * per_token_kl)
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
 
