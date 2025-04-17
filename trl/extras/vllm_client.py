@@ -195,7 +195,7 @@ class VLLMClient:
         """
         Initializes the weight update group in a distributed setup for model synchronization.
         """
-        # Get the tensor parallel size from the server
+        # Get the world size from the server
         url = f"http://{self.host}:{self.server_port}/get_world_size/"
         response = requests.get(url)
         if response.status_code == 200:
