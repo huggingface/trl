@@ -34,7 +34,7 @@ from trl.import_utils import (
 
 
 if is_fastapi_available():
-    from fastapi import BackgroundTasks, FastAPI
+    from fastapi import FastAPI
 
 
 if is_pydantic_available():
@@ -255,8 +255,8 @@ def llm_worker(script_args, data_parallel_rank, conn):
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
     )
 
-    # # Send ready signal to parent process with worker rank
-    # conn.send({"status": "ready", "rank": data_parallel_rank})
+    # Send ready signal to parent process with worker rank
+    conn.send({"status": "ready"})
 
     while True:
         if conn.poll(timeout=0.1):  # Non-blocking check for messages
@@ -311,37 +311,21 @@ def main(script_args: ScriptArguments):
         """
         return {"status": "ok"}
 
-    @app.get("/get_tensor_parallel_size/")
-    async def get_tensor_parallel_size():
+    @app.get("/get_world_size/")
+    async def get_world_size():
         """
-        Retrieves the tensor parallel size from the LLM engine.
+        Retrieves the world size of the LLM engine, which is `tensor_parallel_size * data_parallel_size`.
 
         Returns:
             `dict`:
-                A dictionary containing the tensor parallel size.
+                A dictionary containing the world size.
 
         Example response:
         ```json
-        {"tensor_parallel_size": 8}
+        {"world_size": 8}
         ```
         """
-        return {"tensor_parallel_size": script_args.tensor_parallel_size}
-
-    @app.get("/get_data_parallel_size/")
-    async def get_data_parallel_size():
-        """
-        Retrieves the data parallel size from the LLM engine.
-
-        Returns:
-            `dict`:
-                A dictionary containing the data parallel size.
-
-        Example response:
-        ```json
-        {"data_parallel_size": 4}
-        ```
-        """
-        return {"data_parallel_size": script_args.data_parallel_size}
+        return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
@@ -508,10 +492,14 @@ def main(script_args: ScriptArguments):
             conn.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
         return {"message": "Request received, closing communicator"}
 
-    # # Wait for all workers to be ready
-    # for conn in conns:
-    #     if conn.poll(timeout=0.1):  # Non-blocking check for messages
-    #         conn.recv()
+    # Wait for all workers to send "ready"
+    ready_workers = set()
+    while len(ready_workers) < script_args.data_parallel_size:
+        for conn in enumerate(conns):
+            if conn.poll(0.1):
+                msg = conn.recv()
+                if isinstance(msg, dict) and msg.get("status") == "ready":
+                    ready_workers.add(conn)
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
