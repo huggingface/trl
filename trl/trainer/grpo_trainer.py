@@ -27,6 +27,7 @@ from accelerate.utils import broadcast_object_list, gather, gather_object, is_pe
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import Sampler
 from transformers import (
     AutoModelForCausalLM,
@@ -46,10 +47,11 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is_rich_available, is_vllm_available
-from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
+from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
+    _ForwardRedirection,
     disable_dropout_in_model,
     generate_model_card,
     get_comet_experiment_url,
@@ -369,7 +371,7 @@ class GRPOTrainer(Trainer):
         if self.beta == 0.0:
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
-        elif is_deepspeed_zero3_enabled():
+        elif is_deepspeed_zero3_enabled() or args.fsdp_config is not None:
             self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif is_peft_model(model):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
@@ -481,6 +483,8 @@ class GRPOTrainer(Trainer):
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
+        # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
+        self._forward_redirection = _ForwardRedirection()
         if self.use_liger_loss:
             if not is_liger_kernel_available():
                 raise ImportError(
@@ -489,18 +493,14 @@ class GRPOTrainer(Trainer):
             if is_peft_model(model):
                 raise TypeError("Liger loss is not supported with a PEFT model.")
 
-            if self.loss_type != "bnpo":
-                raise ValueError(
-                    f"The provided loss type (`{self.loss_type}`) is not supported with `use_liger_loss`. Liger loss "
-                    "only supports `bnpo` for now."
-                )
-
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
                 temperature=self.temperature,
                 use_ref_model=self.ref_model is not None,
+                loss_type=self.loss_type,
+                max_completion_length=self.max_completion_length,
             )
 
         super().__init__(
@@ -606,6 +606,8 @@ class GRPOTrainer(Trainer):
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+            elif self.is_fsdp_enabled:
+                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
@@ -614,7 +616,10 @@ class GRPOTrainer(Trainer):
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
-                self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+                # set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
+                self.reward_funcs[i] = self.accelerator.prepare_model(
+                    reward_func, evaluation_mode=True, device_placement=True
+                )
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -696,9 +701,7 @@ class GRPOTrainer(Trainer):
         return model
 
     @profiling_decorator
-    def _get_last_hidden_state(self, model, input_ids, attention_mask, logits_to_keep=None):
-        # unwrap the model to access the model.model
-        unwrapped_model = self.accelerator.unwrap_model(model)
+    def _get_last_hidden_state(self, unwrapped_model, input_ids, attention_mask, logits_to_keep=None):
         last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
@@ -722,15 +725,16 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _move_model_to_vllm(self):
-        # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
+        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
+        fsdp_summon_full_params = FSDP.summon_full_params if self.is_fsdp_enabled else nullcontext
 
         if is_peft_model(self.model):
-            # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
+            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
             # adapters in a sharded manner is not supported.
-            with gather_if_zero3(list(self.model.parameters())):
+            with gather_if_zero3(list(self.model.parameters())), fsdp_summon_full_params(self.model, recurse=True):
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
@@ -751,11 +755,13 @@ class GRPOTrainer(Trainer):
                 self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
         else:
-            # For non-PEFT models, simply gather and update each parameter individually.
-            for name, param in self.model.named_parameters():
-                with gather_if_zero3([param]):
-                    if self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
+            # For non-PEFT models and DeepSpeed ZeRO-3, simply gather and update each parameter individually.
+            # For non-PEFT models and FSDP, we gather all parameters at once.
+            with fsdp_summon_full_params(self.model, recurse=True):
+                for name, param in self.model.named_parameters():
+                    with gather_if_zero3([param]):
+                        if self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(name, param.data)
 
         # Reset cache on main process
         if self.accelerator.is_main_process:
@@ -841,9 +847,14 @@ class GRPOTrainer(Trainer):
             with unwrap_model_for_generation(
                 self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
             ) as unwrapped_model:
-                prompt_completion_ids = unwrapped_model.generate(
-                    prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
-                )
+                with (
+                    FSDP.summon_full_params(self.model_wrapped, recurse=False)
+                    if self.is_fsdp_enabled
+                    else nullcontext()
+                ):
+                    prompt_completion_ids = unwrapped_model.generate(
+                        prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+                    )
 
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)
@@ -1027,7 +1038,7 @@ class GRPOTrainer(Trainer):
             "ref_per_token_logps": ref_per_token_logps,
         }
 
-    def compute_liger_loss(self, model, inputs):
+    def compute_liger_loss(self, unwrapped_model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
@@ -1036,8 +1047,7 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         # get the last hidden state of the model
-        last_hidden_state = self._get_last_hidden_state(model, input_ids, attention_mask, logits_to_keep)
-        unwrapped_model = self.accelerator.unwrap_model(model)
+        last_hidden_state = self._get_last_hidden_state(unwrapped_model, input_ids, attention_mask, logits_to_keep)
         # compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
             _input=last_hidden_state,
@@ -1066,7 +1076,8 @@ class GRPOTrainer(Trainer):
             raise ValueError("The GRPOTrainer does not support returning outputs")
         if self.use_liger_loss:
             # Compute the loss using the liger grpo loss
-            return self.compute_liger_loss(model, inputs)
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
         else:
             return self._compute_loss(model, inputs)
 
