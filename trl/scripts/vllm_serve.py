@@ -234,7 +234,7 @@ class ScriptArguments:
     )
 
 
-def llm_worker(script_args, data_parallel_rank, conn):
+def llm_worker(script_args, data_parallel_rank, connection):
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
@@ -252,22 +252,23 @@ def llm_worker(script_args, data_parallel_rank, conn):
         enable_prefix_caching=script_args.enable_prefix_caching,
         max_model_len=script_args.max_model_len,
         enforce_eager=True,  # dp requires eager mode
+        enable_expert_parallel=True,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
     )
 
     # Send ready signal to parent process with worker rank
-    conn.send({"status": "ready"})
+    connection.send({"status": "ready"})
 
     while True:
-        if conn.poll(timeout=0.1):  # Non-blocking check for messages
-            command = conn.recv()
+        if connection.poll(timeout=0.1):  # Non-blocking check for messages
+            command = connection.recv()
             if command["type"] in ["call", "fire_and_forget"]:
                 method_name = command["method"]
                 args, kwargs = command.get("args", ()), command.get("kwargs", {})
                 method = getattr(llm, method_name)
                 result = method(*args, **kwargs)
                 if command["type"] == "call":
-                    conn.send(result)
+                    connection.send(result)
             elif command["type"] == "shutdown":
                 break
 
@@ -292,13 +293,13 @@ def main(script_args: ScriptArguments):
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     # Spawn dp workers, and setup pipes for communication
-    conns = []
+    connections = []
     procs = []
-    for rank in range(script_args.data_parallel_size):
-        parent_conn, child_conn = Pipe()
-        p = Process(target=llm_worker, args=(script_args, rank, child_conn))
+    for data_parallel_rank in range(script_args.data_parallel_size):
+        parent_connection, child_connection = Pipe()
+        p = Process(target=llm_worker, args=(script_args, data_parallel_rank, child_connection))
         p.start()
-        conns.append(parent_conn)
+        connections.append(parent_connection)
         procs.append(p)
 
     app = FastAPI()
@@ -401,12 +402,12 @@ def main(script_args: ScriptArguments):
         chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
 
         # Send the prompts to each worker
-        for conn, prompts in zip(conns, chunked_prompts):
+        for connection, prompts in zip(connections, chunked_prompts):
             kwargs = {"prompts": prompts, "sampling_params": sampling_params}
-            conn.send({"type": "call", "method": "generate", "kwargs": kwargs})
+            connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
         # Wait for and collect all results
-        all_outputs = [conn.recv() for conn in conns]
+        all_outputs = [connection.recv() for connection in connections]
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
@@ -436,8 +437,8 @@ def main(script_args: ScriptArguments):
         # So with collective_rpc we need to call it this way:
         # llm.collective_rpc(method="init_communicator", args=(host, port, world_size))
         kwargs = {"method": "init_communicator", "args": (request.host, request.port, world_size)}
-        for conn in conns:
-            conn.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 
         return {"message": "Request received, initializing communicator"}
 
@@ -465,8 +466,8 @@ def main(script_args: ScriptArguments):
         # llm.collective_rpc("update_named_param", args=("name", torch.float32, (10, 10)))
         dtype = torch.__getattribute__(request.dtype.split(".")[-1])
         kwargs = {"method": "update_named_param", "args": (request.name, dtype, tuple(request.shape))}
-        for conn in conns:
-            conn.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 
         return {"message": "Request received, updating named parameter"}
 
@@ -475,10 +476,10 @@ def main(script_args: ScriptArguments):
         """
         Resets the prefix cache for the model.
         """
-        for conn in conns:
-            conn.send({"type": "call", "method": "reset_prefix_cache"})
+        for connection in connections:
+            connection.send({"type": "call", "method": "reset_prefix_cache"})
         # Wait for and collect all results
-        all_outputs = [conn.recv() for conn in conns]
+        all_outputs = [connection.recv() for connection in connections]
         success = all(output for output in all_outputs)
         return {"message": "Request received, resetting prefix cache status: " + str(success)}
 
@@ -488,25 +489,25 @@ def main(script_args: ScriptArguments):
         Closes the weight update group and cleans up associated resources.
         """
         kwargs = {"method": "close_communicator"}
-        for conn in conns:
-            conn.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
         return {"message": "Request received, closing communicator"}
 
     # Wait for all workers to send "ready"
     ready_workers = set()
     while len(ready_workers) < script_args.data_parallel_size:
-        for conn in enumerate(conns):
-            if conn.poll(0.1):
-                msg = conn.recv()
+        for connection in connections:
+            if connection.poll(0.1):
+                msg = connection.recv()
                 if isinstance(msg, dict) and msg.get("status") == "ready":
-                    ready_workers.add(conn)
+                    ready_workers.add(connection)
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
 
     # Shutdown the executor
-    for conn in conns:
-        conn.send({"type": "shutdown"})
+    for connection in connections:
+        connection.send({"type": "shutdown"})
 
     # Wait for processes to terminate
     for p in procs:
