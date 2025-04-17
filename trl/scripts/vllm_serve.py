@@ -277,6 +277,22 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, connection
             break
 
 
+def chunk_list(lst: list, n: int) -> list[list]:
+    """Split list `lst` into `n` evenly distributed sublists.
+
+    Example:
+        >>> chunk_list([1, 2, 3, 4, 5, 6], 2)
+        [[1, 2, 3], [4, 5, 6]]
+        >>> chunk_list([1, 2, 3, 4, 5, 6], 4)
+        [[1, 2], [3, 4], [5], [6]]
+        >>> chunk_list([1, 2, 3, 4, 5, 6], 8)
+        [[1], [2], [3], [4], [5], [6]]
+    """
+    n = min(n, len(lst))
+    k, r = divmod(len(lst), n)
+    return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
+
+
 def main(script_args: ScriptArguments):
     if not is_fastapi_available():
         raise ImportError(
@@ -372,21 +388,6 @@ def main(script_args: ScriptArguments):
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
-
-    def chunk_list(lst : list, n : int) -> list[list[int]]:
-        """Split list `lst` into `n` evenly distributed sublists.
-
-        Example:
-            >>> chunk_list([1, 2, 3, 4, 5, 6], 2)
-            [[1, 2, 3], [4, 5, 6]]
-            >>> chunk_list([1, 2, 3, 4, 5, 6], 4)
-            [[1, 2], [3, 4], [5], [6]]
-            >>> chunk_list([1, 2, 3, 4, 5, 6], 8)
-            [[1], [2], [3], [4], [5], [6]]
-        """
-        n = min(n, len(lst))
-        k, r = divmod(len(lst), n)
-        return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
