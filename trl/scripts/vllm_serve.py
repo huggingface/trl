@@ -433,10 +433,9 @@ def main(script_args: ScriptArguments):
 
         # Send the prompts to each worker
         for connection, prompts in zip(connections, chunked_prompts):
-            # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts. However, vLLM
-            # requires that we always send at least one prompt. So we send a placeholder prompt to mitigate the vLLM prompt request, and we later ignore
-            # requires that we always send at least one prompt. So we send a placeholder prompt, and we later ignore
-            # the result.
+            # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts.
+            # However, vLLM requires that we always send at least one prompt. So we send a placeholder prompt to comply
+            # with vLLM's requirement, and we later ignore the result.
             if not prompts:
                 prompts = ["<placeholder>"]
             kwargs = {"prompts": prompts, "sampling_params": sampling_params}
