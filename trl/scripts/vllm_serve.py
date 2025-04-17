@@ -157,6 +157,8 @@ class ScriptArguments:
             Revision to use for the model. If not specified, the default branch will be used.
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
+        data_parallel_size (`int`, *optional*, defaults to `1`):
+            Number of data parallel workers to use.
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
