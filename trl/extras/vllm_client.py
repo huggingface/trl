@@ -199,12 +199,12 @@ class VLLMClient:
         url = f"http://{self.host}:{self.server_port}/get_world_size/"
         response = requests.get(url)
         if response.status_code == 200:
-            world_size = response.json()["world_size"]
+            vllm_world_size = response.json()["world_size"]
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        world_size = world_size + 1  # add the client to the world
-        self.rank = world_size - 1  # the client's rank is the last process
+        world_size = vllm_world_size + 1  # add the client to the world
+        self.rank = vllm_world_size  # the client's rank is the last process
 
         # Initialize weight update group
         url = f"http://{self.host}:{self.server_port}/init_communicator/"
