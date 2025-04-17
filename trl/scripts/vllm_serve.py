@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import argparse
-import asyncio
 import logging
 import os
 from collections.abc import Sequence
@@ -93,10 +92,6 @@ class WeightSyncWorkerExtension:
             world_size (`int`):
                 Total number of participating processes in the update group.
         """
-        # Print the GPU id of the current worker and the kwargs
-        print(
-            f"Worker {self.device} initializing communicator with host: {host}, port: {port}, world_size: {world_size}"
-        )
         if self.pynccl_comm is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
@@ -183,7 +178,9 @@ class ScriptArguments:
             this feature.
     """
 
-    model: str = field(metadata={"help": "Model name or path to load the model from."})
+    model: str = field(
+        metadata={"help": "Model name or path to load the model from."},
+    )
     revision: Optional[str] = field(
         default=None,
         metadata={"help": "Revision to use for the model. If not specified, the default branch will be used."},
@@ -258,16 +255,21 @@ def llm_worker(script_args, data_parallel_rank, conn):
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
     )
 
-    while True:
-        msg = conn.recv()
-        if msg == "STOP":
-            break
+    # # Send ready signal to parent process with worker rank
+    # conn.send({"status": "ready", "rank": data_parallel_rank})
 
-        method = msg.get("method")
-        kwargs = msg.get("kwargs", {})
-        print(f"Worker {data_parallel_rank} received request: {method}, {kwargs}")
-        result = getattr(llm, method)(**kwargs)
-        conn.send(result)
+    while True:
+        if conn.poll(timeout=0.1):  # Non-blocking check for messages
+            command = conn.recv()
+            if command["type"] in ["call", "fire_and_forget"]:
+                method_name = command["method"]
+                args, kwargs = command.get("args", ()), command.get("kwargs", {})
+                method = getattr(llm, method_name)
+                result = method(*args, **kwargs)
+                if command["type"] == "call":
+                    conn.send(result)
+            elif command["type"] == "shutdown":
+                break
 
 
 def main(script_args: ScriptArguments):
@@ -289,9 +291,9 @@ def main(script_args: ScriptArguments):
     if not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
+    # Spawn dp workers, and setup pipes for communication
     conns = []
     procs = []
-
     for rank in range(script_args.data_parallel_size):
         parent_conn, child_conn = Pipe()
         p = Process(target=llm_worker, args=(script_args, rank, child_conn))
@@ -414,17 +416,13 @@ def main(script_args: ScriptArguments):
         # Evenly distribute prompts across DP ranks
         chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
 
-        # Create a list of tasks for each connection
-        loop = asyncio.get_running_loop()
-        tasks = []
-        for con, prompts in zip(conns, chunked_prompts):
-            # Send the request to the worker
+        # Send the prompts to each worker
+        for conn, prompts in zip(conns, chunked_prompts):
             kwargs = {"prompts": prompts, "sampling_params": sampling_params}
-            task = loop.run_in_executor(None, con.send, {"method": "generate", "kwargs": kwargs})
-            tasks.append(task)
+            conn.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
-        # Run all tasks concurrently
-        all_outputs = await asyncio.gather(*tasks)
+        # Wait for and collect all results
+        all_outputs = [conn.recv() for conn in conns]
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
@@ -448,19 +446,14 @@ def main(script_args: ScriptArguments):
                 - `port` (`int`): Port number to be used for communication.
                 - `world_size` (`int`): Total number of participating processes in the group.
         """
-        world_size = script_args.tensor_parallel_size * script_args.data_parallel_size
+        world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
 
-        loop = asyncio.get_running_loop()
-        tasks = []
+        # The function init_communicator is called this way: init_communicator(host, port, world_size)
+        # So with collective_rpc we need to call it this way:
+        # llm.collective_rpc(method="init_communicator", args=(host, port, world_size))
+        kwargs = {"method": "init_communicator", "args": (request.host, request.port, world_size)}
         for conn in conns:
-            # The function is called this way: init_communicator(host, port, world_size)
-            # So with collect_rpc we need to call it this way:
-            # llm.collective_rpc("init_communicator", args=(host, port, world_size))
-            # And with run_in_executor we need to call it this way:
-            # conn.send({"method": "init_communicator", "kwargs": {"args":(host, port, world_size)}})
-            kwargs = {"method": "init_communicator", "args": (request.host, request.port, world_size)}
-            task = loop.run_in_executor(None, conn.send, {"method": "collective_rpc", "kwargs": kwargs})
-            tasks.append(task)
+            conn.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 
         return {"message": "Request received, initializing communicator"}
 
@@ -483,13 +476,13 @@ def main(script_args: ScriptArguments):
                 - `shape` (list of `int`): Shape of the weight
 
         """
-        # The function is called this way: update_named_param(name="name", dtype=torch.float32, shape=(10, 10))
-        # So with collect_rpc we need to call it this way:
+        # The function update_named_param is called this way: update_named_param("name", torch.float32, (10, 10))
+        # So with collective_rpc we need to call it this way:
         # llm.collective_rpc("update_named_param", args=("name", torch.float32, (10, 10)))
-        # And with background_tasks.add_task we need to call it this way:
-        # background_tasks.add_task(llm.collective_rpc, "update_named_param", args=("name", torch.float32, (10, 10)))
         dtype = torch.__getattribute__(request.dtype.split(".")[-1])
-        background_tasks.add_task(llm.collective_rpc, "update_named_param", args=(request.name, dtype, request.shape))
+        kwargs = {"method": "update_named_param", "args": (request.name, dtype, tuple(request.shape))}
+        for conn in conns:
+            conn.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 
         return {"message": "Request received, updating named parameter"}
 
@@ -498,7 +491,11 @@ def main(script_args: ScriptArguments):
         """
         Resets the prefix cache for the model.
         """
-        success = llm.llm_engine.reset_prefix_cache()
+        for conn in conns:
+            conn.send({"type": "call", "method": "reset_prefix_cache"})
+        # Wait for and collect all results
+        all_outputs = [conn.recv() for conn in conns]
+        success = all(output for output in all_outputs)
         return {"message": "Request received, resetting prefix cache status: " + str(success)}
 
     @app.post("/close_communicator/")
@@ -506,15 +503,24 @@ def main(script_args: ScriptArguments):
         """
         Closes the weight update group and cleans up associated resources.
         """
-        llm.collective_rpc("close_communicator")
+        kwargs = {"method": "close_communicator"}
+        for conn in conns:
+            conn.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
         return {"message": "Request received, closing communicator"}
+
+    # # Wait for all workers to be ready
+    # for conn in conns:
+    #     if conn.poll(timeout=0.1):  # Non-blocking check for messages
+    #         conn.recv()
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
 
-    # When the server stops, we need to stop all the workers
+    # Shutdown the executor
     for conn in conns:
-        conn.send("STOP")
+        conn.send({"type": "shutdown"})
+
+    # Wait for processes to terminate
     for p in procs:
         p.join()
 
