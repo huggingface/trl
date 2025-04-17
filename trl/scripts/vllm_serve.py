@@ -259,7 +259,7 @@ def llm_worker(script_args, data_parallel_rank, connection):
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
     )
 
-    # Send ready signal to parent process with worker rank
+    # Send ready signal to parent process
     connection.send({"status": "ready"})
 
     while True:
