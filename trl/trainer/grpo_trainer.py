@@ -695,14 +695,14 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _move_model_to_vllm(self):
-        # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
+        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
         fsdp_summon_full_params = FSDP.summon_full_params if self.is_fsdp_enabled else nullcontext
 
         if is_peft_model(self.model):
-            # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
+            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
             # adapters in a sharded manner is not supported.
             with gather_if_zero3(list(self.model.parameters())), fsdp_summon_full_params(self.model, recurse=True):
                 self.model.merge_adapter()
@@ -725,7 +725,8 @@ class GRPOTrainer(Trainer):
                 self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
         else:
-            # For non-PEFT models, simply gather and update each parameter individually.
+            # For non-PEFT models and DeepSpeed ZeRO-3, simply gather and update each parameter individually.
+            # For non-PEFT models and FSDP, we gather all parameters at once.
             with fsdp_summon_full_params(self.model, recurse=True):
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
