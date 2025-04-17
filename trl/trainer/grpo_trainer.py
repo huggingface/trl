@@ -252,7 +252,9 @@ class GRPOTrainer(Trainer):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
-            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`].
+            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A padding
+            token, `processing_class.pad_token`, must be defined. If not explicitly set, `processing_class.eos_token` will
+            be used as the default padding token.
         reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
