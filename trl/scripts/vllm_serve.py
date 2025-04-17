@@ -297,13 +297,13 @@ def main(script_args: ScriptArguments):
 
     # Spawn dp workers, and setup pipes for communication
     connections = []
-    procs = []
+    processes = []
     for data_parallel_rank in range(script_args.data_parallel_size):
         parent_connection, child_connection = Pipe()
-        p = Process(target=llm_worker, args=(script_args, data_parallel_rank, child_connection))
-        p.start()
+        process = Process(target=llm_worker, args=(script_args, data_parallel_rank, child_connection))
+        process.start()
         connections.append(parent_connection)
-        procs.append(p)
+        processes.append(process)
 
     app = FastAPI()
 
@@ -513,8 +513,8 @@ def main(script_args: ScriptArguments):
         connection.send({"type": "shutdown"})
 
     # Wait for processes to terminate
-    for p in procs:
-        p.join()
+    for process in processes:
+        process.join()
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
