@@ -237,7 +237,7 @@ class ScriptArguments:
     )
 
 
-def llm_worker(script_args, data_parallel_rank, connection):
+def llm_worker(script_args : ScriptArguments, data_parallel_rank : int, connection : Pipe) -> None:
     # Set required environment variables for DP to work with vLLM
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
