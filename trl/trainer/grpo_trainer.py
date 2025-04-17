@@ -185,7 +185,6 @@ def nanstd(tensor: torch.Tensor) -> torch.Tensor:
     return torch.sqrt(variance)
 
 
-
 def split_tensor_dict(
     tensor_dict: dict[str, Optional[torch.Tensor]], num_chunks: int
 ) -> list[dict[str, Optional[torch.Tensor]]]:
@@ -212,6 +211,7 @@ def split_tensor_dict(
         }
         for i in range(num_chunks)
     ]
+
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -241,7 +241,6 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
     return torch.max(tensor[~torch.isnan(tensor)])
-
 
 
 class GRPOTrainer(Trainer):
