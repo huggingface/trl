@@ -463,7 +463,7 @@ def main(script_args: ScriptArguments):
         shape: list[int]
 
     @app.post("/update_named_param/")
-    async def update_named_param(request: UpdateWeightsRequest, background_tasks: BackgroundTasks):
+    async def update_named_param(request: UpdateWeightsRequest):
         """
         Updates the model weights with the provided tensor.
 
