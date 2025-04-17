@@ -257,7 +257,6 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, connection
         enable_prefix_caching=script_args.enable_prefix_caching,
         max_model_len=script_args.max_model_len,
         enforce_eager=True,  # dp requires eager mode
-        # enable_expert_parallel=True,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
     )
 
