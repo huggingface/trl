@@ -17,8 +17,7 @@ import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional
-
+from typing import Optional, Union
 import torch
 
 from trl import TrlParser
@@ -286,7 +285,7 @@ def main(script_args: ScriptArguments):
         return {"tensor_parallel_size": llm.llm_engine.vllm_config.parallel_config.tensor_parallel_size}
 
     class GenerateRequest(BaseModel):
-        prompts: list[str]
+        prompts: Union[list[str], list[dict]]
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
