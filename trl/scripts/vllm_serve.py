@@ -263,7 +263,14 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, connection
     connection.send({"status": "ready"})
 
     while True:
-        command = connection.recv()
+        # Wait for commands from the parent process
+        try:
+            command = connection.recv()
+        except KeyboardInterrupt:
+            llm.collective_rpc(method="close_communicator")
+            break
+
+        # Handle commands
         if command["type"] in ["call", "fire_and_forget"]:
             method_name = command["method"]
             args, kwargs = command.get("args", ()), command.get("kwargs", {})
@@ -331,13 +338,6 @@ def main(script_args: ScriptArguments):
                     ready_connections.add(connection)
 
         yield
-
-        # Shutdown the executor
-        for connection in connections:
-            connection.send({"type": "shutdown"})
-
-        # FIXME: for some reason, the shutdown command is not received by the workers and the program exits
-        # before the join
 
         # Wait for processes to terminate
         for process in processes:
