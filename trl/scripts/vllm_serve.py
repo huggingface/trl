@@ -16,6 +16,7 @@ import argparse
 import logging
 import os
 from collections.abc import Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from itertools import chain
 from multiprocessing import Pipe, Process
@@ -255,7 +256,7 @@ def llm_worker(script_args, data_parallel_rank, connection):
         enable_prefix_caching=script_args.enable_prefix_caching,
         max_model_len=script_args.max_model_len,
         enforce_eager=True,  # dp requires eager mode
-        enable_expert_parallel=True,
+        # enable_expert_parallel=True,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
     )
 
@@ -263,17 +264,16 @@ def llm_worker(script_args, data_parallel_rank, connection):
     connection.send({"status": "ready"})
 
     while True:
-        if connection.poll(timeout=0.1):  # Non-blocking check for messages
-            command = connection.recv()
-            if command["type"] in ["call", "fire_and_forget"]:
-                method_name = command["method"]
-                args, kwargs = command.get("args", ()), command.get("kwargs", {})
-                method = getattr(llm, method_name)
-                result = method(*args, **kwargs)
-                if command["type"] == "call":
-                    connection.send(result)
-            elif command["type"] == "shutdown":
-                break
+        command = connection.recv()
+        if command["type"] in ["call", "fire_and_forget"]:
+            method_name = command["method"]
+            args, kwargs = command.get("args", ()), command.get("kwargs", {})
+            method = getattr(llm, method_name)
+            result = method(*args, **kwargs)
+            if command["type"] == "call":
+                connection.send(result)
+        elif command["type"] == "shutdown":
+            break
 
 
 def main(script_args: ScriptArguments):
@@ -305,7 +305,34 @@ def main(script_args: ScriptArguments):
         connections.append(parent_connection)
         processes.append(process)
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Wait for all workers to send "ready"
+        ready_connections = set()
+        while len(ready_connections) < script_args.data_parallel_size:
+            for connection in connections:
+                msg = connection.recv()
+                if isinstance(msg, dict) and msg.get("status") == "ready":
+                    ready_connections.add(connection)
+
+        yield
+
+        # Shutdown the executor
+        for connection in connections:
+            connection.send({"type": "shutdown"})
+
+        # FIXME: for some reason, the shutdown command is not received by the workers and the program exits
+        # before the join
+
+        # Wait for processes to terminate
+        for process in processes:
+            process.join(timeout=10)  # Wait for 10 seconds for the process to terminate
+            if process.is_alive():
+                logger.warning(f"Process {process} is still alive after 10 seconds, attempting to terminate...")
+                process.terminate()
+                process.join()  # ensure process termination after calling terminate()
+
+    app = FastAPI(lifespan=lifespan)
 
     # Define the endpoints for the model server
     @app.get("/health/")
@@ -496,25 +523,8 @@ def main(script_args: ScriptArguments):
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
         return {"message": "Request received, closing communicator"}
 
-    # Wait for all workers to send "ready"
-    ready_workers = set()
-    while len(ready_workers) < script_args.data_parallel_size:
-        for connection in connections:
-            if connection.poll(0.1):
-                msg = connection.recv()
-                if isinstance(msg, dict) and msg.get("status") == "ready":
-                    ready_workers.add(connection)
-
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
-
-    # Shutdown the executor
-    for connection in connections:
-        connection.send({"type": "shutdown"})
-
-    # Wait for processes to terminate
-    for process in processes:
-        process.join()
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
