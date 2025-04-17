@@ -62,6 +62,8 @@ class SFTConfig(TrainingArguments):
             batch structure.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
+        only_completion_loss (`bool`, *optional*, defaults to `False`):
+            Whether to only compute the loss on the completion.
 
         > Parameters that control the training
 
@@ -176,7 +178,13 @@ class SFTConfig(TrainingArguments):
             "instead."
         },
     )
-
+    only_completion_loss: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to only compute the loss on the completion."
+        }
+    )
+    
     def __post_init__(self):
         super().__post_init__()
 

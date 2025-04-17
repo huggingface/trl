@@ -497,7 +497,7 @@ class SFTTrainer(Trainer):
                 def concat_prompt_completion(example):
                     return {key: example["prompt"] + example["completion"]}
 
-                dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
+                dataset = dataset.map(concat_prompt_completion)
 
             if not is_processed:
                 # Convert the dataset to ChatML if needed
@@ -533,12 +533,17 @@ class SFTTrainer(Trainer):
                     ):
                         processed["input_ids"] = processed["input_ids"] + [processing_class.eos_token_id]
                         processed["attention_mask"] = processed["attention_mask"] + [1]
+                        if args.only_completion_loss:
+                            processed_prompt = processing_class(text=example["prompt"])
+                            processed_completion = processing_class(text=example["completion"])
+                            processed["labels"] = [-100] * len(processed_prompt) + processed_completion + [processing_class.eos_token_id]
                     return processed
 
                 dataset = dataset.map(
                     tokenize,
                     fn_kwargs={"processing_class": processing_class, "dataset_text_field": args.dataset_text_field},
                     **map_kwargs,
+                    remove_columns=["prompt", "completion"],
                 )
 
             # Pack or truncate
