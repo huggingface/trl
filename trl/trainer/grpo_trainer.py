@@ -76,6 +76,74 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+import numpy as np
+import random
+
+
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+        self.sample_indices = []
+
+    def add(self, experience):
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+        else:
+            self.buffer.pop(0)
+            self.buffer.append(experience)
+
+        # Clear index queue when buffer changes
+        self.sample_indices.clear()
+
+    def _init_sampling_queue(self):
+        self.sample_indices = list(range(len(self.buffer)))
+        random.shuffle(self.sample_indices)
+
+    def sample(self, batch_size):
+        if not self.sample_indices:
+            self._init_sampling_queue()
+
+        batch = []
+        while len(batch) < batch_size and self.sample_indices:
+            idx = self.sample_indices.pop(0)
+            batch.append(self.buffer[idx])
+
+        return batch
+
+    def __len__(self):
+        return len(self.buffer)
+
+class PrioritizedReplayBuffer(ReplayBuffer):
+    def __init__(self, capacity, alpha=1.0):
+        super().__init__(capacity)
+        self.alpha = alpha
+        self.advantages = []
+
+    def add(self, experience):
+        EPS = 0.0001 # ensures we get non-zero advs when the buffer contains all 0 advantages
+        advantage = experience["advantages"].item()
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+            self.advantages.append(abs(advantage) + EPS)  # Store absolute advantage
+        else:
+            # Replace the oldest entry if the buffer is full
+            self.buffer.pop(0)
+            self.advantages.pop(0)
+            self.buffer.append(experience)
+            self.advantages.append(abs(advantage))
+
+    def sample(self, batch_size):
+        if not self.buffer:
+            raise ValueError("Buffer is empty. Cannot sample from an empty buffer.")
+
+        # Convert advantages to priorities
+        scaled_priorities = np.power(self.advantages, self.alpha)
+        total_priority = np.sum(scaled_priorities)
+        probabilities = scaled_priorities / total_priority
+
+        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities)
+        return [self.buffer[i] for i in indices]
 
 class RepeatRandomSampler(Sampler):
     """
@@ -606,6 +674,14 @@ class GRPOTrainer(Trainer):
             batch_size=mega_batch_size,
             collate_fn=lambda x: x,
         )
+        
+        
+        self._replay_buffer = PrioritizedReplayBuffer(
+            capacity=mega_batch_size*4,
+            alpha=1.0,
+        )
+        self._num_samples_until_gen = 0
+        
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -766,7 +842,7 @@ class GRPOTrainer(Trainer):
         
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
-            if len(self._buffered_inputs) == 0:
+            if self._num_samples_until_gen == 0:
                 def repeat_generator():
                     while True:
                         yield from self._gen_dataloader
@@ -777,24 +853,30 @@ class GRPOTrainer(Trainer):
                 inputs = inputs[process_index*self._per_device_mega_batch_size:(process_index+1)*self._per_device_mega_batch_size]
                 
                 generations = self._generate_and_score_completions(inputs)
-                gen_dataset = Dataset.from_dict(generations)
-                mini_batch_dataloader = DataLoader(
-                    gen_dataset,
-                    batch_size=self.args.per_device_train_batch_size,
-                    shuffle=True,  # we technically don't need to shuffle due to grad acc, but we will decouple later
-                    drop_last=True,
-                    collate_fn=collate_fn,
-                )
-                for num_iters in range(self.args.num_iterations):
-                    for mini_batch in mini_batch_dataloader:
-                        self._buffered_inputs.append(mini_batch)
-            inputs = self._buffered_inputs.pop(0)
+                self._num_samples_until_gen = self.num_iterations * self._per_device_mega_batch_size
+                
+                for i in range(self._per_device_mega_batch_size):
+                    sample = {}
+                    for k,v in generations.items():
+                        sample[k] = v[i]
+                    self._replay_buffer.add(sample)
+                
+            samples = self._replay_buffer.sample(self.args.per_device_train_batch_size)
+            
+            inputs = {}
+            for k in samples[0].keys():
+                # padding may change between mega batches, TODO
+                # TODO padding should be rewritten as the completion ids will not be padded correctino
+                if k == "advantages":
+                    inputs[k] = torch.stack([sample[k] for sample in samples])
+                else:
+                    inputs[k] = pad([sample[k] for sample in samples], padding_value=self.processing_class.pad_token_id)
+            
+            self._num_samples_until_gen -= self.args.per_device_train_batch_size
         else:
             # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
             inputs = self._generate_and_score_completions(inputs)
-        return {
-            k: v.to(self.accelerator.device) for k, v in inputs.items()
-        }
+        return inputs
 
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
