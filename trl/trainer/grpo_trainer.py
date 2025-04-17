@@ -27,7 +27,7 @@ from accelerate.utils import broadcast_object_list, gather, gather_object, is_pe
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import Sampler
 from transformers import (
     AutoModelForCausalLM,
@@ -699,11 +699,12 @@ class GRPOTrainer(Trainer):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
+        fsdp_summon_full_params = FSDP.summon_full_params if self.is_fsdp_enabled else nullcontext
 
         if is_peft_model(self.model):
             # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
             # adapters in a sharded manner is not supported.
-            with gather_if_zero3(list(self.model.parameters())):
+            with gather_if_zero3(list(self.model.parameters())), fsdp_summon_full_params(self.model, recurse=True):
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
@@ -725,10 +726,11 @@ class GRPOTrainer(Trainer):
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather and update each parameter individually.
-            for name, param in self.model.named_parameters():
-                with gather_if_zero3([param]):
-                    if self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
+            with fsdp_summon_full_params(self.model, recurse=True):
+                for name, param in self.model.named_parameters():
+                    with gather_if_zero3([param]):
+                        if self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(name, param.data)
 
         # Reset cache on main process
         if self.accelerator.is_main_process:
@@ -815,7 +817,7 @@ class GRPOTrainer(Trainer):
                 self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
             ) as unwrapped_model:
                 with (
-                    FullyShardedDataParallel.summon_full_params(self.model_wrapped, recurse=False)
+                    FSDP.summon_full_params(self.model_wrapped, recurse=False)
                     if self.is_fsdp_enabled
                     else nullcontext()
                 ):
