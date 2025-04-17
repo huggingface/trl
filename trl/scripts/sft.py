@@ -15,7 +15,7 @@
 """
 # Full training
 python trl/scripts/sft.py \
-    --model_name_or_path Qwen/Qwen2.5-0.5B \
+    --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --learning_rate 2.0e-5 \
     --num_train_epochs 1 \
@@ -27,12 +27,12 @@ python trl/scripts/sft.py \
     --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 100 \
-    --output_dir Qwen2.5-0.5B-SFT \
+    --output_dir Qwen2-0.5B-SFT \
     --push_to_hub
 
 # LoRA
 python trl/scripts/sft.py \
-    --model_name_or_path Qwen/Qwen2.5-0.5B \
+    --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --learning_rate 2.0e-4 \
     --num_train_epochs 1 \
@@ -47,7 +47,7 @@ python trl/scripts/sft.py \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16 \
-    --output_dir Qwen2.5-0.5B-SFT \
+    --output_dir Qwen2-0.5B-SFT \
     --push_to_hub
 """
 
