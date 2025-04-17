@@ -276,7 +276,8 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, connection
 
 
 def chunk_list(lst: list, n: int) -> list[list]:
-    """Split list `lst` into `n` evenly distributed sublists.
+    """
+    Split list `lst` into `n` evenly distributed sublists.
 
     Example:
         >>> chunk_list([1, 2, 3, 4, 5, 6], 2)
@@ -284,9 +285,8 @@ def chunk_list(lst: list, n: int) -> list[list]:
         >>> chunk_list([1, 2, 3, 4, 5, 6], 4)
         [[1, 2], [3, 4], [5], [6]]
         >>> chunk_list([1, 2, 3, 4, 5, 6], 8)
-        [[1], [2], [3], [4], [5], [6]]
+        [[1], [2], [3], [4], [5], [6], [], []]
     """
-    n = min(n, len(lst))
     k, r = divmod(len(lst), n)
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
@@ -433,13 +433,19 @@ def main(script_args: ScriptArguments):
 
         # Send the prompts to each worker
         for connection, prompts in zip(connections, chunked_prompts):
+            # When the number of prompts is less than dp, some workers will receive empty prompts. However, vLLM
+            # requires that we always send at least one prompt. So we send a placeholder prompt, and we later ignore
+            # the result.
+            if not prompts:
+                prompts = ["<placeholder>"]
             kwargs = {"prompts": prompts, "sampling_params": sampling_params}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
-        # Receive results. zip prevents us from calling recv on unused connections.
-        # Usually, len(connections) == len(chunked_prompts), but if there are fewer prompts than DP workers, only the
-        # first few connections will be active.
-        all_outputs = [connection.recv() for connection, _ in zip(connections, chunked_prompts)]
+        # Receive results
+        all_outputs = [connection.recv() for connection in connections]
+
+        # Handle empty prompts (see above)
+        all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts) if prompts]
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list

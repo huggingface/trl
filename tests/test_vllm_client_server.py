@@ -36,19 +36,16 @@ class TestChunkList(unittest.TestCase):
         self.assertEqual(chunk_list([1, 2, 3, 4, 5, 6], 4), [[1, 2], [3, 4], [5], [6]])
 
     def test_more_chunks_than_elements(self):
-        self.assertEqual(chunk_list([1, 2, 3, 4, 5, 6], 8), [[1], [2], [3], [4], [5], [6]])
+        self.assertEqual(chunk_list([1, 2, 3, 4, 5, 6], 8), [[1], [2], [3], [4], [5], [6], [], []])
 
     def test_n_equals_len(self):
         self.assertEqual(chunk_list([1, 2, 3], 3), [[1], [2], [3]])
-
-    def test_n_greater_than_len(self):
-        self.assertEqual(chunk_list([1, 2], 5), [[1], [2]])
 
     def test_n_is_1(self):
         self.assertEqual(chunk_list([1, 2, 3], 1), [[1, 2, 3]])
 
     def test_single_element_list(self):
-        self.assertEqual(chunk_list([42], 2), [[42]])
+        self.assertEqual(chunk_list([42], 2), [[42], []])
 
     def test_any_dtype(self):
         self.assertEqual(
