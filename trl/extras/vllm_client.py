@@ -204,7 +204,7 @@ class VLLMClient:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         world_size = world_size + 1  # add the client to the world
-        self.rank = world_size  # the client's rank is the last process
+        self.rank = world_size - 1  # the client's rank is the last process
 
         # Initialize weight update group
         url = f"http://{self.host}:{self.server_port}/init_communicator/"
