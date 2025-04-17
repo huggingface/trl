@@ -256,7 +256,6 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, connection
         # This is particularly useful here because we generate completions from the same prompts.
         enable_prefix_caching=script_args.enable_prefix_caching,
         max_model_len=script_args.max_model_len,
-        enforce_eager=True if script_args.data_parallel_size > 1 else False,  # dp requires eager mode
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
     )
 
