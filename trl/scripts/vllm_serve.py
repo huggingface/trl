@@ -436,8 +436,10 @@ def main(script_args: ScriptArguments):
             kwargs = {"prompts": prompts, "sampling_params": sampling_params}
             connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
-        # Wait for and collect all results
-        all_outputs = [connection.recv() for connection in connections]
+        # Receive results. zip prevents us from calling recv on unused connections.
+        # Usually, len(connections) == len(chunked_prompts), but if there are fewer prompts than DP workers, only the
+        # first few connections will be active.
+        all_outputs = [connection.recv() for connection, _ in zip(connections, chunked_prompts)]
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
