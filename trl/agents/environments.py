@@ -66,15 +66,7 @@ class CodeAgentEnvironment(Environment):
         stop_string: str = "</code>",
         tools_script: Optional[str] = None
     ):
-        """Initialize the code agent environment
-        
-        Args:
-            code_executor: The executor to run code (like LocalExecutor or E2BExecutor)
-            tokenizer: Tokenizer for encoding/decoding text
-            parsing_string: String that marks the beginning of code blocks
-            stop_string: String that marks the end of code blocks
-            tools_script: Optional script to prepend to extracted code
-        """
+        """Initialize the code agent environment"""
         self.code_executor = code_executor
         self.tokenizer = tokenizer
         self.parsing_string = parsing_string
@@ -96,174 +88,91 @@ class CodeAgentEnvironment(Environment):
         return code_parts
     
     def run_agent(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List[str]:
-        """Run the agent with code execution and return completed text responses
-
-        Args:
-            vllm_client: VLLM client instance
-            generation_config: Configuration for generation parameters
-            prompts: Input prompts for generation
-            
-        Returns:
-            List[str]: Completed text responses with code execution results
-        """
-        # Store original prompts for later use
-        original_prompts = prompts.copy()
-        # a buncha debug print statements
-        print(f"Original prompts: {original_prompts}")
-        # Duplicate prompts to match the requested number of generations (n)
+        """Run the agent with code execution and return completed text responses"""
+        # Configure stop tokens to include the code stop string
+        modified_gen_config = VLLMClientGenerationConfig(
+            **{k: v for k, v in vars(generation_config).items()},
+        )
+        modified_gen_config.stop = [self.stop_string] if modified_gen_config.stop is None else list(set(modified_gen_config.stop + [self.stop_string]))
+        
+        # Handle multiple generations per prompt (n>1)
         expanded_prompts = []
         for prompt in prompts:
             expanded_prompts.extend([prompt] * generation_config.n)
-        print(f"Expanded prompts: {expanded_prompts}")
-        # Create a modified generation config with n=1 for individual generations
-        single_gen_config = VLLMClientGenerationConfig(
-            n=1,
-            repetition_penalty=generation_config.repetition_penalty,
-            temperature=generation_config.temperature,
-            top_p=generation_config.top_p,
-            top_k=generation_config.top_k,
-            min_p=generation_config.min_p,
-            max_tokens=generation_config.max_tokens,
-            guided_decoding_regex=generation_config.guided_decoding_regex,
-            # Ensure stop string is always included for code parsing
-            stop=[self.stop_string] if generation_config.stop is None else 
-                    list(set(generation_config.stop + [self.stop_string])) # Use set to avoid duplicates
-        )
-        print(f"Single generation config: {single_gen_config}")
-        # Track current conversations for each prompt
-        current_conversations = expanded_prompts.copy()
-        completed_conversations = []
-        print(f"Initial Current conversations: {current_conversations}")
-        print(f"Initial Completed conversations: {completed_conversations}")
-        # Continue code execution loop until all conversations are completed
-        while current_conversations:
-            print(f"\n--- Starting Generation Loop ---")
-            print(f"Current conversations ({len(current_conversations)}): {current_conversations}")
-            # Generate next response segment
+        
+        completed_conversations = []  # Fully completed conversations
+        current_batch = expanded_prompts  # Current batch of prompts/conversations
+        
+        # Continue until all conversations are complete
+        while current_batch:
+            # Generate outputs for current batch
             outputs = vllm_client.generate(
-                prompts=current_conversations,
-                n=1, # Already handled expansion, generate 1 per conversation
-                repetition_penalty=single_gen_config.repetition_penalty,
-                temperature=single_gen_config.temperature,
-                top_p=single_gen_config.top_p,
-                top_k=single_gen_config.top_k,
-                min_p=single_gen_config.min_p,
-                max_tokens=single_gen_config.max_tokens,
-                guided_decoding_regex=single_gen_config.guided_decoding_regex,
-                stop=single_gen_config.stop
+                prompts=current_batch,
+                n=1,  # We already expanded the prompts
+                repetition_penalty=modified_gen_config.repetition_penalty,
+                temperature=modified_gen_config.temperature,
+                top_p=modified_gen_config.top_p,
+                top_k=modified_gen_config.top_k,
+                min_p=modified_gen_config.min_p,
+                max_tokens=modified_gen_config.max_tokens,
+                guided_decoding_regex=modified_gen_config.guided_decoding_regex,
+                stop=modified_gen_config.stop
             )
-            print(f"Generated outputs (token ids): {outputs}")
             
-            next_conversations_for_llm = [] # Conversations needing more generation
-            code_batch = [] # Code snippets to execute
-            code_conversations_map = {} # Map index to conversation needing code exec
-
-            # Process outputs
-            for idx, (conversation_prompt, output_ids) in enumerate(zip(current_conversations, outputs)):
-                # output is a list of token ids; decode it
-                # Important: Decode carefully, handle potential stop tokens like stop_string
+            next_batch = []  # For conversations needing more processing
+            code_batch = []  # Code snippets to execute
+            conversations = []  # To track conversations for code execution
+            
+            # Process all outputs
+            for prompt, output_ids in zip(current_batch, outputs):
                 generated_text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
+                full_conversation = prompt + generated_text
                 
-                # Check if generation stopped exactly at the stop_string
-                stopped_at_code_end = False
-                if single_gen_config.stop:
-                    # Check if the last decoded token corresponds to any stop sequence
-                    # This is tricky, a simpler check might be needed depending on tokenizer behavior
-                    # For now, check if the decoded text ends with the stop_string
-                    if generated_text.endswith(self.stop_string.strip()): # Strip potential whitespace
-                            stopped_at_code_end = True
-                            # Remove the stop string itself if needed, or keep it based on desired format
-                            # generated_text = generated_text[:-len(self.stop_string)] # Optional: remove stop string
-
-                print(f"\nProcessing conversation index {idx}:")
-                print(f"  Prompt: '{conversation_prompt}'")
-                print(f"  Generated text: '{generated_text}'")
-                print(f"  Stopped at code end: {stopped_at_code_end}")
-
-                # Check if code execution is indicated IN THE NEWLY GENERATED TEXT
-                # And if the generation actually stopped because of the stop_string
-                if self.parsing_string in generated_text and stopped_at_code_end:
-                    # Construct the full conversation up to this point
-                    full_conversation_segment = conversation_prompt + generated_text 
-                    
-                    # Extract code ONLY from the generated part for safety
-                    code = self.extract_code(generated_text) # Pass only generated text
-                    print(f"  Extracted code: {code}")
+                # Check if generation stopped at code block
+                has_code_block = self.parsing_string in generated_text
+                stopped_at_code = generated_text.endswith(self.stop_string.strip())
+                
+                if has_code_block and stopped_at_code:
+                    # Extract code for execution
+                    code = self.extract_code(generated_text)
                     if code:
                         code_batch.append(code)
-                        # Store the conversation *before* adding output tag, map by original index
-                        code_conversations_map[idx] = full_conversation_segment
+                        conversations.append(full_conversation)
                     else:
-                            # Code tags present but extraction failed? Treat as complete for now.
-                            print(f"  Warning: Code tags found but extraction failed. Completing conversation.")
-                            completed_conversations.append(full_conversation_segment)
-
+                        # Code tags present but extraction failed
+                        completed_conversations.append(full_conversation)
                 else:
-                    # No code block detected in the new text OR didn't stop at stop_string
-                    # Conversation is considered complete for this agent logic
-                    full_conversation = conversation_prompt + generated_text
+                    # No code block or didn't stop at code end - conversation is complete
                     completed_conversations.append(full_conversation)
-                    print(f"  No code detected or not stopped correctly. Conversation completed.")
             
-            print(f"\n--- After Processing Generations ---")
-            print(f"Code batch ({len(code_batch)}): {code_batch}")
-            print(f"Code conversations map ({len(code_conversations_map)}): {code_conversations_map.keys()}")
-            print(f"Completed conversations ({len(completed_conversations)}): {[c[-100:]+'...' for c in completed_conversations]}") # Show ends
-
-            # Execute code batch if any code was extracted
+            # Execute all code snippets in batch if any
             if code_batch:
-                print(f"\n--- Executing Code Batch ---")
                 execution_results = self.code_executor.execute(code_batch)
-                print(f"Execution results: {execution_results}")
                 
-                # Add execution results back to the corresponding conversations
-                result_idx = 0
-                for original_idx, conversation_segment in code_conversations_map.items():
-                    result = execution_results[result_idx]
-                    # Append the output tag and result
-                    updated_conversation = conversation_segment + f"<output>{result}</output>"
-                    next_conversations_for_llm.append(updated_conversation) # Add to list for next LLM call
-                    print(f"  Appended output to conversation index {original_idx}. Ready for next generation.")
-                    result_idx += 1
-            else:
-                    print(f"\n--- No Code to Execute ---")
-
-            # Update current conversations for the next iteration of the loop
-            current_conversations = next_conversations_for_llm
-            print(f"\n--- End of Loop Iteration ---")
-            print(f"Next conversations for LLM ({len(current_conversations)}): {[c[-100:]+'...' for c in current_conversations]}") # Show ends
-
-        # Return the final completed conversations
-        print(f"\n--- Agent Run Finished ---")
-        print(f"Final Completed conversations ({len(completed_conversations)}): {completed_conversations}")
-        return completed_conversations
-         
-    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List:
-        """Generate responses with code execution and return token IDs
-
-        Args:
-            vllm_client: VLLM client instance
-            generation_config: Configuration for generation parameters
-            prompts: Input prompts for generation
+                # Add results back to conversations and continue
+                for conversation, result in zip(conversations, execution_results):
+                    updated_conversation = conversation + f"<output>{result}</output>"
+                    next_batch.append(updated_conversation)
             
-        Returns:
-            completion_ids: Generated token ids
-        """
-        # Get completed text responses from the agent
+            # Update current batch for next iteration
+            current_batch = next_batch
+        
+        return completed_conversations
+    
+    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List:
+        """Generate responses with code execution and return token IDs"""
+        # Get completed text responses
         completed_conversations = self.run_agent(vllm_client, generation_config, prompts)
         
-        # Recreate expanded prompts for completion extraction
+        # Recreate expanded prompts for proper extraction
         expanded_prompts = []
         for prompt in prompts:
             expanded_prompts.extend([prompt] * generation_config.n)
         
-        # Extract completion IDs (just the generated part without the original prompt)
+        # Extract completion IDs (just the generated part)
         completion_ids = []
         for original_prompt, final_output in zip(expanded_prompts, completed_conversations):
-            # Extract just the completion (everything after the original prompt)
             completion_text = final_output[len(original_prompt):]
-            
-            # Encode to get token IDs
             completion_token_ids = self.tokenizer.encode(
                 completion_text, 
                 add_special_tokens=False
