@@ -19,6 +19,7 @@ from copy import deepcopy
 from typing import Any, Callable, Optional, Sized, Union
 from unittest.mock import patch
 
+import numpy as np
 import torch
 import torch.utils.data
 import transformers
@@ -128,6 +129,112 @@ class RepeatRandomSampler(Sampler):
 
     def __len__(self):
         return self.num_samples * self.repeat_count
+
+class SSRBuffer:
+    '''
+    Selective Sample Replay manager. Maintains a buffer of high entropy samples for training.
+    '''
+
+    def __init__(self, alpha: float = 2.0, total_buffer_size: int = 1000, persist_steps: int = 1000):
+        '''
+        Args:
+            alpha: float, handles prioritization intensity>=0.
+                alpha = 0 means no prioritization,
+                alpha = 1 means prioritization linearly proportional to advantage,
+                alpha > 1 means more prioritization for high entropy samples.
+            total_buffer_size: int, maximum size of the buffer. After the buffer is full, the oldest samples will be discarded.
+            persist_steps: int, number of steps an example lives in the buffer. After this many steps, the example will be discarded.
+        '''
+
+        if alpha <= 0:
+            raise ValueError("alpha must be greater than 0")
+        self.alpha = alpha
+
+        if total_buffer_size <= 0:
+            raise ValueError("total_buffer_size must be greater than 0")
+        self.total_buffer_size = total_buffer_size
+
+        if persist_steps <= 0:
+            raise ValueError("persist_steps must be greater than 0")
+        self.persist_steps = persist_steps
+
+        self.buffer = []
+
+        # element of buffer format:
+        # {
+        #      "example": dict, - the example to be replayed
+        #      "advantage": float, - the advantage observed last training step
+        #      "ttl": int, - time to live, number of steps before the example will be discarded from the buffer
+        # }
+
+    def add_example(self, example: dict, advantage: float) -> None:
+        '''
+        Add an example to the buffer.
+        '''
+        # NOTE: We don't check if the buffer is full here. We'll do it at the end of each training step.
+        buffer_element = {
+            "example": example,
+            "advantage": advantage,
+            "ttl": self.persist_steps
+        }
+        self.buffer.append(buffer_element)
+
+    @property
+    def buffer_size(self) -> int:
+        '''
+        Number of examples in the buffer.
+        '''
+        return len(self.buffer)
+
+    def draw_example(self) -> dict:
+        '''
+        Returns an example from the buffer. The probabilty of drawing an example j is:
+        abs(advantage_j)**(self.alpha) / sum(abs(advantage_i)**(self.alpha) for i in range(len(self.buffer)))
+        
+        Raises a ValueError if the buffer is empty, otherwise, pops an example from the buffer and returns it.
+        '''
+
+        if self.buffer_size == 0:
+            raise ValueError("Buffer is empty")
+
+        values = []
+        for buffer_element in self.buffer:
+            values.append(abs(buffer_element["advantage"])**self.alpha)
+
+        total = sum(values)
+        probabilities = [value / total for value in values]
+
+        # check that the probabilities sum to 1, with some tolerance
+        if not np.isclose(sum(probabilities), 1.0, atol=1e-6):
+            raise ValueError(f"Probabilities do not sum to 1, but instead sum to {sum(probabilities)}")
+
+        # choose the index of the example to draw
+        index = np.random.choice(range(len(self.buffer)), p=probabilities)
+
+        # pop the example from the buffer
+        buffer_element = self.buffer.pop(index)
+
+        return buffer_element['example']
+
+    def step(self) -> None:
+        '''
+        Handles reducing ttl's on objects in the buffer and removes objects that have expired.
+       
+        It is to be called once at the end of training step.
+        '''
+        # decrement the ttl of each buffer element
+        for buffer_element in self.buffer:
+            buffer_element['ttl'] -= 1
+
+        # remove buffer elements that have expired
+        self.buffer = [b for b in self.buffer if b['ttl'] > 0]
+
+        # if the buffer is too big, discard the oldest examples
+        if len(self.buffer) > self.buffer_size:
+            # Sort by absolute advantage (priority), ascending
+            self.buffer.sort(key=lambda x: abs(x['advantage']))
+            # Keep only the top 'buffer_size' elements (highest priority)
+            self.buffer = self.buffer[-self.buffer_size:]
 
 
 class QwenGRPOTrainer(Trainer):
@@ -355,6 +462,12 @@ class QwenGRPOTrainer(Trainer):
         # intialize epsilon
         self.epsilon_low = args.epsilon_low
         self.epsilon_high = args.epsilon_high
+        
+        # TODO: make these config args
+        self.use_ssr_buffer = True
+        self.
+        
+        self.ssr_buffer =
 
         super().__init__(
             model=model,
