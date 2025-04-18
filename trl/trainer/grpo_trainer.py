@@ -328,7 +328,7 @@ class GRPOTrainer(Trainer):
                 )
             
         # Initialize the default environment if none provided
-        self.environment = environment()
+        self.environment = environment
 
         if peft_config is not None:
             if not is_peft_available():
