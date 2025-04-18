@@ -15,18 +15,17 @@
 import atexit
 import logging
 import time
-from typing import Optional
+from typing import Optional, Union
+from urllib.parse import urlparse
 
 import torch
 from torch import nn
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
-
 if is_requests_available():
     import requests
     from requests import ConnectionError
-
 
 if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
@@ -34,7 +33,6 @@ if is_vllm_available():
 
     if is_vllm_ascend_available():
         from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
-
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +45,12 @@ class VLLMClient:
     weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
 
     Args:
+        base_url (`str`, *optional*, defaults to `None`):
+            Base URL for the vLLM server (e.g., "http://localhost:8000"). If provided, host and server_port are ignored.
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
-            IP address of the vLLM server.
+            IP address of the vLLM server. Ignored if base_url is provided.
         server_port (`int`, *optional*, defaults to `8000`):
-            Port number of the vLLM server.
+            Port number of the vLLM server. Ignored if base_url is provided.
         group_port (`int`, *optional*, defaults to `51216`):
             Port number for the weight update group.
         connection_timeout (`float`, *optional*, defaults to `0.0`):
@@ -67,11 +67,29 @@ class VLLMClient:
         INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
         ```
 
+        There are two ways to initialize the client:
+
+        1. Using base_url:
+        ```python
+        >>> from trl.extras.vllm_client import VLLMClient
+        >>> # Connect to a local server
+        >>> client = VLLMClient(base_url="http://localhost:8000")
+        >>> # Or connect to a remote server
+        >>> client = VLLMClient(base_url="http://192.168.1.100:8000")
+        ```
+
+        2. Using host and server_port:
+        ```python
+        >>> from trl.extras.vllm_client import VLLMClient
+        >>> # Connect to a local server
+        >>> client = VLLMClient(host="localhost", server_port=8000)
+        >>> # Or connect to a remote server
+        >>> client = VLLMClient(host="192.168.1.100", server_port=8000)
+        ```
+
         Use the client to generate completions and update model weights:
 
         ```python
-        >>> from trl.extras.vllm_client import VLLMClient
-        >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
         [[2980, 498, 1492, 752, 448, 264, 13027, 8645, 30, 358, 2776, 4460, 311, 3270, 264, 2025],
          [911, 7988, 1251, 382, 3838, 653, 498, 1618, 4325, 879, 2581, 20027, 264, 21428, 30, 362]]
@@ -83,7 +101,12 @@ class VLLMClient:
     """
 
     def __init__(
-        self, host: str = "0.0.0.0", server_port: int = 8000, group_port: int = 51216, connection_timeout: float = 0.0
+        self,
+        base_url: Optional[str] = None,
+        host: str = "0.0.0.0",
+        server_port: int = 8000,
+        group_port: int = 51216,
+        connection_timeout: float = 0.0
     ):
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
@@ -91,8 +114,17 @@ class VLLMClient:
             raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
 
         self.session = requests.Session()
-        self.host = host
-        self.server_port = server_port
+
+        if base_url is not None:
+            # Parse the base_url to extract host and port
+            parsed_url = urlparse(base_url)
+            scheme = parsed_url.scheme or "http"
+            self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
+        else:
+            self.host = host
+            self.server_port = server_port
+            self.base_url = f"http://{self.host}:{self.server_port}"
+
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
         self.init_communicator()
@@ -109,7 +141,7 @@ class VLLMClient:
             total_timeout (`float`, *optional*, defaults to `0.0`):
                 Total timeout duration in seconds.
         """
-        url = f"http://{self.host}:{self.server_port}/health/"
+        url = f"{self.base_url}/health/"
         start_time = time.time()  # Record the start time
 
         while True:
@@ -120,7 +152,7 @@ class VLLMClient:
                 elapsed_time = time.time() - start_time
                 if elapsed_time >= total_timeout:
                     raise ConnectionError(
-                        f"The vLLM server can't be reached at {self.host}:{self.server_port} after {total_timeout} "
+                        f"The vLLM server can't be reached at {self.base_url} after {total_timeout} "
                         "seconds. Make sure the server is running by running `trl vllm-serve`."
                     ) from exc
             else:
@@ -171,7 +203,7 @@ class VLLMClient:
             `list[list[int]]`:
                 List of lists of token IDs representing the model-generated completions for each prompt.
         """
-        url = f"http://{self.host}:{self.server_port}/generate/"
+        url = f"{self.base_url}/generate/"
         response = self.session.post(
             url,
             json={
@@ -196,7 +228,7 @@ class VLLMClient:
         Initializes the weight update group in a distributed setup for model synchronization.
         """
         # Get the tensor parallel size from the server
-        url = f"http://{self.host}:{self.server_port}/get_tensor_parallel_size/"
+        url = f"{self.base_url}/get_tensor_parallel_size/"
         response = requests.get(url)
         if response.status_code == 200:
             tensor_parallel_size = response.json()["tensor_parallel_size"]
@@ -207,7 +239,7 @@ class VLLMClient:
         self.rank = tensor_parallel_size  # The client's rank is the last process
 
         # Initialize weight update group
-        url = f"http://{self.host}:{self.server_port}/init_communicator/"
+        url = f"{self.base_url}/init_communicator/"
         # In the server side, the host is set to 0.0.0.0
         response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "world_size": world_size})
         if response.status_code != 200:
@@ -228,7 +260,7 @@ class VLLMClient:
                 Tensor containing the updated weights.
         """
         dtype, shape = str(weights.dtype), tuple(weights.shape)
-        url = f"http://{self.host}:{self.server_port}/update_named_param/"
+        url = f"{self.base_url}/update_named_param/"
         response = self.session.post(url, json={"name": name, "dtype": dtype, "shape": shape})
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -253,7 +285,7 @@ class VLLMClient:
         """
         Resets the prefix cache for the model.
         """
-        url = f"http://{self.host}:{self.server_port}/reset_prefix_cache/"
+        url = f"{self.base_url}/reset_prefix_cache/"
         response = self.session.post(url)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -262,7 +294,7 @@ class VLLMClient:
         """
         Closes the weight update group and cleans up the communication group.
         """
-        url = f"http://{self.host}:{self.server_port}/close_communicator/"
+        url = f"{self.base_url}/close_communicator/"
 
         try:
             response = self.session.post(url)
@@ -278,10 +310,19 @@ class VLLMClient:
 if __name__ == "__main__":
     from vllm import SamplingParams
 
-    client = VLLMClient()
+    # Example 1: Initialize with base_url (recommended)
+    client1 = VLLMClient(base_url="http://0.0.0.0:8000")
+    print("Client 1 initialized with base_url")
+
+    # Example 2: Initialize with host and port
+    client2 = VLLMClient(host="0.0.0.0", server_port=8000)
+    print("Client 2 initialized with host and port")
+
+    # Choose one client to use for the example
+    client = client1
 
     # Generate completions
-    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
+    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32)
     print("Responses:", responses)  # noqa
 
     # Update model weights
