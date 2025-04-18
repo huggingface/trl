@@ -468,8 +468,8 @@ class QwenGRPOTrainer(Trainer):
         # TODO: make these configurable args
         self.use_ssr_buffer = True
         self.ssr_alpha = 2.0
-        self.ssr_total_buffer_size = 1000
-        self.ssr_persist_steps = 10000
+        self.ssr_total_buffer_size = 10000
+        self.ssr_persist_steps = 1000
         # if the buffer is smaller than this, we don't use it. Instead, draw from the dataset. This helps ensure we only select the best quality examples from the buffer on average.
         self.min_ssr_buffer_size = 100
         # the probability of using the SSR buffer on each step
@@ -999,9 +999,9 @@ class QwenGRPOTrainer(Trainer):
         print("Finished with advantages")
 
         # if we are using the SSR buffer, we need to populate it with the current batch of examples
-        # we only add examples to the buffer if they are not coming from the buffer
-        if self.use_ssr_buffer and not should_use_buffer and self.accelerator.process_index == 0:
-            # if the average absolute advantage is positive, we add that example to the buffer with the average advantage
+        # we DO allow an example from the buffer to be re-added after it is popped
+        if self.use_ssr_buffer and self.accelerator.process_index == 0:
+            # if the average absolute advantage is greater than 0, we add that example to the buffer with the average advantage
             average_abs_advantage = torch.abs(advantages).mean().item()
             if average_abs_advantage > 0:
                 print(f"Adding {inputs[0]} to the SSR buffer with advantage {average_abs_advantage}")
