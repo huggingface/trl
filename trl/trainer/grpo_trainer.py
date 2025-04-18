@@ -51,6 +51,7 @@ from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
+from .grpo_replay_buffer import ReplayBuffer, SSRReplayBuffer, repad
 from .utils import (
     disable_dropout_in_model,
     generate_model_card,
@@ -211,6 +212,31 @@ def split_tensor_dict(
         }
         for i in range(num_chunks)
     ]
+
+
+def combine_tensor_dict(split_dicts: list[dict[str, Optional[torch.Tensor]]]) -> dict[str, Optional[torch.Tensor]]:
+    """
+    Combines a list of dictionaries containing tensors into a single dictionary by
+    concatenating the tensors along the first dimension.
+
+    Example:
+        >>> d1 = {"x": torch.tensor([[0, 1], [2, 3]]), "y": torch.tensor([[0], [1]])}
+        >>> d2 = {"x": torch.tensor([[4, 5], [6, 7]]), "y": torch.tensor([[2], [3]])}
+        >>> d3 = {"x": torch.tensor([[8, 9], [10, 11]]), "y": torch.tensor([[4], [5]])}
+        >>> combine_tensor_dict([d1, d2, d3])
+        {
+            "x": tensor([[ 0,  1], [ 2,  3], [ 4,  5], [ 6,  7], [ 8,  9], [10, 11]]),
+            "y": tensor([[0], [1], [2], [3], [4], [5]])
+        }
+    """
+    combined_dict = {}
+    keys = split_dicts[0].keys()
+
+    for key in keys:
+        tensors = [d[key] for d in split_dicts if d[key] is not None]
+        combined_dict[key] = torch.stack(tensors, dim=0) if tensors else None
+
+    return combined_dict
 
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
@@ -652,6 +678,22 @@ class GRPOTrainer(Trainer):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
+        # for the standard setting, use this replay buffer
+
+        effective_batch_size = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+
+        if self.args.replay_buffer_class == "ReplayBuffer":
+            self.replay_buffer = ReplayBuffer(capacity=effective_batch_size)
+        elif self.args.replay_buffer_class == "SSRReplayBuffer":
+            self.replay_buffer = SSRReplayBuffer(
+                capacity=effective_batch_size * self.args.ssr_capacity_scalar,
+                alpha=self.args.ssr_alpha,
+            )
+        else:
+            raise ValueError(
+                f"Invalid `replay_buffer_class` passed to `GRPOConfig`. Expected either 'ReplayBuffer' or 'SSRReplayBuffer', but got {self.args.replay_buffer_class}."
+            )
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -860,13 +902,19 @@ class GRPOTrainer(Trainer):
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
             generate_every = self.args.gradient_accumulation_steps * self.num_iterations
-            if self._step % generate_every == 0 or self._buffered_inputs is None:
+            if self._step % generate_every == 0 or len(self.replay_buffer) == 0:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
-                self._buffered_inputs = split_tensor_dict(
-                    accumulated_local_batch, self.args.gradient_accumulation_steps
-                )
-            inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+                effective_batch_size = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+                split_tensors = split_tensor_dict(accumulated_local_batch, effective_batch_size)
+
+                for tensor in split_tensors:
+                    self.replay_buffer.add(tensor)
+
+            split_inputs = self.replay_buffer.sample(self.args.per_device_train_batch_size)
+            repadded_split_inputs = repad(split_inputs, padding_value=self.processing_class.pad_token_id)
+            inputs = combine_tensor_dict(repadded_split_inputs)
+
             self._step += 1
         else:
             # In evaluation, there is neither gradient accumulation, nor multiple iterations
