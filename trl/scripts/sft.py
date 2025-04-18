@@ -23,6 +23,7 @@ python trl/scripts/sft.py \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
+    --eos_token '<|im_end|>' \
     --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 100 \
@@ -39,6 +40,7 @@ python trl/scripts/sft.py \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
+    --eos_token '<|im_end|>' \
     --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 100 \
@@ -64,6 +66,7 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
+    setup_chat_format,
 )
 
 
@@ -98,6 +101,10 @@ def main(script_args, training_args, model_args):
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
     )
+
+    # Set default chat template if needed
+    if tokenizer.chat_template is None:
+        model, tokenizer = setup_chat_format(model, tokenizer, format="chatml")
 
     ################
     # Dataset
