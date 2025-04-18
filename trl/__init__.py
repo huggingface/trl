@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,15 +36,6 @@ _import_structure = {
     ],
     "environment": ["TextEnvironment", "TextHistory"],
     "extras": ["BestOfNSampler"],
-    "import_utils": [
-        "is_deepspeed_available",
-        "is_diffusers_available",
-        "is_llm_blender_available",
-        "is_mergekit_available",
-        "is_rich_available",
-        "is_unsloth_available",
-        "is_vllm_available",
-    ],
     "models": [
         "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
@@ -139,15 +130,6 @@ if TYPE_CHECKING:
     )
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
-    from .import_utils import (
-        is_deepspeed_available,
-        is_diffusers_available,
-        is_llm_blender_available,
-        is_mergekit_available,
-        is_rich_available,
-        is_unsloth_available,
-        is_vllm_available,
-    )
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,

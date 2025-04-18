@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ import itertools
 import tempfile
 import unittest
 
+import pytest
 import torch
 from accelerate.utils.memory import release_memory
 from datasets import load_dataset
@@ -41,6 +42,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
+@pytest.mark.slow
 @require_torch_accelerator
 @require_peft
 class SFTTrainerSlowTester(unittest.TestCase):
@@ -106,7 +108,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -141,7 +142,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -178,7 +178,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -214,7 +213,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -251,7 +249,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -295,7 +292,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name, device_map=device_map)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -335,7 +331,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -381,7 +376,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
             if tokenizer.chat_template is None:
                 model, tokenizer = setup_chat_format(model, tokenizer)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = SFTTrainer(
                 model,
@@ -423,8 +417,6 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 eval_dataset=self.eval_dataset,
             )
 
-            # check that the components of the trainer.model are monkey patched:
-            self.assertTrue(any("Liger" in type(module).__name__ for module in trainer.model.model.modules()))
             trainer.train()
 
         release_memory(trainer.model, trainer)

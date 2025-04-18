@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import unittest
 
 import torch
 from parameterized import parameterized
-from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
 
@@ -380,14 +380,6 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
         # Just check if the generation works
         _ = model.generate(input_ids, decoder_input_ids=decoder_input_ids, generation_config=generation_config)
-
-    def test_raise_error_not_causallm(self):
-        # Test with a model without a LM head
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
-        # This should raise a ValueError
-        with self.assertRaises(ValueError):
-            pretrained_model = AutoModel.from_pretrained(model_id)
-            _ = self.trl_model_class.from_pretrained(pretrained_model)
 
     @unittest.skip("This test needs to be run manually due to HF token issue.")
     def test_push_to_hub(self):

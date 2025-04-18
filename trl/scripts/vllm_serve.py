@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,14 +15,20 @@
 import argparse
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Optional
 
 import torch
-import torch.distributed as dist
 
 from trl import TrlParser
-from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
+from trl.import_utils import (
+    is_fastapi_available,
+    is_pydantic_available,
+    is_uvicorn_available,
+    is_vllm_ascend_available,
+    is_vllm_available,
+)
 
 
 if is_fastapi_available():
@@ -43,9 +49,10 @@ if is_vllm_available():
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
-    from vllm.worker.worker import Worker
-else:
-    Worker = object
+
+    if is_vllm_ascend_available():
+        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+
 
 logger = logging.getLogger(__name__)
 
@@ -55,26 +62,18 @@ logger = logging.getLogger(__name__)
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
-class WeightSyncWorker(Worker):
+class WeightSyncWorkerExtension:
     """
-    A vLLM worker that enables weight synchronization between a client and multiple server workers.
+    A vLLM worker extension that enables weight synchronization between a client and multiple server workers.
 
     This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` to handle
     efficient GPU-based communication using NCCL. The primary purpose of this class is to receive updated model weights
     from a client process and distribute them to all worker processes participating in model inference.
     """
 
-    def __init__(self, *args, **kwargs):
-        if not is_vllm_available():
-            raise ImportError(
-                "vLLM is required to use the WeightSyncWorker. Please install it using `pip install vllm`."
-            )
-
-        super().__init__(*args, **kwargs)
-
-        # The following attributes are initialized when `init_communicator` method is called.
-        self.pynccl_comm = None  # Communicator for weight updates
-        self.client_rank = None  # Source rank for broadcasting updated weights
+    # The following attributes are initialized when `init_communicator` method is called.
+    pynccl_comm = None  # Communicator for weight updates
+    client_rank = None  # Source rank for broadcasting updated weights
 
     def init_communicator(self, host: str, port: int, world_size: int) -> None:
         """
@@ -125,7 +124,7 @@ class WeightSyncWorker(Worker):
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
         # Use NCCL to broadcast the updated weights from the client (src) to all workers.
-        self.pynccl_comm.broadcast(weight, src=self.client_rank, stream=torch.cuda.current_stream())
+        self.pynccl_comm.broadcast(weight, src=self.client_rank)
         self.pynccl_comm.group.barrier()
 
         # Load the received weights into the model.
@@ -257,7 +256,7 @@ def main(script_args: ScriptArguments):
         # This is particularly useful here because we generate completions from the same prompts.
         enable_prefix_caching=script_args.enable_prefix_caching,
         max_model_len=script_args.max_model_len,
-        worker_cls="trl.scripts.vllm_serve.WeightSyncWorker",
+        worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
     )
 
     app = FastAPI()
@@ -284,7 +283,7 @@ def main(script_args: ScriptArguments):
         {"tensor_parallel_size": 8}
         ```
         """
-        return {"tensor_parallel_size": llm.llm_engine.parallel_config.tensor_parallel_size}
+        return {"tensor_parallel_size": llm.llm_engine.vllm_config.parallel_config.tensor_parallel_size}
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
@@ -416,8 +415,6 @@ def main(script_args: ScriptArguments):
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port)
-
-    dist.destroy_process_group()
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):

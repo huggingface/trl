@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,11 +22,12 @@ accelerate launch \
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
-    --output_dir gemma-3-4b-it-trl-sft-ChartQA \
+    --output_dir gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft \
     --bf16 \
     --torch_dtype bfloat16 \
     --use_peft \
-    --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
+    --lora_target_modules all-linear \
+    --attn_implementation eager
 
 Train Gemma-3 on the FanqingM/MMIU-Benchmark dataset (multi-image).
 
@@ -42,7 +43,8 @@ accelerate launch \
     --bf16 \
     --torch_dtype bfloat16 \
     --use_peft \
-    --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
+    --lora_target_modules all-linear
+    --attn_implementation eager
 """
 
 import io
@@ -152,17 +154,19 @@ def main():
     processor = AutoProcessor.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
+    processor.tokenizer.padding_side = "right"
 
     model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
 
     def collate_fn(examples):
-        texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
+        texts = [
+            processor.apply_chat_template(example["messages"], tokenize=False, add_generation_prompt=False).strip()
+            for example in examples
+        ]
         if "images" in examples[0]:  # single-image
-            images = [
-                img.convert("RGB") if img.mode == "RGBA" else img for example in examples for img in example["images"]
-            ]
+            images = [[img.convert("RGB") for img in example["images"]] for example in examples]
         else:  # multi-image
             images = [process_vision_info(example["messages"]) for example in examples]
 

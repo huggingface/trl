@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -594,6 +594,11 @@ class ConstantLengthDataset(IterableDataset):
         append_concat_token=True,
         add_special_tokens=True,
     ):
+        warnings.warn(
+            "This class is deprecated and will be removed in version 0.20.0. To use packing, use the argument "
+            "`packing` of `SFTConfig` instead.",
+            DeprecationWarning,
+        )
         self.tokenizer = tokenizer
         self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
         self.dataset = dataset
