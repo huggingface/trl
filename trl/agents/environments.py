@@ -81,8 +81,6 @@ class CodeAgentEnvironment(Environment):
         """
         if not hasattr(code_executor, "execute"):
              raise ValueError("code_executor must have an 'execute' method.")
-        if not hasattr(tokenizer, "decode") or not hasattr(tokenizer, "encode"):
-             raise ValueError("tokenizer must have 'decode' and 'encode' methods.")
 
         self.code_executor = code_executor
         self.tokenizer = tokenizer
@@ -119,7 +117,7 @@ class CodeAgentEnvironment(Environment):
         if self.tools_script:
             code_parts = f"{self.tools_script}\n{code_parts}"
 
-        # Basic cleaning (optional, adjust as needed)
+        # Basic cleaning
         code_parts = code_parts.strip()
 
         return code_parts if code_parts else None
@@ -170,13 +168,12 @@ class CodeAgentEnvironment(Environment):
             code_batch = []
             conversations_pending_code = []
 
-            # --- MODIFICATION START ---
             # Check if the structure of outputs is as expected (list of lists)
             if not isinstance(outputs, list) or (outputs and not all(isinstance(item, list) for item in outputs)):
                     print(f"Warning: Unexpected output structure from vllm_client.generate. Expected List[List[int]], got: {type(outputs)}. Attempting to proceed.")
                     # Depending on the actual structure, this might still fail later.
 
-            for i, generated_token_ids in enumerate(outputs): # Assume 'output' is directly the list of token IDs
+            for i, generated_token_ids in enumerate(outputs): # Assumes 'output' is directly the list of token IDs
                 current_prompt = active_conversations[i]
 
                 # Check if the generated_token_ids list is valid
@@ -184,19 +181,15 @@ class CodeAgentEnvironment(Environment):
                     print(f"Warning: Invalid token list received for prompt index {i}. Skipping. Got: {type(generated_token_ids)}")
                     completed_conversations.append(current_prompt)
                     continue
-                # We no longer have direct access to 'finish_reason' in this assumed structure.
-                # --- MODIFICATION END ---
 
                 # Decode the newly generated part
                 generated_text = self.tokenizer.decode(generated_token_ids, skip_special_tokens=True)
 
                 full_conversation_segment = current_prompt + generated_text
 
-                # --- MODIFICATION START ---
                 # Check if the generation stopped because of our specific code stop string
                 # Rely solely on the text ending with the stop string
                 stopped_by_code_tag = generated_text.rstrip().endswith(self.stop_string.rstrip())
-                # --- MODIFICATION END ---
 
                 # Check if code execution is requested IN THE NEWLY GENERATED TEXT
                 # Use rfind on the full segment to find the *last* code block start
@@ -240,7 +233,6 @@ class CodeAgentEnvironment(Environment):
 
         return completed_conversations
 
-    # ... generate method remains the same ...
 
     def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List[List[int]]:
         """Generate responses with code execution and return token IDs of the completions.
