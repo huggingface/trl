@@ -24,7 +24,7 @@ def test_repad_basic_padding():
         }
     ]
 
-    padded = repad(deepcopy(sample), pad_token_id=PAD_TOKEN_ID)
+    padded = repad(deepcopy(sample), padding_value=PAD_TOKEN_ID)
 
     assert len(padded[0]['prompt_ids']) == 2
     assert len(padded[0]['completion_ids']) == 3
@@ -61,7 +61,7 @@ def test_repad_logps_padding():
         }
     ]
 
-    padded = repad(deepcopy(sample), pad_token_id=PAD_TOKEN_ID)
+    padded = repad(deepcopy(sample), padding_value=PAD_TOKEN_ID)
 
     for logps in ["old_per_token_logps", "ref_per_token_logps"]:
         for ex in padded:
@@ -103,7 +103,7 @@ def test_repad_empty_masks():
             "ref_per_token_logps": torch.tensor([0.0,1.0]),
         }
     ]
-    padded = repad(deepcopy(sample), pad_token_id=999)
+    padded = repad(deepcopy(sample), padding_value=999)
     
     assert len(padded[0]['prompt_ids']) == 2
     assert len(padded[0]['completion_ids']) == 1

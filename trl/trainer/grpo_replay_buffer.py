@@ -2,17 +2,17 @@ import random
 from .utils import pad
     
 
-def repad(list_of_tensor_dicts, pad_token_id):   
+def repad(list_of_tensor_dicts, padding_value):   
     p_ids, p_attn_masks = remove_and_pad(
         [tensor_dict['prompt_ids'] for tensor_dict in list_of_tensor_dicts],
         [tensor_dict['prompt_mask'] for tensor_dict in list_of_tensor_dicts],
-        pad_token_id=pad_token_id,
+        pad_token_id=padding_value,
         padding_side='left',
     )
     c_ids, c_attn_masks = remove_and_pad(
         [tensor_dict['completion_ids'] for tensor_dict in list_of_tensor_dicts],
         [tensor_dict['completion_mask'] for tensor_dict in list_of_tensor_dicts],
-        pad_token_id=pad_token_id
+        pad_token_id=padding_value
     )
     old_logps, _ = remove_and_pad(
         [tensor_dict['old_per_token_logps'] for tensor_dict in list_of_tensor_dicts],
@@ -25,12 +25,7 @@ def repad(list_of_tensor_dicts, pad_token_id):
         pad_token_id=-10000.0, # ignored so can be anything
     )
     
-    for i, (p_id, p_mask, c_id, c_mask, o_logp, r_logp) in enumerate(zip(p_ids, p_attn_masks, c_ids, c_attn_masks, old_logps, ref_logps)):
-        assert len(p_id) == len(p_mask)
-        assert len(c_id) == len(c_mask)
-        assert len(o_logp) == len(c_mask)
-        assert len(r_logp) == len(c_mask)
-        
+    for i, (p_id, p_mask, c_id, c_mask, o_logp, r_logp) in enumerate(zip(p_ids, p_attn_masks, c_ids, c_attn_masks, old_logps, ref_logps)):        
         list_of_tensor_dicts[i]['prompt_ids'] = p_id
         list_of_tensor_dicts[i]['prompt_mask'] = p_mask
         list_of_tensor_dicts[i]['completion_ids'] = c_id
@@ -104,3 +99,36 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
+    
+    
+class SSRReplayBuffer(ReplayBuffer):
+    # implementation of the SSR replay buffer from https://arxiv.org/pdf/2504.08837
+    def __init__(self, capacity, alpha=1.0):
+        super().__init__(capacity)
+        self.alpha = alpha
+        self.advantages = []
+
+    def add(self, experience):
+        EPS = 0.0001 # ensures we get non-zero advs when the buffer contains all 0 advantages
+        advantage = experience["advantages"].item()
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+            self.advantages.append(abs(advantage) + EPS)  # Store absolute advantage
+        else:
+            # Replace the oldest entry if the buffer is full
+            self.buffer.pop(0)
+            self.advantages.pop(0)
+            self.buffer.append(experience)
+            self.advantages.append(abs(advantage))
+
+    def sample(self, batch_size):
+        if not self.buffer:
+            raise ValueError("Buffer is empty. Cannot sample from an empty buffer.")
+
+        # Convert advantages to priorities
+        scaled_priorities = np.power(self.advantages, self.alpha)
+        total_priority = np.sum(scaled_priorities)
+        probabilities = scaled_priorities / total_priority
+
+        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities)
+        return [self.buffer[i] for i in indices]

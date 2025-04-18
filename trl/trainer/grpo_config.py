@@ -150,6 +150,8 @@ class GRPOConfig(TrainingArguments):
             set `sync_ref_model=True`.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
+            
+        replay_buffer_class: (`str`, defaults to `DefaultReplayBuffer`):
 
         > Parameters that control the logging
 
@@ -385,6 +387,26 @@ class GRPOConfig(TrainingArguments):
     use_liger_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
+    )
+
+    replay_buffer_class: str = field(
+        default="ReplayBuffer",
+        metadata={
+            "help": "Replay buffer class to use, Options [ReplayBuffer, SSRReplayBuffer] The default is `ReplayBuffer`, that randomly samples without replacement."
+        },
+    )
+    ssr_capacity_scalar: int = field(
+        default=4,
+        metadata={
+            "help": "Scalar to multiply the replay buffer capacity. The default is 1, which means the capacity is "
+            "equal to the number of training samples in the effective batch."
+        },
+    )
+    ssr_alpha: float = field(
+        default=1.0,
+        metadata={
+            "help": "Alpha parameter for controlling the probablity distribution of the replay buffer. The default is 1.0, "
+        },
     )
 
     # Parameters that control the logging

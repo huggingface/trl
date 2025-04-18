@@ -60,7 +60,7 @@ from .utils import (
     selective_log_softmax,
 )
 
-from .grpo_replay_buffer import ReplayBuffer, repad
+from .grpo_replay_buffer import ReplayBuffer, SSRReplayBuffer, repad
 
 if is_deepspeed_available():
     import deepspeed
@@ -236,7 +236,7 @@ def combine_tensor_dict(
     for key in keys:
         tensors = [d[key] for d in split_dicts if d[key] is not None]
         combined_dict[key] = (
-            torch.cat(tensors, dim=0) if tensors else None
+            torch.stack(tensors, dim=0) if tensors else None
         )
 
     return combined_dict
@@ -681,7 +681,22 @@ class GRPOTrainer(Trainer):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
                 
         # for the standard setting, use this replay buffer
-        self.replay_buffer = ReplayBuffer(capacity=self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps)
+        
+        effective_batch_size = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+        
+        if self.args.replay_buffer_class == "ReplayBuffer":
+            self.replay_buffer = ReplayBuffer(capacity=effective_batch_size)
+        elif self.args.replay_buffer_class == "SSRReplayBuffer":
+            self.replay_buffer = SSRReplayBuffer(
+                capacity=effective_batch_size * self.args.ssr_capacity_scalar,
+                alpha=self.args.ssr_alpha,
+            )
+        else:
+            raise ValueError(
+                f"Invalid `replay_buffer_class` passed to `GRPOConfig`. Expected either 'ReplayBuffer' or 'SSRReplayBuffer', but got {self.args.replay_buffer_class}."
+            )
+        
+        
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -901,7 +916,8 @@ class GRPOTrainer(Trainer):
                     self.replay_buffer.add(tensor)
                           
             split_inputs = self.replay_buffer.sample(self.args.per_device_train_batch_size)
-            inputs = combine_tensor_dict(split_inputs)
+            repadded_split_inputs = repad(split_inputs, padding_value=self.processing_class.pad_token_id)
+            inputs = combine_tensor_dict(repadded_split_inputs)
             
             self._step += 1
         else:
