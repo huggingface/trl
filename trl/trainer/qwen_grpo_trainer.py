@@ -469,7 +469,9 @@ class QwenGRPOTrainer(Trainer):
         self.use_ssr_buffer = True
         self.ssr_alpha = 2.0
         self.ssr_total_buffer_size = 1000
-        self.ssr_persist_steps = 1000
+        self.ssr_persist_steps = 10000
+        # if the buffer is smaller than this, we don't use it. Instead, draw from the dataset. This helps ensure we only select the best quality examples from the buffer on average.
+        self.min_ssr_buffer_size = 100
         # the probability of using the SSR buffer on each step
         self.ssr_use_prob = 0.5
 
@@ -699,16 +701,49 @@ class QwenGRPOTrainer(Trainer):
             vlm_model = self.vlm.llm_engine.model_executor.driver_worker.model_runner.model
             vlm_model.load_weights(state_dict.items())
 
-    def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]], should_use_buffer: bool = False) -> dict[str, Union[torch.Tensor, Any]]:
-        '''
-        should_use_buffer - signals if the input comes from the SSR buffer
-        '''
+    def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
 
 
         device = self.accelerator.device
 
         if not self.env:
             raise ValueError("No environment provided. Only supporting envs now. ")
+
+        if self.use_ssr_buffer:
+            # each process needs to know if we are using the buffer. Process 0 decides and then broadcasts the decision to all processes
+            if self.accelerator.process_index == 0:
+                print(f"buffer size: {self.ssr_buffer.buffer_size}")
+                # step the buffer, needs to happen at each training step
+                self.ssr_buffer.step()
+
+                should_use_buffer = random.random() < self.ssr_use_prob and self.ssr_buffer.buffer_size > self.min_ssr_buffer_size
+                should_use_buffer_list = [should_use_buffer for _ in range(self.accelerator.num_processes)]
+            else:
+                should_use_buffer_list = [None for _ in range(self.accelerator.num_processes)]
+
+            broadcast_object_list(should_use_buffer_list, from_process=0)
+            should_use_buffer = should_use_buffer_list[0]
+
+            if should_use_buffer:
+                # process 0 will draw from the buffer, the other processes will hang out
+                if self.accelerator.process_index == 0:
+                    print("Drawing from buffer")
+                    example_from_buffer = self.ssr_buffer.draw_example()
+                    local_inputs = [deepcopy(example_from_buffer) for _ in range(len(inputs))]
+                    print(f"local_inputs after drawing from buffer length: {len(local_inputs)=}")
+                else:
+                    local_inputs = [None for _ in range(len(inputs))]
+
+                # broadcast the inputs (from the buffer) to all processes
+                broadcast_object_list(local_inputs, from_process=0)
+                inputs = local_inputs
+        else:
+            # if we are not using the SSR buffer, we just use the inputs passed into the function and signal that this example is not from the buffer
+            should_use_buffer = False
+
+        print(f"should_use_buffer: {should_use_buffer}")
+
+
 
         # TODO: This is a hack that we should probably fix.
         # without this, each gpu receives different inputs, screwing up the advantage computation.
@@ -844,6 +879,8 @@ class QwenGRPOTrainer(Trainer):
         else:
             raise ValueError("Attempted to generate with HF. Only supporting vllm now.")
 
+        print("Finished with generation")
+
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B*G, P+C)
 
@@ -869,6 +906,8 @@ class QwenGRPOTrainer(Trainer):
                         image_grid_thw,
                         logits_to_keep,
                     )
+
+        print("Finished with ref logits")
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -915,37 +954,49 @@ class QwenGRPOTrainer(Trainer):
                 output_reward_func = reward_func(prompts=conversations, completions=completions, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
+        print("Finished with rewards per function")
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
+        print(f"Finished with gathering rewards per function, {rewards_per_func=}, {self.accelerator.process_index=}")
+
+        self.accelerator.wait_for_everyone()
+        print(f"Finished with waiting for everyone, {self.accelerator.process_index=}")
 
         # # DEBUG: Verify prompt consistency across completions in each group
         # TODO: remove this probably?
-        if self.accelerator.is_main_process:
-            all_prompts = gather_object(prompts_text)
+        # if self.accelerator.is_main_process:
+        #     all_prompts = gather_object(prompts_text)
 
-            if not len(all_prompts) == self.num_generations:
-                raise ValueError(
-                    f"We should have one prompt per generation, but we have {len(all_prompts)} prompts and {self.num_generations} generations"
-                )
-            if not len(set(all_prompts)) == 1:
-                raise ValueError(f"All prompts should be the same. {all_prompts=}")
-            print("PASSED PROMPT CONSISTENCY CHECK")
+        #     if not len(all_prompts) == self.num_generations:
+        #         raise ValueError(
+        #             f"We should have one prompt per generation, but we have {len(all_prompts)} prompts and {self.num_generations} generations"
+        #         )
+        #     if not len(set(all_prompts)) == 1:
+        #         raise ValueError(f"All prompts should be the same. {all_prompts=}")
+        #     print("PASSED PROMPT CONSISTENCY CHECK")
 
-        # Add synchronization point to prevent processes from getting out of sync
-        self.accelerator.wait_for_everyone()
+        # # Add synchronization point to prevent processes from getting out of sync
+        # self.accelerator.wait_for_everyone()
+
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
-
+        print(f"Finished with reward weighting, {rewards=} {self.accelerator.process_index=}")
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+
+        print(f"Finished with grouped rewards, {mean_grouped_rewards=} {self.accelerator.process_index=}")
+        print(f"Finished with grouped rewards std, {std_grouped_rewards=} {self.accelerator.process_index=}")
 
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
+
+
+        print("Finished with advantages")
 
         # if we are using the SSR buffer, we need to populate it with the current batch of examples
         # we only add examples to the buffer if they are not coming from the buffer
@@ -957,6 +1008,8 @@ class QwenGRPOTrainer(Trainer):
 
                 # add the example to the buffer with the average advantage
                 self.ssr_buffer.add_example(inputs[0], average_abs_advantage)
+
+        print("Finished with repopulating SSR buffer")
 
         self.accelerator.wait_for_everyone()
 
@@ -1089,39 +1142,7 @@ class QwenGRPOTrainer(Trainer):
         prediction_loss_only,
         ignore_keys: Optional[list[str]] = None,
     ):
-        if self.use_ssr_buffer:
-            # each process needs to know if we are using the buffer. Process 0 decides and then broadcasts the decision to all processes
-            if self.accelerator.process_index == 0:
-                # step the buffer, needs to happen at each training step
-                self.ssr_buffer.step()
-
-                should_use_buffer = random.random() < self.ssr_use_prob and self.ssr_buffer.buffer_size > 0
-                should_use_buffer_list = [should_use_buffer for _ in range(self.accelerator.num_processes)]
-            else:
-                should_use_buffer_list = [None for _ in range(self.accelerator.num_processes)]
-
-            broadcast_object_list(should_use_buffer_list, from_process=0)
-            should_use_buffer = should_use_buffer_list[0]
-
-            if should_use_buffer:
-                # process 0 will draw from the buffer, the other processes will hang out
-                if self.accelerator.process_index == 0:
-                    print("Drawing from buffer")
-                    example_from_buffer = self.ssr_buffer.draw_example()
-                    local_inputs = [deepcopy(example_from_buffer) for _ in range(len(inputs))]
-                    print(f"local_inputs after drawing from buffer length: {len(local_inputs)=}")
-                else:
-                    local_inputs = [None for _ in range(len(inputs))]
-
-                # broadcast the inputs (from the buffer) to all processes
-                broadcast_object_list(local_inputs, from_process=0)
-                inputs = local_inputs
-        else:
-            # if we are not using the SSR buffer, we just use the inputs passed into the function and signal that this example is not from the buffer
-            should_use_buffer = False
-
-
-        inputs = self._prepare_inputs(inputs, should_use_buffer=should_use_buffer)
+        inputs = self._prepare_inputs(inputs)
         with torch.no_grad():
             with self.compute_loss_context_manager():
                 loss = self.compute_loss(model, inputs)
