@@ -60,6 +60,7 @@ from .utils import (
     selective_log_softmax,
 )
 
+from .grpo_replay_buffer import ReplayBuffer, repad
 
 if is_deepspeed_available():
     import deepspeed
@@ -212,6 +213,33 @@ def split_tensor_dict(
         for i in range(num_chunks)
     ]
 
+def combine_tensor_dict(
+    split_dicts: list[dict[str, Optional[torch.Tensor]]]
+) -> dict[str, Optional[torch.Tensor]]:
+    """
+    Combines a list of dictionaries containing tensors into a single dictionary by
+    concatenating the tensors along the first dimension.
+
+    Example:
+        >>> d1 = {"x": torch.tensor([[0, 1], [2, 3]]), "y": torch.tensor([[0], [1]])}
+        >>> d2 = {"x": torch.tensor([[4, 5], [6, 7]]), "y": torch.tensor([[2], [3]])}
+        >>> d3 = {"x": torch.tensor([[8, 9], [10, 11]]), "y": torch.tensor([[4], [5]])}
+        >>> combine_tensor_dict([d1, d2, d3])
+        {
+            "x": tensor([[ 0,  1], [ 2,  3], [ 4,  5], [ 6,  7], [ 8,  9], [10, 11]]),
+            "y": tensor([[0], [1], [2], [3], [4], [5]])
+        }
+    """
+    combined_dict = {}
+    keys = split_dicts[0].keys()
+
+    for key in keys:
+        tensors = [d[key] for d in split_dicts if d[key] is not None]
+        combined_dict[key] = (
+            torch.cat(tensors, dim=0) if tensors else None
+        )
+
+    return combined_dict
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -651,6 +679,9 @@ class GRPOTrainer(Trainer):
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+                
+        # for the standard setting, use this replay buffer
+        self.replay_buffer = ReplayBuffer(capacity=self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps)
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -860,13 +891,18 @@ class GRPOTrainer(Trainer):
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
             generate_every = self.args.gradient_accumulation_steps * self.num_iterations
-            if self._step % generate_every == 0 or self._buffered_inputs is None:
+            if self._step % generate_every == 0 or len(self.replay_buffer) == 0:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
-                self._buffered_inputs = split_tensor_dict(
-                    accumulated_local_batch, self.args.gradient_accumulation_steps
-                )
-            inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+                effective_batch_size = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+                split_tensors = split_tensor_dict(accumulated_local_batch, effective_batch_size)
+                
+                for tensor in split_tensors:
+                    self.replay_buffer.add(tensor)
+                          
+            split_inputs = self.replay_buffer.sample(self.args.per_device_train_batch_size)
+            inputs = combine_tensor_dict(repadded_split_inputs)
+            
             self._step += 1
         else:
             # In evaluation, there is neither gradient accumulation, nor multiple iterations
