@@ -901,7 +901,7 @@ class GRPOTrainer(Trainer):
                     self.replay_buffer.add(tensor)
                           
             split_inputs = self.replay_buffer.sample(self.args.per_device_train_batch_size)
-            inputs = combine_tensor_dict(repadded_split_inputs)
+            inputs = combine_tensor_dict(split_inputs)
             
             self._step += 1
         else:
