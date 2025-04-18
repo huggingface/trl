@@ -33,12 +33,11 @@ if is_vllm_available():
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm import SamplingParams, LLM
     from vllm.sampling_params import GuidedDecodingParams
+    if is_vllm_ascend_available():
+        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
 
 from accelerate import Accelerator
-from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
-
-if is_vllm_ascend_available():
-    from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+from accelerate.utils import broadcast_object_list, gather_object
 
 
 logger = logging.getLogger(__name__)
