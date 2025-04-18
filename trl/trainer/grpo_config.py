@@ -150,8 +150,8 @@ class GRPOConfig(TrainingArguments):
             set `sync_ref_model=True`.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
-            
-        replay_buffer_class: (`str`, defaults to `DefaultReplayBuffer`):
+
+        replay_buffer_class: (`str`, defaults to `ReplayBuffer`):
 
         > Parameters that control the logging
 

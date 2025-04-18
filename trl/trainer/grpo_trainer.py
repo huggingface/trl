@@ -51,6 +51,7 @@ from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
+from .grpo_replay_buffer import ReplayBuffer, SSRReplayBuffer, repad
 from .utils import (
     disable_dropout_in_model,
     generate_model_card,
@@ -60,7 +61,6 @@ from .utils import (
     selective_log_softmax,
 )
 
-from .grpo_replay_buffer import ReplayBuffer, SSRReplayBuffer, repad
 
 if is_deepspeed_available():
     import deepspeed
@@ -213,9 +213,8 @@ def split_tensor_dict(
         for i in range(num_chunks)
     ]
 
-def combine_tensor_dict(
-    split_dicts: list[dict[str, Optional[torch.Tensor]]]
-) -> dict[str, Optional[torch.Tensor]]:
+
+def combine_tensor_dict(split_dicts: list[dict[str, Optional[torch.Tensor]]]) -> dict[str, Optional[torch.Tensor]]:
     """
     Combines a list of dictionaries containing tensors into a single dictionary by
     concatenating the tensors along the first dimension.
@@ -235,11 +234,10 @@ def combine_tensor_dict(
 
     for key in keys:
         tensors = [d[key] for d in split_dicts if d[key] is not None]
-        combined_dict[key] = (
-            torch.stack(tensors, dim=0) if tensors else None
-        )
+        combined_dict[key] = torch.stack(tensors, dim=0) if tensors else None
 
     return combined_dict
+
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -679,11 +677,11 @@ class GRPOTrainer(Trainer):
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
-                
+
         # for the standard setting, use this replay buffer
-        
+
         effective_batch_size = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
-        
+
         if self.args.replay_buffer_class == "ReplayBuffer":
             self.replay_buffer = ReplayBuffer(capacity=effective_batch_size)
         elif self.args.replay_buffer_class == "SSRReplayBuffer":
@@ -695,8 +693,6 @@ class GRPOTrainer(Trainer):
             raise ValueError(
                 f"Invalid `replay_buffer_class` passed to `GRPOConfig`. Expected either 'ReplayBuffer' or 'SSRReplayBuffer', but got {self.args.replay_buffer_class}."
             )
-        
-        
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -911,14 +907,14 @@ class GRPOTrainer(Trainer):
                 accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
                 effective_batch_size = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
                 split_tensors = split_tensor_dict(accumulated_local_batch, effective_batch_size)
-                
+
                 for tensor in split_tensors:
                     self.replay_buffer.add(tensor)
-                          
+
             split_inputs = self.replay_buffer.sample(self.args.per_device_train_batch_size)
             repadded_split_inputs = repad(split_inputs, padding_value=self.processing_class.pad_token_id)
             inputs = combine_tensor_dict(repadded_split_inputs)
-            
+
             self._step += 1
         else:
             # In evaluation, there is neither gradient accumulation, nor multiple iterations

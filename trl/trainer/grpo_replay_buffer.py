@@ -13,58 +13,65 @@
 # limitations under the License.
 
 import random
-from .utils import pad
+
 import numpy as np
 
-def repad(list_of_tensor_dicts, padding_value):   
+from .utils import pad
+
+
+def repad(list_of_tensor_dicts, padding_value):
     p_ids, p_attn_masks = remove_and_pad(
-        [tensor_dict['prompt_ids'] for tensor_dict in list_of_tensor_dicts],
-        [tensor_dict['prompt_mask'] for tensor_dict in list_of_tensor_dicts],
+        [tensor_dict["prompt_ids"] for tensor_dict in list_of_tensor_dicts],
+        [tensor_dict["prompt_mask"] for tensor_dict in list_of_tensor_dicts],
         pad_token_id=padding_value,
-        padding_side='left',
+        padding_side="left",
     )
     c_ids, c_attn_masks = remove_and_pad(
-        [tensor_dict['completion_ids'] for tensor_dict in list_of_tensor_dicts],
-        [tensor_dict['completion_mask'] for tensor_dict in list_of_tensor_dicts],
-        pad_token_id=padding_value
+        [tensor_dict["completion_ids"] for tensor_dict in list_of_tensor_dicts],
+        [tensor_dict["completion_mask"] for tensor_dict in list_of_tensor_dicts],
+        pad_token_id=padding_value,
     )
     old_logps, _ = remove_and_pad(
-        [tensor_dict['old_per_token_logps'] for tensor_dict in list_of_tensor_dicts],
-        [tensor_dict['completion_mask'] for tensor_dict in list_of_tensor_dicts],
-        pad_token_id=-10000.0, # ignored so can be anything
+        [tensor_dict["old_per_token_logps"] for tensor_dict in list_of_tensor_dicts],
+        [tensor_dict["completion_mask"] for tensor_dict in list_of_tensor_dicts],
+        pad_token_id=-10000.0,  # ignored so can be anything
     )
     ref_logps, _ = remove_and_pad(
-        [tensor_dict['ref_per_token_logps'] for tensor_dict in list_of_tensor_dicts],
-        [tensor_dict['completion_mask'] for tensor_dict in list_of_tensor_dicts],
-        pad_token_id=-10000.0, # ignored so can be anything
+        [tensor_dict["ref_per_token_logps"] for tensor_dict in list_of_tensor_dicts],
+        [tensor_dict["completion_mask"] for tensor_dict in list_of_tensor_dicts],
+        pad_token_id=-10000.0,  # ignored so can be anything
     )
-    
-    for i, (p_id, p_mask, c_id, c_mask, o_logp, r_logp) in enumerate(zip(p_ids, p_attn_masks, c_ids, c_attn_masks, old_logps, ref_logps)):        
-        list_of_tensor_dicts[i]['prompt_ids'] = p_id
-        list_of_tensor_dicts[i]['prompt_mask'] = p_mask
-        list_of_tensor_dicts[i]['completion_ids'] = c_id
-        list_of_tensor_dicts[i]['completion_mask'] = c_mask
-        list_of_tensor_dicts[i]['old_per_token_logps'] = o_logp
-        list_of_tensor_dicts[i]['ref_per_token_logps'] = r_logp
-        
+
+    for i, (p_id, p_mask, c_id, c_mask, o_logp, r_logp) in enumerate(
+        zip(p_ids, p_attn_masks, c_ids, c_attn_masks, old_logps, ref_logps)
+    ):
+        list_of_tensor_dicts[i]["prompt_ids"] = p_id
+        list_of_tensor_dicts[i]["prompt_mask"] = p_mask
+        list_of_tensor_dicts[i]["completion_ids"] = c_id
+        list_of_tensor_dicts[i]["completion_mask"] = c_mask
+        list_of_tensor_dicts[i]["old_per_token_logps"] = o_logp
+        list_of_tensor_dicts[i]["ref_per_token_logps"] = r_logp
+
     return list_of_tensor_dicts
-    
-def remove_and_pad(list_of_ids, list_of_masks, pad_token_id=0, padding_side='right'):
+
+
+def remove_and_pad(list_of_ids, list_of_masks, pad_token_id=0, padding_side="right"):
     """
     Remove padding from list_of_ids and list_of_masks, and then pad them to the same length.
     """
     num_samples = len(list_of_ids)
     if list_of_ids[0] is None:
         # we are not using old_per_token_logps / ref_per_token_logps
-        return [None]*num_samples, [None]*num_samples
+        return [None] * num_samples, [None] * num_samples
     # Remove padding
     list_of_ids = [ids[mask == 1] for ids, mask in zip(list_of_ids, list_of_masks)]
     list_of_masks = [mask[mask == 1] for mask in list_of_masks]
-    
+
     ids = pad(list_of_ids, padding_value=pad_token_id, padding_side=padding_side)
     masks = pad(list_of_masks, padding_value=0, padding_side=padding_side)
-    
+
     return ids, masks
+
 
 def remove_padding(input_ids, attn_mask):
     """
@@ -74,7 +81,6 @@ def remove_padding(input_ids, attn_mask):
         input_ids = input_ids[attn_mask == 1]
         attn_mask = attn_mask[attn_mask == 1]
     return input_ids, attn_mask
-    
 
 
 class ReplayBuffer:
@@ -113,8 +119,8 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
-    
-    
+
+
 class SSRReplayBuffer(ReplayBuffer):
     # implementation of the SSR replay buffer from https://arxiv.org/pdf/2504.08837
     def __init__(self, capacity, alpha=1.0):
@@ -123,7 +129,7 @@ class SSRReplayBuffer(ReplayBuffer):
         self.advantages = []
 
     def add(self, experience):
-        EPS = 0.0001 # ensures we get non-zero advs when the buffer contains all 0 advantages
+        EPS = 0.0001  # ensures we get non-zero advs when the buffer contains all 0 advantages
         advantage = experience["advantages"].item()
         if len(self.buffer) < self.capacity:
             self.buffer.append(experience)
