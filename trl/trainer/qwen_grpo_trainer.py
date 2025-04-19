@@ -469,9 +469,9 @@ class QwenGRPOTrainer(Trainer):
         self.use_ssr_buffer = True
         self.ssr_alpha = 2.0
         self.ssr_total_buffer_size = 10000
-        self.ssr_persist_steps = 1000
+        self.ssr_persist_steps = 100000
         # if the buffer is smaller than this, we don't use it. Instead, draw from the dataset. This helps ensure we only select the best quality examples from the buffer on average.
-        self.min_ssr_buffer_size = 100
+        self.min_ssr_buffer_size = 50
         # the probability of using the SSR buffer on each step
         self.ssr_use_prob = 0.5
 
