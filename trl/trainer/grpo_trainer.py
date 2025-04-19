@@ -283,7 +283,7 @@ class GRPOTrainer(Trainer):
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
-        environment: Optional[Environment] = DefaultEnvironment,
+        environment: Optional[Environment] = DefaultEnvironment(),
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
