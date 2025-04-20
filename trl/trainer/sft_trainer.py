@@ -500,6 +500,16 @@ class SFTTrainer(Trainer):
                     )
                     dataset = dataset.map(_func, batched=True, **map_kwargs)
 
+            # If the dataset is prompt-completion, convert it to language modeling type
+            first_example = next(iter(dataset))
+            if "prompt" in first_example.keys() and "completion" in first_example.keys():
+                key = "messages" if is_conversational(first_example) else "text"
+
+                def concat_prompt_completion(example):
+                    return {key: example["prompt"] + example["completion"]}
+
+                dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
+
             if not is_processed:
                 # Convert the dataset to ChatML if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
