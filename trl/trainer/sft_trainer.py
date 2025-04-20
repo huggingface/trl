@@ -45,8 +45,8 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
+    apply_chat_template,
     is_conversational,
-    maybe_apply_chat_template,
     maybe_convert_to_chatml,
     pack_dataset,
     truncate_dataset,
@@ -521,29 +521,63 @@ class SFTTrainer(Trainer):
                     **map_kwargs,
                 )
 
+                # When dataset is not conversational, we need to add the EOS token at the end of each example
+                # We don't need to do this for conversational datasets as this is already handled by the
+                # `apply_chat_template` function.
+                first_example = next(iter(dataset))
+                if "text" in first_example.keys():
+
+                    def add_eos(example, eos_token):
+                        example["text"] = example["text"] + eos_token
+                        return example
+
+                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                        map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
+                    dataset = dataset.map(add_eos, fn_kwargs={"eos_token": processing_class.eos_token}, **map_kwargs)
+
                 # Apply the chat template if needed
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
-                column_names = next(iter(dataset)).keys()
-                dataset = dataset.map(
-                    maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
-                    remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
-                    **map_kwargs,
-                )
+                first_example = next(iter(dataset))
+                if is_conversational(first_example):
+                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                        map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+                    column_names = first_example.keys()
+                    dataset = dataset.map(
+                        apply_chat_template,
+                        fn_kwargs={"tokenizer": processing_class},
+                        remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
+                        **map_kwargs,
+                    )
+                    add_special_tokens = False
+                else:
+                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                        map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
+
+                    def add_eos(example, eos_token):
+                        example["text"] = example["text"] + eos_token
+                        return example
+
+                    dataset = dataset.map(
+                        add_eos,
+                        fn_kwargs={"tokenizer": processing_class},
+                        remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
+                        **map_kwargs,
+                    )
+                    add_special_tokens = True
 
                 # Tokenize the dataset if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize(example, processing_class, dataset_text_field):
-                    processed = processing_class(text=example[dataset_text_field])
-                    if (
-                        processing_class.eos_token_id is not None
-                        and processed["input_ids"][-1] != processing_class.eos_token_id
-                    ):
-                        processed["input_ids"] = processed["input_ids"] + [processing_class.eos_token_id]
-                        processed["attention_mask"] = processed["attention_mask"] + [1]
+                    processed = processing_class(
+                        text=example[dataset_text_field], add_special_tokens=add_special_tokens
+                    )
+                    # if (
+                    #     processing_class.eos_token_id is not None
+                    #     and processed["input_ids"][-1] != processing_class.eos_token_id
+                    # ):
+                    #     processed["input_ids"] = processed["input_ids"] + [processing_class.eos_token_id]
+                    #     processed["attention_mask"] = processed["attention_mask"] + [1]
                     return processed
 
                 dataset = dataset.map(
