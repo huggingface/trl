@@ -556,7 +556,7 @@ class SFTTrainer(Trainer):
                     )
                     add_special_tokens = True  # subsequent tokenization will add special tokens (mostly for bos)
 
-                # Tokenize the dataset
+                # Tokenize the dataset if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
