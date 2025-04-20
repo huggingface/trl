@@ -44,7 +44,7 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
 
-from ..data_utils import apply_chat_template, is_conversational
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is_rich_available, is_vllm_available
@@ -880,19 +880,9 @@ class GRPOTrainer(Trainer):
         mode = "eval" if self.control.should_evaluate else "train"
 
         prompts = [x["prompt"] for x in inputs]
-        if is_conversational(inputs[0]):
-            prompts_text = [apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-            add_special_tokens = False
-        else:
-            prompts_text = [x["prompt"] for x in inputs]
-            add_special_tokens = True
-
+        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
-            text=prompts_text,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            add_special_tokens=add_special_tokens,
+            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
@@ -1021,16 +1011,10 @@ class GRPOTrainer(Trainer):
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                         texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
-                        add_special_tokens = False
                     else:
                         texts = [p + c for p, c in zip(prompts, completions)]
-                        add_special_tokens = True
                     reward_inputs = reward_processing_class(
-                        text=texts,
-                        return_tensors="pt",
-                        padding=True,
-                        padding_side="right",
-                        add_special_tokens=add_special_tokens,
+                        text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
                     )
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
