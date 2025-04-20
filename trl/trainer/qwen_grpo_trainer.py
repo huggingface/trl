@@ -727,6 +727,10 @@ class QwenGRPOTrainer(Trainer):
             if should_use_buffer:
                 # process 0 will draw from the buffer, the other processes will hang out
                 if self.accelerator.process_index == 0:
+
+                    # put the current example in the buffer with a small advantage so we avoid "throwing it away"
+                    self.ssr_buffer.add_example(inputs[0], 0.01)
+
                     print("Drawing from buffer")
                     example_from_buffer = self.ssr_buffer.draw_example()
                     local_inputs = [deepcopy(example_from_buffer) for _ in range(len(inputs))]
