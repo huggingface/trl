@@ -70,6 +70,9 @@ class SFTConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `2e-5`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
+        completion_only_loss (`bool`, *optional*, defaults to `True`):
+            When provided with a [prompt-completion](#prompt-completion) dataset, whether to compute the loss only on
+            the completion part of the dataset. If `False`, the loss is computed on the entire input sequence.
     """
 
     # Parameters that control the model
@@ -145,6 +148,13 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
             "`TrainingArguments`."
+        },
+    )
+    completion_only_loss: bool = field(
+        default=True,
+        metadata={
+            "help": "When provided with a prompt-completion dataset, whether to compute the loss only on the "
+            "completion part of the dataset. If `False`, the loss is computed on the entire input sequence."
         },
     )
 
