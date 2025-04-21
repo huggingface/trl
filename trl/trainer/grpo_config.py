@@ -226,9 +226,7 @@ class GRPOConfig(TrainingArguments):
     )
     shuffle_dataset: Optional[bool] = field(
         default=True,
-        metadata={
-            "help": "Whether to shuffle the training dataset."
-        },
+        metadata={"help": "Whether to shuffle the training dataset."},
     )
 
     # Parameters that control generation

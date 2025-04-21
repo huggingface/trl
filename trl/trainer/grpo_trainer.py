@@ -145,7 +145,7 @@ class RepeatSampler(Sampler):
         self.shuffle = shuffle
         self.seed = seed
 
-        if not shuffle:
+        if shuffle:
             self.generator = torch.Generator()  # Create a local random generator
             if seed is not None:
                 self.generator.manual_seed(seed)
@@ -155,7 +155,6 @@ class RepeatSampler(Sampler):
             # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
             indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
         else:
-            # E.g., [0, 1, 2, 3, 4, 5, 6] (num_samples = 7)
             indexes = list(range(self.num_samples))
 
         #    [2, 4, 3, 1, 0, 6, 5]
@@ -491,6 +490,8 @@ class GRPOTrainer(Trainer):
         self.mask_truncated_completions = args.mask_truncated_completions
 
         # Datasets
+        self.shuffle_dataset = args.shuffle_dataset
+
         if (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
@@ -742,6 +743,7 @@ class GRPOTrainer(Trainer):
             mini_repeat_count=self.num_generations,
             batch_size=effective_batch_size // self.num_generations,
             repeat_count=self.num_iterations * self.args.gradient_accumulation_steps,
+            shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
 
