@@ -225,7 +225,7 @@ class ScriptArguments:
         },
     )
     enforce_eager_flag: Optional[bool] = field(
-        default=False,
+        default=None,
         metadata={
             "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute "
             "the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
