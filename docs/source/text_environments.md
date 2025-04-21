@@ -157,7 +157,7 @@ The `TextHistory` object stores the interactions between the model and the text 
 
 ### Attributes
 
-The following table summarises the available attributes of the `TextEnvironment` class:
+The following table summarises the available attributes of the `TextHistory` class:
 
 | Attribute           | Description     |
 |:-------------------|:----------------|
