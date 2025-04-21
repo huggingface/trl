@@ -224,6 +224,13 @@ class ScriptArguments:
             "hardware support this feature."
         },
     )
+    enforce_eager_flag: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute "
+            "the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
+        },
+    )
 
 
 def main(script_args: ScriptArguments):
@@ -250,6 +257,7 @@ def main(script_args: ScriptArguments):
         revision=script_args.revision,
         tensor_parallel_size=script_args.tensor_parallel_size,
         gpu_memory_utilization=script_args.gpu_memory_utilization,
+        enforce_eager=script_args.enforce_eager_flag,
         dtype=script_args.dtype,
         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
