@@ -224,7 +224,7 @@ class ScriptArguments:
             "hardware support this feature."
         },
     )
-    enforce_eager_flag: Optional[bool] = field(
+    enforce_eager: Optional[bool] = field(
         default=None,
         metadata={
             "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute "
