@@ -20,6 +20,7 @@ from collections.abc import Sized
 from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
 
+import datasets
 import torch
 import torch.utils.data
 import transformers
@@ -27,7 +28,7 @@ from accelerate.utils import broadcast_object_list, gather, gather_object, is_pe
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
-from torch.utils.data import Sampler
+from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
@@ -40,7 +41,8 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
+from transformers.trainer_utils import seed_worker
+from transformers.utils import is_datasets_available, is_peft_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -76,7 +78,7 @@ if is_wandb_available():
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 
-class RepeatRandomSampler(Sampler):
+class RepeatSampler(Sampler):
     """
     Sampler that repeats the indices of a dataset in a structured manner.
 
@@ -89,6 +91,8 @@ class RepeatRandomSampler(Sampler):
             Number of unique indices per batch.
         repeat_count (`int`, *optional*, defaults to `1`):
             Number of times to repeat the full sampling process.
+        shuffle (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the dataset.
         seed (`int` or `None`, *optional*, defaults to `None`):
             Random seed for reproducibility (only affects this sampler).
 
@@ -130,6 +134,7 @@ class RepeatRandomSampler(Sampler):
         mini_repeat_count: int,
         batch_size: int = 1,
         repeat_count: int = 1,
+        shuffle: bool = True,
         seed: Optional[int] = None,
     ):
         self.data_source = data_source
@@ -137,14 +142,20 @@ class RepeatRandomSampler(Sampler):
         self.batch_size = batch_size
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
+        self.shuffle = shuffle
         self.seed = seed
-        self.generator = torch.Generator()  # Create a local random generator
-        if seed is not None:
-            self.generator.manual_seed(seed)
+
+        if shuffle:
+            self.generator = torch.Generator()  # Create a local random generator
+            if seed is not None:
+                self.generator.manual_seed(seed)
 
     def __iter__(self):
-        # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
-        indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+        if self.shuffle:
+            # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
+            indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+        else:
+            indexes = list(range(self.num_samples))
 
         #    [2, 4, 3, 1, 0, 6, 5]
         # -> [[2, 4, 3], [1, 0, 6], [5]]  (batch_size = 3)
@@ -164,6 +175,15 @@ class RepeatRandomSampler(Sampler):
         return self.num_samples * self.mini_repeat_count * self.repeat_count
 
 
+class RepeatRandomSampler(RepeatSampler):
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "RepeatRandomSampler is deprecated and will be removed in version 0.18. Use RepeatSampler instead.",
+            DeprecationWarning,
+        )
+        super().__init__(*args, **kwargs)
+
+
 # torch.nanstd doesn't exist, so we define it here
 def nanstd(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -181,6 +201,34 @@ def nanstd(tensor: torch.Tensor) -> torch.Tensor:
     count = torch.sum(~torch.isnan(tensor))  # Count of non-NaN values
     variance *= count / (count - 1)  # Bessel's correction
     return torch.sqrt(variance)
+
+
+def split_tensor_dict(
+    tensor_dict: dict[str, Optional[torch.Tensor]], num_chunks: int
+) -> list[dict[str, Optional[torch.Tensor]]]:
+    """
+    Splits a dictionary of tensors along the first dimension into `num_chunks` equal parts.
+
+    Example:
+        >>> x = torch.arange(12).reshape(6, 2)
+        >>> y = torch.arange(6).reshape(6, 1)
+        >>> tensor_dict = {"x": x, "y": y}
+        >>> split_tensor_dict(tensor_dict, 3)
+        [
+            {"x": tensor([[0, 1], [2, 3]]), "y": tensor([[0], [1]])},
+            {"x": tensor([[4, 5], [6, 7]]), "y": tensor([[2], [3]])},
+            {"x": tensor([[ 8,  9], [10, 11]]), "y": tensor([[4], [5]])}
+        ]
+    """
+    first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
+    chunk_size = first_tensor.shape[0] // num_chunks
+    return [
+        {
+            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
+            for key, tensor in tensor_dict.items()
+        }
+        for i in range(num_chunks)
+    ]
 
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
@@ -451,6 +499,8 @@ class GRPOTrainer(Trainer):
         self.mask_truncated_completions = args.mask_truncated_completions
 
         # Datasets
+        self.shuffle_dataset = args.shuffle_dataset
+
         if (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
@@ -471,7 +521,7 @@ class GRPOTrainer(Trainer):
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
         # `_get_train_sampler` and `_prepare_inputs`.
-        self._buffered_inputs = [None] * args.gradient_accumulation_steps
+        self._buffered_inputs = None
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
@@ -529,29 +579,35 @@ class GRPOTrainer(Trainer):
             "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
         }
 
-        # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
-        num_processes = self.accelerator.num_processes
-        global_batch_size = args.per_device_train_batch_size * num_processes
-        possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+        # Check if the effective batch size can be divided by the number of generations
         if self.num_generations < 2:
             raise ValueError(
-                f"GRPO requires at least 2 generations per prompt to calculate the advantages. "
-                f"You provided {self.num_generations}, which is less than the minimum required."
+                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                f"{self.num_generations}, which is less than the minimum required."
             )
+        num_processes = self.accelerator.num_processes
+        effective_batch_size = args.per_device_train_batch_size * num_processes * args.gradient_accumulation_steps
+        possible_values = [
+            n_gen for n_gen in range(2, effective_batch_size + 1) if (effective_batch_size) % n_gen == 0
+        ]
         if self.num_generations not in possible_values:
             raise ValueError(
-                f"The global train batch size ({num_processes} x {args.per_device_train_batch_size}) must be evenly "
-                f"divisible by the number of generations per prompt ({self.num_generations}). Given the current train "
-                f"batch size, the valid values for the number of generations are: {possible_values}."
+                f"The effective train batch size ({num_processes} x {args.per_device_train_batch_size} x "
+                f"{args.gradient_accumulation_steps}) must be evenly divisible by the number of generations per "
+                f"prompt ({self.num_generations}). Given the current effective train batch size, the valid values for "
+                f"the number of generations are: {possible_values}."
             )
         if self.args.eval_strategy != "no":
-            global_batch_size = args.per_device_eval_batch_size * num_processes
-            possible_values = [n_gen for n_gen in range(2, global_batch_size + 1) if (global_batch_size) % n_gen == 0]
+            effective_batch_size = args.per_device_eval_batch_size * num_processes
+            possible_values = [
+                n_gen for n_gen in range(2, effective_batch_size + 1) if (effective_batch_size) % n_gen == 0
+            ]
             if self.num_generations not in possible_values:
                 raise ValueError(
-                    f"The global eval batch size ({num_processes} x {args.per_device_eval_batch_size}) must be evenly "
-                    f"divisible by the number of generations per prompt ({self.num_generations}). Given the current "
-                    f"eval batch size, the valid values for the number of generations are: {possible_values}."
+                    f"The effective eval batch size ({num_processes} x {args.per_device_eval_batch_size}) must be "
+                    f"evenly divisible by the number of generations per prompt ({self.num_generations}). Given the "
+                    "current effective eval batch size, the valid values for the number of generations are: "
+                    f"{possible_values}."
                 )
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
@@ -624,6 +680,42 @@ class GRPOTrainer(Trainer):
         if self._signature_columns is None:
             self._signature_columns = ["prompt"]
 
+    # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
+    # Instead of returning a standard per-step batch, our dataloader loads an *accumulated* batch
+    # (i.e., `per_device_batch_size × gradient_accumulation_steps`). This allows us to generate completions
+    # once per optimization step—rather than once per gradient accumulation step—which is significantly more efficient.
+    # The only change from the original implementation is multiplying the batch size by `gradient_accumulation_steps`.
+    # Thus, `_prepare_inputs` is called with the accumulated batch size, and it handles the splitting internally.
+    # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
+    # modification.As a result, some parts of the method aren't relevant to GRPO, but we keep them to stay one line
+    # apart from the super method, ensuring easier maintenance in the future.
+    def get_train_dataloader(self):
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        train_dataset = self.train_dataset
+        data_collator = self.data_collator
+        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+        else:
+            data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
+
+        dataloader_params = {
+            "batch_size": self._train_batch_size * self.args.gradient_accumulation_steps,  # < this is the change
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+            "persistent_workers": self.args.dataloader_persistent_workers,
+        }
+
+        if not isinstance(train_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_train_sampler()
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+            dataloader_params["worker_init_fn"] = seed_worker
+            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+        return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
+
     def _get_train_sampler(self) -> Sampler:
         # Returns a sampler that
         # 1. ensures each prompt is repeated across multiple processes. This guarantees that identical prompts are
@@ -636,38 +728,37 @@ class GRPOTrainer(Trainer):
         # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
         # second row shows the second sampled batch, and so on.
         #
-        #                                     |     GPU 0     |     GPU 1     |     GPU 2    |
+        #                                      |     Accum step 0      |     Accum step 1      |
+        #                                      |   GPU 0   |   GPU 1   |   GPU 0   |   GPU 1   |
         #
-        #               global_step   step     <───────>  num_generations=3
-        #                                      <───────────> per_device_train_batch_size=4
-        #                ▲   0          0      0   0   0   1   1   1   2   2   2   3   3   3  │
-        #  grad_accum=3  │   0          1      4   4   4   5   5   5   6   6   6   7   7   7  │ Generate completions for each prompt
-        #                ▼   0          2      8   8   8   9   9   9  10  10  10  11  11  11  │
+        #                 global_step   step    <-───>  num_generations=2
+        #                                       <-───────> per_device_train_batch_size=3
+        #  grad_accum    ▲  ▲  0          0     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
+        #     =2         ▼  |  0          1      0   0   1   1   2   2 [ 3   3   4   4   5   5]   <- Take the stored generations and use the second slice to compute the loss
+        #                   |
+        #                   |  1          2     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Take the stored generations and use the first slice to compute the loss
+        #  num_iterations=2 ▼  1          3      0   0   1   1   2   2 [ 3   3   4   4   5   5]   <- Take the stored generations and use the second slice to compute the loss
         #
-        #                    1          3      0   0   0   1   1   1   2   2   2   3   3   3  │ The sampled prompts are the same as in the first iteration
-        #                    1          4      4   4   4   5   5   5   6   6   6   7   7   7  │ Reuse the completions (here, once, because num_iterations=2)
-        #                    1          5      8   8   8   9   9   9  10  10  10  11  11  11  │
-        #
-        #                    2          6     12  12  12  13  13  13  14  14  14  15  15  15
-        #                    2          7     16  16  16  17  17  17  18  18  18  19  19  19
-        #                    2          8     20  20  20  21  21  21  22  22  22  23  23  23
+        #                      2          4     [6   6   7   7   8   8]  9   9  10  10  11  11    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
+        #                      2          5      6   6   7   7   8   8 [ 9   9  10  10  11  11]   <- ...
         #                                          ...
         effective_batch_size = (
             self.args.per_device_train_batch_size
             * self.accelerator.num_processes
             * self.args.gradient_accumulation_steps
         )
-        return RepeatRandomSampler(
+        return RepeatSampler(
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
             batch_size=effective_batch_size // self.num_generations,
-            repeat_count=self.num_iterations,
+            repeat_count=self.num_iterations * self.args.gradient_accumulation_steps,
+            shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
         # See _get_train_sampler for an explanation of the sampler.
-        return RepeatRandomSampler(
+        return RepeatSampler(
             data_source=eval_dataset,
             mini_repeat_count=self.num_generations,
             seed=self.args.seed,
@@ -707,18 +798,28 @@ class GRPOTrainer(Trainer):
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
-    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
-        # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-        logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
-        logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-        input_ids = input_ids[:, -logits_to_keep:]
-        # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
-        # See https://github.com/huggingface/trl/issues/2770
-        logits = logits[:, -logits_to_keep:]
-        # Divide logits by sampling temperature.
-        # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-        logits = logits / self.temperature
-        return selective_log_softmax(logits, input_ids)  # compute logprobs for the input tokens
+    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
+        batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
+        all_logps = []
+        for i in range(0, input_ids.size(0), batch_size):
+            input_ids_batch = input_ids[i : i + batch_size]
+            attention_mask_batch = attention_mask[i : i + batch_size]
+
+            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+            logits = model(
+                input_ids=input_ids_batch, attention_mask=attention_mask_batch, logits_to_keep=logits_to_keep + 1
+            ).logits
+            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            input_ids_batch = input_ids_batch[:, -logits_to_keep:]
+            # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
+            # See https://github.com/huggingface/trl/issues/2770
+            logits = logits[:, -logits_to_keep:]
+            # Divide logits by sampling temperature.
+            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+            logits = logits / self.temperature
+            logps = selective_log_softmax(logits, input_ids_batch)  # compute logprobs for the input tokens
+            all_logps.append(logps)
+        return torch.cat(all_logps, dim=0)
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -762,27 +863,43 @@ class GRPOTrainer(Trainer):
             self.vllm_client.reset_prefix_cache()
 
     @profiling_decorator
-    def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
+    def _prepare_inputs(
+        self, accumulated_local_batch: dict[str, Union[torch.Tensor, Any]]
+    ) -> dict[str, Union[torch.Tensor, Any]]:
+        # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
+        # During training:
+        #   - Receives the accumulated local batch (Per-GPU batch size × Gradient accumulation steps)
+        #     from the modified training dataloader instead of the standard local batch
+        #   - Generates completions once for the entire accumulated batch and splits it into smaller batches
+        #   - Buffers these completions and returns the appropriate slice for the current accumulation step
+        #   - Optimizes by regenerating completions only periodically (every gradient_accumulation_steps * num_iterations)
+        # During evaluation:
+        #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
+        #   - Completions are generated for each batch without buffering or reuse
+        # Returns a single local batch in both cases.
+
         mode = "eval" if self.control.should_evaluate else "train"
         if mode == "train":
-            buffer_index = self._step % self.args.gradient_accumulation_steps
-            buffered_inputs = self._buffered_inputs[buffer_index]
-            if self.state.global_step % self.num_iterations == 0 or buffered_inputs is None:
-                # buffered_inputs=None can occur when resuming from a checkpoint
-                inputs = self._generate_and_score_completions(inputs)
-                self._buffered_inputs[buffer_index] = inputs
-            else:
-                inputs = buffered_inputs
+            generate_every = self.args.gradient_accumulation_steps * self.num_iterations
+            if self._step % generate_every == 0 or self._buffered_inputs is None:
+                # self._buffered_inputs=None can occur when resuming from a checkpoint
+                accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
+                self._buffered_inputs = split_tensor_dict(
+                    accumulated_local_batch, self.args.gradient_accumulation_steps
+                )
+            inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
             self._step += 1
         else:
-            # In evaluation, we don't reuse completions across multiple updates, so we don't need to buffer inputs.
-            inputs = self._generate_and_score_completions(inputs)
+            # In evaluation, there is neither gradient accumulation, nor multiple iterations
+            inputs = self._generate_and_score_completions(accumulated_local_batch)
         return inputs
 
     def _generate_and_score_completions(
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
+        mode = "eval" if self.control.should_evaluate else "train"
+
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
@@ -866,13 +983,14 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         with torch.no_grad():
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:
                 old_per_token_logps = self._get_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
             else:
                 old_per_token_logps = None
@@ -881,12 +999,12 @@ class GRPOTrainer(Trainer):
                 ref_per_token_logps = None
             elif self.ref_model is not None:
                 ref_per_token_logps = self._get_per_token_logps(
-                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
             else:
                 with self.accelerator.unwrap_model(self.model).disable_adapter():
                     ref_per_token_logps = self._get_per_token_logps(
-                        self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                        self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                     )
 
         # Decode the generated completions
@@ -969,8 +1087,6 @@ class GRPOTrainer(Trainer):
         advantages = advantages[process_slice]
 
         # Log the metrics
-        mode = "eval" if self.control.should_evaluate else "train"
-
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]

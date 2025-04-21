@@ -174,6 +174,9 @@ class ScriptArguments:
         enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
+        enforce_eager (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
+            model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
     """
 
     model: str = field(metadata={"help": "Model name or path to load the model from."})
@@ -224,6 +227,14 @@ class ScriptArguments:
             "hardware support this feature."
         },
     )
+    enforce_eager: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always "
+            "execute the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager "
+            "execution in hybrid."
+        },
+    )
 
 
 def main(script_args: ScriptArguments):
@@ -250,6 +261,7 @@ def main(script_args: ScriptArguments):
         revision=script_args.revision,
         tensor_parallel_size=script_args.tensor_parallel_size,
         gpu_memory_utilization=script_args.gpu_memory_utilization,
+        enforce_eager=script_args.enforce_eager,
         dtype=script_args.dtype,
         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
