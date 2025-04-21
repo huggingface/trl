@@ -178,7 +178,7 @@ class RepeatSampler(Sampler):
 class RepeatRandomSampler(RepeatSampler):
     def __init__(self, *args, **kwargs):
         warnings.warn(
-            "RepeatRandomSampler is deprecated and will be removed in version 0.18. Use RepeatSampler instead",
+            "RepeatRandomSampler is deprecated and will be removed in version 0.18. Use RepeatSampler instead.",
             DeprecationWarning,
         )
         super().__init__(*args, **kwargs)
