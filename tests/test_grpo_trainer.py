@@ -52,7 +52,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         sampled = list(sampler)
         expected = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
         self.assertEqual(sampled, expected)
-        
+
     def test_sampler_no_repeat(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=1)
