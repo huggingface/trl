@@ -78,7 +78,7 @@ if is_wandb_available():
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 
-class RepeatRandomSampler(Sampler):
+class RepeatSampler(Sampler):
     """
     Sampler that repeats the indices of a dataset in a structured manner.
 
@@ -91,6 +91,8 @@ class RepeatRandomSampler(Sampler):
             Number of unique indices per batch.
         repeat_count (`int`, *optional*, defaults to `1`):
             Number of times to repeat the full sampling process.
+        shuffle (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the dataset.
         seed (`int` or `None`, *optional*, defaults to `None`):
             Random seed for reproducibility (only affects this sampler).
 
@@ -132,6 +134,7 @@ class RepeatRandomSampler(Sampler):
         mini_repeat_count: int,
         batch_size: int = 1,
         repeat_count: int = 1,
+        shuffle: bool = True,
         seed: Optional[int] = None,
     ):
         self.data_source = data_source
@@ -140,13 +143,20 @@ class RepeatRandomSampler(Sampler):
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
         self.seed = seed
-        self.generator = torch.Generator()  # Create a local random generator
-        if seed is not None:
-            self.generator.manual_seed(seed)
+
+        if not shuffle:
+            self.generator = torch.Generator()  # Create a local random generator
+            if seed is not None:
+                self.generator.manual_seed(seed)
 
     def __iter__(self):
-        # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
-        indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+        
+        # E.g., [0, 1, 2, 3, 4, 5, 6] (num_samples = 7)
+        indexes = torch.arange(self.num_samples).tolist()
+
+        if self.shuffle:
+            # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
+            indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
 
         #    [2, 4, 3, 1, 0, 6, 5]
         # -> [[2, 4, 3], [1, 0, 6], [5]]  (batch_size = 3)

@@ -59,6 +59,8 @@ class GRPOConfig(TrainingArguments):
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
             with vLLM generation.
+        shuffle_dataset (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the training dataset.
 
         > Parameters that control generation
 
@@ -220,6 +222,12 @@ class GRPOConfig(TrainingArguments):
             "generation, improving generation speed. However, disabling this option allows training models that "
             "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
             "is not compatible with vLLM generation."
+        },
+    )
+    shuffle_dataset: Optional[bool] = field(
+        default=True,
+        metadata={
+            "help": "Whether to shuffle the training dataset."
         },
     )
 
