@@ -46,6 +46,21 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         # Check that each element is repeated twice
         assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
 
+    def test_sampler_noshuffle(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2)
+        # Should output something like [4, 4, 3, 3, 0, 0, 1, 1, 2, 2, 6, 6, 5, 5]
+        sampled = list(sampler)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * len(dataset)
+        # Check that all indexes are present
+        assert set(sampled) == set(range(len(dataset)))
+        # Check that each element is repeated twice
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+
+        # new
+        assert sampled == [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]    
+        
     def test_sampler_no_repeat(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatRandomSampler(dataset, mini_repeat_count=1)

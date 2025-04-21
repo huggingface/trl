@@ -142,6 +142,7 @@ class RepeatSampler(Sampler):
         self.batch_size = batch_size
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
+        self.shuffle = shuffle
         self.seed = seed
 
         if not shuffle:
@@ -150,13 +151,12 @@ class RepeatSampler(Sampler):
                 self.generator.manual_seed(seed)
 
     def __iter__(self):
-        
-        # E.g., [0, 1, 2, 3, 4, 5, 6] (num_samples = 7)
-        indexes = torch.arange(self.num_samples).tolist()
-
         if self.shuffle:
             # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
             indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+        else:
+            # E.g., [0, 1, 2, 3, 4, 5, 6] (num_samples = 7)
+            indexes = list(range(self.num_samples))
 
         #    [2, 4, 3, 1, 0, 6, 5]
         # -> [[2, 4, 3], [1, 0, 6], [5]]  (batch_size = 3)
