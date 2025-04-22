@@ -419,6 +419,7 @@ class QwenGRPOTrainer(Trainer):
             # Default to list of 1.0 floats
             self.reward_weights_config = torch.ones(len(reward_funcs), dtype=torch.float32)
 
+
         # Reward processing class
         if reward_processing_classes is None:
             reward_processing_classes = [None] * len(reward_funcs)
@@ -500,6 +501,9 @@ class QwenGRPOTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # we need this line to avoid serializing the reward weights on checkpoint save. The reward schedules are not serializable.
+        self.args.reward_weights = None
 
         # Check if the per_device_train/eval_batch_size * num processes can be divided by the number of generations
         num_processes = self.accelerator.num_processes
