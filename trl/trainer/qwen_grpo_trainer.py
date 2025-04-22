@@ -478,10 +478,10 @@ class QwenGRPOTrainer(Trainer):
         # if the buffer is smaller than this, we don't use it. Instead, draw from the dataset. This helps ensure we only select the best quality examples from the buffer on average.
         self.min_ssr_buffer_size = 50
         # the probability of using the SSR buffer on each step
-        self.ssr_use_prob = 0.5
+        self.max_ssr_use_prob = 0.9
 
-        if not 0 <= self.ssr_use_prob <= 1:
-            raise ValueError("ssr_use_prob must be between 0 and 1")
+        if not 0 <= self.max_ssr_use_prob <= 1:
+            raise ValueError("max_ssr_use_prob must be between 0 and 1")
 
         if self.use_ssr_buffer:
             self.ssr_buffer = SSRBuffer(alpha=self.ssr_alpha, total_buffer_size=self.ssr_total_buffer_size, persist_steps=self.ssr_persist_steps)
@@ -721,13 +721,30 @@ class QwenGRPOTrainer(Trainer):
                 # step the buffer, needs to happen at each training step
                 self.ssr_buffer.step()
 
-                should_use_buffer = random.random() < self.ssr_use_prob and self.ssr_buffer.buffer_size > self.min_ssr_buffer_size
+                buffer_size = self.ssr_buffer.buffer_size
+                if buffer_size >= self.min_ssr_buffer_size:
+                    # Calculate dynamic probability based on buffer size
+                    size_range = self.ssr_total_buffer_size - self.min_ssr_buffer_size
+                    if size_range > 0: # Avoid division by zero if min and total size are the same
+                        prob_ramp = (buffer_size - self.min_ssr_buffer_size) / size_range
+                        current_ssr_use_prob = min(self.max_ssr_use_prob, max(0.0, prob_ramp))
+                    else: # If min and total size are the same, use max probability if buffer is at least min size
+                        current_ssr_use_prob = self.max_ssr_use_prob
+                else:
+                     # If buffer is smaller than min size, probability is 0
+                    current_ssr_use_prob = 0.0
+
+                print(f"Current SSR use probability: {current_ssr_use_prob:.4f}")
+                should_use_buffer = random.random() < current_ssr_use_prob and buffer_size >= self.min_ssr_buffer_size
+
                 should_use_buffer_list = [should_use_buffer for _ in range(self.accelerator.num_processes)]
             else:
                 should_use_buffer_list = [None for _ in range(self.accelerator.num_processes)]
+                # Non-zero processes also need the flag, although they don't decide it
+                buffer_size = None # Placeholder for non-zero processes
 
             broadcast_object_list(should_use_buffer_list, from_process=0)
-            should_use_buffer = should_use_buffer_list[0]
+            should_use_buffer = should_use_buffer_list[0] # All processes now know if buffer is used
 
             if should_use_buffer:
                 # process 0 will draw from the buffer, the other processes will hang out
@@ -749,6 +766,7 @@ class QwenGRPOTrainer(Trainer):
         else:
             # if we are not using the SSR buffer, we just use the inputs passed into the function and signal that this example is not from the buffer
             should_use_buffer = False
+            buffer_size = 0 # Ensure buffer_size is defined even if not using SSR buffer
 
         print(f"should_use_buffer: {should_use_buffer}")
 
