@@ -475,6 +475,8 @@ class QwenGRPOTrainer(Trainer):
         self.ssr_alpha = 2.0
         self.ssr_total_buffer_size = 10000
         self.ssr_persist_steps = 100000
+        # size at which the probability ramp reaches max_ssr_use_prob
+        self.ssr_ramp_up_size = 500
         # if the buffer is smaller than this, we don't use it. Instead, draw from the dataset. This helps ensure we only select the best quality examples from the buffer on average.
         self.min_ssr_buffer_size = 50
         # the probability of using the SSR buffer on each step
@@ -723,13 +725,15 @@ class QwenGRPOTrainer(Trainer):
 
                 buffer_size = self.ssr_buffer.buffer_size
                 if buffer_size >= self.min_ssr_buffer_size:
-                    # Calculate dynamic probability based on buffer size
-                    size_range = self.ssr_total_buffer_size - self.min_ssr_buffer_size
-                    if size_range > 0: # Avoid division by zero if min and total size are the same
-                        prob_ramp = (buffer_size - self.min_ssr_buffer_size) / size_range
-                        current_ssr_use_prob = min(self.max_ssr_use_prob, max(0.0, prob_ramp))
-                    else: # If min and total size are the same, use max probability if buffer is at least min size
-                        current_ssr_use_prob = self.max_ssr_use_prob
+                    # Calculate dynamic probability based on buffer size relative to the ramp-up size
+                    size_range = self.ssr_ramp_up_size - self.min_ssr_buffer_size
+                    if size_range > 0: # Avoid division by zero
+                        # Calculate the ramp progress, ensuring it doesn't exceed 1
+                        prob_ramp = min(1.0, (buffer_size - self.min_ssr_buffer_size) / size_range)
+                        current_ssr_use_prob = prob_ramp * self.max_ssr_use_prob
+                    else: # If min and ramp-up size are the same, use max probability if buffer is at least min size
+                        current_ssr_use_prob = self.max_ssr_use_prob if buffer_size >= self.min_ssr_buffer_size else 0.0
+
                 else:
                      # If buffer is smaller than min size, probability is 0
                     current_ssr_use_prob = 0.0
