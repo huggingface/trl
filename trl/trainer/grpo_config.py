@@ -295,7 +295,10 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
-
+    chat_template: Optional[str] = field(
+        default=None,
+        metadata={"help": "chat_template. If `None` (default), use DEFAULT_CHAT_TEMPLATE."},
+    )
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,
