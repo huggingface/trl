@@ -57,7 +57,7 @@ The above snippets will use the default training arguments from the [`SFTConfig`
 
 ## Advanced usage
 
-### Train on Completions Only
+### Train on completions only
 
 To train on completions only, simply use a [prompt-completion](#prompt-completion) dataset. In this mode, loss is computed solely on the completion part.
 
