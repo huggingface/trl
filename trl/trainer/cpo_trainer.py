@@ -242,7 +242,7 @@ class CPOTrainer(Trainer):
         else:
             max_prompt_length = args.max_prompt_length
 
-        if max_prompt_length >= max_length:
+        if not max_prompt_length < max_length:
             raise ValueError(
                 f"max_prompt_length ({max_prompt_length}) should be strictly less than max_length ({max_length})."
             )
