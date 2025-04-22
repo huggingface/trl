@@ -142,7 +142,6 @@ class RepeatSampler(Sampler):
         self.batch_size = batch_size
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
-        
         self.shuffle = shuffle
         self.seed = seed
 
