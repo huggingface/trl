@@ -93,12 +93,24 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     ...     {"input_ids": [4, 5]}
     ... ]
     >>> collator(examples)
-    {'input_ids': tensor([[   1,   2,   3],
-                          [   4,   5,   0]]),
-     'attention_mask': tensor([[  1,   1,   1],
-                               [  1,   1,   0]]),
+    {'input_ids': tensor([[  1,  2,  3],
+                          [  4,  5,  0]]),
+     'attention_mask': tensor([[  1,  1,  1],
+                               [  1,  1,  0]]),
      'labels': tensor([[   1,    2,    3],
                        [   4,    5, -100]])}
+    >>> # With completion mask
+    >>> examples = [
+    ...     {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
+    ...     {"input_ids": [4, 5], "completion_mask": [0, 1]}
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[  1,  2,  3],
+                          [  4,  5,  0]]),
+     'attention_mask': tensor([[  1,  1,  1],
+                               [  1,  1,  0]]),
+     'labels': tensor([[-100,    2,    3],
+                       [-100,    5, -100]])}
     ```
     """
 
