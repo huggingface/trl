@@ -180,6 +180,12 @@ class ScriptArguments:
         enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
+        enforce_eager (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
+            model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
+        log_level (`str`, *optional*, defaults to `"info"`):
+            Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
+            `"trace"`.
     """
 
     model: str = field(
@@ -236,6 +242,21 @@ class ScriptArguments:
             "hardware support this feature."
         },
     )
+    enforce_eager: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always "
+            "execute the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager "
+            "execution in hybrid."
+        },
+    )
+    log_level: str = field(
+        default="info",
+        metadata={
+            "help": "Log level for uvicorn. Possible choices: 'critical', 'error', 'warning', 'info', 'debug', "
+            "'trace'."
+        },
+    )
 
 
 def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, connection: Connection) -> None:
@@ -250,6 +271,7 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, connection
         revision=script_args.revision,
         tensor_parallel_size=script_args.tensor_parallel_size,
         gpu_memory_utilization=script_args.gpu_memory_utilization,
+        enforce_eager=script_args.enforce_eager,
         dtype=script_args.dtype,
         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
@@ -532,7 +554,7 @@ def main(script_args: ScriptArguments):
         return {"message": "Request received, closing communicator"}
 
     # Start the server
-    uvicorn.run(app, host=script_args.host, port=script_args.port)
+    uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
