@@ -107,17 +107,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
-        if self.completion_only_loss and "completion_mask" not in examples[0]:
-            raise KeyError(
-                "When `completion_only_loss` is set to True, the input examples must contain a `completion_mask` "
-                "field."
-            )
-
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
         attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
         labels = [torch.tensor(example["input_ids"]) for example in examples]
-        if self.completion_only_loss:
+        if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
 
         # Pad
@@ -125,7 +119,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output["input_ids"] = pad(input_ids, padding_value=self.pad_token_id, padding_side="right")
         output["attention_mask"] = pad(attention_mask, padding_value=0, padding_side="right")
         output["labels"] = pad(labels, padding_value=-100, padding_side="right")
-        if self.completion_only_loss:
+        if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
             output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
 
