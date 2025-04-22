@@ -141,7 +141,7 @@ class RepeatSampler(Sampler):
         self.mini_repeat_count = mini_repeat_count
         self.batch_size = batch_size
         self.repeat_count = repeat_count
-        self.num_samples = len(data_source)
+        self.        self.num_samples =  = len(data_sourcedata_source)
         self.shuffle = shuffle
         self.seed = seed
 
@@ -899,7 +899,7 @@ class GRPOTrainer(Trainer):
         return inputs
 
     def _generate_and_score_completions(
-        self, inputs: dict[str, Union[torch.Tensor, Any]]
+        self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
         mode = "eval" if self.control.should_evaluate else "train"
