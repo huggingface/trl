@@ -70,9 +70,12 @@ class SFTConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `2e-5`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-        completion_only_loss (`bool`, *optional*, defaults to `True`):
-            When provided with a [prompt-completion](#prompt-completion) dataset, whether to compute the loss only on
-            the completion part of the dataset. If `False`, the loss is computed on the entire input sequence.
+        completion_only_loss (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to compute loss only on the completion part of the input. If set to `True`, loss is computed only
+            on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
+            `False`, loss is computed on the entire input sequence. If `None` (default), the behavior depends on the
+            dataset: loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on
+            the full sequence for [language modeling](#language-modeling) datasets.
     """
 
     # Parameters that control the model
@@ -150,11 +153,16 @@ class SFTConfig(TrainingArguments):
             "`TrainingArguments`."
         },
     )
-    completion_only_loss: bool = field(
-        default=True,
+    completion_only_loss: Optional[bool] = field(
+        default=None,
         metadata={
-            "help": "When provided with a prompt-completion dataset, whether to compute the loss only on the "
-            "completion part of the dataset. If `False`, the loss is computed on the entire input sequence."
+            "help": (
+                "Whether to compute loss only on the completion part of the input. If set to `True`, loss is computed "
+                "only on the completion, which is supported only for prompt-completion datasets. If `False`, loss is "
+                "computed on the entire input sequence. If `None` (default), the behavior depends on the dataset: "
+                "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
+                "language modeling datasets."
+            )
         },
     )
 

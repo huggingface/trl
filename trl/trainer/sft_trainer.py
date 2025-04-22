@@ -293,6 +293,11 @@ class SFTTrainer(Trainer):
                 )
             data_collator = DataCollatorWithFlattening()
 
+        if args.completion_only_loss is None:
+            first_example = next(iter(train_dataset))
+            self.completion_only_loss = "prompt" in first_example
+        else:
+            self.completion_only_loss = args.completion_only_loss
         if data_collator is None:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -304,7 +309,7 @@ class SFTTrainer(Trainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
-            data_collator = DataCollatorForLanguageModeling(pad_token_id, args.completion_only_loss)
+            data_collator = DataCollatorForLanguageModeling(pad_token_id, self.completion_only_loss)
 
         # Dataset
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
