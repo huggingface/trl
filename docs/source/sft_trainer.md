@@ -57,24 +57,11 @@ The above snippets will use the default training arguments from the [`SFTConfig`
 
 ## Advanced usage
 
-### Train on completions only
+### Train on Completions Only
 
-To train on completions only, use the `completion_only_loss` argument in the [`SFTConfig`] class. This setting requires the dataset to be of the [prompt-completion](#prompt-completion) type (meaning it cannot be of the [language modeling](#language-modeling) type).
+To train on completions only, simply use a [prompt-completion](#prompt-completion) dataset. In this mode, loss is computed solely on the completion part.
 
-```python
-from datasets import load_dataset
-from trl import SFTConfig, SFTTrainer
-
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-trainer = SFTTrainer(
-    model="Qwen/Qwen2.5-1.5B",
-    train_dataset=dataset,
-    args=SFTConfig(completion_only_loss=True),
-)
-
-trainer.train()
-```
+If you’d like to compute loss on both the prompt **and** the completion while still using a prompt-completion dataset, set `completion_only_loss=False` in the [`SFTConfig`]. This is equivalent to [converting the dataset to a language modeling](#from-prompt-completion-to-language-modeling-dataset) format.
 
 ### Add Special Tokens for Chat Format
 

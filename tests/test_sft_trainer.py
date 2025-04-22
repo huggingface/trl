@@ -1219,7 +1219,14 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                # In the past, we needed to use DataCollatorForCompletionOnlyLM to train on completion only. Now, we
+                # can simply use `completion_only_loss=True` in the training args. But this setting is not compatible
+                # with DataCollatorForCompletionOnlyLM, so we need to set it to False.
+                completion_only_loss=False,
+                report_to="none",
+            )
             trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset, data_collator=collator)
 
             # Save the initial parameters to compare them later

@@ -107,11 +107,17 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        if self.completion_only_loss and "completion_mask" not in examples[0]:
+            raise KeyError(
+                "When `completion_only_loss` is set to True, the input examples must contain a `completion_mask` "
+                "field."
+            )
+
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
         attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
         labels = [torch.tensor(example["input_ids"]) for example in examples]
-        if "completion_mask" in examples[0] and self.completion_only_loss:
+        if self.completion_only_loss:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
 
         # Pad
@@ -119,7 +125,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output["input_ids"] = pad(input_ids, padding_value=self.pad_token_id, padding_side="right")
         output["attention_mask"] = pad(attention_mask, padding_value=0, padding_side="right")
         output["labels"] = pad(labels, padding_value=-100, padding_side="right")
-        if "completion_mask" in examples[0] and self.completion_only_loss:
+        if self.completion_only_loss:
             completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
             output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
 
@@ -565,13 +571,13 @@ class SFTTrainer(Trainer):
                             text=example["prompt"],
                             add_special_tokens=add_special_tokens,
                         )
-                        processed_prompt_completion = processing_class(
+                        processed = processing_class(
                             text=example["prompt"] + example["completion"], add_special_tokens=add_special_tokens
                         )
-                        prompt_ids = processed_prompt["input_ids"]
-                        prompt_completion_ids = processed_prompt_completion["input_ids"]
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
+                        prompt_ids = processed_prompt["input_ids"]
+                        prompt_completion_ids = processed["input_ids"]
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
                             warnings.warn(
                                 "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
@@ -579,8 +585,10 @@ class SFTTrainer(Trainer):
                                 "token handling. Verify that the tokenizer is processing text consistently."
                             )
 
+                        # Create a completion mask
                         completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        processed = {**processed_prompt_completion, "completion_mask": completion_mask}
+                        processed = {**processed, "completion_mask": completion_mask}
+
                     else:  # language modeling case
                         processed = processing_class(
                             text=example[dataset_text_field], add_special_tokens=add_special_tokens
