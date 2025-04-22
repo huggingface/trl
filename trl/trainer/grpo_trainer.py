@@ -44,7 +44,7 @@ from transformers import (
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
-
+from functools import partial
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
@@ -834,12 +834,12 @@ class GRPOTrainer(Trainer):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
-        fsdp_summon_full_params = FSDP.summon_full_params if self.is_fsdp_enabled else nullcontext
+        fsdp_summon_full_params = partial(FSDP.summon_full_params, recurse=True) if self.is_fsdp_enabled else nullcontext
 
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
             # adapters in a sharded manner is not supported.
-            with gather_if_zero3(list(self.model.parameters())), fsdp_summon_full_params(self.model, recurse=True):
+            with gather_if_zero3(list(self.model.parameters())), fsdp_summon_full_params(self.model):
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
@@ -862,7 +862,7 @@ class GRPOTrainer(Trainer):
         else:
             # For non-PEFT models and DeepSpeed ZeRO-3, simply gather and update each parameter individually.
             # For non-PEFT models and FSDP, we gather all parameters at once.
-            with fsdp_summon_full_params(self.model, recurse=True):
+            with fsdp_summon_full_params(self.model):
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
                         if self.accelerator.is_main_process:
