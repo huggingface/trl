@@ -16,12 +16,13 @@ training_args = GRPOConfig(
     output_dir=checkpoint_dir,  # Set output directory here
     learning_rate=1.0e-03,
     per_device_train_batch_size=3,
-    num_generations=9,
+    num_generations=3,
     max_completion_length=32,
     report_to="none",
     use_sglang=True,
     sglang_device="cuda:7",
     sglang_gpu_memory_utilization=0.9,
+    sglang_server_url="http://127.0.0.1:30000"
 )
 
 trainer = GRPOTrainer(

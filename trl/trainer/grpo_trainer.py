@@ -682,7 +682,7 @@ class GRPOTrainer(Trainer):
             flush_response = requests.post(
                 f"{self.sglang_server_url}/flush_cache", timeout=30
             )
-            if not flush_response.json().get("success", True):
+            if not flush_response.status_code == 200:
                 print(
                     f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
                 )
