@@ -178,7 +178,8 @@ class ScriptArguments:
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
         log_level (`str`, *optional*, defaults to `"info"`):
-            Log level for uvicorn. Possible choices: critical, error, warning, info, debug, trace.
+            Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
+            `"trace"`.
     """
 
     model: str = field(metadata={"help": "Model name or path to load the model from."})
