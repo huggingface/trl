@@ -257,9 +257,6 @@ class CPOTrainer(Trainer):
         else:
             max_completion_length = args.max_completion_length
 
-        
-
-
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
                 pad_token_id=processing_class.pad_token_id,
