@@ -407,12 +407,17 @@ class QwenGRPOTrainer(Trainer):
         if args.reward_weights is not None:
             if len(args.reward_weights) != len(reward_funcs):
                 raise ValueError(
-                    f"Number of reward weights ({len(len(args.reward_weights))}) must match number of reward "
+                    f"Number of reward weights ({len(args.reward_weights)}) must match number of reward "
                     f"functions ({len(reward_funcs)})"
                 )
-            self.reward_weights = torch.tensor(args.reward_weights, dtype=torch.float32)
+            # Validate types (float or callable)
+            for weight in args.reward_weights:
+                if not isinstance(weight, float) and not callable(weight):
+                    raise TypeError(f"Reward weights must be floats or callables, but found {type(weight)}")
+            self.reward_weights_config = args.reward_weights # Store the original list/config
         else:
-            self.reward_weights = torch.ones(len(reward_funcs), dtype=torch.float32)
+            # Default to list of 1.0 floats
+            self.reward_weights_config = torch.ones(len(reward_funcs), dtype=torch.float32)
 
         # Reward processing class
         if reward_processing_classes is None:
@@ -984,8 +989,31 @@ class QwenGRPOTrainer(Trainer):
         # self.accelerator.wait_for_everyone()
 
 
-        # Apply weights to each reward function's output and sum
-        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+        # Calculate current weights based on schedule/config
+        current_step_weights = []
+        current_global_step = self.state.global_step
+        for weight_config in self.reward_weights_config:
+            if callable(weight_config):
+                # Call the schedule function with the current step
+                current_weight = weight_config(current_global_step)
+                if not 0.0 <= current_weight <= 1.0:
+                     warnings.warn(f"Reward weight schedule returned {current_weight} at step {current_global_step}. Clamping to [0, 1].")
+                     current_weight = max(0.0, min(1.0, current_weight))
+                current_step_weights.append(current_weight)
+            else:
+                # Use the fixed float weight
+                current_step_weights.append(weight_config)
+
+        current_step_weights_tensor = torch.tensor(current_step_weights, dtype=torch.float32, device=device)
+
+        # Log the calculated weights for this step
+        for i, weight in enumerate(current_step_weights):
+            reward_func = self.reward_funcs[i]
+            reward_func_name = reward_func.__name__
+            self._metrics[f"reward_weights/{reward_func_name}"].append(weight)
+
+        # Apply calculated weights to each reward function's output and sum
+        rewards = (rewards_per_func * current_step_weights_tensor.to(device).unsqueeze(0)).sum(dim=1)
         print(f"Finished with reward weighting, {rewards=} {self.accelerator.process_index=}")
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
