@@ -882,7 +882,7 @@ class GRPOTrainer(Trainer):
         #   - Completions are generated for each batch without buffering or reuse
         # Returns a single local batch in both cases.
 
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.gradient_accumulation_steps * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
@@ -902,7 +902,7 @@ class GRPOTrainer(Trainer):
         self, inputs: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
@@ -1174,7 +1174,7 @@ class GRPOTrainer(Trainer):
         mean_kl = metrics[0] if self.beta != 0.0 else None
         clip_ratio = metrics[-1]
 
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
@@ -1230,7 +1230,7 @@ class GRPOTrainer(Trainer):
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
@@ -1264,7 +1264,7 @@ class GRPOTrainer(Trainer):
         return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
