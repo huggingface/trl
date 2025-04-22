@@ -242,6 +242,11 @@ class CPOTrainer(Trainer):
         else:
             max_prompt_length = args.max_prompt_length
 
+        if max_prompt_length >= max_length:
+            raise ValueError(
+                f"max_prompt_length ({max_prompt_length}) should be strictly less than max_length ({max_length})."
+            )
+
         if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
                 "When using an encoder decoder architecture, you should set `max_completion_length` in the CPOConfig's init"
@@ -251,6 +256,9 @@ class CPOTrainer(Trainer):
             max_completion_length = 128
         else:
             max_completion_length = args.max_completion_length
+
+        
+
 
         if data_collator is None:
             data_collator = DPODataCollatorWithPadding(
