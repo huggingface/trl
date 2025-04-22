@@ -241,7 +241,8 @@ class ScriptArguments:
     log_level: str = field(
         default="info",
         metadata={
-            "help": "Log level for uvicorn. Possible choices: critical, error, warning, info, debug, trace."
+            "help": "Log level for uvicorn. Possible choices: 'critical', 'error', 'warning', 'info', 'debug', "
+            "'trace'."
         },
     )
 
