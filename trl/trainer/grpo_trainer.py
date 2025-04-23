@@ -528,9 +528,7 @@ class GRPOTrainer(Trainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
-        self.use_sglang = getattr(
-            args, "use_sglang", False
-        )  # Add backedn selection flag
+        self.use_sglang = args.use_sglang
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
@@ -667,14 +665,20 @@ class GRPOTrainer(Trainer):
                 raise ValueError(
                     "SGLang is enabled but no server URL was provided (use --sglang_server_url)."
                 )
-            self.sglang_server_url = args.sglang_server_url
+            
             if self.accelerator.is_main_process:
+                self.sglang_server_url = args.sglang_server_url
                 self.sglang_sampling_params = {
-                    "temperature": args.temperature,
+                    "temperature": self.temperature,
                     "max_new_tokens": self.max_completion_length,
+                    "n": self.num_generations,
+                    "repetition_penalty": self.repetition_penalty,
+                    "top_p": self.top_p,
+                    "top_k": -1 if self.top_k is None else self.top_k,
+                    "min_p": 0.0 if self.min_p is None else self.min_p,
                 }
 
-            self._last_loaded_step = 0
+            self._last_loaded_step = -1
             self.accelerator.wait_for_everyone()
         elif self.use_vllm:
             if not is_vllm_available():
@@ -1051,8 +1055,9 @@ class GRPOTrainer(Trainer):
             # Gather all prompt texts from all processes.
             all_prompts_text = gather_object(prompts_text)
             if self.accelerator.is_main_process:
+                ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                 payload = {
-                    "text": all_prompts_text,
+                    "text": ordered_set_of_prompts,
                     "sampling_params": self.sglang_sampling_params,
                 }
                 response = requests.post(
@@ -1064,14 +1069,31 @@ class GRPOTrainer(Trainer):
                 ]
             else:
                 completion_ids = [None] * len(all_prompts_text)
+            # # Broadcast and slice the generated completions.
+            # completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            # process_slice = slice(
+            #     self.accelerator.process_index * len(prompts),
+            #     (self.accelerator.process_index + 1) * len(prompts),
+            # )
+            # completion_ids = completion_ids[process_slice]
+            # completion_ids = [
+            #     torch.tensor(ids, device=device) for ids in completion_ids
+            # ]
+            # completion_ids = pad(
+            #     completion_ids, padding_value=self.processing_class.pad_token_id
+            # )
+            # prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
 
-            # Broadcast and slice the generated completions.
+            # Broadcast the completions from the main process to all processes, ensuring each process receives its
+            # corresponding slice.
             completion_ids = broadcast_object_list(completion_ids, from_process=0)
             process_slice = slice(
                 self.accelerator.process_index * len(prompts),
                 (self.accelerator.process_index + 1) * len(prompts),
             )
             completion_ids = completion_ids[process_slice]
+
+            # Pad the completions, and concatenate them with the prompts
             completion_ids = [
                 torch.tensor(ids, device=device) for ids in completion_ids
             ]
