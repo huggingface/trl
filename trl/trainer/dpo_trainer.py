@@ -403,7 +403,10 @@ class DPOTrainer(Trainer):
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
             self.dpo_loss_fn = LigerFusedLinearDPOLoss(
-                ignore_index=args.label_pad_token_id, beta=args.beta, use_ref_model=not args.reference_free, average_log_prob=False,
+                ignore_index=args.label_pad_token_id,
+                beta=args.beta,
+                use_ref_model=not args.reference_free,
+                average_log_prob=False,
             )
 
         self.generate_during_eval = args.generate_during_eval
@@ -1225,7 +1228,7 @@ class DPOTrainer(Trainer):
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
                 logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1
                 model_kwargs["logits_to_keep"] = logits_to_keep
-            
+
             # Add padding-free training support
             if self.padding_free:
                 input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
@@ -1448,7 +1451,7 @@ class DPOTrainer(Trainer):
             per_token_logps_[attention_mask.bool()] = per_token_logps
             per_token_logps = per_token_logps_
 
-        all_logps = per_token_logps[:,1:].sum(-1)
+        all_logps = per_token_logps[:, 1:].sum(-1)
 
         output = {}
 
