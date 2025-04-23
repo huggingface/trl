@@ -533,7 +533,9 @@ class SFTTrainer(Trainer):
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )
-                    add_special_tokens = False  # subsequent tokenization won't add special tokens (mostly for bos)
+                    # Subsequent tokenization won't add special tokens (mostly for bos).
+                    # See https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+                    add_special_tokens = False
                 # When dataset is not conversational, we need to add the EOS token at the end of each example
                 # We don't need to do this for conversational datasets as this is already handled by the
                 # `apply_chat_template` function.
@@ -554,7 +556,9 @@ class SFTTrainer(Trainer):
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )
-                    add_special_tokens = True  # subsequent tokenization will add special tokens (mostly for bos)
+                    # Subsequent tokenization will add special tokens (mostly for bos).
+                    # See https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+                    add_special_tokens = True
 
                 # Tokenize the dataset if needed
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
