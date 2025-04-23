@@ -24,7 +24,6 @@ from multiprocessing.connection import Connection
 from typing import Optional
 
 import torch
-from vllm.utils import get_open_port
 
 from trl import TrlParser
 from trl.import_utils import (
@@ -54,6 +53,7 @@ if is_vllm_available():
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
+    from vllm.utils import get_open_port
 
     if is_vllm_ascend_available():
         from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
