@@ -78,7 +78,7 @@ if is_wandb_available():
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 
-class RepeatRandomSampler(Sampler):
+class RepeatSampler(Sampler):
     """
     Sampler that repeats the indices of a dataset in a structured manner.
 
@@ -91,6 +91,8 @@ class RepeatRandomSampler(Sampler):
             Number of unique indices per batch.
         repeat_count (`int`, *optional*, defaults to `1`):
             Number of times to repeat the full sampling process.
+        shuffle (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the dataset.
         seed (`int` or `None`, *optional*, defaults to `None`):
             Random seed for reproducibility (only affects this sampler).
 
@@ -132,6 +134,7 @@ class RepeatRandomSampler(Sampler):
         mini_repeat_count: int,
         batch_size: int = 1,
         repeat_count: int = 1,
+        shuffle: bool = True,
         seed: Optional[int] = None,
     ):
         self.data_source = data_source
@@ -139,14 +142,20 @@ class RepeatRandomSampler(Sampler):
         self.batch_size = batch_size
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
+        self.shuffle = shuffle
         self.seed = seed
-        self.generator = torch.Generator()  # Create a local random generator
-        if seed is not None:
-            self.generator.manual_seed(seed)
+
+        if shuffle:
+            self.generator = torch.Generator()  # Create a local random generator
+            if seed is not None:
+                self.generator.manual_seed(seed)
 
     def __iter__(self):
-        # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
-        indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+        if self.shuffle:
+            # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
+            indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+        else:
+            indexes = list(range(self.num_samples))
 
         #    [2, 4, 3, 1, 0, 6, 5]
         # -> [[2, 4, 3], [1, 0, 6], [5]]  (batch_size = 3)
@@ -164,6 +173,15 @@ class RepeatRandomSampler(Sampler):
 
     def __len__(self) -> int:
         return self.num_samples * self.mini_repeat_count * self.repeat_count
+
+
+class RepeatRandomSampler(RepeatSampler):
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "RepeatRandomSampler is deprecated and will be removed in version 0.18. Use RepeatSampler instead.",
+            DeprecationWarning,
+        )
+        super().__init__(*args, **kwargs)
 
 
 # torch.nanstd doesn't exist, so we define it here
@@ -312,7 +330,9 @@ class GRPOTrainer(Trainer):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
-            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`].
+            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
+            padding token, `processing_class.pad_token`, must be set. If the processing class has not set a padding
+            token, `processing_class.eos_token` will be used as the default.
         reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
@@ -418,6 +438,8 @@ class GRPOTrainer(Trainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+        if processing_class.pad_token is None:
+            processing_class.pad_token = processing_class.eos_token
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -486,6 +508,8 @@ class GRPOTrainer(Trainer):
         self.mask_truncated_completions = args.mask_truncated_completions
 
         # Datasets
+        self.shuffle_dataset = args.shuffle_dataset
+
         if (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
@@ -735,17 +759,18 @@ class GRPOTrainer(Trainer):
             * self.accelerator.num_processes
             * self.args.gradient_accumulation_steps
         )
-        return RepeatRandomSampler(
+        return RepeatSampler(
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
             batch_size=effective_batch_size // self.num_generations,
             repeat_count=self.num_iterations * self.args.gradient_accumulation_steps,
+            shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
         # See _get_train_sampler for an explanation of the sampler.
-        return RepeatRandomSampler(
+        return RepeatSampler(
             data_source=eval_dataset,
             mini_repeat_count=self.num_generations,
             seed=self.args.seed,
@@ -882,7 +907,7 @@ class GRPOTrainer(Trainer):
         return inputs
 
     def _generate_and_score_completions(
-        self, inputs: dict[str, Union[torch.Tensor, Any]]
+        self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
         mode = "eval" if self.control.should_evaluate else "train"
