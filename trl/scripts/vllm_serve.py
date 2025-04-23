@@ -24,6 +24,7 @@ from multiprocessing.connection import Connection
 from typing import Optional
 
 import torch
+from vllm.utils import get_open_port
 
 from trl import TrlParser
 from trl.import_utils import (
@@ -259,12 +260,14 @@ class ScriptArguments:
     )
 
 
-def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, connection: Connection) -> None:
+def llm_worker(
+    script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
+) -> None:
     # Set required environment variables for DP to work with vLLM
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
-    os.environ["VLLM_DP_MASTER_PORT"] = "37607"
+    os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
 
     llm = LLM(
         model=script_args.model,
@@ -340,11 +343,12 @@ def main(script_args: ScriptArguments):
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     # Spawn dp workers, and setup pipes for communication
+    master_port = get_open_port()
     connections = []
     processes = []
     for data_parallel_rank in range(script_args.data_parallel_size):
         parent_connection, child_connection = Pipe()
-        process = Process(target=llm_worker, args=(script_args, data_parallel_rank, child_connection))
+        process = Process(target=llm_worker, args=(script_args, data_parallel_rank, master_port, child_connection))
         process.start()
         connections.append(parent_connection)
         processes.append(process)
