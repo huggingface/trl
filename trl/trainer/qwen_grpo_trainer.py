@@ -1022,9 +1022,6 @@ class QwenGRPOTrainer(Trainer):
             if callable(weight_config):
                 # Call the schedule function with the current step
                 current_weight = weight_config(current_global_step)
-                if not 0.0 <= current_weight <= 1.0:
-                     warnings.warn(f"Reward weight schedule returned {current_weight} at step {current_global_step}. Clamping to [0, 1].")
-                     current_weight = max(0.0, min(1.0, current_weight))
                 current_step_weights.append(current_weight)
             else:
                 # Use the fixed float weight
