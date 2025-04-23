@@ -83,7 +83,7 @@ def read_script(user_script_path: str) -> str:
     return Path(user_script_path).read_text()
 
 
-class LocalExecutor:
+class Localexecuter:
     def execute(self, codes: list[str]) -> list[str]:
         """
         Executes multiple code snippets using PythonREPL sequentially.
@@ -105,10 +105,10 @@ class LocalExecutor:
         return results
 
 
-class E2BExecutor:
+class E2Bexecuter:
     def __init__(self, api_key: str, template: str = None, max_concurrent: int = 5):
         """
-        Initialize the E2BExecutor for parallel code execution.
+        Initialize the E2Bexecuter for parallel code execution.
         Tests the connection by running a simple print statement.
 
         Args:

@@ -80,7 +80,7 @@ class CodeAgentEnvironment(Environment):
 
     def __init__(
         self,
-        code_executor: Any,
+        code_executer: Any,
         tokenizer: PreTrainedTokenizerBase,
         parsing_string: str = "<code>",
         stop_string: str = "</code>",
@@ -91,7 +91,7 @@ class CodeAgentEnvironment(Environment):
         """Initialize the code agent environment
 
         Args:
-            code_executor: The executor to run code (like LocalExecutor or E2BExecutor)
+            code_executer: The executer to run code (like Localexecuter or E2Bexecuter)
             tokenizer: Tokenizer for encoding/decoding text
             parsing_string: String that marks the beginning of code blocks
             stop_string: String that marks the end of code blocks
@@ -99,10 +99,10 @@ class CodeAgentEnvironment(Environment):
             output_parsing_string: String marking the beginning of code output.
             output_stop_string: String marking the end of code output.
         """
-        if not hasattr(code_executor, "execute"):
-            raise ValueError("code_executor must have an 'execute' method.")
+        if not hasattr(code_executer, "execute"):
+            raise ValueError("code_executer must have an 'execute' method.")
 
-        self.code_executor = code_executor
+        self.code_executer = code_executer
         self.tokenizer = tokenizer
         self.parsing_string = parsing_string
         self.stop_string = stop_string
@@ -230,7 +230,7 @@ class CodeAgentEnvironment(Environment):
             # Execute code batch if any code was extracted
             if code_batch:
                 try:
-                    execution_results = self.code_executor.execute(code_batch)
+                    execution_results = self.code_executer.execute(code_batch)
                     if len(execution_results) != len(conversations_pending_code):
                         raise ValueError(
                             f"Mismatch between code batch size ({len(code_batch)}) and results ({len(execution_results)})"
