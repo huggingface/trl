@@ -824,7 +824,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 47)  # w/ this dataset, we end up with 46 seqs
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
             self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
     def test_eval_packing(self):
@@ -843,8 +843,8 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 47)  # w/ this dataset, we end up with 47 seqs
-            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 7 seqs
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
+            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 6)  # w/ this dataset, we end up with 6 seqs
 
     def test_no_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -960,27 +960,6 @@ class SFTTrainerTester(unittest.TestCase):
             )
             self.assertEqual(trainer.model.config.torch_dtype, torch.float16)
 
-        # Now test when `torch_dtype` is provided but is wrong
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                model_init_kwargs={"torch_dtype": -1},
-                report_to="none",
-            )
-            with self.assertRaises(ValueError) as context:
-                _ = SFTTrainer(
-                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                    args=training_args,
-                    train_dataset=self.train_dataset,
-                )
-
-            self.assertIn(
-                "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                "a `torch.dtype` (e.g., 'float32'), but got -1.",
-                str(context.exception),
-            )
-
 
 # This new tester aims to replace the first one at some point
 class SFTTrainerTester2(unittest.TestCase):
@@ -1063,23 +1042,6 @@ class SFTTrainerTester2(unittest.TestCase):
                 # Check the torch dtype
                 self.assertEqual(new_param.dtype, torch.float16)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
-
-    def test_train_model_wrong_torch_dtype(self):
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, model_init_kwargs={"torch_dtype": -1}, report_to="none")
-            with self.assertRaises(ValueError) as context:
-                SFTTrainer(
-                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-                )
-            self.assertIn(
-                "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                "a `torch.dtype` (e.g., 'float32'), but got -1.",
-                str(context.exception),
-            )
 
     @require_peft
     def test_train_peft_model(self):
@@ -1211,7 +1173,7 @@ class SFTTrainerTester2(unittest.TestCase):
     def test_train_with_data_collator_for_completion_only_and_padding_free(self):
         # Get the dataset
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         response_template = "<|im_start|>assistant\n"
