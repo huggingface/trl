@@ -403,7 +403,7 @@ class DPOTrainer(Trainer):
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
             self.dpo_loss_fn = LigerFusedLinearDPOLoss(
-                ignore_index=args.label_pad_token_id, beta=args.beta, use_ref_model=not args.reference_free
+                ignore_index=args.label_pad_token_id, beta=args.beta, use_ref_model=not args.reference_free, average_log_prob=False,
             )
 
         self.generate_during_eval = args.generate_during_eval
@@ -1207,14 +1207,7 @@ class DPOTrainer(Trainer):
                 dim=1,
             )
 
-            # Add padding-free training support
-            if self.padding_free:
-                input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
-                loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
-                position_ids = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
-                model_kwargs["position_ids"] = position_ids
-            else:
-                model_kwargs["attention_mask"] = attention_mask
+            attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
 
             # Add truncation support
             if self.max_length is not None:
@@ -1232,6 +1225,15 @@ class DPOTrainer(Trainer):
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
                 logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1
                 model_kwargs["logits_to_keep"] = logits_to_keep
+            
+            # Add padding-free training support
+            if self.padding_free:
+                input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
+                loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
+                position_ids = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
+                model_kwargs["position_ids"] = position_ids
+            else:
+                model_kwargs["attention_mask"] = attention_mask
 
             # Get the base model outputs (before LM head)
             if hasattr(model, "get_decoder"):
@@ -1274,7 +1276,8 @@ class DPOTrainer(Trainer):
                     )
                     ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
 
-            labels = input_ids[:, 1:]  # Shift right for casual LM
+            masked_input_ids = torch.where(loss_mask != 0, input_ids, self.label_pad_token_id)
+            labels = masked_input_ids[:, 1:]  # Shift right for casual LM
 
         # Get the LM head
         lm_head = model.get_output_embeddings()
@@ -1445,7 +1448,7 @@ class DPOTrainer(Trainer):
             per_token_logps_[attention_mask.bool()] = per_token_logps
             per_token_logps = per_token_logps_
 
-        all_logps = per_token_logps.sum(-1)
+        all_logps = per_token_logps[:,1:].sum(-1)
 
         output = {}
 
