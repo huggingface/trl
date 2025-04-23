@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional, Union
@@ -81,10 +80,10 @@ class DPOConfig(TrainingArguments):
             Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
             `"keep_start"`.
         padding_free (`bool`, *optional*, defaults to `False`):
-            Whether forward passes are performed without padding by flattening all sequences in the batch
-            into a single continuous sequence. This approach requires associating a `position_ids` vector to track
-            positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it
-            can handle the flattened batch structure.
+            Whether to perform forward passes without padding by flattening all sequences in the batch into a single
+            continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
+            supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
+            batch structure.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute the log probabilities from the reference model. Setting this to `True` allows
             training without needing the reference model during training, which can help reduce GPU memory usage. If
@@ -248,10 +247,10 @@ class DPOConfig(TrainingArguments):
     padding_free: bool = field(
         default=False,
         metadata={
-            "help": "Whether forward passes are performed without padding by flattening all sequences in the batch "
-            "into a single continuous sequence. This approach requires associating a `position_ids` vector to track "
-            "positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it "
-            "can handle the flattened batch structure."
+            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
+            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
+            "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
+            "handle the flattened batch structure."
         },
     )
     precompute_ref_log_probs: bool = field(
@@ -402,20 +401,3 @@ class DPOConfig(TrainingArguments):
             "Comet during evaluation."
         },
     )
-
-    # Deprecated parameters
-    use_num_logits_to_keep: Optional[bool] = field(
-        default=None,
-        metadata={"help": "Deprecated. Use `use_logits_to_keep` instead."},
-    )
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        if self.use_num_logits_to_keep is not None:
-            warnings.warn(
-                "`use_num_logits_to_keep` is deprecated and will be remove in version 0.17.0. Use "
-                "`use_logits_to_keep` instead.",
-                DeprecationWarning,
-            )
-            self.use_logits_to_keep = self.use_num_logits_to_keep

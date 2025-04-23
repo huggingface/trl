@@ -68,11 +68,17 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 
 ### Computing the advantage
 
-For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:  
+For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:
 
-$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$  
+$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
 
-This approach gives the method its name: **Group Relative Policy Optimization (GRPO)**.  
+This approach gives the method its name: **Group Relative Policy Optimization (GRPO)**.
+
+<Tip>
+
+It was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that scaling by  \\( \text{std}(\mathbf{r}) \\) may cause a question-level difficulty bias. You can disable this scaling by setting `scale_rewards=False` in [`GRPOConfig`].
+
+</Tip>
 
 ### Estimating the KL divergence
 
@@ -83,46 +89,182 @@ $$
 
 ### Computing the loss
 
-The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:  
+The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:
 
 $$
-\mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
+\mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} \left[ \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
 $$
 
-where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.  
+where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.
 
-In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:  
+<Tip>
+
+Note that compared to the original formulation in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300), we don't scale by  \\( \frac{1}{|o_i|} \\) because it was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that this introduces a response-level length bias. More details in [loss types](#loss-types).
+
+</Tip>
+
+In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:
 
 $$
-\mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
+\mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
 $$
 
 where  \\(\text{clip}(\cdot, 1 - \epsilon, 1 + \epsilon) \\) ensures that updates do not deviate excessively from the reference policy by bounding the policy ratio between  \\( 1 - \epsilon \\) and  \\( 1 + \epsilon \\).
 When  \\( \mu = 1 \\) (default in TRL), the clipped surrogate objective simplifies to the original objective.
 
+#### Loss Types
+
+Several formulations of the objective have been proposed in the literature. Initially, the objective of GRPO was defined as follows:
+
+$$
+\mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} l_{i,t},
+$$
+
+where
+
+$$
+l_{i,t} = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right].
+$$
+
+The DAPO paper highlights the limitations of the GRPO algorithm’s sample-level loss in long-CoT scenarios, where longer responses are under-penalized, leading to poorer quality outputs. The proposed solution is a token-level normalization, which better handles longer sequences by assigning more balanced rewards to individual tokens, regardless of response length:
+
+$$
+\mathcal{L}_{\text{DAPO}}(\theta) = - \frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} l_{i,t},
+$$
+
+
+Furthermore, it was demonstrated in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that the initial GRPO formulation introduces a response length bias. They show that while the DAPO formulation reduces this bias, it does not eliminate it completely. To fully remove this bias, they propose dividing by a constant instead of the sequence length, resulting in the following formulation:
+
+$$
+\mathcal{L}_{\text{Dr. GRPO}}(\theta) = - \frac{1}{LG} \sum_{i=1}^G \sum_{t=1}^{|o_i|} l_{i,t},
+$$
+
+This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
+
 ## Logged metrics
 
-The GRPO Trainer logs the following metrics:
-
-- `completion_length`: The average completion length.
-- `reward/{reward_func_name}`: The reward computed by each reward function.
-- `reward`: The average reward.
-- `reward_std` : The average standard deviation within reward groups.
-- `kl` : The average KL divergence between the model and the reference model calculated on completions.
+- `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `completions/mean_length`: The average length of generated completions.
+- `completions/min_length`: The minimun length of generated completions.
+- `completions/max_length`: The maximum length of generated completions.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
+- `completions/min_terminated_length`: The minimun length of generated completions that terminate with EOS.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
+- `completions/clipped_ratio` : The ratio of truncated (clipped) completions.
+- `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
+- `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
+- `reward`: The overall average reward after applying reward weights.
+- `reward_std`: The standard deviation of the overall reward within each batch after applying reward weights.
+- `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero. 
+- `clip_ratio/region_mean`: The ratio of token probabilities where the GRPO objective is clipped to stay within the trust region:
+$$
+\text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}\,.
+$$
+A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
+- `clip_ratio/low_mean`: The average ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/low_min`: The minimum ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/high_mean`: The average ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/high_max`: The maximum ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
 
-## Speed up training with vLLM-powered generation  
+### Speed up training with vLLM-powered generation
 
-Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, pass `use_vllm=True` in the training arguments.  
+Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, first install the package with
+
+```shell
+pip install trl[vllm]
+```
+
+Then, start the vLLM server with the desired model:
+
+```bash
+trl vllm-serve --model <model_name>
+```
+
+Then, pass `use_vllm=True` in the training arguments and run the training script:
 
 ```python
 from trl import GRPOConfig
 
 training_args = GRPOConfig(..., use_vllm=True)
-```  
+```
 
-For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).  
+For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
+
+### GRPO at scale: train a 70B+ Model on multiple nodes
+
+When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
+
+- **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such model. For more details, see [DeepSpeed Integration](deepspeed_integration).
+- **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
+- **vLLM**: See the previous section on how to use vLLM to speed up generation.
+
+Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
+
+```sh
+#!/bin/bash
+#SBATCH --nodes=5
+#SBATCH --gres=gpu:8
+
+# Get the list of allocated nodes
+NODELIST=($(scontrol show hostnames $SLURM_JOB_NODELIST))
+
+# Assign the first 4 nodes for training and the 5th node for vLLM
+TRAIN_NODES="${NODELIST[@]:0:4}"  # Nodes 0, 1, 2, 3 for training
+VLLM_NODE="${NODELIST[4]}"  # Node 4 for vLLM
+
+# Run training on the first 4 nodes (Group 1)
+srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
+     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+     --num_processes 32 \
+     --num_machines 4 \
+     --main_process_ip ${NODELIST[0]} \
+     --machine_rank $SLURM_PROCID \
+     --rdzv_backend c10d \
+     train_grpo.py \
+     --server_ip $VLLM_NODE &
+
+# Run vLLM server on the 5th node (Group 2)
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+
+wait
+```
+
+```python
+import argparse
+
+from datasets import load_dataset
+from trl import GRPOTrainer, GRPOConfig
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--vllm_server_host", type=str, default="", help="The server IP")
+    args = parser.parse_args()
+
+    # Example dataset from TLDR
+    dataset = load_dataset("trl-lib/tldr", split="train")
+
+    # Dummy reward function: count the number of unique characters in the completions
+    def reward_num_unique_chars(completions, **kwargs):
+        return [len(set(c)) for c in completions]
+
+    training_args = GRPOConfig(
+        output_dir="Qwen2.5-72B-GRPO",
+        per_device_train_batch_size=4,
+        bf16=True,
+        gradient_checkpointing=True,
+        logging_steps=10,
+        use_vllm=True,
+        vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
+    )
+
+    trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer.train()
+
+if __name__=="__main__":
+    main()
+```
 
 ### Using a custom reward function
 
@@ -216,6 +358,67 @@ You can test this function as follows:
 >>> reward_func(prompts=prompts, completions=completions, ground_truth=ground_truth)
 [1.0, 0.0]
 ```
+#### Example 4: Multi-task reward functions
+
+Below is an example of using multiple reward functions in the [`GRPOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
+
+```python
+from datasets import Dataset
+from trl import GRPOTrainer
+
+# Define a dataset that contains both math and coding problems
+dataset = Dataset.from_list(
+    [
+        {"prompt": "What is 2+2?", "task": "math"},
+        {"prompt": "Write a function that returns the sum of two numbers.", "task": "code"},
+        {"prompt": "What is 3*4?", "task": "math"},
+        {"prompt": "Write a function that returns the product of two numbers.", "task": "code"},
+    ]
+)
+
+# Math-specific reward function
+def math_reward_func(prompts, completions, task, **kwargs):
+    rewards = []
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "math":
+            # Calculate math-specific reward
+            correct = check_math_solution(prompt, completion)
+            reward = 1.0 if correct else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-math tasks
+            rewards.append(None)
+    return rewards
+
+# Coding-specific reward function
+def coding_reward_func(prompts, completions, task, **kwargs):
+    rewards = []
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "coding":
+            # Calculate coding-specific reward
+            works = test_code_solution(prompt, completion)
+            reward = 1.0 if works else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-coding tasks
+            rewards.append(None)
+    return rewards
+
+# Use both task-specific reward functions
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    reward_funcs=[math_reward_func, coding_reward_func],
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None` and the [`GRPOTrainer`] will continue with the valid functions and tasks. This allows the [`GRPOTrainer`] to handle multiple reward functions with different applicability.
+
+Note that the [`GRPOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
+
+
 
 #### Passing the reward function to the trainer
 

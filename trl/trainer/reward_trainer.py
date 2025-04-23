@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -204,7 +204,7 @@ class RewardTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         if "input_ids_chosen" not in train_dataset.column_names:
-            with PartialState().local_main_process_first():
+            with PartialState().main_process_first():
                 fn_kwargs = {"tokenizer": processing_class}
                 train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class})
                 train_dataset = train_dataset.map(
