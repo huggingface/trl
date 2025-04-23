@@ -23,10 +23,9 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import GRPOConfig, GRPOTrainer
+from trl import GRPOConfig, GRPOTrainer, CodeAgentEnvironment, LocalExecutor
 from trl.trainer.grpo_trainer import RepeatSampler
-
-from .testing_utils import require_vllm
+from .testing_utils import require_vllm, require_local_code_executer
 
 
 if is_peft_available():
@@ -693,6 +692,52 @@ class GRPOTrainerTester(unittest.TestCase):
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_vllm
+    @require_local_code_executer
+    @unittest.skip("We should add a mock for the vLLM server.")
+    def test_training_vllm(self):
+        """Test that training works with vLLM for generation."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        # initializing local code executer
+        code_executer = LocalExecutor()
+        # initializing tokeqnizer
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+
+        # initializing code agent environment
+        env = CodeAgentEnvironment(
+            code_executor=code_executer,
+            tokenizer=tokenizer,
+            )
+        
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+                use_vllm=True,
+            )
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny is too small for vLLM
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                environment=env,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

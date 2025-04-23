@@ -25,6 +25,7 @@ from trl.import_utils import (
     is_llm_blender_available,
     is_mergekit_available,
     is_vllm_available,
+    is_langchain_experimental_available
 )
 
 
@@ -78,6 +79,11 @@ def require_vllm(test_case):
     """
     return unittest.skipUnless(is_vllm_available(), "test requires vllm")(test_case)
 
+def require_local_code_executer(test_case):
+    """
+    Decorator marking a test that requires local code executer using langchain_experimentals PythonREPL. Skips the test if local code executer is not available.
+    """
+    return unittest.skipUnless(is_langchain_experimental_available(), "test requires local code executer with langchain_experimentals")(test_case)
 
 def require_no_wandb(test_case):
     """
