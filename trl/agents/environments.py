@@ -56,7 +56,7 @@ class DefaultEnvironment(Environment):
         )
 
 class CodeAgentEnvironment(Environment):
-    """Environment that supports code execution during generation, simplified implementation."""
+    """Environment that supports code execution during generation"""
 
     def __init__(
         self,

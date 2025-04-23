@@ -89,6 +89,7 @@ EXTRAS = {
     "bco": ["scikit-learn", "joblib"],
     "test": ["parameterized", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "pytest"],
     "vllm": ["vllm>=0.8.3", "fastapi", "pydantic", "requests", "uvicorn"],
+    "agents": [*EXTRAS["vllm"],"e2b-code-interpreter","python-dotenv","langchain_experimental",],
     "vlm": ["Pillow"],
 }
 EXTRAS["dev"] = []

@@ -18,19 +18,14 @@ from inspect import getsource
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, List
 
-from dataclasses import dataclass
-from e2b_code_interpreter import AsyncSandbox
-#from ..import_utils import is_e2b_available, is_langchain_experimental_available
+from ..import_utils import is_e2b_available, is_langchain_experimental_available
 
 
-#if is_e2b_available():
-#    from e2b_code_interpreter import AsyncSandbox
+if is_e2b_available():
+    from e2b_code_interpreter import AsyncSandbox
 
-#if is_langchain_experimental_available():
-#    from langchain_experimental.utilities import PythonREPL
-
-#if TYPE_CHECKING:
-#    from vllm import LLM, SamplingParams
+if is_langchain_experimental_available():
+    from langchain_experimental.utilities import PythonREPL
 
 default_system_prompt = "You can answer questions and solve problems. If running code helps, write it inside <code> </code>, and you will see the result. Example: To calculate 2 + 2, write <code> print(2 + 2) </code>."
 
@@ -113,9 +108,9 @@ class E2BExecutor:
         self.semaphore = asyncio.Semaphore(max_concurrent)
 
         # Run a test code to validate connection
-        validation_code = "print('Hello, E2B connection test successful')"
+        validation_code = "print('E2B connection test successful')"
         result = self.execute([validation_code])[0]
-        
+        # Check if the result contains the expected output
         if "successful" not in result:
             raise ConnectionError(f"E2B connection test failed. Response: {result}")
         
@@ -283,81 +278,3 @@ def prepare_data_for_local_agent(
 
     # Create a new dataset with processed prompts
     return dataset.map(lambda x, idx: {prompt_column: processed_prompts[idx]}, with_indices=True)
-
-
-def generate_agent_responses(
-    dataset: list,
-    llm: "LLM",
-    sampling_params: "SamplingParams",
-    tools_script_path: str = None,
-    parsing_string: str = "<code>",
-    stop_string: str = "</code>",
-    code_executer=None,
-) -> list:
-    """
-    Generates responses for the agent with potential code execution.
-
-    Args:
-        dataset (`list`):
-            List of preprocessed prompts (strings).
-        llm (`LLM`):
-            The language model to use for generation.
-        sampling_params (`SamplingParams`):
-            Sampling parameters for the llm.generate method.
-        tools_script_path (`str` or `None`, *optional*, defaults to `None`):
-            Path to script to prepend to code extracted.
-        parsing_string (`str`, *optional*, defaults to `"<code>"`):
-            String used to locate the code in the conversation.
-        stop_string (`str`, *optional*, defaults to `"</code>"`):
-            String used to stop generation.
-        code_executer (`LocalExecutor`, *optional*, defaults to `LocalExecutor()`):
-            Executor to run the code.
-
-    Returns:
-        `list`:
-            A list of complete conversations (strings).
-    """
-    if code_executer is None:
-        code_executer = LocalExecutor()
-
-    # adding stop string to sampling params
-    sampling_params.stop = [stop_string]
-    # Read the tools script if provided.
-    tools_script = read_script(tools_script_path) if tools_script_path else None
-
-    completed_chats = []  # Chats that are fully complete.
-    current_batch = dataset  # Start with your initial batch of prompts.
-
-    while current_batch:
-        # Generate outputs for the current batch.
-        outputs = llm.generate(current_batch, sampling_params, use_tqdm=False)
-        next_batch = []  # To store chats that still need code execution.
-        code_batch = []  # To collect code snippets for batch execution
-        conversations = []  # To keep track of conversations for each code
-
-        # First pass: collect all codes that need execution
-        for output in outputs:
-            conversation = output.prompt + output.outputs[0].text
-            if output.outputs[0].stop_reason == stop_string:
-                code = get_code(conversation, tools_script=tools_script, parsing_string=parsing_string)
-                code_batch.append(code)
-                conversations.append(conversation)
-            else:
-                completed_chats.append(conversation)
-
-        # Execute all collected codes in one batch
-        if code_batch:
-            executed_results = code_executer.execute(code_batch)
-
-            # Process results and update conversations
-            for conv, result in zip(conversations, executed_results):
-                updated_conversation = conv + f"{stop_string}<output>" + result + "</output>"
-                next_batch.append(updated_conversation)
-
-        # Process next batch.
-        current_batch = next_batch
-
-    return completed_chats
-
-# parsing and tokenizing the completion since outputs with use_agent is the full chat
-#completion_ids = [tuple(self.processing_class.encode(output[len(prompt) :].strip(), add_special_tokens=False))for prompt, output in zip(all_prompts_text, outputs)
