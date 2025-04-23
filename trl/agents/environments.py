@@ -1,11 +1,28 @@
-from dataclasses import dataclass 
-from typing import List, Any, Optional, Union, Dict
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import abc
+from dataclasses import dataclass
+from typing import Any, Optional
+
 from transformers import PreTrainedTokenizerBase
+
 
 @dataclass
 class VLLMClientGenerationConfig:
     """Configuration for VLLM client generation parameters"""
+
     n: int
     repetition_penalty: float
     temperature: float
@@ -14,46 +31,49 @@ class VLLMClientGenerationConfig:
     min_p: float
     max_tokens: int
     guided_decoding_regex: Optional[str] = None
-    stop: Optional[List[str]] = None
+    stop: Optional[list[str]] = None
+
 
 class Environment(abc.ABC):
     """Base environment that implements standard VLLM generation"""
-    
+
     @abc.abstractmethod
-    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List:
+    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]) -> list:
         """Generate responses using VLLM
 
         Args:
             vllm_client: VLLM client instance
             generation_config: Configuration for generation parameters
             prompts: Input prompts for generation
-            
+
         Returns:
             completion_ids: Generated token ids
         """
         pass
 
+
 class DefaultEnvironment(Environment):
     """Default environment that implements standard VLLM generation"""
-    
-    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List:
+
+    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]) -> list:
         """Generate responses using VLLM
 
         Args:
             vllm_client: VLLM client instance
             generation_config: Configuration for generation parameters
             prompts: Input prompts for generation
-            
+
         Returns:
             completion_ids: Generated token ids
         """
         if generation_config is None:
             raise ValueError("Generation config must be provided to the generate method")
-            
+
         return vllm_client.generate(
             prompts=prompts,
             **vars(generation_config),
         )
+
 
 class CodeAgentEnvironment(Environment):
     """Environment that supports code execution during generation"""
@@ -80,7 +100,7 @@ class CodeAgentEnvironment(Environment):
             output_stop_string: String marking the end of code output.
         """
         if not hasattr(code_executor, "execute"):
-             raise ValueError("code_executor must have an 'execute' method.")
+            raise ValueError("code_executor must have an 'execute' method.")
 
         self.code_executor = code_executor
         self.tokenizer = tokenizer
@@ -98,20 +118,20 @@ class CodeAgentEnvironment(Environment):
         # Find the last occurrence of the parsing string
         last_code_start_index = text.rfind(self.parsing_string)
         if last_code_start_index == -1:
-             return None # Should not happen if parsing_string is in text, but safety check
+            return None  # Should not happen if parsing_string is in text, but safety check
 
-        code_segment = text[last_code_start_index + len(self.parsing_string):]
+        code_segment = text[last_code_start_index + len(self.parsing_string) :]
 
         # Find the first occurrence of the stop string *after* the last parsing string
         stop_index = code_segment.find(self.stop_string)
         if stop_index != -1:
             code_parts = code_segment[:stop_index]
         else:
-             # If stop string is not found after the last parsing string,
-             # maybe the generation stopped exactly at the stop string.
-             # Or maybe the stop string is missing. Assume it's the end for now.
-             # This might need adjustment based on typical model behavior.
-             code_parts = code_segment # Or handle error?
+            # If stop string is not found after the last parsing string,
+            # maybe the generation stopped exactly at the stop string.
+            # Or maybe the stop string is missing. Assume it's the end for now.
+            # This might need adjustment based on typical model behavior.
+            code_parts = code_segment  # Or handle error?
 
         # Prepend tools script if available
         if self.tools_script:
@@ -122,7 +142,9 @@ class CodeAgentEnvironment(Environment):
 
         return code_parts if code_parts else None
 
-    def run_agent(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List[str]:
+    def run_agent(
+        self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]
+    ) -> list[str]:
         """Run the agent with code execution and return completed text responses.
 
         Args:
@@ -131,7 +153,7 @@ class CodeAgentEnvironment(Environment):
             prompts: Input prompts for generation.
 
         Returns:
-            List[str]: Completed text responses with code execution results.
+            list[str]: Completed text responses with code execution results.
         """
         completed_conversations = []
         active_conversations = []
@@ -155,30 +177,21 @@ class CodeAgentEnvironment(Environment):
             min_p=generation_config.min_p,
             max_tokens=generation_config.max_tokens,
             guided_decoding_regex=generation_config.guided_decoding_regex,
-            stop=stop_sequences
+            stop=stop_sequences,
         )
 
         while active_conversations:
-            outputs = vllm_client.generate(
-                prompts=active_conversations,
-                **vars(step_gen_config)
-            )
+            outputs = vllm_client.generate(prompts=active_conversations, **vars(step_gen_config))
 
             next_active_conversations = []
             code_batch = []
             conversations_pending_code = []
 
-            # Check if the structure of outputs is as expected (list of lists)
-            if not isinstance(outputs, list) or (outputs and not all(isinstance(item, list) for item in outputs)):
-                    print(f"Warning: Unexpected output structure from vllm_client.generate. Expected List[List[int]], got: {type(outputs)}. Attempting to proceed.")
-                    # Depending on the actual structure, this might still fail later.
-
-            for i, generated_token_ids in enumerate(outputs): # Assumes 'output' is directly the list of token IDs
+            for i, generated_token_ids in enumerate(outputs):  # Assumes 'output' is directly the list of token IDs
                 current_prompt = active_conversations[i]
 
                 # Check if the generated_token_ids list is valid
                 if not isinstance(generated_token_ids, list):
-                    print(f"Warning: Invalid token list received for prompt index {i}. Skipping. Got: {type(generated_token_ids)}")
                     completed_conversations.append(current_prompt)
                     continue
 
@@ -196,7 +209,9 @@ class CodeAgentEnvironment(Environment):
                 last_code_start_in_segment = full_conversation_segment.rfind(self.parsing_string)
                 # Check if the *last* code block start is within the *newly generated* part
                 # Ensure last_code_start_in_segment is found before comparing index
-                is_code_in_new_text = last_code_start_in_segment != -1 and last_code_start_in_segment >= len(current_prompt)
+                is_code_in_new_text = last_code_start_in_segment != -1 and last_code_start_in_segment >= len(
+                    current_prompt
+                )
 
                 if is_code_in_new_text and stopped_by_code_tag:
                     # Extract code from the full segment, as extract_code finds the last block
@@ -207,7 +222,6 @@ class CodeAgentEnvironment(Environment):
                         conversations_pending_code.append(full_conversation_segment)
                     else:
                         # Parsing string found, but extraction failed. Treat as complete.
-                        print(f"Warning: Code parsing string found but extraction failed for segment: ...{generated_text[-50:]}")
                         completed_conversations.append(full_conversation_segment)
                 else:
                     # Generation finished (max tokens, other stop word) or no code detected in the new part
@@ -218,23 +232,27 @@ class CodeAgentEnvironment(Environment):
                 try:
                     execution_results = self.code_executor.execute(code_batch)
                     if len(execution_results) != len(conversations_pending_code):
-                            raise ValueError(f"Mismatch between code batch size ({len(code_batch)}) and results ({len(execution_results)})")
+                        raise ValueError(
+                            f"Mismatch between code batch size ({len(code_batch)}) and results ({len(execution_results)})"
+                        )
 
                     # Append results and add back to active conversations for the next round
                     for conversation, result in zip(conversations_pending_code, execution_results):
-                        updated_conversation = conversation + f"{self.output_parsing_string}{result}{self.output_stop_string}"
+                        updated_conversation = (
+                            conversation + f"{self.output_parsing_string}{result}{self.output_stop_string}"
+                        )
                         next_active_conversations.append(updated_conversation)
-                except Exception as e:
-                        print(f"Error during code execution batch: {e}")
-                        completed_conversations.extend(conversations_pending_code) # Add pending as completed on error
+                except Exception:
+                    completed_conversations.extend(conversations_pending_code)  # Add pending as completed on error
 
             # Update the list of conversations for the next iteration
             active_conversations = next_active_conversations
 
         return completed_conversations
 
-
-    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: List[str]) -> List[List[int]]:
+    def generate(
+        self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]
+    ) -> list[list[int]]:
         """Generate responses with code execution and return token IDs of the completions.
 
         Args:
@@ -243,7 +261,7 @@ class CodeAgentEnvironment(Environment):
             prompts: Input prompts for generation.
 
         Returns:
-            List[List[int]]: List of generated token ID lists (completions only).
+            list[list[int]]: list of generated token ID lists (completions only).
         """
         # Get completed text responses from the agent logic
         completed_conversations = self.run_agent(vllm_client, generation_config, prompts)
@@ -254,30 +272,24 @@ class CodeAgentEnvironment(Environment):
             expanded_prompts.extend([prompt] * generation_config.n)
 
         if len(expanded_prompts) != len(completed_conversations):
-             # This indicates a potential issue in run_agent or prompt expansion
-             print(f"Warning: Mismatch between expanded prompts ({len(expanded_prompts)}) and completed conversations ({len(completed_conversations)}). Returning completions based on available conversations.")
-             # Adjust the shorter list to match the longer one? Or raise error?
-             # For robustness, let's process based on the number of completed conversations
-             expanded_prompts = expanded_prompts[:len(completed_conversations)]
-
+            # This indicates a potential issue in run_agent or prompt expansion
+            # Adjust the shorter list to match the longer one? Or raise error?
+            # For robustness, let's process based on the number of completed conversations
+            expanded_prompts = expanded_prompts[: len(completed_conversations)]
 
         completion_ids = []
         for original_prompt, final_output in zip(expanded_prompts, completed_conversations):
             # Ensure the final output actually starts with the prompt
             if final_output.startswith(original_prompt):
-                completion_text = final_output[len(original_prompt):]
+                completion_text = final_output[len(original_prompt) :]
             else:
                 # Handle cases where the output might not perfectly match the start (e.g., due to tokenization differences)
                 # Or if the conversation somehow got corrupted. Fallback to using the whole output as completion?
-                print(f"Warning: Final output does not start with the original prompt. Using entire final output as completion.")
-                completion_text = final_output # Or potentially try a fuzzy match / diff?
+                completion_text = final_output  # Or potentially try a fuzzy match / diff?
 
             # Encode the completion text to get token IDs
             # add_special_tokens=False is typical for training completions
-            completion_token_ids = self.tokenizer.encode(
-                completion_text,
-                add_special_tokens=False
-            )
+            completion_token_ids = self.tokenizer.encode(completion_text, add_special_tokens=False)
             completion_ids.append(completion_token_ids)
 
         return completion_ids

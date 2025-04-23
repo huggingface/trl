@@ -1,3 +1,17 @@
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Copyright 2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,7 +30,7 @@
 import asyncio
 from inspect import getsource
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, List
+from typing import Callable
 
 from ..import_utils import is_e2b_available, is_langchain_experimental_available
 
@@ -70,15 +84,15 @@ def read_script(user_script_path: str) -> str:
 
 
 class LocalExecutor:
-    def execute(self, codes: List[str]) -> List[str]:
+    def execute(self, codes: list[str]) -> list[str]:
         """
         Executes multiple code snippets using PythonREPL sequentially.
 
         Args:
-            codes (List[str]): List of code snippets to execute.
+            codes (list[str]): list of code snippets to execute.
 
         Returns:
-            List[str]: List of execution results in same order as input snippets.
+            list[str]: list of execution results in same order as input snippets.
         """
         results = []
         repl = PythonREPL()
@@ -95,7 +109,7 @@ class E2BExecutor:
     def __init__(self, api_key: str, template: str = None, max_concurrent: int = 5):
         """
         Initialize the E2BExecutor for parallel code execution.
-        Tests the connection by running a simple hello world code.
+        Tests the connection by running a simple print statement.
 
         Args:
             api_key (`str`): Your E2B API Key.
@@ -113,8 +127,6 @@ class E2BExecutor:
         # Check if the result contains the expected output
         if "successful" not in result:
             raise ConnectionError(f"E2B connection test failed. Response: {result}")
-        
-        print("E2B connection validated successfully.")
 
     async def _execute_single(self, code: str) -> str:
         """Execute a single code snippet in a sandbox"""
@@ -129,15 +141,15 @@ class E2BExecutor:
             except Exception as e:
                 return f"Error: {str(e)}"
 
-    def execute(self, codes: List[str]) -> List[str]:
+    def execute(self, codes: list[str]) -> list[str]:
         """
         Executes multiple code snippets in parallel.
 
         Args:
-            codes (List[str]): List of code snippets to execute.
+            codes (list[str]): list of code snippets to execute.
 
         Returns:
-            List[str]: List of execution results in same order as input snippets.
+            list[str]: list of execution results in same order as input snippets.
         """
         try:
             loop = asyncio.get_event_loop()
@@ -221,7 +233,7 @@ def prepare_data_for_local_agent(
     tokenizer,
     prompt_column: str = "prompt",
     system_prompt: str = default_system_prompt,
-    tools: List[Callable] = None,
+    tools: list[Callable] = None,
     include_source_code: bool = True,
 ) -> list:
     """
@@ -237,8 +249,8 @@ def prepare_data_for_local_agent(
             Name of the column containing prompts.
         system_prompt (`str`, *optional*, defaults to `default_system_prompt`):
             The base system prompt.
-        tools (`List[Callable]` or `None`, *optional*, defaults to `None`):
-            List of callable functions to include in system prompt
+        tools (`list[Callable]` or `None`, *optional*, defaults to `None`):
+            list of callable functions to include in system prompt
         include_source_code (`bool`, *optional*, defaults to `True`):
             If True, includes source code of tools, else includes docstrings
 

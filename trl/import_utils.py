@@ -38,7 +38,7 @@ _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
 _vllm_available = _is_package_available("vllm")
 _joblib_available = _is_package_available("joblib")
-_e2b_available = _is_package_available("e2b-code-interpreter")
+_e2b_available = _is_package_available("e2b_code_interpreter")
 _langchain_experimental_available = _is_package_available("langchain_experimental")
 
 
@@ -93,11 +93,14 @@ def is_vllm_available() -> bool:
 def is_joblib_available() -> bool:
     return _joblib_available
 
+
 def is_e2b_available() -> bool:
     return _e2b_available
 
+
 def is_langchain_experimental_available() -> bool:
     return _langchain_experimental_available
+
 
 class _LazyModule(ModuleType):
     """

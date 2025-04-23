@@ -20,7 +20,7 @@ from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffus
 
 
 _import_structure = {
-    "agents.environments": ["Environment", "DefaultEnvironment", "CodeAgentEnvironment","VLLMClientGenerationConfig"],
+    "agents.environments": ["Environment", "DefaultEnvironment", "CodeAgentEnvironment", "VLLMClientGenerationConfig"],
     "agents.utils": ["E2BExecutor", "LocalExecutor", "prepare_data_for_e2b_agent", "prepare_data_for_local_agent"],
     "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
     "data_utils": [
@@ -37,7 +37,7 @@ _import_structure = {
         "unpair_preference_dataset",
     ],
     "environment": ["TextEnvironment", "TextHistory"],
-    "extras": ["BestOfNSampler","VLLMClient"],
+    "extras": ["BestOfNSampler", "VLLMClient"],
     "models": [
         "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
@@ -117,6 +117,8 @@ else:
     _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
+    from .agents.environments import CodeAgentEnvironment, DefaultEnvironment, Environment, VLLMClientGenerationConfig
+    from .agents.utils import E2BExecutor, LocalExecutor, prepare_data_for_e2b_agent, prepare_data_for_local_agent
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
@@ -140,8 +142,6 @@ if TYPE_CHECKING:
         create_reference_model,
         setup_chat_format,
     )
-    from .agents.environments import Environment, DefaultEnvironment, CodeAgentEnvironment, VLLMClientGenerationConfig
-    from .agents.utils import E2BExecutor, LocalExecutor, prepare_data_for_e2b_agent, prepare_data_for_local_agent
     from .scripts import ScriptArguments, TrlParser, init_zero_verbose
     from .trainer import (
         AlignPropConfig,
