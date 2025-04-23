@@ -328,9 +328,9 @@ Below are some numbers you can get in terms of speedup and memory efficiency, us
 
 | use_flash_attn_1 | model_name        | max_seq_len | batch_size | time per training step |
 | ---------------- | ----------------- | ----------- | ---------- | ---------------------- |
-| x                | facebook/opt-350m | 2048        | 8          | ~59.1s                 |
+| ✓                | facebook/opt-350m | 2048        | 8          | ~59.1s                 |
 |                  | facebook/opt-350m | 2048        | 8          | **OOM**                |
-| x                | facebook/opt-350m | 2048        | 4          | ~30.3s                 |
+| ✓                | facebook/opt-350m | 2048        | 4          | ~30.3s                 |
 |                  | facebook/opt-350m | 2048        | 4          | ~148.9s                |
 
 ### Using Flash Attention-2
