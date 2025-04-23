@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional, Union
@@ -81,10 +80,10 @@ class DPOConfig(TrainingArguments):
             Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
             `"keep_start"`.
         padding_free (`bool`, *optional*, defaults to `False`):
-            Whether forward passes are performed without padding by flattening all sequences in the batch
-            into a single continuous sequence. This approach requires associating a `position_ids` vector to track
-            positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it
-            can handle the flattened batch structure.
+            Whether to perform forward passes without padding by flattening all sequences in the batch into a single
+            continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
+            supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
+            batch structure.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute the log probabilities from the reference model. Setting this to `True` allows
             training without needing the reference model during training, which can help reduce GPU memory usage. If
@@ -147,12 +146,12 @@ class DPOConfig(TrainingArguments):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originites from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
-        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.9`):
+        ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
             between the current policy and the previous reference policy during updates. The reference policy is
             updated according to the equation: `π_ref = α * π_θ + (1 - α) * π_ref_prev`. To use this parameter, you
             must set `sync_ref_model=True`.
-        ref_model_sync_steps (`int`, *optional*, defaults to `64`):
+        ref_model_sync_steps (`int`, *optional*, defaults to `512`):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
@@ -243,10 +242,10 @@ class DPOConfig(TrainingArguments):
     padding_free: bool = field(
         default=False,
         metadata={
-            "help": "Whether forward passes are performed without padding by flattening all sequences in the batch "
-            "into a single continuous sequence. This approach requires associating a `position_ids` vector to track "
-            "positional information. Currently, this is only supported with the `flash_attention_2` mechanism, as it "
-            "can handle the flattened batch structure."
+            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
+            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
+            "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
+            "handle the flattened batch structure."
         },
     )
     precompute_ref_log_probs: bool = field(
@@ -362,7 +361,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     ref_model_mixup_alpha: float = field(
-        default=0.9,
+        default=0.6,
         metadata={
             "help": "α parameter from the TR-DPO paper, which controls the mix between the current policy and the "
             "previous reference policy during updates. The reference policy is updated according to the equation: "
@@ -370,7 +369,7 @@ class DPOConfig(TrainingArguments):
         },
     )
     ref_model_sync_steps: int = field(
-        default=64,
+        default=512,
         metadata={
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
@@ -385,20 +384,3 @@ class DPOConfig(TrainingArguments):
             "Comet during evaluation."
         },
     )
-
-    # Deprecated parameters
-    use_num_logits_to_keep: bool = field(
-        default=False,
-        metadata={"help": "Deprecated. Use `use_logits_to_keep` instead."},
-    )
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        if self.use_num_logits_to_keep:
-            warnings.warn(
-                "`use_num_logits_to_keep` is deprecated and will be remove in version 0.17.0. Use "
-                "`use_logits_to_keep` instead.",
-                DeprecationWarning,
-            )
-            self.use_logits_to_keep = self.use_num_logits_to_keep

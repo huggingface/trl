@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -52,7 +52,8 @@ python trl/scripts/sft.py \
 import argparse
 
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 
 from trl import (
     ModelConfig,
@@ -80,12 +81,23 @@ def main(script_args, training_args, model_args):
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    training_args.model_init_kwargs = model_kwargs
+
+    # Create model
+    config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+    valid_image_text_architectures = MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.values()
+
+    if config.architectures and any(arch in valid_image_text_architectures for arch in config.architectures):
+        from transformers import AutoModelForImageTextToText
+
+        model_kwargs.pop("use_cache", None)  # Image models do not support cache
+        model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+
+    # Create tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
     )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
     ################
     # Dataset
@@ -96,7 +108,7 @@ def main(script_args, training_args, model_args):
     # Training
     ################
     trainer = SFTTrainer(
-        model=model_args.model_name_or_path,
+        model=model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,

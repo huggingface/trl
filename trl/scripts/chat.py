@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ import argparse
 import copy
 import json
 import os
-import platform
+import pwd
 import re
 import time
 from dataclasses import dataclass, field
@@ -34,9 +34,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStream
 from trl import TrlParser, init_zero_verbose
 from trl.trainer.utils import get_quantization_config
 
-
-if platform.system() != "Windows":
-    import pwd
 
 init_zero_verbose()
 
@@ -253,6 +250,10 @@ class RichInterface:
 
     def clear(self):
         self._console.clear()
+        self._console.print(
+            "[bold yellow]❗ The chat interface is deprecated and will be removed in TRL 0.19!\n"
+            "👉 Please use the `transformers-cli chat` instead.[/bold yellow]"
+        )
 
     def print_user_message(self, text):
         self._console.print(f"[bold red]<{self.user_name}>:[/ bold red]\n{text}")
@@ -272,10 +273,7 @@ class RichInterface:
 
 
 def get_username():
-    if platform.system() == "Windows":
-        return os.getlogin()
-    else:
-        return pwd.getpwuid(os.getuid()).pw_name
+    return pwd.getpwuid(os.getuid()).pw_name
 
 
 def create_default_filename(model_name):

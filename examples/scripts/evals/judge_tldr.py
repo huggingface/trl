@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -99,4 +99,4 @@ else:
 completions = [[c0, c1] for c0, c1 in zip(reference_completions, model_completions)]
 best_idxs = judge.judge(prompts, completions)
 model_win_rate = best_idxs.count(1) / len(best_idxs)
-print(f"Model win rate: {model_win_rate*100:.2f}%")
+print(f"Model win rate: {model_win_rate * 100:.2f}%")

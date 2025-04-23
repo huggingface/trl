@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -145,7 +145,7 @@ class PRMTrainer(Trainer):
             data_collator = DataCollatorForTokenClassification(processing_class, max_length=args.max_length)
 
         if "input_ids" not in train_dataset.column_names:
-            with PartialState().local_main_process_first():
+            with PartialState().main_process_first():
                 fn_kwargs = {
                     "tokenizer": processing_class,
                     "step_separator": args.step_separator,

@@ -23,6 +23,8 @@
     title: Reducing Memory Usage
   - local: speeding_up_training
     title: Speeding Up Training
+  - local: distributing_training
+    title: Distributing Training
   - local: use_model
     title: Using Trained Models
   title: How-to guides
@@ -51,6 +53,8 @@
     title: Learning to Use Tools
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
+  - local: training_vlm_sft
+    title: Fine-tuning a Multimodal Model Using SFT (Single or Multi-Image Dataset)
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
@@ -105,4 +109,6 @@
     title: Text Environments
   - local: script_utils
     title: Script Utilities
+  - local: others
+    title: Others
   title: API
