@@ -131,13 +131,14 @@ class RepeatRandomSampler(Sampler):
     def __len__(self):
         return self.num_samples * self.repeat_count
 
+
 class SSRBuffer:
-    '''
+    """
     Selective Sample Replay manager. Maintains a buffer of high entropy samples for training.
-    '''
+    """
 
     def __init__(self, alpha: float = 2.0, total_buffer_size: int = 1000, persist_steps: int = 1000):
-        '''
+        """
         Args:
             alpha: float, handles prioritization intensity>=0.
                 alpha = 0 means no prioritization,
@@ -145,7 +146,7 @@ class SSRBuffer:
                 alpha > 1 means more prioritization for high entropy samples.
             total_buffer_size: int, maximum size of the buffer. After the buffer is full, the oldest samples will be discarded.
             persist_steps: int, number of steps an example lives in the buffer. After this many steps, the example will be discarded.
-        '''
+        """
 
         if alpha <= 0:
             raise ValueError("alpha must be greater than 0")
@@ -169,38 +170,34 @@ class SSRBuffer:
         # }
 
     def add_example(self, example: dict, advantage: float) -> None:
-        '''
+        """
         Add an example to the buffer.
-        '''
+        """
         # NOTE: We don't check if the buffer is full here. We'll do it at the end of each training step.
-        buffer_element = {
-            "example": example,
-            "advantage": advantage,
-            "ttl": self.persist_steps
-        }
+        buffer_element = {"example": example, "advantage": advantage, "ttl": self.persist_steps}
         self.buffer.append(buffer_element)
 
     @property
     def buffer_size(self) -> int:
-        '''
+        """
         Number of examples in the buffer.
-        '''
+        """
         return len(self.buffer)
 
     def draw_example(self) -> dict:
-        '''
+        """
         Returns an example from the buffer. The probabilty of drawing an example j is:
         abs(advantage_j)**(self.alpha) / sum(abs(advantage_i)**(self.alpha) for i in range(len(self.buffer)))
-        
+
         Raises a ValueError if the buffer is empty, otherwise, pops an example from the buffer and returns it.
-        '''
+        """
 
         if self.buffer_size == 0:
             raise ValueError("Buffer is empty")
 
         values = []
         for buffer_element in self.buffer:
-            values.append(abs(buffer_element["advantage"])**self.alpha)
+            values.append(abs(buffer_element["advantage"]) ** self.alpha)
 
         total = sum(values)
         probabilities = [value / total for value in values]
@@ -215,27 +212,27 @@ class SSRBuffer:
         # pop the example from the buffer
         buffer_element = self.buffer.pop(index)
 
-        return buffer_element['example']
+        return buffer_element["example"]
 
     def step(self) -> None:
-        '''
+        """
         Handles reducing ttl's on objects in the buffer and removes objects that have expired.
-       
+
         It is to be called once at the end of training step.
-        '''
+        """
         # decrement the ttl of each buffer element
         for buffer_element in self.buffer:
-            buffer_element['ttl'] -= 1
+            buffer_element["ttl"] -= 1
 
         # remove buffer elements that have expired
-        self.buffer = [b for b in self.buffer if b['ttl'] > 0]
+        self.buffer = [b for b in self.buffer if b["ttl"] > 0]
 
         # if the buffer is too big, discard the oldest examples
         if len(self.buffer) > self.buffer_size:
             # Sort by absolute advantage (priority), ascending
-            self.buffer.sort(key=lambda x: abs(x['advantage']))
+            self.buffer.sort(key=lambda x: abs(x["advantage"]))
             # Keep only the top 'buffer_size' elements (highest priority)
-            self.buffer = self.buffer[-self.buffer_size:]
+            self.buffer = self.buffer[-self.buffer_size :]
 
 
 class QwenGRPOTrainer(Trainer):
@@ -414,11 +411,10 @@ class QwenGRPOTrainer(Trainer):
             for weight in args.reward_weights:
                 if not isinstance(weight, float) and not callable(weight):
                     raise TypeError(f"Reward weights must be floats or callables, but found {type(weight)}")
-            self.reward_weights_config = args.reward_weights # Store the original list/config
+            self.reward_weights_config = args.reward_weights  # Store the original list/config
         else:
             # Default to list of 1.0 floats
             self.reward_weights_config = torch.ones(len(reward_funcs), dtype=torch.float32)
-
 
         # Reward processing class
         if reward_processing_classes is None:
@@ -470,24 +466,27 @@ class QwenGRPOTrainer(Trainer):
         self.epsilon_low = args.epsilon_low
         self.epsilon_high = args.epsilon_high
 
-
         # TODO: make these configurable args
         self.use_ssr_buffer = True
         self.ssr_alpha = 2.0
         self.ssr_total_buffer_size = 10000
-        self.ssr_persist_steps = 100000
+        self.ssr_persist_steps = 10000000
         # size at which the probability ramp reaches max_ssr_use_prob
-        self.ssr_ramp_up_size = 500
+        self.ssr_ramp_up_size = 1000
         # if the buffer is smaller than this, we don't use it. Instead, draw from the dataset. This helps ensure we only select the best quality examples from the buffer on average.
         self.min_ssr_buffer_size = 50
-        # the probability of using the SSR buffer on each step
-        self.max_ssr_use_prob = 0.9
+        # the maximum probability of using the SSR buffer on each step
+        self.max_ssr_use_prob = 0.75
 
         if not 0 <= self.max_ssr_use_prob <= 1:
             raise ValueError("max_ssr_use_prob must be between 0 and 1")
 
         if self.use_ssr_buffer:
-            self.ssr_buffer = SSRBuffer(alpha=self.ssr_alpha, total_buffer_size=self.ssr_total_buffer_size, persist_steps=self.ssr_persist_steps)
+            self.ssr_buffer = SSRBuffer(
+                alpha=self.ssr_alpha,
+                total_buffer_size=self.ssr_total_buffer_size,
+                persist_steps=self.ssr_persist_steps,
+            )
         else:
             self.ssr_buffer = None
 
@@ -583,7 +582,10 @@ class QwenGRPOTrainer(Trainer):
                         enable_prefix_caching=True,
                         max_model_len=self.args.vllm_max_model_len,
                         # Setting this to 1 as we only have one image per prompt for now. Setting it longer requires more resources, which is wasteful until we need it.
-                        limit_mm_per_prompt={"image": self.args.limit_image_per_prompt, "video": self.args.limit_video_per_prompt},
+                        limit_mm_per_prompt={
+                            "image": self.args.limit_image_per_prompt,
+                            "video": self.args.limit_video_per_prompt,
+                        },
                     )
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,
@@ -713,8 +715,6 @@ class QwenGRPOTrainer(Trainer):
             vlm_model.load_weights(state_dict.items())
 
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
-
-
         device = self.accelerator.device
 
         if not self.env:
@@ -731,15 +731,17 @@ class QwenGRPOTrainer(Trainer):
                 if buffer_size >= self.min_ssr_buffer_size:
                     # Calculate dynamic probability based on buffer size relative to the ramp-up size
                     size_range = self.ssr_ramp_up_size - self.min_ssr_buffer_size
-                    if size_range > 0: # Avoid division by zero
+                    if size_range > 0:  # Avoid division by zero
                         # Calculate the ramp progress, ensuring it doesn't exceed 1
                         prob_ramp = min(1.0, (buffer_size - self.min_ssr_buffer_size) / size_range)
                         current_ssr_use_prob = prob_ramp * self.max_ssr_use_prob
-                    else: # If min and ramp-up size are the same, use max probability if buffer is at least min size
-                        current_ssr_use_prob = self.max_ssr_use_prob if buffer_size >= self.min_ssr_buffer_size else 0.0
+                    else:  # If min and ramp-up size are the same, use max probability if buffer is at least min size
+                        current_ssr_use_prob = (
+                            self.max_ssr_use_prob if buffer_size >= self.min_ssr_buffer_size else 0.0
+                        )
 
                 else:
-                     # If buffer is smaller than min size, probability is 0
+                    # If buffer is smaller than min size, probability is 0
                     current_ssr_use_prob = 0.0
 
                 print(f"Current SSR use probability: {current_ssr_use_prob:.4f}")
@@ -749,15 +751,14 @@ class QwenGRPOTrainer(Trainer):
             else:
                 should_use_buffer_list = [None for _ in range(self.accelerator.num_processes)]
                 # Non-zero processes also need the flag, although they don't decide it
-                buffer_size = None # Placeholder for non-zero processes
+                buffer_size = None  # Placeholder for non-zero processes
 
             broadcast_object_list(should_use_buffer_list, from_process=0)
-            should_use_buffer = should_use_buffer_list[0] # All processes now know if buffer is used
+            should_use_buffer = should_use_buffer_list[0]  # All processes now know if buffer is used
 
             if should_use_buffer:
                 # process 0 will draw from the buffer, the other processes will hang out
                 if self.accelerator.process_index == 0:
-
                     # put the current example in the buffer with a small advantage so we avoid "throwing it away"
                     self.ssr_buffer.add_example(inputs[0], 0.01)
 
@@ -774,11 +775,9 @@ class QwenGRPOTrainer(Trainer):
         else:
             # if we are not using the SSR buffer, we just use the inputs passed into the function and signal that this example is not from the buffer
             should_use_buffer = False
-            buffer_size = 0 # Ensure buffer_size is defined even if not using SSR buffer
+            buffer_size = 0  # Ensure buffer_size is defined even if not using SSR buffer
 
         print(f"should_use_buffer: {should_use_buffer}")
-
-
 
         # TODO: This is a hack that we should probably fix.
         # without this, each gpu receives different inputs, screwing up the advantage computation.
@@ -837,10 +836,9 @@ class QwenGRPOTrainer(Trainer):
                         sampling_params=self.sampling_params,
                     )
 
-                    completion_ids = generated_output['ids']
-                    completion_messages = generated_output.get('messages', None)
-                    completion_mask = generated_output.get('mask', None)
-
+                    completion_ids = generated_output["ids"]
+                    completion_messages = generated_output.get("messages", None)
+                    completion_mask = generated_output.get("mask", None)
 
             else:
                 completion_ids = [None] * len(all_env_inputs)
@@ -880,7 +878,9 @@ class QwenGRPOTrainer(Trainer):
                 print("No completion mask provided. Computing mask based on EOS positions.")
                 # Fallback: compute mask based on EOS positions if not provided
                 eos_idx = torch.tensor([len(ids) - 1 for ids in completion_ids], device=device)
-                sequence_indices = torch.arange(completion_ids.size(1), device=device).expand(completion_ids.size(0), -1)
+                sequence_indices = torch.arange(completion_ids.size(1), device=device).expand(
+                    completion_ids.size(0), -1
+                )
                 completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
@@ -897,9 +897,9 @@ class QwenGRPOTrainer(Trainer):
             if len(new_images) > 0:
                 # use the processor to get pixel_values and image_grid_thw for the new images
                 new_images_info = self.processing_class(
-                    text='',
+                    text="",
                     images=new_images,
-                    return_tensors='pt',
+                    return_tensors="pt",
                     padding=True,
                 )
                 new_pixel_values = new_images_info["pixel_values"]
@@ -1014,7 +1014,6 @@ class QwenGRPOTrainer(Trainer):
         # # Add synchronization point to prevent processes from getting out of sync
         # self.accelerator.wait_for_everyone()
 
-
         # Calculate current weights based on schedule/config
         current_step_weights = []
         current_global_step = self.state.global_step
@@ -1050,7 +1049,6 @@ class QwenGRPOTrainer(Trainer):
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
 
-
         print("Finished with advantages")
 
         # if we are using the SSR buffer, we need to populate it with the current batch of examples
@@ -1067,7 +1065,6 @@ class QwenGRPOTrainer(Trainer):
         print("Finished with repopulating SSR buffer")
 
         self.accelerator.wait_for_everyone()
-
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -1097,9 +1094,7 @@ class QwenGRPOTrainer(Trainer):
 
             # For logging
             inputs_data_to_log = {
-                key: gather_object(
-                    [i[key] for i in inputs if key in i]
-                ) for key in self.inputs_to_log
+                key: gather_object([i[key] for i in inputs if key in i]) for key in self.inputs_to_log
             }
             # if the value is torch.Tensor, convert it to a list
             for key, value in inputs_data_to_log.items():
