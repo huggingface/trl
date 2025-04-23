@@ -22,7 +22,13 @@ from typing import Optional
 import torch
 
 from trl import TrlParser
-from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
+from trl.import_utils import (
+    is_fastapi_available,
+    is_pydantic_available,
+    is_uvicorn_available,
+    is_vllm_ascend_available,
+    is_vllm_available,
+)
 
 
 if is_fastapi_available():
@@ -43,6 +49,10 @@ if is_vllm_available():
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
+
+    if is_vllm_ascend_available():
+        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +124,7 @@ class WeightSyncWorkerExtension:
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
         # Use NCCL to broadcast the updated weights from the client (src) to all workers.
-        self.pynccl_comm.broadcast(weight, src=self.client_rank, stream=torch.cuda.current_stream())
+        self.pynccl_comm.broadcast(weight, src=self.client_rank)
         self.pynccl_comm.group.barrier()
 
         # Load the received weights into the model.
@@ -164,6 +174,12 @@ class ScriptArguments:
         enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
+        enforce_eager (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
+            model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
+        log_level (`str`, *optional*, defaults to `"info"`):
+            Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
+            `"trace"`.
     """
 
     model: str = field(metadata={"help": "Model name or path to load the model from."})
@@ -214,6 +230,21 @@ class ScriptArguments:
             "hardware support this feature."
         },
     )
+    enforce_eager: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always "
+            "execute the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager "
+            "execution in hybrid."
+        },
+    )
+    log_level: str = field(
+        default="info",
+        metadata={
+            "help": "Log level for uvicorn. Possible choices: 'critical', 'error', 'warning', 'info', 'debug', "
+            "'trace'."
+        },
+    )
 
 
 def main(script_args: ScriptArguments):
@@ -240,6 +271,7 @@ def main(script_args: ScriptArguments):
         revision=script_args.revision,
         tensor_parallel_size=script_args.tensor_parallel_size,
         gpu_memory_utilization=script_args.gpu_memory_utilization,
+        enforce_eager=script_args.enforce_eager,
         dtype=script_args.dtype,
         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
@@ -406,7 +438,7 @@ def main(script_args: ScriptArguments):
         return {"message": "Request received, closing communicator"}
 
     # Start the server
-    uvicorn.run(app, host=script_args.host, port=script_args.port)
+    uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):

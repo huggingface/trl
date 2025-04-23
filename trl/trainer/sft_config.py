@@ -47,6 +47,8 @@ class SFTConfig(TrainingArguments):
             `skip_prepare_dataset`.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        eos_token (`str` or `None`, *optional*, defaults to `None`):
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`.
         pad_token (`int` or `None`, *optional*, defaults to `None`):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
@@ -68,6 +70,12 @@ class SFTConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `2e-5`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
+        completion_only_loss (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
+            only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
+            `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
+            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on
+            the full sequence for [language modeling](#language-modeling) datasets.
     """
 
     # Parameters that control the model
@@ -94,6 +102,12 @@ class SFTConfig(TrainingArguments):
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    eos_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
+        },
     )
     pad_token: Optional[str] = field(
         default=None,
@@ -137,6 +151,18 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
             "`TrainingArguments`."
+        },
+    )
+    completion_only_loss: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is "
+                "computed only on the completion, which is supported only for prompt-completion datasets. If `False`, "
+                "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
+                "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
+                "language modeling datasets."
+            )
         },
     )
 

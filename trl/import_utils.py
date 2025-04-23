@@ -37,6 +37,7 @@ _rich_available = _is_package_available("rich")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
 _vllm_available = _is_package_available("vllm")
+_vllm_ascend_available = _is_package_available("vllm_ascend")
 _joblib_available = _is_package_available("joblib")
 _e2b_available = _is_package_available("e2b_code_interpreter")
 _langchain_experimental_available = _is_package_available("langchain_experimental")
@@ -88,6 +89,10 @@ def is_uvicorn_available() -> bool:
 
 def is_vllm_available() -> bool:
     return _vllm_available
+
+
+def is_vllm_ascend_available() -> bool:
+    return _vllm_ascend_available
 
 
 def is_joblib_available() -> bool:
