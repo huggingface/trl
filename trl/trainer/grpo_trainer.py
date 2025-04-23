@@ -687,9 +687,9 @@ class GRPOTrainer(Trainer):
                 raise ValueError(
                     "SGLang is enabled but no server URL was provided (use --sglang_server_url)."
                 )
-            
+            self.sglang_server_url = args.sglang_server_url
             if self.accelerator.is_main_process:
-                self.sglang_server_url = args.sglang_server_url
+                
                 self.sglang_sampling_params = {
                     "temperature": self.temperature,
                     "max_new_tokens": self.max_completion_length,
@@ -937,7 +937,7 @@ class GRPOTrainer(Trainer):
         checkpoint = self.args.checkpoint_path
         if not checkpoint or not os.path.exists(checkpoint):
             raise FileNotFoundError(f"Checkpoint path {checkpoint} does not exist.")
-
+        self.model.save_pretrained(checkpoint)
         payload = {
             "model_path": checkpoint,
             "load_format": getattr(self.args, "load_format", "auto"),
@@ -958,18 +958,19 @@ class GRPOTrainer(Trainer):
             )
 
         # Optionally flush cache.
-        try:
-            flush_response = requests.post(
-                f"{self.sglang_server_url}/flush_cache", timeout=30
-            )
-            if not flush_response.status_code == 200:
-                print(
-                    f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
+        if self.accelerator.is_main_process:
+            try:
+                flush_response = requests.post(
+                    f"{self.sglang_server_url}/flush_cache", timeout=30
                 )
-        except requests.RequestException as e:
-            print(f"Warning: Cache flush request failed: {e}")
+                if not flush_response.status_code == 200:
+                    print(
+                        f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
+                    )
+            except requests.RequestException as e:
+                print(f"Warning: Cache flush request failed: {e}")
 
-        print(f"SGLang weights updated successfully: {res_json.get('message')}")
+        # print(f"SGLang weights updated successfully: {res_json.get('message')}")
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -1072,6 +1073,7 @@ class GRPOTrainer(Trainer):
         if self.use_sglang:
             # Update weights if the training step has advanced.
             if self.state.global_step != self._last_loaded_step:
+                
                 self._update_sglang_weights()
                 self._last_loaded_step = self.state.global_step
 
