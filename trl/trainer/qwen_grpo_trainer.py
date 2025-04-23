@@ -476,7 +476,7 @@ class QwenGRPOTrainer(Trainer):
         # if the buffer is smaller than this, we don't use it. Instead, draw from the dataset. This helps ensure we only select the best quality examples from the buffer on average.
         self.min_ssr_buffer_size = 50
         # the maximum probability of using the SSR buffer on each step
-        self.max_ssr_use_prob = 0.75
+        self.max_ssr_use_prob = 0.65
 
         if not 0 <= self.max_ssr_use_prob <= 1:
             raise ValueError("max_ssr_use_prob must be between 0 and 1")
