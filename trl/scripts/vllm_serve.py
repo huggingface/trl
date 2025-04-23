@@ -177,6 +177,9 @@ class ScriptArguments:
         enforce_eager (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
+        log_level (`str`, *optional*, defaults to `"info"`):
+            Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
+            `"trace"`.
     """
 
     model: str = field(metadata={"help": "Model name or path to load the model from."})
@@ -233,6 +236,13 @@ class ScriptArguments:
             "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always "
             "execute the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager "
             "execution in hybrid."
+        },
+    )
+    log_level: str = field(
+        default="info",
+        metadata={
+            "help": "Log level for uvicorn. Possible choices: 'critical', 'error', 'warning', 'info', 'debug', "
+            "'trace'."
         },
     )
 
@@ -426,7 +436,7 @@ def main(script_args: ScriptArguments):
         return {"message": "Request received, closing communicator"}
 
     # Start the server
-    uvicorn.run(app, host=script_args.host, port=script_args.port)
+    uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
