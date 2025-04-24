@@ -36,7 +36,7 @@ trl vllm-serve --model <model_name>
 ```
 # What exactly happens when you run `trl vllm-serve --model <model_name>`?
 when you run for example `CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2`, the following happens:
-![alt text](vllm1.png)
+![alt text](./vllm1.png)
 1. First it will spawn multiple workers to handle loads of requests in parallel. To figure our exactly how many workers to spawn, it will use the `--tensor-parallel-size` and `--data-parallel-size` arguments in the command. For example, if you run `CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2`, it will spawn 4 workers (2 for data parallelism and 2 for tensor parallelism). Tricky point here is that you need to think of it as 4 workers independent and in parallel at the same time are processing a chunk of the incoming requests. Here the requests are basically the prompts that are sent to the model on the server to generate completions. Therefore, each of these workers(gpus) will be responsible for processing a chunk of the incoming requests. 
 
 2. Now that we have the requests(prompts) ready on each of the workers, the model will start generating the completions. Note that the model (models' weights actually) itself is split across multiple gpus on the vllm side (`--tensor parallelism size`) and each gpu will be responsible for processing a chunk of the incoming requests(`--data parallelism size`).
