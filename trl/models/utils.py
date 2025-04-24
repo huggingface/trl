@@ -18,7 +18,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, Union
 
-from accelerate.utils import is_deepspeed_available
 from packaging import version
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
@@ -29,9 +28,6 @@ SUPPORTED_ARCHITECTURES = (
     AutoModelForCausalLMWithValueHead,
     AutoModelForSeq2SeqLMWithValueHead,
 )
-
-if is_deepspeed_available():
-    import deepspeed
 
 if TYPE_CHECKING:
     from accelerate import Accelerator
@@ -167,6 +163,8 @@ def iter_params(module, recurse=False):
 
 def add_hooks(model: "DeepSpeedEngine") -> None:
     """Adds the optimizer hooks from a DeepSpeed ZeRO-3 model."""
+    import deepspeed
+
     if not hasattr(model, "optimizer"):  # before the first training step, the model has no optimizer
         return
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
@@ -214,6 +212,8 @@ def unwrap_model_for_generation(
         if not gather_deepspeed3_params:
             yield accelerator.unwrap_model(model)
         else:
+            import deepspeed
+
             with deepspeed.zero.GatheredParameters(model.parameters()):
                 remove_hooks(model)
                 yield accelerator.unwrap_model(model)
@@ -224,6 +224,8 @@ def unwrap_model_for_generation(
 
 def prepare_deepspeed(model, accelerator):
     # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+    import deepspeed
+
     deepspeed_plugin = accelerator.state.deepspeed_plugin
     config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
     stage = config_kwargs["zero_optimization"]["stage"]
