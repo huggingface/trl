@@ -53,11 +53,11 @@ when you run for example `trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parall
   
 
 ## 📝 Important notes:
-When using vLLM, ensure the gpus assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation using `CUDA_VISIBLE_DEVICES`.  See the example below;
+When using vLLM, ensure the gpus assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation for training using `CUDA_VISIBLE_DEVICES`.  See the example below;
 
 - **Set GPUs **0-3** for vLLM generation:** Assume `CUDA_VISIBLE_DEVICES=0,1,2,3` are allocated for vLLM generation.   
 ```sh
-trl vllm-serve --model <model_name>
+trl vllm-serve --model <model_name> --tensor-parallel-size 1 --data-parallel-size 4
 ```  
 
 - **And GPUs **4-7** for training:** If you do not set the `CUDA_VISIBLE_DEVICES` environment variable, the training script will use all available GPUs by default which may lead to resource conflicts. To avoid this, you can set the `CUDA_VISIBLE_DEVICES` environment variable to specify which GPUs to use for training. For example, if you want to use GPUs 4-7 for training, you can set the `CUDA_VISIBLE_DEVICES` environment variable as follows:
