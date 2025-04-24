@@ -72,6 +72,7 @@ class TestVLLMClientServer(unittest.TestCase):
 
         # Initialize the client
         cls.client = VLLMClient(connection_timeout=240)
+        cls.client.init_communicator()
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -151,6 +152,7 @@ class TestVLLMClientServerTP(unittest.TestCase):
 
         # Initialize the client
         cls.client = VLLMClient(connection_timeout=240)
+        cls.client.init_communicator()
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]

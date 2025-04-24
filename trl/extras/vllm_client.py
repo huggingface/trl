@@ -78,6 +78,7 @@ class VLLMClient:
 
         >>> from transformers import AutoModelForCausalLM
         >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B", device_map="cuda")
+        >>> client.init_communicator()
         >>> client.update_model_params(model)
         ```
     """
@@ -95,8 +96,6 @@ class VLLMClient:
         self.server_port = server_port
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
-        self.init_communicator()
-        atexit.register(self.close_communicator)  # when the client object is deleted, close the weight update group
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
@@ -222,6 +221,9 @@ class VLLMClient:
         pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
         self.pynccl_comm = PyNcclCommunicator(pg, device=0)
 
+        # When the client object is deleted, close the weight update group
+        atexit.register(self.close_communicator)
+
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
         Updates a specific named parameter in the model and broadcasts it to other processes.
@@ -284,6 +286,7 @@ if __name__ == "__main__":
     from vllm import SamplingParams
 
     client = VLLMClient()
+    client.init_communicator()
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
