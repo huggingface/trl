@@ -39,3 +39,9 @@ options:
                         Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support this
                         feature. (default: None)
 ```
+
+### Find the best distributed setup
+
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_8_gpus.png)
+
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_4_gpus.png)
