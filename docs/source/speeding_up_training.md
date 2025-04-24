@@ -6,9 +6,9 @@ Section under construction. Feel free to contribute!
 
 </Tip>
 
-## vLLM for fast generation in GRPO
+## vLLM for fast generation in online methods
 
-GRPO requires the model to generate completions, which is often a slow process and can significantly impact training time.
+Online methods such as GRPO or Online DPO require the model to generate completions, which is often a slow process and can significantly impact training time.
 To speed up generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation through, among other things, PagedAttention. TRL's online trainers support vLLM, greatly improving training speed.
 
 To use [vLLM](https://github.com/vllm-project/vllm), first install it using:
@@ -22,6 +22,20 @@ or
 ```bash
 pip install "trl[vllm]"
 ```
+
+<hfoptions id="vllm examples">
+<hfoption id="Online DPO">
+
+Then, enable it by passing `use_vllm=True` in the training arguments.
+
+```python
+from trl import OnlineDPOConfig
+
+training_args = OnlineDPOConfig(..., use_vllm=True)
+```
+
+</hfoption>
+<hfoption id="GRPO">
 
 First, start a vLLM server by running:
 
@@ -54,3 +68,6 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 ```  
 
 </Tip>
+
+</hfoption>
+</hfoptions>
