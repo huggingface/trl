@@ -97,6 +97,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
+        warnings.warn(
+            "This class is deprecated and will be removed in version 0.20.0. To train on completion only, please use "
+            "the parameter `completion_only_loss` of `SFTConfig` instead.",
+            DeprecationWarning,
+        )
 
         self.instruction_template = instruction_template
         if isinstance(instruction_template, str):
