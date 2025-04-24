@@ -36,36 +36,14 @@ from ..import_utils import is_e2b_available, is_langchain_experimental_available
 
 
 if is_e2b_available():
-    from e2b_code_interpreter import AsyncSandbox
+    from e2b_code_interpreter import AsyncSandbox  # used for E2B async code execution
 
 if is_langchain_experimental_available():
-    from langchain_experimental.utilities import PythonREPL
+    from langchain_experimental.utilities import PythonREPL  # used for local code execution
 
 default_system_prompt = "You can answer questions and solve problems. If running code helps, write it inside <code> </code>, and you will see the result. Example: To calculate 2 + 2, write <code> print(2 + 2) </code>."
 
 default_environment_prompt = "This is a user-provided script containing tools that you can use to help complete tasks. It will be added to the sandbox environment so you can call its functions. If you are unsure how to use the available tools, you can use the `help()` function to inspect them."
-
-
-def get_code(chat: str, tools_script: str = None, parsing_string: str = "<code>") -> str:
-    """
-    Extracts and optionally prepends a tools script to a code snippet from a chat message.
-
-    Args:
-        chat (`str`):
-            Chat message containing the code snippet.
-        tools_script (`str` or `None`, *optional*, defaults to `None`):
-            A script to prepend to the extracted code snippet.
-        parsing_string (`str`, *optional*, defaults to `"<code>"`):
-            String used to identify the start of the code snippet in the chat message.
-
-    Returns:
-        `str`:
-            Extracted code snippet, optionally prepended with the tools script.
-    """
-    code = chat.split(parsing_string)[-1]
-    if tools_script:
-        code = f"{tools_script}\n{code}"
-    return code
 
 
 def read_script(user_script_path: str) -> str:
@@ -106,7 +84,7 @@ class Localexecuter:
 
 
 class E2Bexecuter:
-    def __init__(self, api_key: str, template: str = None, max_concurrent: int = 5):
+    def __init__(self, api_key: str, template: str = None, max_concurrent: int = 20):
         """
         Initialize the E2Bexecuter for parallel code execution.
         Tests the connection by running a simple print statement.

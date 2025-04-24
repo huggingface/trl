@@ -320,6 +320,10 @@ class GRPOTrainer(Trainer):
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
+        environment (`Optional[Environment]`, *optional*, defaults to `None`):
+            Custom environment for generation. If `None`, uses the default environment.
+            This can be used to override the default generation behavior, for example to support
+            code execution or other custom logic during generation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:

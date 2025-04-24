@@ -23,9 +23,10 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import GRPOConfig, GRPOTrainer, CodeAgentEnvironment, LocalExecutor
+from trl import CodeAgentEnvironment, GRPOConfig, GRPOTrainer, LocalExecutor
 from trl.trainer.grpo_trainer import RepeatSampler
-from .testing_utils import require_vllm, require_local_code_executer
+
+from .testing_utils import require_local_code_executer, require_vllm
 
 
 if is_peft_available():
@@ -708,7 +709,7 @@ class GRPOTrainerTester(unittest.TestCase):
     @require_vllm
     @require_local_code_executer
     @unittest.skip("We should add a mock for the vLLM server.")
-    def test_training_vllm(self):
+    def test_training_vllm_with_environment(self):
         """Test that training works with vLLM for generation."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         # initializing local code executer
@@ -720,8 +721,8 @@ class GRPOTrainerTester(unittest.TestCase):
         env = CodeAgentEnvironment(
             code_executor=code_executer,
             tokenizer=tokenizer,
-            )
-        
+        )
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,

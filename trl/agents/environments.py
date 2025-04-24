@@ -76,8 +76,30 @@ class DefaultEnvironment(Environment):
 
 
 class CodeAgentEnvironment(Environment):
-    """Environment that supports code execution during generation"""
+    """
+    Environment that supports code execution during generation.
 
+    This environment enables an agent to generate text that include code blocks,
+    execute those code blocks using a provided code executer (such as Localexecuter or E2Bexecuter),
+    and insert the execution results back into the conversation. It is designed to work with
+    conversational models that can output code delimited by specific tags (e.g., <code>...</code>).
+
+    The environment repeatedly generates text, detects code blocks using configurable delimiters,
+    executes the code, and appends the output (delimited by output tags) to the conversation.
+    This process continues until no further code execution is requested in the generated text.
+
+    Args:
+        code_executer: An object with an `execute` method that takes a list of code strings and returns a list of results.
+            This is used to run the extracted code blocks (e.g., Localexecuter or E2Bexecuter).
+        tokenizer: A PreTrainedTokenizerBase instance for encoding and decoding text and completions.
+        parsing_string: String that marks the beginning of code blocks in the generated text (default: "<code>").
+        stop_string: String that marks the end of code blocks in the generated text (default: "</code>").
+        tools_script: Optional script to prepend to each extracted code block before execution.
+        output_string_start: String marking the beginning of code output to be inserted into the conversation (default: "<output>").
+        output_string_end: String marking the end of code output (default: "</output>").
+    """
+
+    # ...existing code...
     def __init__(
         self,
         code_executer: Any,
@@ -85,8 +107,8 @@ class CodeAgentEnvironment(Environment):
         parsing_string: str = "<code>",
         stop_string: str = "</code>",
         tools_script: Optional[str] = None,
-        output_parsing_string: str = "<output>",
-        output_stop_string: str = "</output>",
+        output_string_start: str = "<output>",
+        output_string_end: str = "</output>",
     ):
         """Initialize the code agent environment
 
@@ -96,8 +118,8 @@ class CodeAgentEnvironment(Environment):
             parsing_string: String that marks the beginning of code blocks
             stop_string: String that marks the end of code blocks
             tools_script: Optional script to prepend to extracted code
-            output_parsing_string: String marking the beginning of code output.
-            output_stop_string: String marking the end of code output.
+            output_string_start: String marking the beginning of code output.
+            output_string_end: String marking the end of code output.
         """
         if not hasattr(code_executer, "execute"):
             raise ValueError("code_executer must have an 'execute' method.")
@@ -107,8 +129,8 @@ class CodeAgentEnvironment(Environment):
         self.parsing_string = parsing_string
         self.stop_string = stop_string
         self.tools_script = tools_script
-        self.output_parsing_string = output_parsing_string
-        self.output_stop_string = output_stop_string
+        self.output_string_start = output_string_start
+        self.output_string_end = output_string_end
 
     def extract_code(self, text: str) -> Optional[str]:
         """Extract code from the *last* code block in the generated text."""
@@ -239,7 +261,7 @@ class CodeAgentEnvironment(Environment):
                     # Append results and add back to active conversations for the next round
                     for conversation, result in zip(conversations_pending_code, execution_results):
                         updated_conversation = (
-                            conversation + f"{self.output_parsing_string}{result}{self.output_stop_string}"
+                            conversation + f"{self.output_string_start}{result}{self.output_string_end}"
                         )
                         next_active_conversations.append(updated_conversation)
                 except Exception:
@@ -254,6 +276,7 @@ class CodeAgentEnvironment(Environment):
         self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]
     ) -> list[list[int]]:
         """Generate responses with code execution and return token IDs of the completions.
+        The Generate method is used for the training loop.
 
         Args:
             vllm_client: VLLM client instance.
