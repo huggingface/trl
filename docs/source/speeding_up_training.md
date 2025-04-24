@@ -125,7 +125,7 @@ Now given these, our experiments on Qwen model family (3B, 7B, 14B, 32B), on 8 H
 # 🫠 TL;DR 
 First run the server by; (this example allocate 4 GPUs for vLLM generation)
 ```sh
-CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B
+trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2
 ```  
 Then, run the training script by passing `use_vllm=True` in the training arguments (this example allocate 4 GPUs for training) by;
   
