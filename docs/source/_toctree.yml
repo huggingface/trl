@@ -27,6 +27,8 @@
     title: Distributing Training
   - local: use_model
     title: Using Trained Models
+  - local: training_agents
+    title: Training Agents
   title: How-to guides
 - sections:
   - local: deepspeed_integration
