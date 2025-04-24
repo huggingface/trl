@@ -96,6 +96,7 @@ if is_wandb_available():
 
 if is_sglang_available():
     import requests
+    from sglang.srt.utils import MultiprocessingSerializer
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -878,23 +879,20 @@ class GRPOTrainer(Trainer):
         This function assumes that a checkpoint has been saved at self.args.checkpoint_path.
         The SGLang server will load the new weights from that checkpoint.
         """
-        checkpoint = self.args.checkpoint_path
-        if not checkpoint or not os.path.exists(checkpoint):
-            raise FileNotFoundError(f"Checkpoint path {checkpoint} does not exist.")
-        self.model.save_pretrained(checkpoint)
         payload = {
-            "model_path": checkpoint,
-            "load_format": getattr(self.args, "load_format", "auto"),
+            "serialized_named_tensors": [
+                MultiprocessingSerializer.serialize(list(self.model.named_parameters()), output_str=True)
+            ],
+            "flush_cache": True,
         }
         try:
             response = requests.post(
-                f"{self.sglang_server_url}/update_weights_from_disk",
+                f"{self.sglang_server_url}/update_weights_from_tensor",
                 json=payload,
                 timeout=60,
             )
         except requests.RequestException as e:
             raise RuntimeError(f"Weight update request failed: {e}")
-
         res_json = response.json()
         if not res_json.get("success", False):
             raise RuntimeError(
@@ -903,12 +901,12 @@ class GRPOTrainer(Trainer):
 
         # Optionally flush cache.
 
-        try:
-            flush_response = requests.post(f"{self.sglang_server_url}/flush_cache", timeout=30)
-            if not flush_response.status_code == 200:
-                print(f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}")
-        except requests.RequestException as e:
-            print(f"Warning: Cache flush request failed: {e}")
+        # try:
+        #     flush_response = requests.post(f"{self.sglang_server_url}/flush_cache", timeout=30)
+        #     if not flush_response.status_code == 200:
+        #         print(f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}")
+        # except requests.RequestException as e:
+        #     print(f"Warning: Cache flush request failed: {e}")
 
         # print(f"SGLang weights updated successfully: {res_json.get('message')}")
 
