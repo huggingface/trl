@@ -6,9 +6,9 @@ Section under construction. Feel free to contribute!
 
 </Tip>
 
-## vLLM for fast generation in online methods
+## vLLM for fast generation in GRPO
 
-Online methods such as GRPO or Online DPO require the model to generate completions, which is often a slow process and can significantly impact training time.
+GRPO requires the model to generate completions, which is often a slow process and can significantly impact training time.
 To speed up generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation through, among other things, PagedAttention. TRL's online trainers support vLLM, greatly improving training speed.
 
 To use [vLLM](https://github.com/vllm-project/vllm), first install it using:
@@ -22,20 +22,6 @@ or
 ```bash
 pip install "trl[vllm]"
 ```
-
-<hfoptions id="vllm examples">
-<hfoption id="Online DPO">
-
-Then, enable it by passing `use_vllm=True` in the training arguments.
-
-```python
-from trl import OnlineDPOConfig
-
-training_args = OnlineDPOConfig(..., use_vllm=True)
-```
-
-</hfoption>
-<hfoption id="GRPO">
 
 First, start a vLLM server by running:
 
@@ -106,5 +92,47 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 </Tip>
 
 
-</hfoption>
-</hfoptions>
+### Choose the optimal value TP and DP
+
+Depending on the various parameters like the model size, the batch size, the number of GPUs or even the desired completion length, the optimal values for tensor parallelism (TP) and data parallelism (DP) can vary. We provide a simple calculator to help you choose the best values for your use case.
+
+You'll need:
+- The model size
+- The maximum completion length
+- The per-device batch size
+- The number of GPUs
+- The gradient accumulation steps
+- The number of generations per prompt
+- The number of GPUs for the vLLM server
+
+#### 1. Compute the prompt batch size
+
+The prompt batch size is the number of prompts sent to the server per request. It is computed as follows:
+
+$$
+\text{Prompt Batch Size} = \frac{\text{Per Device Batch Size} \times \text{Number of GPUs} \times \text{Gradient Accumulation Steps}}{\text{Number of Generations per Prompt}}
+$$
+
+Example:
+- Per Device Batch Size: 8
+- Number of GPUs: 4
+- Gradient Accumulation Steps: 16
+- Number of Generations per Prompt: 8
+
+The prompt batch size is:
+
+$$
+\text{Prompt Batch Size} = \frac{8 \times 4 \times 16}{8} = 64
+$$
+
+#### 2.
+
+Then, using the following figure, you can choose the optimal values for TP and DP.
+
+![TP and DP values](https://raw.githubusercontent.com/vllm-project/vllm/main/docs/images/tp_dp.png)
+
+Example:
+- Model: Qwen/Qwen2.5-7B
+- Max completion length: 2048
+
+The optimal configuration is TP=1 and DP=8
