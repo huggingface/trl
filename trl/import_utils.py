@@ -41,6 +41,7 @@ _vllm_ascend_available = _is_package_available("vllm_ascend")
 _joblib_available = _is_package_available("joblib")
 _sglang_available = _is_package_available("sglang")
 
+
 def is_deepspeed_available() -> bool:
     return _deepspeed_available
 
@@ -96,8 +97,10 @@ def is_vllm_ascend_available() -> bool:
 def is_joblib_available() -> bool:
     return _joblib_available
 
+
 def is_sglang_available() -> bool:
     return _sglang_available
+
 
 class _LazyModule(ModuleType):
     """

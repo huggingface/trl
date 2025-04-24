@@ -13,37 +13,41 @@
 # limitations under the License.
 
 import os
+
 from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
-import tempfile
-import torch
+
 import wandb
+from trl import GRPOConfig, GRPOTrainer
+
 
 wandb.init(
-            # Set the wandb entity where your project will be logged (generally your team name).
-            entity="y1cunhui-yang-independent",
-            # Set the wandb project where this run will be logged.
-            project="SGLANG-GRPO-Qwen2.5-0.5B-Instruct",
-            group="sglang-trl"
-        )
+    # Set the wandb entity where your project will be logged (generally your team name).
+    entity="y1cunhui-yang-independent",
+    # Set the wandb project where this run will be logged.
+    project="SGLANG-GRPO-Qwen2.5-0.5B-Instruct",
+    group="sglang-trl",
+)
 
 dataset = load_dataset("trl-lib/tldr", split="train[:5%]")
 
 checkpoint_dir = os.path.join("/sgl-workspace/ryang/trl", "checkpoints/sgl")
 os.makedirs(checkpoint_dir, exist_ok=True)
 
+
 # Define the reward function, which rewards completions that are close to 20 characters
 def reward_len(completions, **kwargs):
     return [-abs(20 - len(completion)) for completion in completions]
 
+
 training_args = GRPOConfig(
-    output_dir=os.path.join(checkpoint_dir, "Qwen2.5_output"), 
-    logging_steps=10, 
-    report_to="wandb", 
+    output_dir=os.path.join(checkpoint_dir, "Qwen2.5_output"),
+    logging_steps=10,
+    report_to="wandb",
     use_sglang=True,
     sglang_device="cuda:0",
     sglang_gpu_memory_utilization=0.9,
-    sglang_server_url="http://127.0.0.1:30000")
+    sglang_server_url="http://127.0.0.1:30000",
+)
 
 
 trainer = GRPOTrainer(
@@ -88,7 +92,6 @@ trainer.train()
 #     return [-abs(20 - len(completion)) for completion in completions]
 
 
-
 # training_args = GRPOConfig(
 #     output_dir=checkpoint_dir,  # Set output directory here
 #     learning_rate=1.0e-03,
@@ -109,7 +112,6 @@ trainer.train()
 #     args=training_args,
 #     train_dataset=dataset,
 # )
-
 
 
 # trainer.train()

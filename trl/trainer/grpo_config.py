@@ -230,9 +230,7 @@ class GRPOConfig(TrainingArguments):
     )
     ds3_gather_for_generation: bool = field(
         default=True,
-        metadata={
-            "help": "If enabled, the policy model weights are gathered for generation (DeepSpeed ZeRO-3)."
-        },
+        metadata={"help": "If enabled, the policy model weights are gathered for generation (DeepSpeed ZeRO-3)."},
     )
     shuffle_dataset: Optional[bool] = field(
         default=True,
@@ -436,9 +434,7 @@ class GRPOConfig(TrainingArguments):
     )
     sync_ref_model: bool = field(
         default=False,
-        metadata={
-            "help": "Whether to synchronize the reference model with the active model."
-        },
+        metadata={"help": "Whether to synchronize the reference model with the active model."},
     )
     ref_model_mixup_alpha: float = field(
         default=0.6,
@@ -450,9 +446,7 @@ class GRPOConfig(TrainingArguments):
     )
     ref_model_sync_steps: int = field(
         default=512,
-        metadata={
-            "help": "Frequency (in steps) for synchronizing the reference model."
-        },
+        metadata={"help": "Frequency (in steps) for synchronizing the reference model."},
     )
     use_liger_loss: bool = field(
         default=False,

@@ -15,13 +15,13 @@
 import os
 import textwrap
 import warnings
-import requests
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
 
 import datasets
+import requests
 import torch
 import torch.utils.data
 import transformers
@@ -58,7 +58,13 @@ from ..data_utils import (
 )
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is_rich_available, is_vllm_available, is_sglang_available
+from ..import_utils import (
+    is_deepspeed_available,
+    is_liger_kernel_available,
+    is_rich_available,
+    is_sglang_available,
+    is_vllm_available,
+)
 from ..models import (
     create_reference_model,
     prepare_deepspeed,
@@ -69,12 +75,9 @@ from .grpo_config import GRPOConfig
 from .utils import (
     disable_dropout_in_model,
     generate_model_card,
-   
     get_comet_experiment_url,
-   
     pad,
     print_prompt_completions_sample,
-   
     selective_log_softmax,
 )
 
@@ -93,8 +96,6 @@ if is_wandb_available():
 
 if is_sglang_available():
     import requests
-    from sglang.utils import launch_server_cmd
-    from sglang.utils import wait_for_server, terminate_process
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -152,7 +153,6 @@ class RepeatSampler(Sampler):
     """
 
     def __init__(
-        
         self,
         data_source: Sized,
         mini_repeat_count: int,
@@ -160,7 +160,6 @@ class RepeatSampler(Sampler):
         repeat_count: int = 1,
         shuffle: bool = True,
         seed: Optional[int] = None,
-    
     ):
         self.data_source = data_source
         self.mini_repeat_count = mini_repeat_count
@@ -388,17 +387,11 @@ class GRPOTrainer(Trainer):
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[
-            Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]
-        ] = None,
+        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
-        reward_processing_classes: Optional[
-            Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]
-        ] = None,
+        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[
-            Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]
-        ] = (None, None),
+        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
     ):
         # Args
@@ -413,11 +406,7 @@ class GRPOTrainer(Trainer):
         if isinstance(model, str):
             model_id = model
             torch_dtype = model_init_kwargs.get("torch_dtype")
-            if (
-                isinstance(torch_dtype, torch.dtype)
-                or torch_dtype == "auto"
-                or torch_dtype is None
-            ):
+            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
                 pass  # torch_dtype is already a torch.dtype or "auto" or None
             elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
                 torch_dtype = getattr(torch, torch_dtype)
@@ -429,9 +418,7 @@ class GRPOTrainer(Trainer):
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
             model_init_kwargs["use_cache"] = (
-                False
-                if args.gradient_checkpointing
-                else model_init_kwargs.get("use_cache")
+                False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
             )
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         else:
@@ -444,9 +431,7 @@ class GRPOTrainer(Trainer):
 
         if peft_config is not None:
             if not is_peft_available():
-                raise ImportError(
-                    "PEFT is required to use `peft_config`. Run `pip install peft`."
-                )
+                raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
             model = get_peft_model(model, peft_config)
 
         # Enable gradient checkpointing if requested
@@ -459,9 +444,7 @@ class GRPOTrainer(Trainer):
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
         elif is_deepspeed_zero3_enabled():
-            self.ref_model = AutoModelForCausalLM.from_pretrained(
-                model_id, **model_init_kwargs
-            )
+            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif is_peft_model(model):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
@@ -510,22 +493,14 @@ class GRPOTrainer(Trainer):
             reward_processing_classes = [reward_processing_classes]
         else:
             if len(reward_processing_classes) != len(reward_funcs):
-                raise ValueError(
-                    "The number of reward processing classes must match the number of reward functions."
-                )
+                raise ValueError("The number of reward processing classes must match the number of reward functions.")
 
-        for i, (reward_processing_class, reward_func) in enumerate(
-            zip(reward_processing_classes, reward_funcs)
-        ):
+        for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(
-                        reward_func.config._name_or_path
-                    )
+                    reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
                 if reward_processing_class.pad_token_id is None:
-                    reward_processing_class.pad_token = (
-                        reward_processing_class.eos_token
-                    )
+                    reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
@@ -538,9 +513,7 @@ class GRPOTrainer(Trainer):
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
-        self.max_completion_length = (
-            args.max_completion_length
-        )  # = |o_i| in the GRPO paper
+        self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.temperature = args.temperature
         self.top_p = args.top_p
@@ -644,11 +617,7 @@ class GRPOTrainer(Trainer):
         num_processes = self.accelerator.num_processes
         effective_batch_size = args.per_device_train_batch_size * num_processes * args.gradient_accumulation_steps
         possible_values = [
-            
-            n_gen
-            for n_gen in range(2, effective_batch_size + 1)
-            if (effective_batch_size) % n_gen == 0
-        
+            n_gen for n_gen in range(2, effective_batch_size + 1) if (effective_batch_size) % n_gen == 0
         ]
         if self.num_generations not in possible_values:
             raise ValueError(
@@ -660,11 +629,7 @@ class GRPOTrainer(Trainer):
         if self.args.eval_strategy != "no":
             effective_batch_size = args.per_device_eval_batch_size * num_processes
             possible_values = [
-                
-                n_gen
-                for n_gen in range(2, effective_batch_size + 1)
-                if (effective_batch_size) % n_gen == 0
-            
+                n_gen for n_gen in range(2, effective_batch_size + 1) if (effective_batch_size) % n_gen == 0
             ]
             if self.num_generations not in possible_values:
                 raise ValueError(
@@ -684,12 +649,9 @@ class GRPOTrainer(Trainer):
             # Use externally managed SGLang server.
             # The server URL is provided via configuration, e.g., "http://localhost:32232"
             if not args.sglang_server_url:
-                raise ValueError(
-                    "SGLang is enabled but no server URL was provided (use --sglang_server_url)."
-                )
+                raise ValueError("SGLang is enabled but no server URL was provided (use --sglang_server_url).")
             self.sglang_server_url = args.sglang_server_url
             if self.accelerator.is_main_process:
-                
                 self.sglang_sampling_params = {
                     "temperature": self.temperature,
                     "max_new_tokens": self.max_completion_length,
@@ -750,22 +712,14 @@ class GRPOTrainer(Trainer):
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
             else:
-                self.ref_model = self.accelerator.prepare_model(
-                    self.ref_model, evaluation_mode=True
-                )
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         if args.sync_ref_model:
-            self.add_callback(
-                SyncRefModelCallback(
-                    ref_model=self.ref_model, accelerator=self.accelerator
-                )
-            )
+            self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
-                self.reward_funcs[i] = self.accelerator.prepare_model(
-                    reward_func, evaluation_mode=True
-                )
+                self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -859,9 +813,7 @@ class GRPOTrainer(Trainer):
             seed=self.args.seed,
         )
 
-    def _enable_gradient_checkpointing(
-        self, model: PreTrainedModel, args: GRPOConfig
-    ) -> PreTrainedModel:
+    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
         """Enables gradient checkpointing for the model."""
         # Ensure use_cache is disabled
         model.config.use_cache = False
@@ -875,8 +827,7 @@ class GRPOTrainer(Trainer):
 
         gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
         use_reentrant = (
-            "use_reentrant" not in gradient_checkpointing_kwargs
-            or gradient_checkpointing_kwargs["use_reentrant"]
+            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
         )
 
         if use_reentrant:
@@ -905,15 +856,11 @@ class GRPOTrainer(Trainer):
 
             # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
             logits = model(
-                
-            input_ids=input_ids_batch,
-            attention_mask=attention_mask_batch,
-            logits_to_keep=logits_to_keep + 1
-            ,
-        ).logits
-            logits = logits[
-            :, :-1, :
-        ]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+                input_ids=input_ids_batch,
+                attention_mask=attention_mask_batch,
+                logits_to_keep=logits_to_keep + 1,
+            ).logits
+            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
             input_ids_batch = input_ids_batch[:, -logits_to_keep:]
             # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
             # See https://github.com/huggingface/trl/issues/2770
@@ -921,13 +868,10 @@ class GRPOTrainer(Trainer):
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
-            logps = selective_log_softmax(
-            logits, input_ids_batch
-        )  # compute logprobs for the input tokens
+            logps = selective_log_softmax(logits, input_ids_batch)  # compute logprobs for the input tokens
             all_logps.append(logps)
         return torch.cat(all_logps, dim=0)
 
-    
     def _update_sglang_weights(self):
         """
         Update the model weights on the SGLang server via its disk-based update API.
@@ -958,17 +902,13 @@ class GRPOTrainer(Trainer):
             )
 
         # Optionally flush cache.
-        if self.accelerator.is_main_process:
-            try:
-                flush_response = requests.post(
-                    f"{self.sglang_server_url}/flush_cache", timeout=30
-                )
-                if not flush_response.status_code == 200:
-                    print(
-                        f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}"
-                    )
-            except requests.RequestException as e:
-                print(f"Warning: Cache flush request failed: {e}")
+
+        try:
+            flush_response = requests.post(f"{self.sglang_server_url}/flush_cache", timeout=30)
+            if not flush_response.status_code == 200:
+                print(f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}")
+        except requests.RequestException as e:
+            print(f"Warning: Cache flush request failed: {e}")
 
         # print(f"SGLang weights updated successfully: {res_json.get('message')}")
 
@@ -1052,10 +992,7 @@ class GRPOTrainer(Trainer):
         mode = "eval" if self.control.should_evaluate else "train"
 
         prompts = [x["prompt"] for x in inputs]
-        prompts_text = [
-            maybe_apply_chat_template(example, self.processing_class)["prompt"]
-            for example in inputs
-        ]
+        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
             text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
         )
@@ -1073,8 +1010,8 @@ class GRPOTrainer(Trainer):
         if self.use_sglang:
             # Update weights if the training step has advanced.
             if self.state.global_step != self._last_loaded_step:
-                
-                self._update_sglang_weights()
+                if self.accelerator.is_main_process:
+                    self._update_sglang_weights()
                 self._last_loaded_step = self.state.global_step
 
             # Gather all prompt texts from all processes.
@@ -1085,13 +1022,9 @@ class GRPOTrainer(Trainer):
                     "text": ordered_set_of_prompts,
                     "sampling_params": self.sglang_sampling_params,
                 }
-                response = requests.post(
-                    f"{self.sglang_server_url}/generate", json=payload
-                )
+                response = requests.post(f"{self.sglang_server_url}/generate", json=payload)
                 generated_texts = [item.get("text") for item in response.json()]
-                completion_ids = [
-                    self.processing_class.encode(text) for text in generated_texts
-                ]
+                completion_ids = [self.processing_class.encode(text) for text in generated_texts]
             else:
                 completion_ids = [None] * len(all_prompts_text)
             # # Broadcast and slice the generated completions.
@@ -1119,12 +1052,8 @@ class GRPOTrainer(Trainer):
             completion_ids = completion_ids[process_slice]
 
             # Pad the completions, and concatenate them with the prompts
-            completion_ids = [
-                torch.tensor(ids, device=device) for ids in completion_ids
-            ]
-            completion_ids = pad(
-                completion_ids, padding_value=self.processing_class.pad_token_id
-            )
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         elif self.use_vllm:
             # First, have main process load weights if needed
@@ -1163,12 +1092,8 @@ class GRPOTrainer(Trainer):
             completion_ids = completion_ids[process_slice]
 
             # Pad the completions, and concatenate them with the prompts
-            completion_ids = [
-                torch.tensor(ids, device=device) for ids in completion_ids
-            ]
-            completion_ids = pad(
-                completion_ids, padding_value=self.processing_class.pad_token_id
-            )
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
@@ -1188,13 +1113,9 @@ class GRPOTrainer(Trainer):
 
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
-        eos_idx = torch.full(
-            (is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device
-        )
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(
-            is_eos.size(0), -1
-        )
+        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
@@ -1231,24 +1152,16 @@ class GRPOTrainer(Trainer):
                     )
 
         # Decode the generated completions
-        completions_text = self.processing_class.batch_decode(
-            completion_ids, skip_special_tokens=True
-        )
+        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
             for prompt, completion in zip(prompts, completions_text):
-                bootstrap = (
-                    prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
-                )
-                completions.append(
-                    [{"role": "assistant", "content": bootstrap + completion}]
-                )
+                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
             completions = completions_text
 
-        rewards_per_func = torch.zeros(
-            len(prompts), len(self.reward_funcs), device=device
-        )
+        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
         for i, (reward_func, reward_processing_class) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes)
         ):
@@ -1426,21 +1339,15 @@ class GRPOTrainer(Trainer):
         )
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(
-            1
-        )  # we only need to compute the logits for the completion tokens
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(
-            model, input_ids, attention_mask, logits_to_keep
-        )
+        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
             per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps)
-                - (ref_per_token_logps - per_token_logps)
-                - 1
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
 
         # Compute the loss
@@ -1565,9 +1472,7 @@ class GRPOTrainer(Trainer):
         if not self.is_world_process_zero():
             return
 
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(
-            self.model.config._name_or_path
-        ):
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
             base_model = self.model.config._name_or_path
         else:
             base_model = None
@@ -1596,11 +1501,7 @@ class GRPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=(
-                wandb.run.get_url()
-                if is_wandb_available() and wandb.run is not None
-                else None
-            ),
+            wandb_url=(wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None),
             comet_url=get_comet_experiment_url(),
             trainer_name="GRPO",
             trainer_citation=citation,
