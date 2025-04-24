@@ -17,8 +17,8 @@ import textwrap
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
-from contextlib import nullcontext
-from typing import Any, Callable, Optional, Union
+from contextlib import nullcontext, contextmanager
+from typing import Any, Callable, Optional, Union, Generator
 
 import datasets
 import torch
@@ -61,6 +61,7 @@ from .utils import (
 )
 
 
+from peft.tuners.tuners_utils import BaseTunerLayer
 if is_deepspeed_available():
     import deepspeed
 
@@ -540,8 +541,6 @@ class GRPOTrainer(Trainer):
                 raise ImportError(
                     "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
                 )
-            if is_peft_model(model):
-                raise TypeError("Liger loss is not supported with a PEFT model.")
 
             if self.loss_type != "bnpo":
                 raise ValueError(
@@ -554,7 +553,7 @@ class GRPOTrainer(Trainer):
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
                 temperature=self.temperature,
-                use_ref_model=self.ref_model is not None,
+                use_ref_model=self.beta != 0.0,
             )
 
         super().__init__(
@@ -790,6 +789,65 @@ class GRPOTrainer(Trainer):
 
         return model
 
+    @contextmanager
+    def get_ref_model_outputs_for_liger_loss(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        logits_to_keep: int,
+    ) -> Generator[Any, Any, Any]:
+        """
+        Get the outputs of the reference model for the Liger loss.
+        Args:
+            input_ids: The input ids of the reference model.
+            attention_mask: The attention mask of the reference model.
+            logits_to_keep: The number of logits to keep.
+        
+        Yields:
+            `tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]`:
+                The outputs of the reference model.
+                The tuple contains the following elements:
+                - `ref_hidden_states`: The hidden states of the reference model.
+                - `ref_lm_head_weight`: The weight of the reference model's language model head.
+                - `ref_lm_head_bias`: The bias of the reference model's language model head.
+        
+        """
+        if self.beta == 0.0:
+            yield None, None, None
+            return
+        
+        if self.ref_model is not None:
+            ref_model = self.ref_model
+            ctx_manager = nullcontext()
+        else:
+            ref_model = self.model
+            ctx_manager = self.accelerator.unwrap_model(ref_model).disable_adapter()
+
+        with ctx_manager:
+            ref_last_hidden_state = self._get_last_hidden_state(
+                ref_model,
+                input_ids,
+                attention_mask,
+                logits_to_keep
+            )
+
+        try:
+            ref_lm_head = ref_model.get_output_embeddings()
+            if is_peft_available():
+                if isinstance(ref_lm_head, BaseTunerLayer):
+                    ref_lm_head.merge()
+
+            yield (
+                ref_last_hidden_state,
+                ref_lm_head.weight,
+                ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
+            )
+        finally:
+            if is_peft_available():
+                from peft.tuners.tuners_utils import BaseTunerLayer
+                if isinstance(ref_lm_head, BaseTunerLayer):
+                    ref_lm_head.unmerge()
+
     @profiling_decorator
     def _get_last_hidden_state(self, model, input_ids, attention_mask, logits_to_keep=None):
         # unwrap the model to access the model.model
@@ -999,18 +1057,6 @@ class GRPOTrainer(Trainer):
             else:
                 old_per_token_logps = None
 
-            if self.beta == 0.0:
-                ref_per_token_logps = None
-            elif self.ref_model is not None:
-                ref_per_token_logps = self._get_per_token_logps(
-                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-                )
-            else:
-                with self.accelerator.unwrap_model(self.model).disable_adapter():
-                    ref_per_token_logps = self._get_per_token_logps(
-                        self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-                    )
-
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
@@ -1144,7 +1190,7 @@ class GRPOTrainer(Trainer):
             "completion_mask": completion_mask,
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
-            "ref_per_token_logps": ref_per_token_logps,
+            # "ref_per_token_logps": ref_per_token_logps,
         }
 
     def compute_liger_loss(self, model, inputs):
@@ -1159,16 +1205,22 @@ class GRPOTrainer(Trainer):
         last_hidden_state = self._get_last_hidden_state(model, input_ids, attention_mask, logits_to_keep)
         unwrapped_model = self.accelerator.unwrap_model(model)
         # compute loss and metrics using liger grpo loss
-        loss, metrics = self.liger_grpo_loss(
-            _input=last_hidden_state,
-            lin_weight=unwrapped_model.lm_head.weight,
-            selected_token_ids=completion_ids,
-            attention_mask=completion_mask,
-            advantages=inputs["advantages"],
-            bias=unwrapped_model.lm_head.bias,
-            ref_per_token_logps=inputs["ref_per_token_logps"],
-            old_per_token_logps=inputs["old_per_token_logps"],
-        )
+        # what are the conditions in which we need to actually run the ref model?
+        # self.beta > 0.0
+
+        with self.get_ref_model_outputs_for_liger_loss(input_ids, attention_mask, logits_to_keep) as (ref_model_last_hidden_state, ref_model_lm_head_weight, ref_model_lm_head_bias):
+            loss, metrics = self.liger_grpo_loss(
+                _input=last_hidden_state,
+                lin_weight=unwrapped_model.lm_head.weight,
+                selected_token_ids=completion_ids,
+                attention_mask=completion_mask,
+                advantages=inputs["advantages"],
+                bias=unwrapped_model.lm_head.bias,
+                old_per_token_logps=inputs["old_per_token_logps"],
+                ref_input=ref_model_last_hidden_state,
+                ref_weight=ref_model_lm_head_weight,
+                ref_bias=ref_model_lm_head_bias,
+            )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero
         mean_kl = metrics[0] if self.beta != 0.0 else None
@@ -1202,7 +1254,16 @@ class GRPOTrainer(Trainer):
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
+            # ref_per_token_logps = inputs["ref_per_token_logps"]
+            if self.ref_model is not None:
+                ref_per_token_logps = self._get_per_token_logps(
+                    self.ref_model, input_ids, attention_mask, logits_to_keep
+                )
+            else:
+                with self.accelerator.unwrap_model(self.model).disable_adapter():
+                    ref_per_token_logps = self._get_per_token_logps(
+                        self.model, input_ids, attention_mask, logits_to_keep
+                    )
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
