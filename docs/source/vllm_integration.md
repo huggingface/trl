@@ -1,4 +1,4 @@
-# vLLM Integration
+# vLLM Integration 
 
 # 🎬 Flashback: why do we need to use vLLM in online methods?
 
@@ -108,7 +108,7 @@ from trl import GRPOConfig
 training_args = GRPOConfig(..., use_vllm=True)
 ```
 
-# 💆🏻‍♀️ What is the optimal parallelism settings for vLLM?
+# 💆🏻‍♀️ Find the best distributed setup?
 First and foremost is that you should always remember that the optimal setup depends on;
 - the model size
 - the number of GPUs you have
@@ -118,7 +118,11 @@ First and foremost is that you should always remember that the optimal setup dep
 - the max_model_len you are using (this is the max length of the input sequence that the model can process aka the context_window size)
 - the number of completions you are generating for each request (num_generations)
 
-Now given these, our experiments on Qwen model family (3B, 7B, 14B, 32B), on 8 H100 GPUs, showes that:
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_8_gpus.png)
+
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_4_gpus.png)
+
+Now given our experiments on Qwen model family (3B, 7B, 14B, 32B), on 8 H100 GPUs, showes that:
 - For reasonable (3-14B) at the same time a reasonable context window (max_len<8k) if we use the full capacity for DP, we get better result in terms of throughput, (tp=1, dp=8) is the best setup.
 - For larger models (32B) and larger context window (max_len>8k), we need to use a smaller DP size, along with some form of parallalism on the model side. For example, (tp=2, dp=4) is a good setup for 32B models with larger context window.
 
