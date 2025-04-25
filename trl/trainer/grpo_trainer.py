@@ -830,12 +830,12 @@ class GRPOTrainer(Trainer):
                 attention_mask,
                 logits_to_keep
             )
-
+        if is_peft_available():
+            from peft.tuners.tuners_utils import BaseTunerLayer
         try:
             ref_lm_head = ref_model.get_output_embeddings()
-            if is_peft_available():
-                if isinstance(ref_lm_head, BaseTunerLayer):
-                    ref_lm_head.merge()
+            if is_peft_available() and isinstance(ref_lm_head, BaseTunerLayer):
+                ref_lm_head.merge()
 
             yield (
                 ref_last_hidden_state,
@@ -843,17 +843,16 @@ class GRPOTrainer(Trainer):
                 ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
             )
         finally:
-            if is_peft_available():
-                from peft.tuners.tuners_utils import BaseTunerLayer
-                if isinstance(ref_lm_head, BaseTunerLayer):
-                    ref_lm_head.unmerge()
+            if is_peft_available() and isinstance(ref_lm_head, BaseTunerLayer):
+                ref_lm_head.unmerge()
 
     @profiling_decorator
     def _get_last_hidden_state(self, model, input_ids, attention_mask, logits_to_keep=None):
         # unwrap the model to access the model.model
         unwrapped_model = self.accelerator.unwrap_model(model)
-        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
+        if is_peft_model(unwrapped_model):
+            unwrapped_model = unwrapped_model.base_model.model
+        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
@@ -1204,10 +1203,8 @@ class GRPOTrainer(Trainer):
         # get the last hidden state of the model
         last_hidden_state = self._get_last_hidden_state(model, input_ids, attention_mask, logits_to_keep)
         unwrapped_model = self.accelerator.unwrap_model(model)
+        
         # compute loss and metrics using liger grpo loss
-        # what are the conditions in which we need to actually run the ref model?
-        # self.beta > 0.0
-
         with self.get_ref_model_outputs_for_liger_loss(input_ids, attention_mask, logits_to_keep) as (ref_model_last_hidden_state, ref_model_lm_head_weight, ref_model_lm_head_bias):
             loss, metrics = self.liger_grpo_loss(
                 _input=last_hidden_state,
