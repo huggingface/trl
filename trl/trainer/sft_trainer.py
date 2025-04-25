@@ -81,7 +81,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         completion_only_loss (`bool`, *optional*, defaults to `True`):
             When the input contains a completion mask (`completion_mask`), the labels are set to -100 for the tokens
             that are no in the completion.
-        pad_to_multiple_of (`int`, *optional*, defaults to `None`):
+        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
