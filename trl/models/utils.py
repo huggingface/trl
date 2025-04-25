@@ -30,6 +30,7 @@ SUPPORTED_ARCHITECTURES = (
 )
 
 if TYPE_CHECKING:
+    from torch.nn import Module
     from accelerate import Accelerator
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn.parallel.distributed import DistributedDataParallel
@@ -222,8 +223,11 @@ def unwrap_model_for_generation(
         yield unwrapped_model
 
 
-def prepare_deepspeed(model, accelerator):
-    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+def prepare_deepspeed(model : "Module", accelerator : "Accelerator"):
+    """Prepares the model for DeepSpeed inference or evaluation by initializing it with the appropriate configuration.
+    
+    Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+    """
     import deepspeed
 
     deepspeed_plugin = accelerator.state.deepspeed_plugin

@@ -118,7 +118,7 @@ class GKDTrainer(SFTTrainer):
             disable_dropout_in_model(self.model)
 
         if self.is_deepspeed_enabled:
-            self.teacher_model = prepare_deepspeed(teacher_model)
+            self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
         else:
             self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
 
