@@ -184,7 +184,6 @@ class DPOTrainer(Trainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-            This supercedes the `tokenizer` argument, which is now deprecated.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
