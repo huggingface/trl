@@ -410,7 +410,12 @@ class GRPOTrainer(Trainer):
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
-
+        # Raise error if environment is provided but vllm is set to false
+        if environment is not None and not args.use_vllm:
+            raise ValueError(
+                "You provided an environment, but `use_vllm` is set to False. "
+                "Environments are only supported with vLLM. Please set `use_vllm` to True."
+            )
         # Initialize the default environment if none provided
         self.environment = environment if environment is not None else DefaultEnvironment()
 
