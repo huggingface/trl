@@ -37,6 +37,8 @@
     title: PEFT
   - local: unsloth_integration
     title: Unsloth
+  - local: vllm_integration
+    title: vLLM
   title: Integrations
 - sections:
   - local: example_overview
