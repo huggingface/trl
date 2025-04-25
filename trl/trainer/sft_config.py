@@ -63,7 +63,7 @@ class SFTConfig(TrainingArguments):
             supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
             batch structure.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
-            If set, the sequences will be padded to a multiple of this value. 
+            If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
@@ -144,9 +144,7 @@ class SFTConfig(TrainingArguments):
     )
     pad_to_multiple_of: Optional[int] = field(
         default=None,
-        metadata={
-            "help": "If set, the sequences will be padded to a multiple of this value. "
-        },
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
     eval_packing: Optional[bool] = field(
         default=None,
