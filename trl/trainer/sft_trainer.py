@@ -650,7 +650,7 @@ class SFTTrainer(Trainer):
         """
         Compute training loss and additionally compute token accuracies
         """
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
@@ -695,7 +695,7 @@ class SFTTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
