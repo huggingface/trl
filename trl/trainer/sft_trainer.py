@@ -131,11 +131,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
         # Pad
         output = {}
-        output["input_ids"] = pad(
-            input_ids,
-            padding_value=self.pad_token_id,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
+        output["input_ids"] = pad(input_ids, padding_value=self.pad_token_id, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of,
         )
         output["attention_mask"] = pad(
             attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
