@@ -14,7 +14,7 @@ Sequence lengths in the dataset can vary widely. When data is batched, sequences
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png" alt="Truncation prompt completion" width="600"/>
 </div>
 
-To reduce memory usage, it’s important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
+To reduce memory usage, it's important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
 
 <hfoptions id="dpo">
 <hfoption id="DPO">
@@ -128,6 +128,42 @@ training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_imple
 
 </hfoption>
 </hfoptions>
+
+## Activation offloading
+
+Activation offloading is a memory efficiency technique that reduces GPU VRAM usage by temporarily moving activation tensors to CPU RAM during the forward pass and bringing them back only when needed for the backward pass. This significantly reduces peak memory usage at the cost of slightly increased training time.
+
+To enable activation offloading in your SFT training configuration:
+
+</hfoption>
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., activation_offloading=True)
+```
+
+</hfoption>
+</hfoptions>
+
+<Tip warning={true}>
+
+When using activation offloading with pre-initialized models that use Liger kernels, you must disable Liger cross entropy due to compatibility issues. The issue occurs specifically with `use_liger_kernel=True` because Liger cross entropy performs in-place operations which conflict with activation offloading. The default setting (`use_liger_kernel=False`) may work properly.
+
+```python
+# When using activation offloading with a model that uses Liger kernels:
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    activation_offloading=True,
+    use_liger_kernel=False,  # Disable Liger cross entropy
+    # Other parameters...
+)
+```
+</Tip>
+
+Under the hood, activation offloading implements PyTorch's `saved_tensors_hooks` to intercept activations during the forward pass. It intelligently manages which tensors to offload based on size and context, avoiding offloading output tensors which would be inefficient. For performance optimization, it can optionally use CUDA streams to overlap computation with CPU-GPU transfers.
 
 ## Disabling model gathering for generation in online methods
 
