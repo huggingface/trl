@@ -172,15 +172,6 @@ class RepeatSampler(Sampler):
         return self.num_samples * self.mini_repeat_count * self.repeat_count
 
 
-class RepeatRandomSampler(RepeatSampler):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "RepeatRandomSampler is deprecated and will be removed in version 0.18. Use RepeatSampler instead.",
-            DeprecationWarning,
-        )
-        super().__init__(*args, **kwargs)
-
-
 # torch.nanstd doesn't exist, so we define it here
 def nanstd(tensor: torch.Tensor) -> torch.Tensor:
     """

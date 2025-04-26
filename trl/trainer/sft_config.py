@@ -175,39 +175,10 @@ class SFTConfig(TrainingArguments):
     )
 
     # Deprecated parameters
-    dataset_batch_size: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. You can safely remove this "
-            "parameter from your configuration."
-        },
-    )
-    num_of_sequences: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. Use `max_length` instead, "
-            "which specifies the maximum length of the tokenized sequence, unlike `num_of_sequences`, which referred "
-            "to string sequences."
-        },
-    )
-    chars_per_token: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. If you want to customize the "
-            "packing length, use `max_length`."
-        },
-    )
     max_seq_length: Optional[int] = field(
         default=None,
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.20.0. Use `max_length` instead."
-        },
-    )
-    use_liger: Optional[bool] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. Use `use_liger_kernel` "
-            "instead."
         },
     )
 
@@ -218,28 +189,6 @@ class SFTConfig(TrainingArguments):
 
     def __post_init__(self):
         super().__post_init__()
-
-        if self.dataset_batch_size is not None:
-            warnings.warn(
-                "`dataset_batch_size` is deprecated and will be removed in version 0.18.0. You can safely remove this "
-                "parameter from your configuration.",
-                DeprecationWarning,
-            )
-
-        if self.num_of_sequences is not None:
-            warnings.warn(
-                "`num_of_sequences` is deprecated and will be removed in version 0.18.0. Use `max_length` instead, "
-                "which specifies the maximum length of the tokenized sequence, unlike `num_of_sequences`, which "
-                "referred to string sequences.",
-                DeprecationWarning,
-            )
-
-        if self.chars_per_token is not None:
-            warnings.warn(
-                "`chars_per_token` is deprecated and will be removed in version 0.18.0. If you want to customize the "
-                "packing length, use `max_length`.",
-                DeprecationWarning,
-            )
 
         if self.max_seq_length is not None:
             warnings.warn(
