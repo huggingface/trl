@@ -80,7 +80,9 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             Token ID to use for padding.
         completion_only_loss (`bool`, *optional*, defaults to `True`):
             When the input contains a completion mask (`completion_mask`), the labels are set to -100 for the tokens
-            that are not in the completion.
+            that are no in the completion.
+        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
+            If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
 
@@ -116,6 +118,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     pad_token_id: int
     completion_only_loss: bool = True
+    pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
@@ -128,11 +131,22 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
         # Pad
         output = {}
-        output["input_ids"] = pad(input_ids, padding_value=self.pad_token_id, padding_side="right")
-        output["attention_mask"] = pad(attention_mask, padding_value=0, padding_side="right")
-        output["labels"] = pad(labels, padding_value=-100, padding_side="right")
+        output["input_ids"] = pad(
+            input_ids,
+            padding_value=self.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        output["attention_mask"] = pad(
+            attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        )
+        output["labels"] = pad(
+            labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        )
         if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
+            completion_mask = pad(
+                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
             output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
 
         return output
@@ -315,7 +329,9 @@ class SFTTrainer(Trainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
-            data_collator = DataCollatorForLanguageModeling(pad_token_id, self.completion_only_loss)
+            data_collator = DataCollatorForLanguageModeling(
+                pad_token_id, self.completion_only_loss, args.pad_to_multiple_of
+            )
 
         # Dataset
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
