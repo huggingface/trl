@@ -140,7 +140,10 @@ class OffloadActivations(saved_tensors_hooks):
             if (
                 activation.is_cuda
                 and num_bytes >= self.min_tensor_size_bytes
-                and (not isinstance(activation, torch.nn.Parameter) and not isinstance(activation, torch.nn.Buffer))
+                and (
+                    not isinstance(activation, torch.nn.Parameter)
+                    and not (hasattr(torch.nn, "Buffer") and isinstance(activation, torch.nn.Buffer))
+                )
             ):
                 if self.use_streams:
                     # First, sync back and dereference previously offloaded tensors
