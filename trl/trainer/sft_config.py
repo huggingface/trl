@@ -254,3 +254,13 @@ class SFTConfig(TrainingArguments):
                 DeprecationWarning,
             )
             self.use_liger_kernel = self.use_liger
+
+        # Validate that activation_offloading and use_liger_kernel aren't both enabled
+        if self.activation_offloading and getattr(self, "use_liger_kernel", False):
+            warnings.warn(
+                "Activation offloading is not compatible with Liger kernels due to in-place operations. "
+                "Setting activation_offloading=False. If you need activation offloading, "
+                "please set use_liger_kernel=False.",
+                UserWarning,
+            )
+            self.activation_offloading = False
