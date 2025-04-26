@@ -36,13 +36,6 @@ class TestActivationOffloading(unittest.TestCase):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
         self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
         self.max_length = 128
-        self.peft_config = LoraConfig(
-            lora_alpha=16,
-            lora_dropout=0.1,
-            r=8,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
 
     def tearDown(self):
         gc.collect()
@@ -83,8 +76,15 @@ class TestActivationOffloading(unittest.TestCase):
         """Test that activation offloading works with PEFT models."""
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id).cuda()
+        peft_config = LoraConfig(
+            lora_alpha=16,
+            lora_dropout=0.1,
+            r=8,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
 
-        model = get_peft_model(model, self.peft_config)
+        model = get_peft_model(model, peft_config)
         inp = torch.randint(0, 100, (2, 10), device="cuda")
 
         # First forward-backward pass without offloading
