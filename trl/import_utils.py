@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,13 +18,17 @@ from itertools import chain
 from types import ModuleType
 from typing import Any
 
+from packaging import version
 from transformers.utils.import_utils import _is_package_available
 
+
+LIGER_KERNEL_MIN_VERSION = "0.5.6"
 
 # Use same as transformers.utils.import_utils
 _deepspeed_available = _is_package_available("deepspeed")
 _diffusers_available = _is_package_available("diffusers")
 _fastapi_available = _is_package_available("fastapi")
+_is_liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
 _llm_blender_available = _is_package_available("llm_blender")
 _mergekit_available = _is_package_available("mergekit")
 _pydantic_available = _is_package_available("pydantic")
@@ -33,6 +37,7 @@ _rich_available = _is_package_available("rich")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
 _vllm_available = _is_package_available("vllm")
+_vllm_ascend_available = _is_package_available("vllm_ascend")
 _joblib_available = _is_package_available("joblib")
 
 
@@ -46,6 +51,10 @@ def is_diffusers_available() -> bool:
 
 def is_fastapi_available() -> bool:
     return _fastapi_available
+
+
+def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
+    return _is_liger_kernel_available and version.parse(_liger_kernel_version) >= version.parse(min_version)
 
 
 def is_llm_blender_available() -> bool:
@@ -78,6 +87,10 @@ def is_uvicorn_available() -> bool:
 
 def is_vllm_available() -> bool:
     return _vllm_available
+
+
+def is_vllm_ascend_available() -> bool:
+    return _vllm_ascend_available
 
 
 def is_joblib_available() -> bool:

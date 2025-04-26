@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 from datasets import load_dataset
@@ -23,8 +24,9 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.import_utils import is_vllm_available
-from trl.trainer.grpo_trainer import RepeatRandomSampler
+from trl.trainer.grpo_trainer import RepeatSampler
+
+from .testing_utils import require_vllm
 
 
 if is_peft_available():
@@ -34,7 +36,7 @@ if is_peft_available():
 class RepeatRandomSamplerTester(unittest.TestCase):
     def test_sampler(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=2)
         # Should output something like [4, 4, 3, 3, 0, 0, 1, 1, 2, 2, 6, 6, 5, 5]
         sampled = list(sampler)
         # Check that the length is doubled
@@ -44,9 +46,16 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         # Check that each element is repeated twice
         assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
 
+    def test_sampler_no_shuffle(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, shuffle=False)
+        sampled = list(sampler)
+        expected = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
+        self.assertEqual(sampled, expected)
+
     def test_sampler_no_repeat(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=1)
+        sampler = RepeatSampler(dataset, mini_repeat_count=1)
         # Should output something like [4, 3, 0, 1, 2, 6, 5]
         sampled = list(sampler)
         # Check that the length is the same
@@ -56,7 +65,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_batch_size(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g", "h"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
         # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6, 5, 7, 5, 7]
         sampled = list(sampler)
         # Check that the length is doubled
@@ -68,7 +77,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_batch_size_and_drop(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
         # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6]
         sampled = list(sampler)
         # Check that the length is doubled
@@ -82,7 +91,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_mini_repeat_count_and_batch_size_1(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
         # Should output something like [4, 4, 3, 3, 0, 0, 4, 4, 3, 3, 0, 0,
         #                               1, 1, 2, 2, 6, 6, 1, 1, 2, 2, 6, 6]
         sampled = list(sampler)
@@ -98,7 +107,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_mini_repeat_count_and_batch_size_2(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
         # Should output something like [4, 4, 4, 3, 3, 3, 4, 4, 4, 3, 3, 3,
         #                               0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1,
         #                               2, 2, 2, 6, 6, 6, 2, 2, 2, 6, 6, 6]
@@ -116,7 +125,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_mini_repeat_count_and_batch_size_3(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
         # Should output something like [4, 4, 3, 3, 4, 4, 3, 3, 4, 4, 3, 3,
         #                               0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
         #                               2, 2, 6, 6, 2, 2, 6, 6, 2, 2, 6, 6]
@@ -153,7 +162,39 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @parameterized.expand([("bnpo",), ("dr_grpo",)])
+    def test_training_loss_types(self, loss_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=32,  # reduce the completion length to reduce memory usage
+                loss_type=loss_type,
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -183,7 +224,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 eval_strategy="steps",
                 eval_steps=2,
                 report_to="none",
@@ -207,7 +248,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 num_iterations=2,
                 report_to="none",
             )
@@ -241,7 +282,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -287,7 +328,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,
                 per_device_train_batch_size=3,
                 num_generations=3,
-                max_completion_length=32,
+                max_completion_length=8,
                 gradient_checkpointing=True,  # Enable gradient checkpointing
                 report_to="none",
             )
@@ -335,7 +376,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -371,7 +412,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -407,7 +448,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -446,7 +487,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -485,7 +526,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,
                 per_device_train_batch_size=3,
                 num_generations=3,
-                max_completion_length=32,
+                max_completion_length=8,
                 report_to="none",
             )
 
@@ -530,7 +571,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 reward_weights=[0.7, 0.3],  # weight of reward_func1 and reward_func2 respectively
             )
@@ -571,7 +612,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -610,7 +651,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -631,7 +672,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm(self):
         """Test that training works with vLLM for generation."""
@@ -643,7 +684,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
             )
@@ -674,7 +715,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 sync_ref_model=True,
                 ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
                 report_to="none",
@@ -706,7 +747,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -727,9 +768,9 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
     @unittest.skip("We should add a mock for the vLLM server.")
     @require_peft
+    @require_vllm
     def test_training_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")  # tiny model is too small for vLLM
@@ -742,7 +783,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
             )
@@ -774,7 +815,7 @@ class GRPOTrainerTester(unittest.TestCase):
                     # We expect the peft params to be different (except for the base layer)
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_guided_decoding(self):
         """Test that training works with vLLM for generation with guided decoding."""
@@ -786,7 +827,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
                 vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
@@ -819,7 +860,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 top_p=0.9,
                 top_k=10,
@@ -845,7 +886,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @unittest.skipIf(not is_vllm_available(), "vLLM is not available")
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
@@ -857,7 +898,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
                 top_p=0.9,
@@ -893,8 +934,129 @@ class GRPOTrainerTester(unittest.TestCase):
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 scale_rewards=False,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @patch("transformers.generation.utils.GenerationMixin.generate")
+    def test_training_with_mask_truncated_completions(self, mock_generate):
+        """Test that training works with mask_truncated_completions=True parameter."""
+
+        # We mock the generate method because the model's random weights make it extremely unlikely to produce a
+        # sequence containing the EOS token within the allowed max_completion_length. As a result, all tokens are
+        # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
+        def fake_generate(prompt_ids, **kwargs):
+            # pad_token_id = 151643; eos_token_id = 151645
+            completions_ids = torch.tensor(
+                [
+                    [1, 2, 3, 4, 5, 6, 7, 8],  # this one is truncated
+                    [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
+                    [12, 13, 14, 15, 16, 17, 18, 151645],  # particular case, eos is generated just within the limit
+                ],
+                device=prompt_ids.device,
+            )
+            return torch.cat([prompt_ids, completions_ids], dim=1)
+
+        mock_generate.side_effect = fake_generate
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                mask_truncated_completions=True,  # Enable masking of truncated completions
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_mask_truncated_completions_all_masked(self):
+        """
+        Test that when all generated completions are truncated (i.e., none contain an EOS token), and
+        mask_truncated_completions=True, the model receives no effective learning signal and therefore does not update
+        its parameters.
+
+        Here, we don't mock the generate method, be we rely on the fact that the model the probability of generating
+        the EOS token is extremely low, so all generated completions are truncated.
+        """
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                mask_truncated_completions=True,  # Enable masking of truncated completions
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
+
+    def test_training_num_generations_larger_than_batch_size(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                num_generations=6,  # the number of generations is larger than the batch size, but
+                gradient_accumulation_steps=2,  # gradient accumulation should allow that
                 report_to="none",
             )
             trainer = GRPOTrainer(

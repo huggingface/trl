@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,10 +15,17 @@
 import random
 import unittest
 
+import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 
-from trl import BaseBinaryJudge, BasePairwiseJudge, is_diffusers_available, is_llm_blender_available
-from trl.import_utils import is_joblib_available, is_mergekit_available
+from trl import BaseBinaryJudge, BasePairwiseJudge
+from trl.import_utils import (
+    is_diffusers_available,
+    is_joblib_available,
+    is_llm_blender_available,
+    is_mergekit_available,
+    is_vllm_available,
+)
 
 
 # transformers.testing_utils contains a require_bitsandbytes function, but relies on pytest markers which we don't use
@@ -28,6 +35,13 @@ def require_bitsandbytes(test_case):
     Decorator marking a test that requires bitsandbytes. Skips the test if bitsandbytes is not available.
     """
     return unittest.skipUnless(is_bitsandbytes_available(), "test requires bitsandbytes")(test_case)
+
+
+def require_comet(test_case):
+    """
+    Decorator marking a test that requires Comet. Skips the test if Comet is not available.
+    """
+    return unittest.skipUnless(is_comet_available(), "test requires comet_ml")(test_case)
 
 
 def require_diffusers(test_case):
@@ -51,13 +65,6 @@ def require_mergekit(test_case):
     return unittest.skipUnless(is_mergekit_available(), "test requires mergekit")(test_case)
 
 
-def require_no_wandb(test_case):
-    """
-    Decorator marking a test that requires no wandb. Skips the test if wandb is available.
-    """
-    return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
-
-
 def require_sklearn(test_case):
     """
     Decorator marking a test that requires sklearn. Skips the test if sklearn is not available.
@@ -65,11 +72,25 @@ def require_sklearn(test_case):
     return unittest.skipUnless(is_sklearn_available() and is_joblib_available(), "test requires sklearn")(test_case)
 
 
-def require_comet(test_case):
+def require_vllm(test_case):
     """
-    Decorator marking a test that requires Comet. Skips the test if Comet is not available.
+    Decorator marking a test that requires vllm. Skips the test if vllm is not available.
     """
-    return unittest.skipUnless(is_comet_available(), "test requires comet_ml")(test_case)
+    return unittest.skipUnless(is_vllm_available(), "test requires vllm")(test_case)
+
+
+def require_no_wandb(test_case):
+    """
+    Decorator marking a test that requires no wandb. Skips the test if wandb is available.
+    """
+    return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
+
+
+def require_3_gpus(test_case):
+    """
+    Decorator marking a test that requires at least num_gpus GPUs. Skips the test if num_gpus is not available.
+    """
+    return unittest.skipUnless(torch.cuda.device_count() > 3, "test requires at least 3 GPUs")(test_case)
 
 
 class RandomBinaryJudge(BaseBinaryJudge):

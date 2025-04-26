@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,6 +49,11 @@ class SFTConfig(TrainingArguments):
             `skip_prepare_dataset`.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        eos_token (`str` or `None`, *optional*, defaults to `None`):
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`.
+        pad_token (`int` or `None`, *optional*, defaults to `None`):
+            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
+            it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
@@ -59,6 +64,8 @@ class SFTConfig(TrainingArguments):
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
             batch structure.
+        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
+            If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
@@ -67,6 +74,12 @@ class SFTConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `2e-5`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
+        completion_only_loss (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
+            only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
+            `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
+            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on
+            the full sequence for [language modeling](#language-modeling) datasets.
     """
 
     # Parameters that control the model
@@ -94,6 +107,19 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
+    eos_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
+        },
+    )
+    pad_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
+            "is also `None`, it falls back to `processing_class.eos_token`."
+        },
+    )
     max_length: Optional[int] = field(
         default=1024,
         metadata={
@@ -118,6 +144,10 @@ class SFTConfig(TrainingArguments):
             "handle the flattened batch structure."
         },
     )
+    pad_to_multiple_of: Optional[int] = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    )
     eval_packing: Optional[bool] = field(
         default=None,
         metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
@@ -129,6 +159,18 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
             "`TrainingArguments`."
+        },
+    )
+    completion_only_loss: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is "
+                "computed only on the completion, which is supported only for prompt-completion datasets. If `False`, "
+                "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
+                "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
+                "language modeling datasets."
+            )
         },
     )
 

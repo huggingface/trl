@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,13 +13,13 @@
 # limitations under the License.
 
 import os
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import gather_object, is_comet_ml_available, is_deepspeed_available, is_wandb_available
+from accelerate.utils import gather_object, is_comet_ml_available, is_wandb_available
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
@@ -43,9 +43,6 @@ from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .utils import log_table_to_comet_experiment
 
-
-if is_deepspeed_available():
-    import deepspeed
 
 if is_comet_ml_available():
     pass
@@ -115,6 +112,8 @@ class SyncRefModelCallback(TrainerCallback):
     def sync_target_model(model, target_model, alpha):
         deepspeed_plugin = AcceleratorState().deepspeed_plugin
         if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            import deepspeed
+
             with deepspeed.zero.GatheredParameters(
                 list(model.parameters()) + list(target_model.parameters()), modifier_rank=0
             ):
@@ -210,7 +209,7 @@ class RichProgressCallback(TrainerCallback):
 
 
 def _win_rate_completions_df(
-    state: TrainerState, prompts: List[str], completions: List[str], winner_indices: List[str]
+    state: TrainerState, prompts: list[str], completions: list[str], winner_indices: list[str]
 ) -> pd.DataFrame:
     global_step = [str(state.global_step)] * len(prompts)
     data = list(zip(global_step, prompts, completions, winner_indices))
