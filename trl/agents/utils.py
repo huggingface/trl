@@ -83,10 +83,10 @@ class Localexecuter:
         return results
 
 
-class E2Bexecuter:
+class E2BExecuter:
     def __init__(self, api_key: str, template: str = None, max_concurrent: int = 20):
         """
-        Initialize the E2Bexecuter for parallel code execution.
+        Initialize the E2BExecuter for parallel code execution.
         Tests the connection by running a simple print statement.
 
         Args:

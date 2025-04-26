@@ -80,7 +80,7 @@ class CodeAgentEnvironment(Environment):
     Environment that supports code execution during generation.
 
     This environment enables an agent to generate text that include code blocks,
-    execute those code blocks using a provided code executer (such as Localexecuter or E2Bexecuter),
+    execute those code blocks using a provided code executer (such as Localexecuter or E2BExecuter),
     and insert the execution results back into the conversation. It is designed to work with
     conversational models that can output code delimited by specific tags (e.g., <code>...</code>).
 
@@ -90,7 +90,7 @@ class CodeAgentEnvironment(Environment):
 
     Args:
         code_executer: An object with an `execute` method that takes a list of code strings and returns a list of results.
-            This is used to run the extracted code blocks (e.g., Localexecuter or E2Bexecuter).
+            This is used to run the extracted code blocks (e.g., Localexecuter or E2BExecuter).
         tokenizer: A PreTrainedTokenizerBase instance for encoding and decoding text and completions.
         parsing_string: String that marks the beginning of code blocks in the generated text (default: "<code>").
         stop_string: String that marks the end of code blocks in the generated text (default: "</code>").
@@ -113,7 +113,7 @@ class CodeAgentEnvironment(Environment):
         """Initialize the code agent environment
 
         Args:
-            code_executer: The executer to run code (like Localexecuter or E2Bexecuter)
+            code_executer: The executer to run code (like Localexecuter or E2BExecuter)
             tokenizer: Tokenizer for encoding/decoding text
             parsing_string: String that marks the beginning of code blocks
             stop_string: String that marks the end of code blocks
