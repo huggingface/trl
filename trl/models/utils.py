@@ -228,7 +228,7 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
 
     Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
     """
-    import deepspeed
+    import deepspeed  # local import (instead of top-level) to avoid DS init interfering with other backends (like vllm): https://github.com/deepspeedai/DeepSpeed/issues/7252
 
     deepspeed_plugin = accelerator.state.deepspeed_plugin
     config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
