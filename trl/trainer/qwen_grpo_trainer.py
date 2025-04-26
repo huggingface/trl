@@ -67,6 +67,7 @@ if is_peft_available():
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
 
 if is_wandb_available():
     import wandb
@@ -335,6 +336,7 @@ class QwenGRPOTrainer(Trainer):
         shuffle_dataset: bool = True,
         image_pad_id: int = 151655,
         inputs_to_log: list[str] = [],
+        guided_regex: Optional[str] = None,
     ):
         # Args
         if args is None:
@@ -587,9 +589,17 @@ class QwenGRPOTrainer(Trainer):
                             "video": self.args.limit_video_per_prompt,
                         },
                     )
+
+                if guided_regex is not None:
+                    guided_decoding_params = GuidedDecodingParams(regex=guided_regex)
+
+                else:
+                    guided_decoding_params = None
+
                 self.sampling_params = SamplingParams(
                     temperature=args.temperature,
                     max_tokens=self.max_completion_length,
+                    guided_decoding=guided_decoding_params,
                 )
 
             self._last_loaded_step = 0  # tag to avoid useless loading during grad accumulation
