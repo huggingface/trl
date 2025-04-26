@@ -141,7 +141,7 @@ To enable activation offloading in your SFT training configuration:
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., activation_offloading=True, activation_checkpointing=True)
+training_args = SFTConfig(..., activation_offloading=True)
 ```
 
 </hfoption>
@@ -151,8 +151,6 @@ training_args = SFTConfig(..., activation_offloading=True, activation_checkpoint
 
 When using activation offloading with pre-initialized models that use Liger kernels, you must disable Liger cross entropy due to compatibility issues. The issue occurs specifically with `use_liger_kernel=True` because Liger cross entropy performs in-place operations which conflict with activation offloading. The default setting (`use_liger_kernel=False`) may work properly.
 
-We recommend using activation offloading together with activation checkpointing, in which case only checkpointed tensors will be offloaded.
-
 ```python
 # When using activation offloading with a model that uses Liger kernels:
 from trl import SFTConfig
@@ -160,7 +158,6 @@ from trl import SFTConfig
 training_args = SFTConfig(
     activation_offloading=True,
     use_liger_kernel=False,  # Disable Liger cross entropy
-    activation_checkpointing=True,
     # Other parameters...
 )
 ```
