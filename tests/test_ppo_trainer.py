@@ -17,13 +17,13 @@ import unittest
 
 import torch
 from datasets import load_dataset
-from transformers import (AutoModelForCausalLM,
-                          AutoModelForSequenceClassification, AutoTokenizer)
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import PPOConfig, PPOTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
 
 if is_peft_available():
     from peft import LoraConfig
@@ -176,7 +176,7 @@ class TestPPOTrainer(unittest.TestCase):
 
             self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
             self.assertTrue(policy_weights_updated, "Policy LoRA weights were not updated during training")
-    
+
     def test_generate(self):
         """Test various configurations of the generate method in PPOTrainer."""
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -219,18 +219,14 @@ class TestPPOTrainer(unittest.TestCase):
 
             for input_type, query, return_prompt, generate_ref_response in test_cases:
                 with self.subTest(
-                    input_type=input_type, 
-                    return_prompt=return_prompt, 
-                    generate_ref_response=generate_ref_response
+                    input_type=input_type, return_prompt=return_prompt, generate_ref_response=generate_ref_response
                 ):
                     # Run generate with the current configuration
                     if generate_ref_response:
                         response, ref_response = trainer.generate(
-                            query,
-                            return_prompt=return_prompt,
-                            generate_ref_response=generate_ref_response
+                            query, return_prompt=return_prompt, generate_ref_response=generate_ref_response
                         )
-                        
+
                         # Verify the reference response
                         if input_type == "tensor":
                             self.assertTrue(isinstance(ref_response, torch.Tensor))
@@ -240,11 +236,9 @@ class TestPPOTrainer(unittest.TestCase):
                             self.assertEqual(len(ref_response), 1)
                     else:
                         response = trainer.generate(
-                            query,
-                            return_prompt=return_prompt,
-                            generate_ref_response=generate_ref_response
+                            query, return_prompt=return_prompt, generate_ref_response=generate_ref_response
                         )
-                    
+
                     # Verify the response format based on input type
                     if input_type == "tensor":
                         self.assertTrue(isinstance(response, torch.Tensor))

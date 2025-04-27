@@ -19,7 +19,7 @@ import textwrap
 import time
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
-from typing import Callable, List, Optional, Union
+from typing import Callable, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -29,26 +29,45 @@ from accelerate import Accelerator
 from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
 from torch.utils.data import DataLoader
-from transformers import (BaseImageProcessor, DataCollatorWithPadding,
-                          FeatureExtractionMixin, GenerationConfig,
-                          PreTrainedTokenizerBase, ProcessorMixin, Trainer,
-                          TrainerCallback, TrainerControl, is_wandb_available)
+from transformers import (
+    BaseImageProcessor,
+    DataCollatorWithPadding,
+    FeatureExtractionMixin,
+    GenerationConfig,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    Trainer,
+    TrainerCallback,
+    TrainerControl,
+    is_wandb_available,
+)
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
-from transformers.trainer_callback import (CallbackHandler, ExportableState,
-                                           PrinterCallback)
+from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import is_peft_available
 
 from ..core import masked_mean, masked_whiten
 from ..models import PreTrainedModelWrapper, create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .ppo_config import PPOConfig
-from .utils import (OnlineTrainerState, batch_generation,
-                    disable_dropout_in_model, exact_div, first_true_indices,
-                    forward, generate_model_card, get_comet_experiment_url,
-                    get_reward, log_table_to_comet_experiment,
-                    peft_module_casting_to_bf16, prepare_deepspeed,
-                    print_rich_table, selective_log_softmax, truncate_response)
+from .utils import (
+    OnlineTrainerState,
+    batch_generation,
+    disable_dropout_in_model,
+    exact_div,
+    first_true_indices,
+    forward,
+    generate_model_card,
+    get_comet_experiment_url,
+    get_reward,
+    log_table_to_comet_experiment,
+    peft_module_casting_to_bf16,
+    prepare_deepspeed,
+    print_rich_table,
+    selective_log_softmax,
+    truncate_response,
+)
+
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
@@ -786,7 +805,7 @@ class PPOTrainer(Trainer):
     def _generate_batched(
         self,
         model: PreTrainedModelWrapper,
-        query_tensors: List[torch.Tensor],
+        query_tensors: list[torch.Tensor],
         length_sampler: Optional[Callable] = None,
         batch_size: int = 4,
         return_prompt: bool = True,
@@ -846,7 +865,7 @@ class PPOTrainer(Trainer):
 
     def generate(
         self,
-        query_tensor: Union[torch.Tensor, List[torch.Tensor]],
+        query_tensor: Union[torch.Tensor, list[torch.Tensor]],
         length_sampler: Optional[Callable] = None,
         batch_size: int = 4,
         return_prompt: bool = True,
@@ -856,7 +875,7 @@ class PPOTrainer(Trainer):
         """
         Generate response with the model given the query tensor.
         call the `generate` method of the model.
-    
+
         Args:
             query_tensor (`torch.LongTensor`):
                 A tensor of shape (`seq_len`) containing query tokens or a list of tensors of shape (`seq_len`).
@@ -870,13 +889,13 @@ class PPOTrainer(Trainer):
                 If set to `True` the reference response is also generated, defaults to `False`.
             generation_kwargs (dict[str, Any]):
                 Keyword arguments for generation.
-    
+
         Returns:
             `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
         """
         if generate_ref_response:
             ref_model = self.model if self.is_peft_model else self.ref_model
-        if isinstance(query_tensor, List):
+        if isinstance(query_tensor, list):
             response = self._generate_batched(
                 self.model,
                 query_tensor,
@@ -894,32 +913,30 @@ class PPOTrainer(Trainer):
                     return_prompt=return_prompt,
                     **generation_kwargs,
                 )
-    
+
         else:
             if len(query_tensor.shape) == 2:
                 raise ValueError(
                     "query_tensor must be a tensor of shape (`seq_len`) or a list of tensors of shape (`seq_len`)"
                 )
-    
+
             if length_sampler is not None:
                 generation_kwargs["max_new_tokens"] = length_sampler()
-    
+
             with unwrap_model_for_generation(self.policy_model, self.accelerator) as unwrapped_model:
                 response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
-    
+
             if generate_ref_response:
-                with unwrap_model_for_generation(
-                    ref_model, self.accelerator
-                ) as unwrapped_model:
+                with unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_model:
                     ref_response = unwrapped_model.generate(
                         input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
                     )
-    
+
             if not return_prompt and not self.is_encoder_decoder:
                 response = response[:, query_tensor.shape[0] :]
                 if generate_ref_response:
                     ref_response = ref_response[:, query_tensor.shape[0] :]
-    
+
         if generate_ref_response:
             return response, ref_response
         return response
