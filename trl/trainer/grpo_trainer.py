@@ -873,17 +873,17 @@ class GRPOTrainer(Trainer):
             all_logps.append(logps)
         return torch.cat(all_logps, dim=0)
 
+    @profiling_decorator
     def _update_sglang_weights(self):
         """
-        Update the model weights on the SGLang server via its disk-based update API.
-        This function assumes that a checkpoint has been saved at self.args.checkpoint_path.
-        The SGLang server will load the new weights from that checkpoint.
+        Update the model weights on the SGLang server via its tensor-based update API.
+        This function only be called in main_process.
         """
         payload = {
             "serialized_named_tensors": [
                 MultiprocessingSerializer.serialize(list(self.model.named_parameters()), output_str=True)
             ],
-            "flush_cache": True,
+            "flush_cache": True, # flush cache after update weights
         }
         try:
             response = requests.post(
@@ -899,16 +899,6 @@ class GRPOTrainer(Trainer):
                 f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
             )
 
-        # Optionally flush cache.
-
-        # try:
-        #     flush_response = requests.post(f"{self.sglang_server_url}/flush_cache", timeout=30)
-        #     if not flush_response.status_code == 200:
-        #         print(f"Warning: Cache flush failed: {flush_response.json().get('message', 'No message provided')}")
-        # except requests.RequestException as e:
-        #     print(f"Warning: Cache flush request failed: {e}")
-
-        # print(f"SGLang weights updated successfully: {res_json.get('message')}")
 
     @profiling_decorator
     def _move_model_to_vllm(self):
