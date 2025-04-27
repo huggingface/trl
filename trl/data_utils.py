@@ -104,7 +104,7 @@ def is_conversational(
     False
     ```
     """
-    example_keys = {key for key in example.keys() if key in NON_LABEL_KEYS}
+    example_keys = {key for key in example.keys() if key in non_label_keys}
 
     # It must have one of the supported keys
     if example_keys:
