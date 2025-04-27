@@ -14,7 +14,7 @@
 
 import functools
 from collections.abc import Sequence
-from typing import Any, Callable, Optional, TypeVar, Union
+from typing import Any, Callable, Dict, List, Optional, TypeVar, Union
 
 import numpy as np
 import pyarrow as pa
@@ -24,10 +24,63 @@ from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizerBase
 
 
+NON_LABEL_KEYS: List[str] = ["prompt", "chosen", "rejected", "completion", "messages"]
+
+
+LABEL_KEYS: List[str] = ["label"]
+
+
+SUPPORTED_KEYS: List[str] = NON_LABEL_KEYS + LABEL_KEYS
+
+
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
-def is_conversational(example: dict[str, Any]) -> bool:
+def example_format(
+    example: dict[str, list[dict[str, str]]], 
+    supported_keys: List[str] = SUPPORTED_KEYS
+) -> Dict:
+    r"""
+    Get example format information, which contains:
+    * The supported keys in it
+    * Format name
+
+    Args:
+        example (`dict[str, list[dict[str, str]]]`)
+            A single data entry of a dataset. The example can have different 
+            keys depending on the dataset type.
+        supported_keys (`List[str]`)
+            Defaultly supported keys by TRL
+
+    Returns:
+        `Dict`:
+            A `Dict` which contains following keys:
+            * format: Example format, if `None` mean the example doesn't 
+               match any built-in format
+            * example_keys: Example keys which are in `supported_keys`
+    """
+    fmt: Optional[str] = None
+    example_keys = {key for key in example.keys() if key in supported_keys}
+    if example_keys == {"messages"}:
+        fmt = "language modeling"
+    elif example_keys == {"prompt"}:
+        fmt = "prompt-only"
+    elif example_keys == {"prompt", "completion"}:
+        fmt = "prompt-completion"
+    elif example_keys == {"prompt", "chosen", "rejected"}:
+        fmt = "preference"
+    elif example_keys == {"chosen", "rejected"}:
+        fmt = "preference with implicit prompt"
+    elif example_keys == {"prompt", "completion", "label"}:
+        fmt = "unpaired preference"
+    fmt_info: Dict = {"format": fmt, "example_keys": example_keys}
+    return fmt_info
+
+
+def is_conversational(
+    example: dict[str, Any], 
+    non_label_keys: List[str] = NON_LABEL_KEYS
+) -> bool:
     r"""
     Check if the example is in a conversational format.
 
@@ -51,8 +104,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
     False
     ```
     """
-    supported_keys = ["prompt", "chosen", "rejected", "completion", "messages"]
-    example_keys = {key for key in example.keys() if key in supported_keys}
+    example_keys = {key for key in example.keys() if key in NON_LABEL_KEYS}
 
     # It must have one of the supported keys
     if example_keys:
@@ -72,6 +124,8 @@ def apply_chat_template(
     example: dict[str, list[dict[str, str]]],
     tokenizer: PreTrainedTokenizerBase,
     tools: Optional[list[Union[dict, Callable]]] = None,
+    non_label_keys: List[str] = NON_LABEL_KEYS,
+    label_keys: List[str] = LABEL_KEYS  
 ) -> dict[str, str]:
     r"""
     Apply a chat template to a conversational example along with the schema for a list of functions in `tools`.
@@ -79,17 +133,9 @@ def apply_chat_template(
     For more details, see [`maybe_apply_chat_template`].
     """
     # Check that the example has the correct keys
-    supported_keys = ["prompt", "chosen", "rejected", "completion", "messages", "label"]
-    example_keys = {key for key in example.keys() if key in supported_keys}
-    if example_keys not in [
-        {"messages"},  # language modeling
-        {"prompt"},  # prompt-only
-        {"prompt", "completion"},  # prompt-completion
-        {"prompt", "chosen", "rejected"},  # preference
-        {"chosen", "rejected"},  # preference with implicit prompt
-        {"prompt", "completion", "label"},  # unpaired preference
-    ]:
-        raise KeyError(f"Invalid keys in the example: {example_keys}")
+    fmt: Dict = example_format(example, non_label_keys + label_keys)
+    if fmt["format"] is None:
+        raise KeyError(f"Invalid keys in the example: {fmt['example_keys']}")
 
     # Apply the chat template to the whole conversation
     if "messages" in example:
