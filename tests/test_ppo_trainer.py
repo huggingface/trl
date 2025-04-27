@@ -17,13 +17,13 @@ import unittest
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import (AutoModelForCausalLM,
+                          AutoModelForSequenceClassification, AutoTokenizer)
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import PPOConfig, PPOTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
-
 
 if is_peft_available():
     from peft import LoraConfig
@@ -176,3 +176,79 @@ class TestPPOTrainer(unittest.TestCase):
 
             self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
             self.assertTrue(policy_weights_updated, "Policy LoRA weights were not updated during training")
+    
+    def test_generate(self):
+        """Test various configurations of the generate method in PPOTrainer."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Configure training args
+            training_args = PPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=4,
+                per_device_eval_batch_size=2,
+                num_ppo_epochs=2,
+                report_to="none",
+            )
+
+            # Create trainer
+            trainer = PPOTrainer(
+                args=training_args,
+                processing_class=self.tokenizer,
+                model=self.model,
+                ref_model=self.ref_model,
+                reward_model=self.reward_model,
+                value_model=self.value_model,
+                train_dataset=self.raw_dataset["train"],
+                eval_dataset=self.raw_dataset["test"],
+            )
+
+            query_txt = "This morning I went to the "
+            query_tensor = torch.flatten(self.tokenizer.encode(query_txt, return_tensors="pt")).to("cuda")
+            query_list = list(self.tokenizer.encode(query_txt, return_tensors="pt").to("cuda"))
+
+            test_cases = [
+                # (input_type, input_data, return_prompt, generate_ref_response)
+                ("tensor", query_tensor, False, False),
+                ("tensor", query_tensor, True, False),
+                ("tensor", query_tensor, False, True),
+                ("tensor", query_tensor, True, True),
+                ("list", query_list, False, False),
+                ("list", query_list, True, False),
+                ("list", query_list, False, True),
+                ("list", query_list, True, True),
+            ]
+
+            for input_type, query, return_prompt, generate_ref_response in test_cases:
+                with self.subTest(
+                    input_type=input_type, 
+                    return_prompt=return_prompt, 
+                    generate_ref_response=generate_ref_response
+                ):
+                    # Run generate with the current configuration
+                    if generate_ref_response:
+                        response, ref_response = trainer.generate(
+                            query,
+                            return_prompt=return_prompt,
+                            generate_ref_response=generate_ref_response
+                        )
+                        
+                        # Verify the reference response
+                        if input_type == "tensor":
+                            self.assertTrue(isinstance(ref_response, torch.Tensor))
+                            self.assertEqual(len(ref_response.shape), 2)
+                        else:
+                            self.assertTrue(isinstance(ref_response, list))
+                            self.assertEqual(len(ref_response), 1)
+                    else:
+                        response = trainer.generate(
+                            query,
+                            return_prompt=return_prompt,
+                            generate_ref_response=generate_ref_response
+                        )
+                    
+                    # Verify the response format based on input type
+                    if input_type == "tensor":
+                        self.assertTrue(isinstance(response, torch.Tensor))
+                        self.assertEqual(len(response.shape), 2)
+                    else:
+                        self.assertTrue(isinstance(response, list))
+                        self.assertEqual(len(response), 1)

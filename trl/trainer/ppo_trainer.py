@@ -40,7 +40,7 @@ from transformers.trainer_callback import (CallbackHandler, ExportableState,
 from transformers.utils import is_peft_available
 
 from ..core import masked_mean, masked_whiten
-from ..models import create_reference_model
+from ..models import PreTrainedModelWrapper, create_reference_model
 from ..models.utils import unwrap_model_for_generation
 from .ppo_config import PPOConfig
 from .utils import (OnlineTrainerState, batch_generation,
@@ -146,6 +146,7 @@ class PPOTrainer(Trainer):
             if args.bf16 and getattr(self.policy_model, "is_loaded_in_4bit", False):
                 peft_module_casting_to_bf16(self.policy_model)
 
+        self.is_encoder_decoder = model.config.is_encoder_decoder
         self.is_peft_model = is_peft_available() and isinstance(self.policy_model, PeftModel)
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
@@ -782,6 +783,67 @@ class PPOTrainer(Trainer):
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
 
+    def _generate_batched(
+        self,
+        model: PreTrainedModelWrapper,
+        query_tensors: List[torch.Tensor],
+        length_sampler: Optional[Callable] = None,
+        batch_size: int = 4,
+        return_prompt: bool = True,
+        pad_to_multiple_of: Optional[int] = None,
+        remove_padding: bool = True,
+        **generation_kwargs,
+    ):
+        outputs = []
+
+        padding_side_default = self.tokenizer.padding_side
+        if not self.is_encoder_decoder:
+            self.tokenizer.padding_side = "left"
+
+        # in case we have fewer examples than bs
+        batch_size = min(len(query_tensors), batch_size)
+
+        for i in range(0, len(query_tensors), batch_size):
+            if length_sampler is not None:
+                generation_kwargs["max_new_tokens"] = length_sampler()
+
+            # prevent overflow if query tensors are not even multiple of bs
+            end_index = min(len(query_tensors), i + batch_size)
+
+            batch = query_tensors[i:end_index]
+            batch_mask = [torch.ones_like(element) for element in batch]
+            inputs = {"input_ids": batch, "attention_mask": batch_mask}
+
+            padded_inputs = self.tokenizer.pad(
+                inputs,
+                padding=True,
+                max_length=None,
+                pad_to_multiple_of=pad_to_multiple_of,
+                return_tensors="pt",
+            ).to(self.accelerator.device)
+
+            with unwrap_model_for_generation(self.policy_model, self.accelerator) as unwrapped_model:
+                generations = unwrapped_model.generate(**padded_inputs, **generation_kwargs)
+
+            for generation, mask in zip(generations, padded_inputs["attention_mask"]):
+                if not self.is_encoder_decoder:
+                    output = generation[(1 - mask).sum() :]  # remove padding
+                else:
+                    output = generation
+
+                if not return_prompt and not self.is_encoder_decoder:
+                    output = output[(mask).sum() :]  # remove prompt
+
+                if remove_padding and self.tokenizer.eos_token_id in output:
+                    pad_mask = output == self.tokenizer.eos_token_id
+                    pad_start = torch.nonzero(pad_mask, as_tuple=False)[0, 0].item()
+                    output = output[: pad_start + 1]  # keep the eos token at the end
+
+                outputs.append(output)
+
+        self.tokenizer.padding_side = padding_side_default
+        return outputs
+
     def generate(
         self,
         query_tensor: Union[torch.Tensor, List[torch.Tensor]],
@@ -842,12 +904,12 @@ class PPOTrainer(Trainer):
             if length_sampler is not None:
                 generation_kwargs["max_new_tokens"] = length_sampler()
     
-            with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+            with unwrap_model_for_generation(self.policy_model, self.accelerator) as unwrapped_model:
                 response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
     
             if generate_ref_response:
                 with unwrap_model_for_generation(
-                    ref_model, self.accelerator, is_peft_model=self.is_peft_model
+                    ref_model, self.accelerator
                 ) as unwrapped_model:
                     ref_response = unwrapped_model.generate(
                         input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
