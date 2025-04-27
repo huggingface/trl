@@ -197,13 +197,6 @@ class SFTConfig(TrainingArguments):
             )
             self.max_length = self.max_seq_length
 
-        if self.use_liger is not None:
-            warnings.warn(
-                "`use_liger` is deprecated and will be removed in version 0.18.0. Use `use_liger_kernel` instead.",
-                DeprecationWarning,
-            )
-            self.use_liger_kernel = self.use_liger
-
         # Validate that activation_offloading and use_liger_kernel aren't both enabled
         if self.activation_offloading and getattr(self, "use_liger_kernel", False):
             warnings.warn(
