@@ -443,8 +443,10 @@ class GRPOTrainer(Trainer):
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
-            if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
+            if isinstance(reward_funcs[i], PreTrainedModel):
                 self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
+            elif isinstance(reward_funcs[i], nn.Module):
+                self.reward_func_names.append(reward_funcs[i].__class__.__name__)
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
@@ -509,9 +511,7 @@ class GRPOTrainer(Trainer):
         if (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
-            or (
-                isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
-            )
+            or (isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values()))
         ):
             # See https://github.com/huggingface/trl/issues/3213
             raise NotImplementedError(
@@ -699,8 +699,8 @@ class GRPOTrainer(Trainer):
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         for i, reward_func in enumerate(self.reward_funcs):
-            if isinstance(reward_func, PreTrainedModel):
-                if self.is_deepspeed_enabled:
+            if isinstance(reward_func, nn.Module):
+                if isinstance(reward_func, PreTrainedModel) and self.is_deepspeed_enabled:
                     self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
                 else:
                     # set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
@@ -861,9 +861,7 @@ class GRPOTrainer(Trainer):
 
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            self._sync_fsdp_params_to_vllm(
-                child_module, prefix=child_prefix, visited=visited
-            )  # recurse into the child
+            self._sync_fsdp_params_to_vllm(child_module, prefix=child_prefix, visited=visited)  # recurse into the child
 
         if isinstance(module, FSDP):
             with FSDP.summon_full_params(module, recurse=False, writeback=False):
@@ -1154,7 +1152,7 @@ class GRPOTrainer(Trainer):
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
         ):
             with profiling_context(self, reward_func_name):
-                if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
+                if isinstance(reward_func, PreTrainedModel):
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                         texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
