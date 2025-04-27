@@ -47,7 +47,7 @@ from transformers.utils import is_datasets_available, is_peft_available
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is_rich_available, is_vllm_available
+from ..import_utils import is_liger_kernel_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -60,9 +60,6 @@ from .utils import (
     selective_log_softmax,
 )
 
-
-if is_deepspeed_available():
-    import deepspeed
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -78,7 +75,7 @@ if is_wandb_available():
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 
-class RepeatRandomSampler(Sampler):
+class RepeatSampler(Sampler):
     """
     Sampler that repeats the indices of a dataset in a structured manner.
 
@@ -91,6 +88,8 @@ class RepeatRandomSampler(Sampler):
             Number of unique indices per batch.
         repeat_count (`int`, *optional*, defaults to `1`):
             Number of times to repeat the full sampling process.
+        shuffle (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the dataset.
         seed (`int` or `None`, *optional*, defaults to `None`):
             Random seed for reproducibility (only affects this sampler).
 
@@ -132,6 +131,7 @@ class RepeatRandomSampler(Sampler):
         mini_repeat_count: int,
         batch_size: int = 1,
         repeat_count: int = 1,
+        shuffle: bool = True,
         seed: Optional[int] = None,
     ):
         self.data_source = data_source
@@ -139,14 +139,20 @@ class RepeatRandomSampler(Sampler):
         self.batch_size = batch_size
         self.repeat_count = repeat_count
         self.num_samples = len(data_source)
+        self.shuffle = shuffle
         self.seed = seed
-        self.generator = torch.Generator()  # Create a local random generator
-        if seed is not None:
-            self.generator.manual_seed(seed)
+
+        if shuffle:
+            self.generator = torch.Generator()  # Create a local random generator
+            if seed is not None:
+                self.generator.manual_seed(seed)
 
     def __iter__(self):
-        # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
-        indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+        if self.shuffle:
+            # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
+            indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+        else:
+            indexes = list(range(self.num_samples))
 
         #    [2, 4, 3, 1, 0, 6, 5]
         # -> [[2, 4, 3], [1, 0, 6], [5]]  (batch_size = 3)
@@ -312,7 +318,9 @@ class GRPOTrainer(Trainer):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
-            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`].
+            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
+            padding token, `processing_class.pad_token`, must be set. If the processing class has not set a padding
+            token, `processing_class.eos_token` will be used as the default.
         reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
@@ -418,15 +426,22 @@ class GRPOTrainer(Trainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+        if processing_class.pad_token is None:
+            processing_class.pad_token = processing_class.eos_token
 
         # Reward functions
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
+        self.reward_func_names = []
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
+            if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
+                self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
+            else:
+                self.reward_func_names.append(reward_funcs[i].__name__)
         self.reward_funcs = reward_funcs
 
         # Reward weights
@@ -481,6 +496,8 @@ class GRPOTrainer(Trainer):
         self.mask_truncated_completions = args.mask_truncated_completions
 
         # Datasets
+        self.shuffle_dataset = args.shuffle_dataset
+
         if (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
@@ -602,10 +619,11 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
-            if self.accelerator.is_main_process:
-                self.vllm_client = VLLMClient(
-                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
-                )
+            if self.accelerator.is_main_process:\
+                base_url = args.vllm_server_base_url if args.vllm_server_base_url is not None else f"http://{args.vllm_server_port}:{args.vllm_server_port}"
+                self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+
+                self.vllm_client.init_communicator()
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
@@ -650,7 +668,10 @@ class GRPOTrainer(Trainer):
 
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
-                self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
+                if self.is_deepspeed_enabled:
+                    self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
+                else:
+                    self.reward_funcs[i] = self.accelerator.prepare_model(reward_func, evaluation_mode=True)
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -727,17 +748,18 @@ class GRPOTrainer(Trainer):
             * self.accelerator.num_processes
             * self.args.gradient_accumulation_steps
         )
-        return RepeatRandomSampler(
+        return RepeatSampler(
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
             batch_size=effective_batch_size // self.num_generations,
             repeat_count=self.num_iterations * self.args.gradient_accumulation_steps,
+            shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
 
     def _get_eval_sampler(self, eval_dataset) -> Sampler:
         # See _get_train_sampler for an explanation of the sampler.
-        return RepeatRandomSampler(
+        return RepeatSampler(
             data_source=eval_dataset,
             mini_repeat_count=self.num_generations,
             seed=self.args.seed,
@@ -805,7 +827,12 @@ class GRPOTrainer(Trainer):
         # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
+        if zero_stage_3:
+            import deepspeed
+
+            gather_if_zero3 = deepspeed.zero.GatheredParameters
+        else:
+            gather_if_zero3 = nullcontext
 
         if is_peft_model(self.model):
             # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
@@ -857,7 +884,7 @@ class GRPOTrainer(Trainer):
         #   - Completions are generated for each batch without buffering or reuse
         # Returns a single local batch in both cases.
 
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.gradient_accumulation_steps * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
@@ -874,10 +901,10 @@ class GRPOTrainer(Trainer):
         return inputs
 
     def _generate_and_score_completions(
-        self, inputs: dict[str, Union[torch.Tensor, Any]]
+        self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
@@ -997,13 +1024,9 @@ class GRPOTrainer(Trainer):
             completions = completions_text
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
-        for i, (reward_func, reward_processing_class) in enumerate(
-            zip(self.reward_funcs, self.reward_processing_classes)
+        for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
+            zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
         ):
-            if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
-                reward_func_name = f"reward {reward_func.config._name_or_path.split('/')[-1]}"
-            else:
-                reward_func_name = reward_func.__name__
             with profiling_context(self, reward_func_name):
                 if isinstance(
                     reward_func, nn.Module
@@ -1088,17 +1111,8 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_mask.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_mask.float().max().item())
 
-        # Get the names of the reward functions
-        reward_func_names = []
-        for reward_func in self.reward_funcs:
-            if isinstance(reward_func, nn.Module):  # Module instead of PretrainedModel for compat with compiled models
-                reward_func_name = reward_func.config._name_or_path.split("/")[-1]
-            else:
-                reward_func_name = reward_func.__name__
-            reward_func_names.append(reward_func_name)
-
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
-        for i, reward_func_name in enumerate(reward_func_names):
+        for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_rewards = nanstd(rewards_per_func[:, i]).item()
@@ -1109,7 +1123,7 @@ class GRPOTrainer(Trainer):
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
-        for i, name in enumerate(reward_func_names):
+        for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
         return {
@@ -1149,7 +1163,7 @@ class GRPOTrainer(Trainer):
         mean_kl = metrics[0] if self.beta != 0.0 else None
         clip_ratio = metrics[-1]
 
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
@@ -1205,7 +1219,7 @@ class GRPOTrainer(Trainer):
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
@@ -1239,7 +1253,7 @@ class GRPOTrainer(Trainer):
         return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
