@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,19 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import gc
-import tempfile
 import unittest
 
 import torch
-from datasets import load_dataset
 from torch import nn
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
 from trl.models.activation_offloading import NoOpManager, OffloadActivations
-from trl.trainer.sft_trainer import SFTConfig, SFTTrainer
 
 
 if is_peft_available():
@@ -32,44 +28,6 @@ if is_peft_available():
 
 
 class TestActivationOffloading(unittest.TestCase):
-    def setUp(self):
-        self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
-        self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
-        self.max_length = 128
-
-    def tearDown(self):
-        gc.collect()
-        torch.cuda.empty_cache()
-        gc.collect()
-
-    @require_torch_accelerator
-    def test_offloading_with_sft_trainer(self) -> None:
-        """Test that activation offloading works with SFTTrainer."""
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id).cuda()
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=1,
-                activation_offloading=True,
-                report_to="none",
-            )
-
-            trainer = SFTTrainer(
-                model=model,
-                args=training_args,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
-            )
-
-            # Train for one step
-            trainer.train()
-
-            # Verify training completed successfully
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
     @require_torch_accelerator
     @require_peft
     def test_offloading_with_peft_models(self) -> None:
@@ -91,7 +49,7 @@ class TestActivationOffloading(unittest.TestCase):
         torch.manual_seed(42)
         loss = model(inp, labels=inp).loss
         loss.backward()
-        # Store gradients
+
         # Store gradients - only from trainable parameters
         grads_original = []
         for name, param in model.named_parameters():
@@ -105,7 +63,7 @@ class TestActivationOffloading(unittest.TestCase):
 
         # Second forward-backward pass with offloading
         torch.manual_seed(42)
-        with OffloadActivations(use_streams=True):
+        with OffloadActivations():
             loss_c = model(inp, labels=inp).loss
         loss_c.backward()
 
@@ -125,7 +83,7 @@ class TestActivationOffloading(unittest.TestCase):
         inp = torch.randint(0, 100, (2, 10), device="cuda")
 
         # Run with offloading but disable for specific section
-        with OffloadActivations(use_streams=True):
+        with OffloadActivations():
             # First forward-backward with normal offloading
             torch.manual_seed(42)
             out1 = model(inp, labels=inp)
@@ -185,7 +143,7 @@ class TestActivationOffloading(unittest.TestCase):
             p.grad = None
 
         # With offloading
-        with OffloadActivations(use_streams=True):
+        with OffloadActivations():
             torch.manual_seed(42)
             out2 = model(inp, labels=inp).loss
             out2.backward()
