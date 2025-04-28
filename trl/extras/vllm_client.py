@@ -380,7 +380,6 @@ class VLLMColocationClient:
             device=self.vllm_device,
             gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
             dtype=self.args.vllm_dtype,
-            enable_prefix_caching=self.args.vllm_enable_prefix_caching,
             max_model_len=self.args.vllm_max_model_len,
             distributed_executor_backend="external_launcher",
         )
