@@ -37,8 +37,6 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
-        activation_offloading (`bool`, *optional*, defaults to `False`):
-            Whether to offload the activations to the CPU.
 
         > Parameters that control the data preprocessing
 
@@ -80,6 +78,9 @@ class SFTConfig(TrainingArguments):
             `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
             loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on
             the full sequence for [language modeling](#language-modeling) datasets.
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+
     """
 
     # Parameters that control the model
@@ -173,6 +174,10 @@ class SFTConfig(TrainingArguments):
             )
         },
     )
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
+    )
 
     # Deprecated parameters
     max_seq_length: Optional[int] = field(
@@ -180,11 +185,6 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "This parameter is deprecated and will be removed in version 0.20.0. Use `max_length` instead."
         },
-    )
-
-    activation_offloading: bool = field(
-        default=False,
-        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     def __post_init__(self):
@@ -196,13 +196,3 @@ class SFTConfig(TrainingArguments):
                 DeprecationWarning,
             )
             self.max_length = self.max_seq_length
-
-        # Validate that activation_offloading and use_liger_kernel aren't both enabled
-        if self.activation_offloading and getattr(self, "use_liger_kernel", False):
-            warnings.warn(
-                "Activation offloading is not compatible with Liger kernels due to in-place operations. "
-                "Setting activation_offloading=False. If you need activation offloading, "
-                "please set use_liger_kernel=False.",
-                UserWarning,
-            )
-            self.activation_offloading = False
