@@ -619,7 +619,7 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
-            if self.accelerator.is_main_process:\
+            if self.accelerator.is_main_process:
                 base_url = args.vllm_server_base_url if args.vllm_server_base_url is not None else f"http://{args.vllm_server_port}:{args.vllm_server_port}"
                 self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
 
