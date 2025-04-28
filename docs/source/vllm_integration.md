@@ -1,8 +1,8 @@
 # vLLM Integration
 If you are here to learn about how to use vLLM with TRL, you are in the right place. This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summerize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood. Let's go! 🔥
 
-# 🫠🚀 How can I use vLLM with TRL to make things go faster? TL;DR
-First run the server by; (this example allocate 4 GPUs for vLLM generation)
+## 🫠🚀 How can I use vLLM with TRL to make things go faster? TL;DR
+First run the server by; (This example allocate 4 GPUs for vLLM generation)
 ```sh
 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2
 ```  
@@ -43,14 +43,14 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-# 🎬 Flashback: why do we need to use vLLM in online methods?
+## 🎬 Flashback: why do we need to use vLLM in online methods?
 Online methods like GRPO or Online DPO require the model to generate completions during training, which are then used to compute reward signals. However, generation can be extremely time-consuming, especially with large models. In the default setup (without vLLM), completions are generated using the [(unwrapped)model's `generate` method here](https://github.com/huggingface/trl/blob/f3e8c2304428ef16e9ae5de9e5741ed84d533b7b/trl/trainer/grpo_trainer.py#L965C39-L965C66). This approach quickly becomes a major bottleneck — generation is slow and inefficient, particularly for large batches or models. As a result, training times increase significantly, and overall efficiency drops. To address this, we turn to vLLM, which enables much faster and more scalable generation, helping eliminate this bottleneck in online methods.
 
-# 🤔 How does vLLM solve the slow generation issue?
+## 🤔 How does vLLM solve the slow generation issue?
 If you've ever done autoregressive decoder training, you know  all the input tokens to the LLM produce their attention key and value tensors, and these tensors are kept in GPU memory to later generate next tokens (Q) based on them. These cached key and value tensors are often referred to as KV cache.  However, this storing is really a pain as it occupies a lot of memory. So here is the secret sauce of vLLM, it uses a technique called PagedAttention to solve this problem. PagedAttention , which is inspired by the OS’s virtual memory concept stores continuous keys and values in **non-contiguous memory space** which is way more efficient. The detail of this is beyond the scope of this document, but in short, it allows the model to store the keys and values in a more efficient way, reducing the memory footprint and speeding up the generation process. If you are interested, make sure to check out the [vLLM PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html) for more details.
 
 
-# ⚙️ How to use vLLM in practice for generation in online methods in TRL?
+## ⚙️ How to use vLLM in practice for generation in online methods in TRL?
 
 1. To use [vLLM](https://github.com/vllm-project/vllm), first install it using:
 
@@ -75,8 +75,8 @@ pip install "trl[vllm]"
 ```bash
 trl vllm-serve --model <model_name>
 ```
-# 🔎 What exactly happens when you run `trl vllm-serve --model <model_name>`?
-when you run for example `trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 1 --data-parallel-size 4`, the following happens:
+## 🔎 What exactly happens when you run `trl vllm-serve --model <model_name>`?
+When you run for example `trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 1 --data-parallel-size 4`, the following happens:
 ![vllm](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/vllm-doc.png)
 1. When you run a command like trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 1 --data-parallel-size 4, vLLM first spawns multiple workers to handle incoming requests in parallel. The number of workers is determined by multiplying the --tensor-parallel-size and --data-parallel-size values. In this example, it spawns 4 workers (1 × 4).
 Each worker operates independently and processes a chunk of the incoming requests — which are basically the prompts sent to the server for generation. A key point to understand is that these 4 workers are running in parallel, and each one is responsible for handling a subset of the total incoming load.
@@ -108,7 +108,7 @@ trl vllm-serve --model <model_name> --tensor-parallel-size 1 --data-parallel-siz
 CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 ```  
 
-# 🍷 More customization options with vLLM?
+## 🍷 More customization options with vLLM?
 You can customize the server configuration by passing additional arguments.
 
 ```sh
@@ -141,7 +141,7 @@ options:
                         feature. (default: None)
 ```
 
-# 🥸 Okay, now that we have the server running, how can we use it to generate completions? 
+## 🥸 Okay, now that we have the server running, how can we use it to generate completions? 
 
 Then, run the training script and pass `use_vllm=True` in the training arguments.
 
@@ -151,18 +151,18 @@ from trl import GRPOConfig
 training_args = GRPOConfig(..., use_vllm=True)
 ```
 
-# 💆🏻‍♀️ What's the best distributed setup?
+## 💆🏻‍♀️ What's the best distributed setup?
 ![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_8_gpus.png)
 ![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_4_gpus.png)
 
 First and foremost is that you should always remember that the optimal setup depends on;
-- the model size
-- the number of GPUs you have
-- the GPU memory size
-- the batch size you are using
-- the number of requests you are sending to the server (prompts)
-- the max_model_len you are using (this is the max length of the input sequence that the model can process aka the context_window size)
-- the number of completions you are generating for each request (num_generations)
+- The model size
+- The number of GPUs you have
+- The GPU memory size
+- The batch size you are using
+- The number of requests you are sending to the server (prompts)
+- The max_model_len you are using (this is the max length of the input sequence that the model can process aka the context_window size)
+- The number of completions you are generating for each request (num_generations)
 
 Now given these, our experiments on Qwen model family (3B, 7B, 14B, 32B), on 8 H100 GPUs, showes that:
 - For reasonable (3-14B) at the same time a reasonable context window (max_len<8k) if we use the full capacity for DP, we get better result in terms of throughput, (tp=1, dp=8) is the best setup.
