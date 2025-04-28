@@ -47,7 +47,7 @@ from transformers.utils import is_datasets_available, is_peft_available
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is_rich_available, is_vllm_available
+from ..import_utils import is_liger_kernel_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -61,12 +61,9 @@ from .utils import (
 )
 
 
-from peft.tuners.tuners_utils import BaseTunerLayer
-if is_deepspeed_available():
-    import deepspeed
-
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
@@ -174,15 +171,6 @@ class RepeatSampler(Sampler):
 
     def __len__(self) -> int:
         return self.num_samples * self.mini_repeat_count * self.repeat_count
-
-
-class RepeatRandomSampler(RepeatSampler):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "RepeatRandomSampler is deprecated and will be removed in version 0.18. Use RepeatSampler instead.",
-            DeprecationWarning,
-        )
-        super().__init__(*args, **kwargs)
 
 
 # torch.nanstd doesn't exist, so we define it here
@@ -634,6 +622,7 @@ class GRPOTrainer(Trainer):
                 self.vllm_client = VLLMClient(
                     args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
                 )
+                self.vllm_client.init_communicator()
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
@@ -895,7 +884,12 @@ class GRPOTrainer(Trainer):
         # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
+        if zero_stage_3:
+            import deepspeed
+
+            gather_if_zero3 = deepspeed.zero.GatheredParameters
+        else:
+            gather_if_zero3 = nullcontext
 
         if is_peft_model(self.model):
             # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
@@ -947,7 +941,7 @@ class GRPOTrainer(Trainer):
         #   - Completions are generated for each batch without buffering or reuse
         # Returns a single local batch in both cases.
 
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.gradient_accumulation_steps * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
@@ -967,7 +961,7 @@ class GRPOTrainer(Trainer):
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
@@ -1055,7 +1049,7 @@ class GRPOTrainer(Trainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         with torch.no_grad():
-            # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
+            # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip its
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:
                 old_per_token_logps = self._get_per_token_logps(
@@ -1184,7 +1178,6 @@ class GRPOTrainer(Trainer):
             "completion_mask": completion_mask,
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
-            # "ref_per_token_logps": ref_per_token_logps,
         }
 
     def compute_liger_loss(self, model, inputs):
@@ -1218,7 +1211,7 @@ class GRPOTrainer(Trainer):
         mean_kl = metrics[0] if self.beta != 0.0 else None
         clip_ratio = metrics[-1]
 
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
@@ -1246,7 +1239,6 @@ class GRPOTrainer(Trainer):
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
-            # ref_per_token_logps = inputs["ref_per_token_logps"]
             if self.ref_model is not None:
                 ref_per_token_logps = self._get_per_token_logps(
                     self.ref_model, input_ids, attention_mask, logits_to_keep
@@ -1283,7 +1275,7 @@ class GRPOTrainer(Trainer):
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
@@ -1317,7 +1309,7 @@ class GRPOTrainer(Trainer):
         return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
