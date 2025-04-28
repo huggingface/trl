@@ -340,6 +340,7 @@ def get_act_offloading_ctx_manager(
     use_streams: bool = True,
     min_offload_size: int = 1024,
     max_fwd_stash_size: int = 5,
+    warn_if_no_head: bool = True,
 ) -> OffloadActivations:
     """
     Returns the activation offloading context manager for the model. All but the last output Linear in every step will
@@ -366,6 +367,9 @@ def get_act_offloading_ctx_manager(
             more overlap between the communication and compute streams at the cost of increasing memory usage. Keeping
             alive fewer activations will conserve memory, but may cause poor overlap between the streams, increasing
             runtime.
+        warn_if_no_head (`bool`, *optional*, defaults to `True`):
+            Whether to warn if no output head is detected. If set to `False`, no warning will be raised if no output
+            head is detected.
 
     Returns:
         `contextlib.ContextDecorator`:
@@ -436,11 +440,12 @@ def get_act_offloading_ctx_manager(
         unwrapped_model.head.register_forward_hook(lambda *args: noop_ctx.__exit__(), always_call=True)
         output_head_detected = True
 
-    if not output_head_detected:
+    if not output_head_detected and warn_if_no_head:
         warnings.warn(
             "During activation offloading, no output head was detected. If your model has an output head, it will be "
             "offloaded. This usually greatly slows training, given the large vocabulary size. To change this "
-            "behavior, set your output head as model.output and make it an nn.Module."
+            "behavior, set your output head as model.output and make it an nn.Module. You can disable this warning by "
+            "passing `warn_if_no_head=False`."
         )
 
     # Disable offloading for any Liger modules
