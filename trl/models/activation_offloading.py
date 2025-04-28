@@ -18,9 +18,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of https://github.com/pytorch/torchtune.
 
-import contextlib
-from typing import Union
-from warnings import warn
+import warnings
 
 import psutil
 import torch
@@ -46,16 +44,16 @@ class OffloadActivations(saved_tensors_hooks):
             be moved back onto GPU more quickly but is a limited resource.
         use_streams (`bool`, *optional*, defaults to `True`):
             Whether to use streams for performance optimization where the communications get overlapped with the
-            computation. Requires a torch build after torch-2.5.0.].
+            computation. Requires a torch build after torch-2.5.0.
+        min_offload_size (`int`, *optional*, defaults to `1024`):
+            Minimum number of bytes a Tensor must be in order to qualify for offloading. If the tensor is too small, we
+            do not want to waste bandwidth and resources moving it to CPU and back.
         max_fwd_stash_size (`int`, *optional*, defaults to `5`):
             Maximum size of the forward stash, or the maximum number of consecutive activations to keep alive during
             the forward pass. This number must be at least 1. Keeping alive more activations will potentially allow
             more overlap between the communication and compute streams at the cost of increasing memory usage. Keeping
             alive fewer activations will conserve memory, but may cause poor overlap between the streams, increasing
             runtime.
-        min_offload_size (`int`, *optional*, defaults to `1024`):
-            Minimum number of bytes a Tensor must be in order to qualify for offloading. If the tensor is too small, we
-            do not want to waste bandwidth and resources moving it to CPU and back.
 
     Raises:
         ValueError: if `max_fwd_stash_size` is not at least `1`.
@@ -71,8 +69,8 @@ class OffloadActivations(saved_tensors_hooks):
         self,
         use_pin_memory: bool = True,
         use_streams: bool = True,
-        max_fwd_stash_size: int = 5,
         min_offload_size: int = 1024,
+        max_fwd_stash_size: int = 5,
     ) -> None:
         self.use_streams = use_streams
 
@@ -105,7 +103,7 @@ class OffloadActivations(saved_tensors_hooks):
         def verify_sufficient_virtual_memory():
             curr_pct = get_cpu_ram_pct()
             if curr_pct > self.virtual_memory_safe_pct:
-                warn(f"{curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used")
+                warnings.warn(f"{curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used")
 
         def get_cpu_ram_pct() -> float:
             # get the percentage of memory used by the system
@@ -322,8 +320,8 @@ class OffloadActivations(saved_tensors_hooks):
 
 class NoOpManager(saved_tensors_hooks):
     """
-    A saved_tensors_hook manager used to disable any other saved_tensors_hook manager applied before. This relies on
-    the behavior that only the most recently registered saved_tensors_hook will run.
+    A `saved_tensors_hook` manager used to disable any other `saved_tensors_hook` manager applied before. This relies
+    on the behavior that only the most recently registered `saved_tensors_hook` will run.
 
     One example usage is to opt a local region of code out of activations offloading, which is usually applied globally
     to best track state.
@@ -338,15 +336,14 @@ class NoOpManager(saved_tensors_hooks):
 
 def get_act_offloading_ctx_manager(
     model: nn.Module,
-    activation_offloading: bool,
     use_pin_memory: bool = True,
     use_streams: bool = True,
     min_offload_size: int = 1024,
     max_fwd_stash_size: int = 5,
-) -> Union[OffloadActivations, contextlib.nullcontext]:
+) -> OffloadActivations:
     """
-    Returns the activation offloading context manager for the model, which will be a null context if
-    `activation_offloading` is `False`. All but the last output Linear in every step will be offloaded.
+    Returns the activation offloading context manager for the model. All but the last output Linear in every step will
+    be offloaded.
 
     If activation offloading is enabled, we return the OffloadActivations context manager.
     If activation offloading is disabled, we return a NoOpManager context manager.
@@ -354,16 +351,26 @@ def get_act_offloading_ctx_manager(
     Args:
         model (`nn.Module`):
             Model to wrap with the activation offloading context manager.
-        activation_offloading (`bool`):
-            Whether or not to enable activation offloading for the model.
+        use_pin_memory (`bool`, *optional*, defaults to `True`):
+            Whether to offloaded Tensor will be placed in pinned memory on the CPU. Pinned memory allows the Tensor to
+            be moved back onto GPU more quickly but is a limited resource.
+        use_streams (`bool`, *optional*, defaults to `True`):
+            Whether to use streams for performance optimization where the communications get overlapped with the
+            computation. Requires a torch build after torch-2.5.0.
+        min_offload_size (`int`, *optional*, defaults to `1024`):
+            Minimum number of bytes a Tensor must be in order to qualify for offloading. If the tensor is too small, we
+            do not want to waste bandwidth and resources moving it to CPU and back.
+        max_fwd_stash_size (`int`, *optional*, defaults to `5`):
+            Maximum size of the forward stash, or the maximum number of consecutive activations to keep alive during
+            the forward pass. This number must be at least 1. Keeping alive more activations will potentially allow
+            more overlap between the communication and compute streams at the cost of increasing memory usage. Keeping
+            alive fewer activations will conserve memory, but may cause poor overlap between the streams, increasing
+            runtime.
 
     Returns:
         `contextlib.ContextDecorator`:
             Activation offloading context manager for the model.
     """
-    if not activation_offloading:
-        return contextlib.nullcontext()
-
     activations_handling_ctx = OffloadActivations(
         use_pin_memory=use_pin_memory,
         use_streams=use_streams,
@@ -430,12 +437,10 @@ def get_act_offloading_ctx_manager(
         output_head_detected = True
 
     if not output_head_detected:
-        warn(
-            "During activation offloading, no output head was detected. "
-            "If your model has an output head, it will be offloaded. "
-            "This usually greatly slows training, given the large vocabulary size. "
-            "To change this behavior, set your output head as model.output and make it "
-            "an nn.Module."
+        warnings.warn(
+            "During activation offloading, no output head was detected. If your model has an output head, it will be "
+            "offloaded. This usually greatly slows training, given the large vocabulary size. To change this "
+            "behavior, set your output head as model.output and make it an nn.Module."
         )
 
     # Disable offloading for any Liger modules

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import dataclasses
 import os
 import warnings
@@ -388,10 +389,10 @@ class SFTTrainer(Trainer):
         )
 
         # Initialize activation offloading context
-        self.activation_offload_context = get_act_offloading_ctx_manager(
-            model=self.model,
-            activation_offloading=self.args.activation_offloading,
-        )
+        if self.args.activation_offloading:
+            self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
+        else:
+            self.maybe_activation_offload_context = contextlib.nullcontext()
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
@@ -717,9 +718,9 @@ class SFTTrainer(Trainer):
 
         return (loss, outputs) if return_outputs else loss
 
+    # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):
-        """Override training step to add activation offloading context."""
-        with self.activation_offload_context:
+        with self.maybe_activation_offload_context:
             return super().training_step(*args, **kwargs)
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
