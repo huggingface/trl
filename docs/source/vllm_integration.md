@@ -108,7 +108,7 @@ trl vllm-serve --model <model_name> --tensor-parallel-size 1 --data-parallel-siz
 CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 ```  
 
-## 🍷 More customization options with vLLM?
+# 🍷 More customization options with vLLM?
 You can customize the server configuration by passing additional arguments.
 
 ```sh
@@ -141,7 +141,7 @@ options:
                         feature. (default: None)
 ```
 
-## 🥸 Okay, now that we have the server running, how can we use it to generate completions? 
+# 🥸 Okay, now that we have the server running, how can we use it to generate completions? 
 
 Then, run the training script and pass `use_vllm=True` in the training arguments.
 
@@ -151,7 +151,10 @@ from trl import GRPOConfig
 training_args = GRPOConfig(..., use_vllm=True)
 ```
 
-# 💆🏻‍♀️ What is the optimal parallelism settings for vLLM?
+# 💆🏻‍♀️ What's the best distributed setup?
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_8_gpus.png)
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/tp_dp_throughput_4_gpus.png)
+
 First and foremost is that you should always remember that the optimal setup depends on;
 - the model size
 - the number of GPUs you have
