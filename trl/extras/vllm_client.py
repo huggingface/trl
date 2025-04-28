@@ -486,10 +486,12 @@ def get_vllm_client(args: GRPOConfig, model, accelerator: Accelerator) -> VLLMNo
     if args.vllm_colocation:
         return VLLMColocationClient(args, model, accelerator.device)
     elif accelerator.is_main_process:
-        return VLLMClient(
+        vllm_client = VLLMClient(
             args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout,
             distributed=accelerator.num_processes > 1,
         )
+        vllm_client.init_communicator()
+        return vllm_client
     return VLLMNoOpClient(accelerator.process_index)
 
 # Example usage for VLLMCLient
