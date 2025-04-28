@@ -16,7 +16,7 @@ trainer = IterativeSFTTrainer(
     "facebook/opt-350m",
     args=IterativeSFTConfig(
         max_length=512,
-        output_dir="/tmp",
+        output_dir="./output",
     ),
 )
 
@@ -30,7 +30,7 @@ trainer = IterativeSFTTrainer(
     model,
     args=IterativeSFTConfig(
         max_length=512,
-        output_dir="/tmp",
+        output_dir="./output",
     ),
     processing_class=tokenizer,
 )
