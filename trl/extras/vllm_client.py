@@ -251,7 +251,7 @@ class VLLMClient:
         time.sleep(0.1)
 
         # Set up the communication group for weight broadcasting
-        pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
+        pg = StatelessProcessGroup.create(host="0.0.0.0", port=self.group_port, rank=self.rank, world_size=world_size)
         self.pynccl_comm = PyNcclCommunicator(pg, device=0)
 
         # When the client object is deleted, close the weight update group
