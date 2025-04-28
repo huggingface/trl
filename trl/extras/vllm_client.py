@@ -268,7 +268,7 @@ class VLLMClient:
                 Tensor containing the updated weights.
         """
         dtype, shape = str(weights.dtype), tuple(weights.shape)
-        url = f"http://{self.host}:{self.server_port}/update_named_param/"
+        url = f"{self.base_url}/update_named_param/"
         response = self.session.post(url, json={"name": name, "dtype": dtype, "shape": shape})
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -293,7 +293,7 @@ class VLLMClient:
         """
         Resets the prefix cache for the model.
         """
-        url = f"http://{self.host}:{self.server_port}/reset_prefix_cache/"
+        url = f"{self.base_url}/reset_prefix_cache/"
         response = self.session.post(url)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -302,7 +302,7 @@ class VLLMClient:
         """
         Closes the weight update group and cleans up the communication group.
         """
-        url = f"http://{self.host}:{self.server_port}/close_communicator/"
+        url = f"{self.base_url}/close_communicator/"
 
         try:
             response = self.session.post(url)
