@@ -149,7 +149,7 @@ training_args = SFTConfig(..., activation_offloading=True)
 
 <Tip warning={true}>
 
-When using activation offloading with pre-initialized models that use Liger kernels, you must disable Liger cross entropy due to compatibility issues. The issue occurs specifically with `use_liger_kernel=True` because Liger cross entropy performs in-place operations which conflict with activation offloading. The default setting (`use_liger_kernel=False`) may work properly.
+When using activation offloading with models that use Liger kernels, you must disable Liger cross entropy due to compatibility issues. The issue occurs specifically with `use_liger_kernel=True` because Liger cross entropy performs in-place operations which conflict with activation offloading. The default setting (`use_liger_kernel=False`) works:
 
 ```python
 # When using activation offloading with a model that uses Liger kernels:
