@@ -787,7 +787,7 @@ class GRPOTrainer(Trainer):
         return model
 
     @contextmanager
-    def get_ref_model_outputs_for_liger_loss(
+    def _get_ref_model_outputs_for_liger_loss(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
@@ -820,7 +820,7 @@ class GRPOTrainer(Trainer):
             ref_model = self.model
             ctx_manager = self.accelerator.unwrap_model(ref_model).disable_adapter()
 
-        with ctx_manager:
+        with ctx_manager, torch.no_grad():
             ref_last_hidden_state = self._get_last_hidden_state(
                 ref_model,
                 input_ids,
@@ -1193,7 +1193,7 @@ class GRPOTrainer(Trainer):
         unwrapped_model = self.accelerator.unwrap_model(model)
         
         # compute loss and metrics using liger grpo loss
-        with self.get_ref_model_outputs_for_liger_loss(input_ids, attention_mask, logits_to_keep) as (ref_model_last_hidden_state, ref_model_lm_head_weight, ref_model_lm_head_bias):
+        with self._get_ref_model_outputs_for_liger_loss(input_ids, attention_mask, logits_to_keep) as (ref_model_last_hidden_state, ref_model_lm_head_weight, ref_model_lm_head_bias):
             loss, metrics = self.liger_grpo_loss(
                 _input=last_hidden_state,
                 lin_weight=unwrapped_model.lm_head.weight,
@@ -1239,15 +1239,16 @@ class GRPOTrainer(Trainer):
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
-            if self.ref_model is not None:
-                ref_per_token_logps = self._get_per_token_logps(
-                    self.ref_model, input_ids, attention_mask, logits_to_keep
-                )
-            else:
-                with self.accelerator.unwrap_model(self.model).disable_adapter():
+            with torch.no_grad():
+                if self.ref_model is not None:
                     ref_per_token_logps = self._get_per_token_logps(
-                        self.model, input_ids, attention_mask, logits_to_keep
+                        self.ref_model, input_ids, attention_mask, logits_to_keep
                     )
+                else:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        ref_per_token_logps = self._get_per_token_logps(
+                            self.model, input_ids, attention_mask, logits_to_keep
+                        )
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
