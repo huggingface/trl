@@ -45,13 +45,8 @@ def main():
     make_sft_parser(subparsers)
     make_vllm_serve_parser(subparsers)
 
-    # Check if --config is in the arguments
-    if "--config" in sys.argv:
-        # Use the custom parse_args_and_config method to handle the config file
-        args = parser.parse_args_and_config()[0]
-    else:
-        # Parse the arguments normally if no config file is specified
-        args = parser.parse_args()
+    # Parse the arguments
+    args = parser.parse_args_and_config()[0]
 
     if args.command == "chat":
         (chat_args,) = parser.parse_args_and_config()
