@@ -553,7 +553,7 @@ class DPOTrainer(Trainer):
 
             dataset = dataset.map(
                 self.tokenize_row if not self.is_vision_model else self.process_row,
-                remove_columns=["prompt", "chosen", "rejected"],
+                remove_columns=["chosen", "rejected"],
                 fn_kwargs={
                     "processing_class": processing_class,
                     "max_prompt_length": args.max_prompt_length,
@@ -1452,7 +1452,7 @@ class DPOTrainer(Trainer):
                     )
                 ],
             )
-            if "wandb" in self.args.report_to:
+            if "wandb" in self.args.report_to and self.accelerator.is_main_process:
                 wandb.log({"game_log": wandb.Table(data=table)})
 
             if "comet_ml" in self.args.report_to:
