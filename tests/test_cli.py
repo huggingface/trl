@@ -13,11 +13,14 @@
 # limitations under the License.
 
 
+import os
 import sys
 import tempfile
 import unittest
 from io import StringIO
 from unittest.mock import patch
+
+import yaml
 
 
 @unittest.skipIf(
@@ -66,6 +69,40 @@ class TestCLI(unittest.TestCase):
             command = f"trl sft --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
             with patch("sys.argv", command.split(" ")):
                 main()
+
+    def test_sft_config_file(self):
+        from trl.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp_dir:  # Create a temporary directory
+            output_dir = os.path.join(tmp_dir, "output")
+
+            # Create a temporary config file
+            config_content = {
+                "model_name_or_path": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "dataset_name": "trl-internal-testing/zen",
+                "dataset_config": "standard_language_modeling",
+                "report_to": "none",
+                "output_dir": output_dir,
+                "lr_scheduler_type": "cosine_with_restarts",
+            }
+
+            # Use NamedTemporaryFile to create a temporary file that will be automatically deleted
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as config_file:
+                yaml.dump(config_content, config_file)
+                config_path = config_file.name
+
+            try:
+                # Test the CLI with config file
+                command = f"trl sft --config {config_path}"
+                with patch("sys.argv", command.split(" ")):
+                    main()
+
+                # Verify that output directory was created
+                self.assertTrue(os.path.exists(output_dir))
+            finally:
+                # Clean up the temporary file even if the test fails
+                if os.path.exists(config_path):
+                    os.unlink(config_path)
 
 
 if __name__ == "__main__":
