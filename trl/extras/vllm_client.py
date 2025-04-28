@@ -382,6 +382,7 @@ class VLLMColocationClient:
             dtype=self.args.vllm_dtype,
             max_model_len=self.args.vllm_max_model_len,
             distributed_executor_backend="external_launcher",
+            seed=0
         )
         
     def update_named_param(self, name: str, weights: torch.Tensor):
