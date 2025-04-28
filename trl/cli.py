@@ -46,7 +46,7 @@ def main():
     make_vllm_serve_parser(subparsers)
 
     # Parse the arguments
-    args = parser.parse_args()
+    args = parser.parse_args_and_config()[0]
 
     if args.command == "chat":
         (chat_args,) = parser.parse_args_and_config()
