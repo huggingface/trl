@@ -447,36 +447,3 @@ class GRPOConfig(TrainingArguments):
             "configuration."
         },
     )
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        if self.vllm_device is not None:
-            warnings.warn(
-                "`vllm_device` is deprecated and will be removed in version 0.18.0. To use vLLM, start a vLLM server "
-                "with the `trl vllm-serve` command.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_gpu_memory_utilization is not None:
-            warnings.warn(
-                "`vllm_gpu_memory_utilization` is deprecated and will be removed in v0.18. To control the GPU memory "
-                "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
-                "configuration.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_dtype is not None:
-            warnings.warn(
-                "`vllm_dtype` is deprecated and will be removed in version 0.18.0. To control the data type for vLLM "
-                "generation, you should now use the `dtype` parameter in the vLLM server configuration.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_max_model_len is not None:
-            warnings.warn(
-                "`vllm_max_model_len` is deprecated and will be removed in version 0.18.0. To control the "
-                "`max_model_len` for vLLM, you should now use the `max_model_len` parameter in the vLLM server "
-                "configuration.",
-                DeprecationWarning,
-            )
