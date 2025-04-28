@@ -97,6 +97,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
+        warnings.warn(
+            "This class is deprecated and will be removed in version 0.20.0. To train on completion only, please use "
+            "the parameter `completion_only_loss` of `SFTConfig` instead.",
+            DeprecationWarning,
+        )
 
         self.instruction_template = instruction_template
         if isinstance(instruction_template, str):
@@ -410,7 +415,12 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
-def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
+def pad(
+    tensors: list[torch.Tensor],
+    padding_value: int = 0,
+    padding_side: str = "right",
+    pad_to_multiple_of: Optional[int] = None,
+) -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
 
@@ -421,6 +431,8 @@ def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str =
             Value to use for padding. Default is 0.
         padding_side (`str`):
             Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
+        pad_to_multiple_of (`int`, *optional*, defaults to `None`):
+            If set will pad the sequence to a multiple of the provided value.
 
     Returns:
         `torch.Tensor`:
@@ -441,18 +453,25 @@ def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str =
     # Determine the maximum shape for each dimension
     output_shape = np.max([t.shape for t in tensors], 0).tolist()
 
+    # Apply pad_to_multiple_of to the first (sequence) dimension
+    if pad_to_multiple_of is not None:
+        remainder = output_shape[0] % pad_to_multiple_of
+        if remainder != 0:
+            output_shape[0] += pad_to_multiple_of - remainder
+
     # Create an output tensor filled with the padding value
     output = torch.full((len(tensors), *output_shape), padding_value, dtype=tensors[0].dtype, device=tensors[0].device)
 
     for i, t in enumerate(tensors):
-        # Determine the slice for the sequence dimension
         if padding_side == "left":
-            seq_slice = slice(output_shape[0] - t.shape[0], output_shape[0])
+            seq_start = output_shape[0] - t.shape[0]
         elif padding_side == "right":
-            seq_slice = slice(0, t.shape[0])
+            seq_start = 0
         else:
             raise ValueError("padding_side must be 'left' or 'right'")
 
+        # Define the slices
+        seq_slice = slice(seq_start, seq_start + t.shape[0])
         slices = (seq_slice,) + tuple(slice(0, s) for s in t.shape[1:])
         output[i][slices] = t
 
