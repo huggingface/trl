@@ -16,9 +16,9 @@ import os
 import textwrap
 import warnings
 from collections import defaultdict, deque
-from collections.abc import Sized
-from contextlib import nullcontext, contextmanager
-from typing import Any, Callable, Optional, Union, Generator
+from collections.abc import Generator, Sized
+from contextlib import contextmanager, nullcontext
+from typing import Any, Callable, Optional, Union
 
 import datasets
 import torch
@@ -63,7 +63,6 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
-    from peft.tuners.tuners_utils import BaseTunerLayer
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
@@ -794,25 +793,24 @@ class GRPOTrainer(Trainer):
         logits_to_keep: int,
     ) -> Generator[Any, Any, Any]:
         """
-        Get the outputs of the reference model for the Liger loss.
-        Args:
-            input_ids: The input ids of the reference model.
-            attention_mask: The attention mask of the reference model.
-            logits_to_keep: The number of logits to keep.
-        
-        Yields:
-            `tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]`:
-                The outputs of the reference model.
-                The tuple contains the following elements:
-                - `ref_hidden_states`: The hidden states of the reference model.
-                - `ref_lm_head_weight`: The weight of the reference model's language model head.
-                - `ref_lm_head_bias`: The bias of the reference model's language model head.
-        
-        """
+                Get the outputs of the reference model for the Liger loss.
+                Args:
+                    input_ids: The input ids of the reference model.
+                    attention_mask: The attention mask of the reference model.
+                    logits_to_keep: The number of logits to keep.
+                Yields:
+                    `tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]`:
+                        The outputs of the reference model.
+                        The tuple contains the following elements:
+                        - `ref_hidden_states`: The hidden states of the reference model.
+                        - `ref_lm_head_weight`: The weight of the reference model's language model head.
+                        - `ref_lm_head_bias`: The bias of the reference model's language model head.
+
+        q"""
         if self.beta == 0.0:
             yield None, None, None
             return
-        
+
         if self.ref_model is not None:
             ref_model = self.ref_model
             ctx_manager = nullcontext()
@@ -821,12 +819,7 @@ class GRPOTrainer(Trainer):
             ctx_manager = self.accelerator.unwrap_model(ref_model).disable_adapter()
 
         with ctx_manager, torch.no_grad():
-            ref_last_hidden_state = self._get_last_hidden_state(
-                ref_model,
-                input_ids,
-                attention_mask,
-                logits_to_keep
-            )
+            ref_last_hidden_state = self._get_last_hidden_state(ref_model, input_ids, attention_mask, logits_to_keep)
         if is_peft_available():
             from peft.tuners.tuners_utils import BaseTunerLayer
         try:
@@ -837,7 +830,7 @@ class GRPOTrainer(Trainer):
             yield (
                 ref_last_hidden_state,
                 ref_lm_head.weight,
-                ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
+                ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None,
             )
         finally:
             if is_peft_available() and isinstance(ref_lm_head, BaseTunerLayer):
@@ -849,7 +842,9 @@ class GRPOTrainer(Trainer):
         unwrapped_model = self.accelerator.unwrap_model(model)
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
-        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state[:, :-1, :]  # (B, L-1, H)
+        last_hidden_state = unwrapped_model.model(
+            input_ids=input_ids, attention_mask=attention_mask
+        ).last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
@@ -1191,9 +1186,13 @@ class GRPOTrainer(Trainer):
         # get the last hidden state of the model
         last_hidden_state = self._get_last_hidden_state(model, input_ids, attention_mask, logits_to_keep)
         unwrapped_model = self.accelerator.unwrap_model(model)
-        
+
         # compute loss and metrics using liger grpo loss
-        with self._get_ref_model_outputs_for_liger_loss(input_ids, attention_mask, logits_to_keep) as (ref_model_last_hidden_state, ref_model_lm_head_weight, ref_model_lm_head_bias):
+        with self._get_ref_model_outputs_for_liger_loss(input_ids, attention_mask, logits_to_keep) as (
+            ref_model_last_hidden_state,
+            ref_model_lm_head_weight,
+            ref_model_lm_head_bias,
+        ):
             loss, metrics = self.liger_grpo_loss(
                 _input=last_hidden_state,
                 lin_weight=unwrapped_model.lm_head.weight,
