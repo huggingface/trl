@@ -77,6 +77,7 @@ class TestCLI(unittest.TestCase):
             output_dir = os.path.join(tmp_dir, "output")
 
             # Create a temporary config file
+            config_path = os.path.join(tmp_dir, "config.yaml")
             config_content = {
                 "model_name_or_path": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "dataset_name": "trl-internal-testing/zen",
@@ -85,24 +86,16 @@ class TestCLI(unittest.TestCase):
                 "output_dir": output_dir,
                 "lr_scheduler_type": "cosine_with_restarts",
             }
-
-            # Use NamedTemporaryFile to create a temporary file that will be automatically deleted
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as config_file:
+            with open(config_path, "w") as config_file:
                 yaml.dump(config_content, config_file)
-                config_path = config_file.name
 
-            try:
-                # Test the CLI with config file
-                command = f"trl sft --config {config_path}"
-                with patch("sys.argv", command.split(" ")):
-                    main()
+            # Test the CLI with config file
+            command = f"trl sft --config {config_path}"
+            with patch("sys.argv", command.split(" ")):
+                main()
 
-                # Verify that output directory was created
-                self.assertTrue(os.path.exists(output_dir))
-            finally:
-                # Clean up the temporary file even if the test fails
-                if os.path.exists(config_path):
-                    os.unlink(config_path)
+            # Verify that output directory was created
+            self.assertTrue(os.path.exists(output_dir))
 
 
 if __name__ == "__main__":
