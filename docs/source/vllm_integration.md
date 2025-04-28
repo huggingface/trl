@@ -167,7 +167,3 @@ First and foremost is that you should always remember that the optimal setup dep
 Now given these, our experiments on Qwen model family (3B, 7B, 14B, 32B), on 8 H100 GPUs, showes that:
 - For reasonable (3-14B) at the same time a reasonable context window (max_len<8k) if we use the full capacity for DP, we get better result in terms of throughput, (tp=1, dp=8) is the best setup.
 - For larger models (32B) and larger context window (max_len>8k), we need to use a smaller DP size, along with some form of parallalism on the model side. For example, (tp=2, dp=4) is a good setup for 32B models with larger context window.
-
-
-</hfoption>
-</hfoptions>
