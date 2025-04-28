@@ -2,10 +2,7 @@
 
 [![](https://img.shields.io/badge/All_models-SFT-blue)](https://huggingface.co/models?other=sft,trl) [![](https://img.shields.io/badge/smol_course-Chapter_1-yellow)](https://github.com/huggingface/smol-course/tree/main/1_instruction_tuning)
 
-Supervised fine-tuning (or SFT for short) is a crucial step in RLHF. In TRL we provide an easy-to-use API to create your SFT models and train them with few lines of code on your dataset.
-
-Check out a complete flexible example at [`trl/scripts/sft.py`](https://github.com/huggingface/trl/tree/main/trl/scripts/sft.py).
-Experimental support for Vision Language Models is also included in the example [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_vlm.py).
+Supervised fine-tuning (SFT) is the most common step in post-training foundation models, and also one of the most effective. In TRL, we provide a simple API to train models with SFT in a few lines of code; for a complete training script, check out [`trl/scripts/sft.py`](https://github.com/huggingface/trl/tree/main/trl/scripts/sft.py). Experimental support for Vision Language Models is also included in [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_vlm.py).
 
 ## Quickstart
 
@@ -59,105 +56,9 @@ The above snippets will use the default training arguments from the [`SFTConfig`
 
 ### Train on completions only
 
-You can use the `DataCollatorForCompletionOnlyLM` to train your model on the generated prompts only. Note that this works only in the case when `packing=False`.
-To instantiate that collator for instruction data, pass a response template and the tokenizer. Here is an example of how it would work to fine-tune `opt-350m` on completions only on the CodeAlpaca dataset:
+To train on completions only, simply use a [prompt-completion](#prompt-completion) dataset. In this mode, loss is computed solely on the completion part.
 
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from datasets import load_dataset
-from trl import SFTConfig, SFTTrainer, DataCollatorForCompletionOnlyLM
-
-dataset = load_dataset("lucasmccabe-lmi/CodeAlpaca-20k", split="train")
-
-model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
-tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
-
-def formatting_prompt_func(example):
-    return f"### Question: {example['instruction']}\n ### Answer: {example['output']}"
-
-
-response_template = " ### Answer:"
-collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer)
-
-trainer = SFTTrainer(
-    model,
-    train_dataset=dataset,
-    args=SFTConfig(output_dir="/tmp"),
-    formatting_func=formatting_prompt_func,
-    data_collator=collator,
-)
-
-trainer.train()
-```
-
-To instantiate that collator for assistant style conversation data, pass a response template, an instruction template and the tokenizer. Here is an example of how it would work to fine-tune `opt-350m` on assistant completions only on the Open Assistant Guanaco dataset:
-
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from datasets import load_dataset
-from trl import SFTConfig, SFTTrainer, DataCollatorForCompletionOnlyLM
-
-dataset = load_dataset("timdettmers/openassistant-guanaco", split="train")
-
-model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
-tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
-
-instruction_template = "### Human:"
-response_template = "### Assistant:"
-collator = DataCollatorForCompletionOnlyLM(instruction_template=instruction_template, response_template=response_template, tokenizer=tokenizer, mlm=False)
-
-trainer = SFTTrainer(
-    model,
-    args=SFTConfig(output_dir="/tmp"),
-    train_dataset=dataset,
-    data_collator=collator,
-)
-
-trainer.train()
-```
-
-Make sure to have a `pad_token_id` which is different from `eos_token_id` which can result in the model not properly predicting EOS (End of Sentence) tokens during generation.
-
-#### Using token_ids directly for `response_template`
-
-Some tokenizers like Llama 2 (`meta-llama/Llama-2-XXb-hf`) tokenize sequences differently depending on whether they have context or not. For example:
-
-```python
-from transformers import AutoTokenizer
-tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
-
-def print_tokens_with_ids(txt):
-    tokens = tokenizer.tokenize(txt, add_special_tokens=False)
-    token_ids = tokenizer.encode(txt, add_special_tokens=False)
-    print(list(zip(tokens, token_ids)))
-
-prompt = """### User: Hello\n\n### Assistant: Hi, how can I help you?"""
-print_tokens_with_ids(prompt)  # [..., ('▁Hello', 15043), ('<0x0A>', 13), ('<0x0A>', 13), ('##', 2277), ('#', 29937), ('▁Ass', 4007), ('istant', 22137), (':', 29901), ...]
-
-response_template = "### Assistant:"
-print_tokens_with_ids(response_template)  # [('▁###', 835), ('▁Ass', 4007), ('istant', 22137), (':', 29901)]
-```
-
-In this case, and due to lack of context in `response_template`, the same string ("### Assistant:") is tokenized differently:
-
-    - Text (with context): `[2277, 29937, 4007, 22137, 29901]`
-    - `response_template` (without context): `[835, 4007, 22137, 29901]`
-
-This will lead to an error when the `DataCollatorForCompletionOnlyLM` does not find the `response_template` in the dataset example text:
-
-```
-RuntimeError: Could not find response key [835, 4007, 22137, 29901] in token IDs tensor([    1,   835,  ...])
-```
-
-
-To solve this, you can tokenize the `response_template` with the same context as in the dataset, truncate it as needed and pass the `token_ids` directly to the `response_template` argument of the `DataCollatorForCompletionOnlyLM` class. For example:
-
-```python
-response_template_with_context = "\n### Assistant:"  # We added context here: "\n". This is enough for this tokenizer
-response_template_ids = tokenizer.encode(response_template_with_context, add_special_tokens=False)[2:]  # Now we have it like in the dataset texts: `[2277, 29937, 4007, 22137, 29901]`
-
-data_collator = DataCollatorForCompletionOnlyLM(response_template_ids, tokenizer=tokenizer)
-```
+If you’d like to compute loss on both the prompt **and** the completion while still using a prompt-completion dataset, set `completion_only_loss=False` in the [`SFTConfig`]. This is equivalent to [converting the dataset to a language modeling](#from-prompt-completion-to-language-modeling-dataset) format.
 
 ### Add Special Tokens for Chat Format
 
@@ -178,8 +79,10 @@ tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
 
 # Set up the chat format with default 'chatml' format
 model, tokenizer = setup_chat_format(model, tokenizer)
-
 ```
+
+> [!WARNING]
+> Some base models, like those from Qwen, have a predefined chat template in the model's tokenizer. In these cases it is not necessary to apply `setup_chat_format()`, as the tokenizer already handles the formatting. However, it is necessary to align the EOS token with the chat template to ensure the model's responses terminate correctly. In these cases, specify `eos_token` in `SFTConfig`; for example, for `Qwen/Qwen2.5-1.5B` one should set `eos_token="<|im_end|>"`.
 
 With our model and tokenizer set up, we can now fine-tune our model on a conversational dataset. Below is an example of how a dataset can be formatted for fine-tuning. 
 
@@ -424,9 +327,9 @@ Below are some numbers you can get in terms of speedup and memory efficiency, us
 
 | use_flash_attn_1 | model_name        | max_seq_len | batch_size | time per training step |
 | ---------------- | ----------------- | ----------- | ---------- | ---------------------- |
-| x                | facebook/opt-350m | 2048        | 8          | ~59.1s                 |
+| ✓                | facebook/opt-350m | 2048        | 8          | ~59.1s                 |
 |                  | facebook/opt-350m | 2048        | 8          | **OOM**                |
-| x                | facebook/opt-350m | 2048        | 4          | ~30.3s                 |
+| ✓                | facebook/opt-350m | 2048        | 4          | ~30.3s                 |
 |                  | facebook/opt-350m | 2048        | 4          | ~148.9s                |
 
 ### Using Flash Attention-2

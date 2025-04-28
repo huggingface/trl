@@ -14,6 +14,7 @@ Currently supported CLIs are:
 #### Other commands
 
 - `trl env`: get the system information
+- `trl vllm-serve`: serve a model with vLLM
 
 ## Fine-tuning with the CLI
 

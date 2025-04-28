@@ -279,7 +279,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`PPOTrainer`]          | Tokenized language modeling                                                                            |
 | [`PRMTrainer`]          | [Stepwise supervision](#stepwise-supervision)                                                          |
 | [`RewardTrainer`]       | [Preference (implicit prompt recommended)](#preference)                                                |
-| [`SFTTrainer`]          | [Language modeling](#language-modeling)                                                                |
+| [`SFTTrainer`]          | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion)                     |
 | [`XPOTrainer`]          | [Prompt-only](#prompt-only)                                                                            |
 
 <Tip>
