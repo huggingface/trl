@@ -1,13 +1,53 @@
 # vLLM Integration
+If you are here to learn about how to use vLLM with TRL, you are in the right place. This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summerize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood. Let's go! 🔥
+
+# 🫠🚀 How can I use vLLM with TRL to make things go faster? TL;DR
+First run the server by; (this example allocate 4 GPUs for vLLM generation)
+```sh
+trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2
+```  
+Then, run the training script by passing `use_vllm=True` in the training arguments (this example allocate 4 GPUs for training) by;
+  
+```sh
+CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+```  
+
+Sample of a simple `train.py` script:
+
+```python
+from datasets import load_dataset
+from trl import GRPOTrainer, GRPOConfig
+
+dataset = load_dataset("trl-lib/tldr", split="train")
+
+
+# Dummy reward function: count the number of unique characters in the completions
+def reward_num_unique_chars(completions, **kwargs):
+    return [len(set(c)) for c in completions]
+
+
+training_args = GRPOConfig(
+    output_dir="my_test",
+    use_vllm=True,
+    bf16=True,
+    gradient_checkpointing=True,
+    logging_steps=10,
+)
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2.5-7B",
+    args=training_args,
+    reward_funcs=reward_num_unique_chars,
+    train_dataset=dataset,
+)
+trainer.train()
+```
 
 # 🎬 Flashback: why do we need to use vLLM in online methods?
 Online methods like GRPO or Online DPO require the model to generate completions during training, which are then used to compute reward signals. However, generation can be extremely time-consuming, especially with large models. In the default setup (without vLLM), completions are generated using the [(unwrapped)model's `generate` method here](https://github.com/huggingface/trl/blob/f3e8c2304428ef16e9ae5de9e5741ed84d533b7b/trl/trainer/grpo_trainer.py#L965C39-L965C66). This approach quickly becomes a major bottleneck — generation is slow and inefficient, particularly for large batches or models. As a result, training times increase significantly, and overall efficiency drops. To address this, we turn to vLLM, which enables much faster and more scalable generation, helping eliminate this bottleneck in online methods.
 
-
-
 # 🤔 How does vLLM solve the slow generation issue?
-If you've ever done autoregressive decoder training, you know  all the input tokens to the LLM produce their attention key and value tensors, and these tensors are kept in GPU memory to later generate next tokens (Q) based on them. These cached key and value tensors are often referred to as KV cache.  However, this storing is really a pain as it occupies a lot of memory. 
-So here is the secret sauce of vLLM, it uses a technique called PagedAttention to solve this problem. PagedAttention , which is inspired by the OS’s virtual memory concept stores continuous keys and values in **non-contiguous memory space** which is way more efficient. The detail of this is beyond the scope of this document, but in short, it allows the model to store the keys and values in a more efficient way, reducing the memory footprint and speeding up the generation process. If you are interested, make sure to check out the [vLLM PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html) for more details.
+If you've ever done autoregressive decoder training, you know  all the input tokens to the LLM produce their attention key and value tensors, and these tensors are kept in GPU memory to later generate next tokens (Q) based on them. These cached key and value tensors are often referred to as KV cache.  However, this storing is really a pain as it occupies a lot of memory. So here is the secret sauce of vLLM, it uses a technique called PagedAttention to solve this problem. PagedAttention , which is inspired by the OS’s virtual memory concept stores continuous keys and values in **non-contiguous memory space** which is way more efficient. The detail of this is beyond the scope of this document, but in short, it allows the model to store the keys and values in a more efficient way, reducing the memory footprint and speeding up the generation process. If you are interested, make sure to check out the [vLLM PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html) for more details.
 
 
 # ⚙️ How to use vLLM in practice for generation in online methods in TRL?
@@ -125,47 +165,6 @@ Now given these, our experiments on Qwen model family (3B, 7B, 14B, 32B), on 8 H
 - For reasonable (3-14B) at the same time a reasonable context window (max_len<8k) if we use the full capacity for DP, we get better result in terms of throughput, (tp=1, dp=8) is the best setup.
 - For larger models (32B) and larger context window (max_len>8k), we need to use a smaller DP size, along with some form of parallalism on the model side. For example, (tp=2, dp=4) is a good setup for 32B models with larger context window.
 
-# 🫠 TL;DR 
-First run the server by; (this example allocate 4 GPUs for vLLM generation)
-```sh
-trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2
-```  
-Then, run the training script by passing `use_vllm=True` in the training arguments (this example allocate 4 GPUs for training) by;
-  
-```sh
-CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
-```  
-
-Sample of a simple `train.py` script:
-
-```python
-from datasets import load_dataset
-from trl import GRPOTrainer, GRPOConfig
-
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
-
-
-training_args = GRPOConfig(
-    output_dir="my_test",
-    use_vllm=True,
-    bf16=True,
-    gradient_checkpointing=True,
-    logging_steps=10,
-)
-
-trainer = GRPOTrainer(
-    model="Qwen/Qwen2.5-7B",
-    args=training_args,
-    reward_funcs=reward_num_unique_chars,
-    train_dataset=dataset,
-)
-trainer.train()
-```
 
 </hfoption>
 </hfoptions>
