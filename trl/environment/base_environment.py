@@ -13,8 +13,8 @@
 # limitations under the License.
 
 import re
-from typing import Optional
 import warnings
+from typing import Optional
 
 import torch
 from accelerate.utils import extract_model_from_parallel
