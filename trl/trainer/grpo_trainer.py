@@ -218,6 +218,29 @@ def split_tensor_dict(
         for i in range(num_chunks)
     ]
 
+def shuffle_tensor_dict(
+    tensor_dict: dict[str, Optional[torch.Tensor]]
+) -> dict[str, Optional[torch.Tensor]]:
+    """
+    Shuffles a dictionary of tensors along the first dimension in unison.
+
+    Example:
+        >>> x = torch.arange(6).reshape(3, 2)
+        >>> y = torch.arange(3).reshape(3, 1)
+        >>> tensor_dict = {"x": x, "y": y}
+        >>> shuffled = shuffle_tensor_dict(tensor_dict)
+        >>> # x and y are shuffled along the first dimension consistently.
+    """
+    first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
+    batch_size = first_tensor.shape[0]
+
+    permutation = torch.randperm(batch_size)
+
+    return {
+        key: tensor[permutation] if tensor is not None else None
+        for key, tensor in tensor_dict.items()
+    }
+
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -888,7 +911,8 @@ class GRPOTrainer(Trainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
-                self._buffered_inputs = split_tensor_dict(accumulated_local_batch, self.args.num_mini_batches)
+                shuffled_local_batch = shuffle_tensor_dict(accumulated_local_batch)
+                self._buffered_inputs = split_tensor_dict(shuffled_local_batch, self.args.num_mini_batches)
             inputs = self._buffered_inputs[self._step % self.args.num_mini_batches]
             self._step += 1
         else:
