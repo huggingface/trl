@@ -370,7 +370,6 @@ class TrainerArgTester(unittest.TestCase):
                 packing=True,
                 max_length=256,
                 dataset_num_proc=4,
-                dataset_batch_size=512,
                 neftune_noise_alpha=0.1,
                 model_init_kwargs={"trust_remote_code": True},
                 dataset_kwargs={"append_concat_token": True, "skip_prepare_dataset": True},
@@ -381,7 +380,6 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.packing, True)
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.dataset_num_proc, 4)
-            self.assertEqual(trainer.args.dataset_batch_size, 512)
             self.assertEqual(trainer.args.neftune_noise_alpha, 0.1)
             self.assertEqual(trainer.args.model_init_kwargs, {"trust_remote_code": True})
             self.assertIn("append_concat_token", trainer.args.dataset_kwargs)

@@ -16,8 +16,8 @@ import os
 import textwrap
 import warnings
 from collections import defaultdict, deque
-from collections.abc import Sized
-from contextlib import nullcontext
+from collections.abc import Generator, Sized
+from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, Optional, Union
 
 import datasets
@@ -48,7 +48,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is_rich_available, is_vllm_available
+from ..import_utils import is_liger_kernel_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -61,9 +61,6 @@ from .utils import (
     selective_log_softmax,
 )
 
-
-if is_deepspeed_available():
-    import deepspeed
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -174,15 +171,6 @@ class RepeatSampler(Sampler):
 
     def __len__(self) -> int:
         return self.num_samples * self.mini_repeat_count * self.repeat_count
-
-
-class RepeatRandomSampler(RepeatSampler):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "RepeatRandomSampler is deprecated and will be removed in version 0.18. Use RepeatSampler instead.",
-            DeprecationWarning,
-        )
-        super().__init__(*args, **kwargs)
 
 
 # torch.nanstd doesn't exist, so we define it here
@@ -546,8 +534,6 @@ class GRPOTrainer(Trainer):
                 raise ImportError(
                     "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
                 )
-            if is_peft_model(model):
-                raise TypeError("Liger loss is not supported with a PEFT model.")
 
             if self.loss_type != "bnpo":
                 raise ValueError(
@@ -560,7 +546,7 @@ class GRPOTrainer(Trainer):
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
                 temperature=self.temperature,
-                use_ref_model=self.ref_model is not None,
+                use_ref_model=self.beta != 0.0,
             )
 
         super().__init__(
@@ -636,6 +622,7 @@ class GRPOTrainer(Trainer):
                 self.vllm_client = VLLMClient(
                     args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
                 )
+                self.vllm_client.init_communicator()
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
@@ -799,12 +786,66 @@ class GRPOTrainer(Trainer):
 
         return model
 
+    @contextmanager
+    def _get_ref_model_outputs_for_liger_loss(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        logits_to_keep: int,
+    ) -> Generator[Any, Any, Any]:
+        """
+        Get the outputs of the reference model for the Liger loss.
+
+        Args:
+            input_ids: The input ids of the reference model.
+            attention_mask: The attention mask of the reference model.
+            logits_to_keep: The number of logits to keep.
+        Yields:
+            `tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]`:
+                The outputs of the reference model.
+                The tuple contains the following elements:
+                - `ref_hidden_states`: The hidden states of the reference model.
+                - `ref_lm_head_weight`: The weight of the reference model's language model head.
+                - `ref_lm_head_bias`: The bias of the reference model's language model head.
+        """
+        if self.beta == 0.0:
+            yield None, None, None
+            return
+
+        if self.ref_model is not None:
+            ref_model = self.ref_model
+            ctx_manager = nullcontext()
+        else:
+            ref_model = self.model
+            ctx_manager = self.accelerator.unwrap_model(ref_model).disable_adapter()
+
+        with ctx_manager, torch.no_grad():
+            ref_last_hidden_state = self._get_last_hidden_state(ref_model, input_ids, attention_mask, logits_to_keep)
+        if is_peft_available():
+            from peft.tuners.tuners_utils import BaseTunerLayer
+        try:
+            ref_lm_head = ref_model.get_output_embeddings()
+            if is_peft_available() and isinstance(ref_lm_head, BaseTunerLayer):
+                ref_lm_head.merge()
+
+            yield (
+                ref_last_hidden_state,
+                ref_lm_head.weight,
+                ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None,
+            )
+        finally:
+            if is_peft_available() and isinstance(ref_lm_head, BaseTunerLayer):
+                ref_lm_head.unmerge()
+
     @profiling_decorator
     def _get_last_hidden_state(self, model, input_ids, attention_mask, logits_to_keep=None):
         # unwrap the model to access the model.model
         unwrapped_model = self.accelerator.unwrap_model(model)
-        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
+        if is_peft_model(unwrapped_model):
+            unwrapped_model = unwrapped_model.base_model.model
+        last_hidden_state = unwrapped_model.model(
+            input_ids=input_ids, attention_mask=attention_mask
+        ).last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
@@ -839,7 +880,12 @@ class GRPOTrainer(Trainer):
         # For DeepSpeed ZeRO-3, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
+        if zero_stage_3:
+            import deepspeed
+
+            gather_if_zero3 = deepspeed.zero.GatheredParameters
+        else:
+            gather_if_zero3 = nullcontext
 
         def post_order_fsdp_processing(module: nn.Module, prefix: str = "", visited=None):
                     """ memory-efficient module gather """
@@ -929,7 +975,7 @@ class GRPOTrainer(Trainer):
         #   - Completions are generated for each batch without buffering or reuse
         # Returns a single local batch in both cases.
 
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.gradient_accumulation_steps * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
@@ -949,7 +995,7 @@ class GRPOTrainer(Trainer):
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
@@ -1037,7 +1083,7 @@ class GRPOTrainer(Trainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         with torch.no_grad():
-            # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
+            # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip its
             # computation here, and use per_token_logps.detach() instead.
             if self.num_iterations > 1:
                 old_per_token_logps = self._get_per_token_logps(
@@ -1045,18 +1091,6 @@ class GRPOTrainer(Trainer):
                 )
             else:
                 old_per_token_logps = None
-
-            if self.beta == 0.0:
-                ref_per_token_logps = None
-            elif self.ref_model is not None:
-                ref_per_token_logps = self._get_per_token_logps(
-                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-                )
-            else:
-                with self.accelerator.unwrap_model(self.model).disable_adapter():
-                    ref_per_token_logps = self._get_per_token_logps(
-                        self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-                    )
 
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
@@ -1178,7 +1212,6 @@ class GRPOTrainer(Trainer):
             "completion_mask": completion_mask,
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
-            "ref_per_token_logps": ref_per_token_logps,
         }
 
     def compute_liger_loss(self, model, inputs):
@@ -1192,23 +1225,31 @@ class GRPOTrainer(Trainer):
         # get the last hidden state of the model
         last_hidden_state = self._get_last_hidden_state(model, input_ids, attention_mask, logits_to_keep)
         unwrapped_model = self.accelerator.unwrap_model(model)
+
         # compute loss and metrics using liger grpo loss
-        loss, metrics = self.liger_grpo_loss(
-            _input=last_hidden_state,
-            lin_weight=unwrapped_model.lm_head.weight,
-            selected_token_ids=completion_ids,
-            attention_mask=completion_mask,
-            advantages=inputs["advantages"],
-            bias=unwrapped_model.lm_head.bias,
-            ref_per_token_logps=inputs["ref_per_token_logps"],
-            old_per_token_logps=inputs["old_per_token_logps"],
-        )
+        with self._get_ref_model_outputs_for_liger_loss(input_ids, attention_mask, logits_to_keep) as (
+            ref_model_last_hidden_state,
+            ref_model_lm_head_weight,
+            ref_model_lm_head_bias,
+        ):
+            loss, metrics = self.liger_grpo_loss(
+                _input=last_hidden_state,
+                lin_weight=unwrapped_model.lm_head.weight,
+                selected_token_ids=completion_ids,
+                attention_mask=completion_mask,
+                advantages=inputs["advantages"],
+                bias=unwrapped_model.lm_head.bias,
+                old_per_token_logps=inputs["old_per_token_logps"],
+                ref_input=ref_model_last_hidden_state,
+                ref_weight=ref_model_lm_head_weight,
+                ref_bias=ref_model_lm_head_bias,
+            )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero
         mean_kl = metrics[0] if self.beta != 0.0 else None
         clip_ratio = metrics[-1]
 
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
@@ -1236,7 +1277,16 @@ class GRPOTrainer(Trainer):
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
+            with torch.no_grad():
+                if self.ref_model is not None:
+                    ref_per_token_logps = self._get_per_token_logps(
+                        self.ref_model, input_ids, attention_mask, logits_to_keep
+                    )
+                else:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        ref_per_token_logps = self._get_per_token_logps(
+                            self.model, input_ids, attention_mask, logits_to_keep
+                        )
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
@@ -1264,7 +1314,7 @@ class GRPOTrainer(Trainer):
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
@@ -1298,7 +1348,7 @@ class GRPOTrainer(Trainer):
         return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
