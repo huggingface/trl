@@ -734,7 +734,7 @@ class GRPOTrainer(Trainer):
         #
         #                   global_step   step    <-───>  num_generations=2
         #                                         <-───────> per_device_train_batch_size=3
-        #  num_minibatches ▲  ▲  0          0     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
+        # num_mini_batches ▲  ▲  0          0     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
         #       =2         ▼  |  0          1      0   0   1   1   2   2 [ 3   3   4   4   5   5]   <- Take the stored generations and use the second slice to compute the loss
         #                     |
         #                     |  1          2     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Take the stored generations and use the first slice to compute the loss
@@ -744,13 +744,13 @@ class GRPOTrainer(Trainer):
         #                        2          5      6   6   7   7   8   8 [ 9   9  10  10  11  11]   <- ...
         #                                            ...
         effective_batch_size = (
-            self.args.per_device_train_batch_size * self.accelerator.num_processes * self.args.num_minibatches
+            self.args.per_device_train_batch_size * self.accelerator.num_processes * self.args.num_mini_batches
         )
         return RepeatSampler(
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
             batch_size=effective_batch_size // self.num_generations,
-            repeat_count=self.num_iterations * self.args.num_minibatches,
+            repeat_count=self.num_iterations * self.args.num_mini_batches,
             shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
@@ -872,7 +872,7 @@ class GRPOTrainer(Trainer):
     ) -> dict[str, Union[torch.Tensor, Any]]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
         # During training:
-        #   - Receives the accumulated local batch (Per-GPU batch size × num minibatches)
+        #   - Receives the accumulated local batch (Per-GPU batch size × num mini-batches)
         #     from the modified training dataloader instead of the standard local batch
         #   - Generates completions once for the entire accumulated batch and splits it into smaller batches
         #   - Buffers these completions and returns the appropriate slice for the current accumulation step
@@ -884,12 +884,12 @@ class GRPOTrainer(Trainer):
 
         mode = "train" if self.model.training else "eval"
         if mode == "train":
-            generate_every = self.args.num_minibatches * self.num_iterations
+            generate_every = self.args.num_mini_batches * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
-                self._buffered_inputs = split_tensor_dict(accumulated_local_batch, self.args.num_minibatches)
-            inputs = self._buffered_inputs[self._step % self.args.num_minibatches]
+                self._buffered_inputs = split_tensor_dict(accumulated_local_batch, self.args.num_mini_batches)
+            inputs = self._buffered_inputs[self._step % self.args.num_mini_batches]
             self._step += 1
         else:
             # In evaluation, there is neither gradient accumulation, nor multiple iterations
@@ -988,10 +988,10 @@ class GRPOTrainer(Trainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         with torch.no_grad():
-            # When using num_iterations == 1 and num_minibatches == gradient_accumulation_steps
+            # When using num_iterations == 1 and num_mini_batches == gradient_accumulation_steps
             # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
             # per_token_logps.detach() instead.
-            if self.num_iterations > 1 or self.args.num_minibatches != self.args.gradient_accumulation_steps:
+            if self.num_iterations > 1 or self.args.num_mini_batches != self.args.gradient_accumulation_steps:
                 old_per_token_logps = self._get_per_token_logps(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )

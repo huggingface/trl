@@ -61,8 +61,8 @@ class GRPOConfig(TrainingArguments):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
-        num_minibatches: (`int`, *optional*, defaults to `None`):
-            The number of minibatches to generate, defaults to 'gradient_accumulation_steps'.
+        num_mini_batches: (`int`, *optional*, defaults to `None`):
+            The number of mini-batches to split a batch into. If `None`, the value of [`GRPOConfig.gradient_accumulation_steps`] will be used.
 
         > Parameters that control generation
 
@@ -230,9 +230,11 @@ class GRPOConfig(TrainingArguments):
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
     )
-    num_minibatches: Optional[int] = field(
+    num_mini_batches: Optional[int] = field(
         default=None,
-        metadata={"help": "The number of minibatches to generate, defaults to 'gradient_accumulation_steps'."},
+        metadata={
+            "help": "The number of mini-batches to split a batch into. If `None`, the value of [`GRPOConfig.gradient_accumulation_steps`] will be used."
+        },
     )
     # Parameters that control generation
     temperature: float = field(
@@ -422,15 +424,15 @@ class GRPOConfig(TrainingArguments):
         super().__post_init__()
 
         # The current default effective batch size
-        if self.num_minibatches is None:
-            self.num_minibatches = self.gradient_accumulation_steps
+        if self.num_mini_batches is None:
+            self.num_mini_batches = self.gradient_accumulation_steps
 
-        if self.num_minibatches < self.gradient_accumulation_steps:
+        if self.num_mini_batches < self.gradient_accumulation_steps:
             raise ValueError(
-                f"steps_per_generation ({self.num_minibatches}) must be greater than or equal to gradient_accumulation_steps ({self.gradient_accumulation_steps})."
+                f"steps_per_generation ({self.num_mini_batches}) must be greater than or equal to gradient_accumulation_steps ({self.gradient_accumulation_steps})."
             )
 
-        if self.num_minibatches % self.gradient_accumulation_steps != 0:
+        if self.num_mini_batches % self.gradient_accumulation_steps != 0:
             raise ValueError(
-                f"steps_per_generation ({self.num_minibatches}) must be divisible by gradient_accumulation_steps ({self.gradient_accumulation_steps})."
+                f"steps_per_generation ({self.num_mini_batches}) must be divisible by gradient_accumulation_steps ({self.gradient_accumulation_steps})."
             )
