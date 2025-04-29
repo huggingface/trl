@@ -797,11 +797,29 @@ class GRPOTrainer(Trainer):
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
-    # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
-    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
+    def _get_per_token_logps_and_probs(
+        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Get both per-token log probabilities and probability distributions for completions in a single forward pass.
+
+        Args:
+            model: The model to generate logits.
+            input_ids: The input token IDs.
+            attention_mask: The attention mask.
+            logits_to_keep: The number of logits to keep (corresponding to completion length).
+            batch_size: Optional batch size to process inputs in chunks to reduce memory peak.
+
+        Returns:
+            tuple: (per_token_logps, probs)
+                - per_token_logps: Tensor of shape (batch_size, logits_to_keep) containing log probabilities
+                - probs: Tensor of shape (batch_size, logits_to_keep, vocab_size) containing full probability distributions
+        """
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
+        all_probs = []
+
         for i in range(0, input_ids.size(0), batch_size):
             input_ids_batch = input_ids[i : i + batch_size]
             attention_mask_batch = attention_mask[i : i + batch_size]
@@ -815,12 +833,37 @@ class GRPOTrainer(Trainer):
             # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
             # See https://github.com/huggingface/trl/issues/2770
             logits = logits[:, -logits_to_keep:]
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
-            logps = selective_log_softmax(logits, input_ids_batch)  # compute logprobs for the input tokens
+
+            # Divide logits by sampling temperature
+            scaled_logits = logits / self.temperature
+
+            # Compute full probability distributions
+            probs = torch.softmax(scaled_logits, dim=-1)  # (B, seq_len, vocab_size)
+            all_probs.append(probs)
+
+            # Compute log probs for the selected tokens (original functionality)
+            logps = selective_log_softmax(scaled_logits, input_ids_batch)  # (B, seq_len)
             all_logps.append(logps)
-        return torch.cat(all_logps, dim=0)
+
+        return torch.cat(all_logps, dim=0), torch.cat(all_probs, dim=0)
+
+    @profiling_decorator
+    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
+        """
+        Get the per-token log probabilities for the completions (backward compatible version).
+
+        Args:
+            model: The model to generate logits.
+            input_ids: The input token IDs.
+            attention_mask: The attention mask.
+            logits_to_keep: The number of logits to keep (corresponding to completion length).
+            batch_size: Optional batch size to process inputs in chunks.
+
+        Returns:
+            Tensor of shape (batch_size, logits_to_keep) containing log probabilities
+        """
+        logps, _ = self._get_per_token_logps_and_probs(model, input_ids, attention_mask, logits_to_keep, batch_size)
+        return logps
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -1187,8 +1230,25 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        # Get both log probabilities and full probability distributions
+        per_token_logps, probs = self._get_per_token_logps_and_probs(model, input_ids, attention_mask, logits_to_keep)
 
+        # Calculate entropy from the full probability distributions
+        eps = 1e-8  # Small epsilon to avoid log(0)
+        entropy_per_token = -torch.sum(probs * torch.log(probs + eps), dim=-1)  # (batch_size, seq_len)
+
+        # Average entropy across valid completion tokens (masked for padding)
+        mean_entropy = (entropy_per_token * completion_mask).sum(dim=1) / completion_mask.sum(dim=1).clamp(min=1.0)
+
+        # Log entropy metrics
+        mode = "train" if self.model.training else "eval"
+        agg_entropy = self.accelerator.gather_for_metrics(mean_entropy)
+        self._metrics[mode]["completions/entropy/mean"].append(agg_entropy.nanmean().item())
+        self._metrics[mode]["completions/entropy/min"].append(nanmin(agg_entropy).item())
+        self._metrics[mode]["completions/entropy/max"].append(nanmax(agg_entropy).item())
+        self._metrics[mode]["completions/entropy/std"].append(nanstd(agg_entropy).item())
+
+        # Continue with the original loss computation...
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
