@@ -392,9 +392,8 @@ def get_act_offloading_ctx_manager(
     unwrapped_model = model
     if hasattr(unwrapped_model, "module"):
         unwrapped_model = unwrapped_model.module
-    if hasattr(unwrapped_model, "model"):
-        unwrapped_model = unwrapped_model.model
-    if hasattr(unwrapped_model, "base_model"):
+    # check for PEFT models
+    if hasattr(unwrapped_model, "base_model") and hasattr(unwrapped_model, "peft_config"):
         unwrapped_model = unwrapped_model.base_model
 
     # Check for different types of output heads
