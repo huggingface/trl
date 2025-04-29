@@ -793,20 +793,20 @@ class GRPOTrainer(Trainer):
         logits_to_keep: int,
     ) -> Generator[Any, Any, Any]:
         """
-                Get the outputs of the reference model for the Liger loss.
-                Args:
-                    input_ids: The input ids of the reference model.
-                    attention_mask: The attention mask of the reference model.
-                    logits_to_keep: The number of logits to keep.
-                Yields:
-                    `tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]`:
-                        The outputs of the reference model.
-                        The tuple contains the following elements:
-                        - `ref_hidden_states`: The hidden states of the reference model.
-                        - `ref_lm_head_weight`: The weight of the reference model's language model head.
-                        - `ref_lm_head_bias`: The bias of the reference model's language model head.
+        Get the outputs of the reference model for the Liger loss.
 
-        q"""
+        Args:
+            input_ids: The input ids of the reference model.
+            attention_mask: The attention mask of the reference model.
+            logits_to_keep: The number of logits to keep.
+        Yields:
+            `tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]`:
+                The outputs of the reference model.
+                The tuple contains the following elements:
+                - `ref_hidden_states`: The hidden states of the reference model.
+                - `ref_lm_head_weight`: The weight of the reference model's language model head.
+                - `ref_lm_head_bias`: The bias of the reference model's language model head.
+        """
         if self.beta == 0.0:
             yield None, None, None
             return
