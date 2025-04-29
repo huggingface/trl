@@ -117,21 +117,21 @@ class IterativeSFTTrainer(Trainer):
         if max_length is not None:
             deprecated_params["max_length"] = max_length
             warnings.warn(
-                "The `max_length` parameter is deprecated and will be removed in a future version. "
+                "The `max_length` parameter is deprecated and will be removed in version 0.20. "
                 "Pass it through the `args` parameter using `IterativeSFTConfig(max_length=...)` instead.",
                 DeprecationWarning,
             )
         if truncation_mode is not None:
             deprecated_params["truncation_mode"] = truncation_mode
             warnings.warn(
-                "The `truncation_mode` parameter is deprecated and will be removed in a future version. "
+                "The `truncation_mode` parameter is deprecated and will be removed in version 0.20. "
                 "Pass it through the `args` parameter using `IterativeSFTConfig(truncation_mode=...)` instead.",
                 DeprecationWarning,
             )
         if optimize_device_cache is not None:
             deprecated_params["optimize_device_cache"] = optimize_device_cache
             warnings.warn(
-                "The `optimize_device_cache` parameter is deprecated and will be removed in a future version. "
+                "The `optimize_device_cache` parameter is deprecated and will be removed in version 0.20  "
                 "Pass it through the `args` parameter using `IterativeSFTConfig(optimize_device_cache=...)` instead.",
                 DeprecationWarning,
             )

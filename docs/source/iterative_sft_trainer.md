@@ -38,7 +38,7 @@ trainer = IterativeSFTTrainer(
 
 ## Usage
 
-The `IterativeSFTTrainer` supports two ways of providing input data to the `step` function:
+The [`IterativeSFTTrainer`] supports two ways of providing input data to the `step` function:
 
 ### Using a list of tensors as input:
 
@@ -66,7 +66,7 @@ For causal language models, labels will automatically be created from `input_ids
 
 ## Configuration
 
-The `IterativeSFTConfig` class provides several parameters to customize the training:
+The [`IterativeSFTConfig`] class provides several parameters to customize the training:
 
 ```python
 from trl import IterativeSFTConfig
