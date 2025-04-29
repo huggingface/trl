@@ -301,12 +301,15 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
-    vllm_colocation: Optional[bool] = field(
-        default=False,
+    vllm_colocation: Optional[int] = field(
+        default=None,
         metadata={
-            "help": "Whether to use colocated vLLM execution via external launcher. If set to `True`, vLLM will be "
-                    "initialized in all processes, each assigned to its respective device. This enables optimized "
-                    "multi-GPU inference."
+            "help": (
+                "Controls colocated vLLM execution and tensor parallelism using the `external_launcher` backend. "
+                "Set to `None` to disable colocated vLLM. "
+                "Set to `1` to enable colocated vLLM on each device (no tensor parallelism). "
+                "Set to a value >1 to enable colocated vLLM with tensor parallelism across multiple devices."
+            )
         },
     )
     vllm_gpu_memory_utilization: Optional[float] = field(
@@ -319,6 +322,16 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "This parameter is used to control model length for the vLLM in colocation mode"
+        },
+    )
+    vllm_sleep_enabled: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": (
+                "Enables sleep mode for colocated vLLM during training. "
+                "Set to `True` to keep vLLM in sleep state during training steps, helping reduce memory usage. "
+                "Set to `False` to disable this behavior."
+            )
         },
     )
 

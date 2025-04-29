@@ -623,15 +623,37 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.args.vllm_colocation:
-                device_type = PartialState().default_device.type
+        
+                # Ensure vllm_colocation TP value is valid (at least 1)
+                assert self.args.vllm_colocation >= 1, "vllm_colocation must be greater than 0"
+                # Make sure vllm_colocation TP group size evenly divides the world size - each group should have the same number of ranks
+                assert self.accelerator.num_processes % self.args.vllm_colocation == 0, (
+                    f"TP size of vllm_colocation ({self.args.vllm_colocation}) must divide world size "
+                    f"({self.accelerator.num_processes}) evenly."
+                )
+
+                if self.args.vllm_colocation > 1:
+                    # Create subgroups of ranks for TP, each group with `vllm_colocation` ranks.
+                    # For example, if world_size=8 and vllm_colocation=2 → groups: [0,1], [2,3], [4,5], [6,7]
+                    self.tp_group, _  = torch.distributed.new_subgroups_by_enumeration(
+                        [
+                            list(range(i*self.args.vllm_colocation, (i+1) * self.args.vllm_colocation)) 
+                            for i in range(self.accelerator.num_processes // self.args.vllm_colocation)
+                        ]
+                    )
+
                 self.llm = LLM(
                     model=model.name_or_path,
-                    device=f"{device_type}:{self.accelerator.process_index}"  ,
+                    # device=f"{device_type}:{self.accelerator.process_index}", # ToDo: we do not need to set the device
+                    tensor_parallel_size=args.vllm_colocation, 
+                    enable_sleep_mode=self.args.vllm_sleep_enabled,
                     gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+                    # max_num_seqs=self.args.per_device_train_batch_size * self.args.vllm_colocation, # ToDo: this should be multiplied by gradient_accumulation_steps 
                     max_model_len=self.args.vllm_max_model_len,
                     distributed_executor_backend="external_launcher",
-                    seed=0
+                    seed=int(os.getenv("RANK", "0")) // self.args.vllm_colocation, # feed identical seed for tp groups
                 )
+
             elif self.accelerator.is_main_process:
                 self.vllm_client = VLLMClient(
                     args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
@@ -865,6 +887,9 @@ class GRPOTrainer(Trainer):
                     name = name.replace("modules_to_save.default.", "")
 
                     if self.args.vllm_colocation:
+                        if self.args.vllm_sleep_enabled:
+                            torch.cuda.empty_cache() 
+                            self.llm.wake_up()
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(name,param.data)])
                     elif self.accelerator.is_main_process:
@@ -878,6 +903,9 @@ class GRPOTrainer(Trainer):
             for name, param in self.model.named_parameters():
                 with gather_if_zero3([param]):
                     if self.args.vllm_colocation:
+                        if self.args.vllm_sleep_enabled:
+                            torch.cuda.empty_cache() 
+                            self.llm.wake_up()
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(name,param.data)])
                     elif self.accelerator.is_main_process:
@@ -948,6 +976,10 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             if self.args.vllm_colocation:
+                # ToDo: we may not need to wake up here anymore as model update is always called before each generation
+                if self.args.vllm_sleep_enabled:
+                    torch.cuda.empty_cache() 
+                    self.llm.wake_up()
                 sampling_params = SamplingParams(
                     n=1, # vLLM on each GPU generates only 1 in vllm_colocation mode
                     repetition_penalty=self.repetition_penalty,
@@ -958,11 +990,29 @@ class GRPOTrainer(Trainer):
                     max_tokens=self.max_completion_length,
                     guided_decoding=GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex) if self.guided_decoding_regex else None,
                 )
+                if self.args.vllm_colocation > 1:
+                    # Gather prompts from all ranks in the TP group and flatten.
+                    # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
+                    orig_size = len(prompts_text)
+                    gathered_prompts = [None for _ in range(self.args.vllm_colocation)]
+                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
+                    prompts_text = [p for sublist in gathered_prompts for p in sublist]
+
                 all_outputs = self.llm.generate(
                     prompts_text, sampling_params=sampling_params, use_tqdm=False
                 )
+                self.llm.sleep(level=2) # going back to sleep to free memory for training
+                torch.cuda.empty_cache() 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
+
+                if self.args.vllm_colocation > 1:
+                    # Slice completions for this rank within its TP group.
+                    # Each rank generates all outputs — we keep only our share.
+                    local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
+                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                    completion_ids = completion_ids[tp_slice]
+
+            # Generate completions using vLLM server: gather all prompts and use them in a single call in the main process
             else:
                 all_prompts_text = gather_object(prompts_text)
                 if self.accelerator.is_main_process:
