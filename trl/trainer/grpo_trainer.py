@@ -872,7 +872,7 @@ class GRPOTrainer(Trainer):
     ) -> dict[str, Union[torch.Tensor, Any]]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
         # During training:
-        #   - Receives the accumulated local batch (Per-GPU batch size × Steps per generation)
+        #   - Receives the accumulated local batch (Per-GPU batch size × num minibatches)
         #     from the modified training dataloader instead of the standard local batch
         #   - Generates completions once for the entire accumulated batch and splits it into smaller batches
         #   - Buffers these completions and returns the appropriate slice for the current accumulation step
