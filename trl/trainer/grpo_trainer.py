@@ -553,7 +553,7 @@ class GRPOTrainer(Trainer):
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
                 temperature=self.temperature,
-                use_ref_model=self.ref_model is not None,
+                use_ref_model=self.beta != 0.0,
                 loss_type=self.loss_type,
                 max_completion_length=self.max_completion_length,
             )
