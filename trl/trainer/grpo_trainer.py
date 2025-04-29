@@ -1001,8 +1001,9 @@ class GRPOTrainer(Trainer):
                 all_outputs = self.llm.generate(
                     prompts_text, sampling_params=sampling_params, use_tqdm=False
                 )
-                self.llm.sleep(level=2) # going back to sleep to free memory for training
-                torch.cuda.empty_cache() 
+                if self.args.vllm_sleep_enabled:
+                    self.llm.sleep(level=2) # going back to sleep to free memory for training
+                    torch.cuda.empty_cache() 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
                 if self.args.vllm_colocation > 1:
