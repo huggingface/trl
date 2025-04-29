@@ -18,7 +18,7 @@ from typing import Optional, Union
 import transformers
 from packaging import version
 from transformers import TrainingArguments
-from trl.trainer.utils import exact_div
+
 
 @dataclass
 class GRPOConfig(TrainingArguments):
@@ -232,9 +232,7 @@ class GRPOConfig(TrainingArguments):
     )
     num_minibatches: Optional[int] = field(
         default=None,
-        metadata={
-            "help": "The number of minibatches to generate, defaults to 'gradient_accumulation_steps'."
-        },
+        metadata={"help": "The number of minibatches to generate, defaults to 'gradient_accumulation_steps'."},
     )
     # Parameters that control generation
     temperature: float = field(
@@ -422,16 +420,16 @@ class GRPOConfig(TrainingArguments):
 
     def __post_init__(self):
         super().__post_init__()
-        
+
         # The current default effective batch size
         if self.num_minibatches is None:
             self.num_minibatches = self.gradient_accumulation_steps
-        
+
         if self.num_minibatches < self.gradient_accumulation_steps:
             raise ValueError(
                 f"steps_per_generation ({self.num_minibatches}) must be greater than or equal to gradient_accumulation_steps ({self.gradient_accumulation_steps})."
             )
-        
+
         if self.num_minibatches % self.gradient_accumulation_steps != 0:
             raise ValueError(
                 f"steps_per_generation ({self.num_minibatches}) must be divisible by gradient_accumulation_steps ({self.gradient_accumulation_steps})."
