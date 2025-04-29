@@ -2,3 +2,4 @@
 wandb
 jupyter
 ipykernel
+ninja
