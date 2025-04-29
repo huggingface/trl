@@ -837,7 +837,7 @@ class GRPOTrainer(Trainer):
             gather_if_zero3 = deepspeed.zero.GatheredParameters
         else:
             gather_if_zero3 = nullcontext
-        
+
         fsdp_summon_full_params = (
             partial(FSDP.summon_full_params, recurse=True) if self.is_fsdp_enabled else nullcontext
         )
