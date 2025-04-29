@@ -588,7 +588,7 @@ class GRPOTrainer(Trainer):
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
-        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.gradient_accumulation_steps
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.num_mini_batches
         self._textual_logs = {
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
@@ -602,14 +602,14 @@ class GRPOTrainer(Trainer):
                 f"{self.num_generations}, which is less than the minimum required."
             )
         num_processes = self.accelerator.num_processes
-        effective_batch_size = args.per_device_train_batch_size * num_processes * args.gradient_accumulation_steps
+        effective_batch_size = args.per_device_train_batch_size * num_processes * args.num_mini_batches
         possible_values = [
             n_gen for n_gen in range(2, effective_batch_size + 1) if (effective_batch_size) % n_gen == 0
         ]
         if self.num_generations not in possible_values:
             raise ValueError(
                 f"The effective train batch size ({num_processes} x {args.per_device_train_batch_size} x "
-                f"{args.gradient_accumulation_steps}) must be evenly divisible by the number of generations per "
+                f"{args.num_mini_batches}) must be evenly divisible by the number of generations per "
                 f"prompt ({self.num_generations}). Given the current effective train batch size, the valid values for "
                 f"the number of generations are: {possible_values}."
             )
@@ -702,9 +702,9 @@ class GRPOTrainer(Trainer):
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch, our dataloader loads an *accumulated* batch
-    # (i.e., `per_device_batch_size × gradient_accumulation_steps`). This allows us to generate completions
+    # (i.e., `per_device_batch_size × num_mini_batches`). This allows us to generate completions
     # once per optimization step—rather than once per gradient accumulation step—which is significantly more efficient.
-    # The only change from the original implementation is multiplying the batch size by `gradient_accumulation_steps`.
+    # The only change from the original implementation is multiplying the batch size by `num_mini_batches`.
     # Thus, `_prepare_inputs` is called with the accumulated batch size, and it handles the splitting internally.
     # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
     # modification.As a result, some parts of the method aren't relevant to GRPO, but we keep them to stay one line
@@ -721,7 +721,7 @@ class GRPOTrainer(Trainer):
             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
 
         dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.gradient_accumulation_steps,  # < this is the change
+            "batch_size": self._train_batch_size * self.args.num_mini_batches,  # < this is the change
             "collate_fn": data_collator,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
@@ -895,7 +895,7 @@ class GRPOTrainer(Trainer):
         #     from the modified training dataloader instead of the standard local batch
         #   - Generates completions once for the entire accumulated batch and splits it into smaller batches
         #   - Buffers these completions and returns the appropriate slice for the current accumulation step
-        #   - Optimizes by regenerating completions only periodically (every gradient_accumulation_steps * num_iterations)
+        #   - Optimizes by regenerating completions only periodically (every num_mini_batches * num_iterations)
         # During evaluation:
         #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
         #   - Completions are generated for each batch without buffering or reuse
