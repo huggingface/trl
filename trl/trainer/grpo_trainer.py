@@ -218,9 +218,8 @@ def split_tensor_dict(
         for i in range(num_chunks)
     ]
 
-def shuffle_tensor_dict(
-    tensor_dict: dict[str, Optional[torch.Tensor]]
-) -> dict[str, Optional[torch.Tensor]]:
+
+def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[str, Optional[torch.Tensor]]:
     """
     Shuffles a dictionary of tensors along the first dimension in unison.
 
@@ -236,10 +235,7 @@ def shuffle_tensor_dict(
 
     permutation = torch.randperm(batch_size)
 
-    return {
-        key: tensor[permutation] if tensor is not None else None
-        for key, tensor in tensor_dict.items()
-    }
+    return {key: tensor[permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
 
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
