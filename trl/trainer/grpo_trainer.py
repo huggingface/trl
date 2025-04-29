@@ -18,6 +18,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
+from functools import partial
 from typing import Any, Callable, Optional, Union
 
 import datasets
@@ -44,16 +45,16 @@ from transformers import (
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available
-from functools import partial
+
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_deepspeed_available, is_liger_kernel_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
-    _ForwardRedirection,
     disable_dropout_in_model,
     generate_model_card,
     get_comet_experiment_url,
@@ -834,7 +835,9 @@ class GRPOTrainer(Trainer):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         gather_if_zero3 = deepspeed.zero.GatheredParameters if zero_stage_3 else nullcontext
-        fsdp_summon_full_params = partial(FSDP.summon_full_params, recurse=True) if self.is_fsdp_enabled else nullcontext
+        fsdp_summon_full_params = (
+            partial(FSDP.summon_full_params, recurse=True) if self.is_fsdp_enabled else nullcontext
+        )
 
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
