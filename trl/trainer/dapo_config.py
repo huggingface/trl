@@ -412,3 +412,17 @@ class DAPOConfig(TrainingArguments):
             "all prompts are logged."
         },
     )
+    use_soft_overlong_punishment: Optional[bool] = field(
+        default=True,
+        metadata={
+            "help": "A length-aware penalty mechanism designed to shape the reward for truncated samples. According to the "
+            "[DAPO](https://huggingface.co/papers/2503.14476) paper, this signals to the model to avoid excessively long responses."
+        },
+    )
+    soft_punish_cache: Optional[int] = field(
+        default=0,
+        metadata={
+            "help": "The L_cache term in the soft overlong punishnment calculation. This term determines how close"
+            "to the max completion length a response can get before being penalized."
+        },
+    )

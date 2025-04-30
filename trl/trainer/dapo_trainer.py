@@ -18,8 +18,8 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
-from typing import Any, Callable, Optional, Union
-
+from typing import Any, Callable, Optional, Union, List, Dict
+from functools import update_wrapper, partial
 import datasets
 import torch
 import torch.utils.data
@@ -50,7 +50,7 @@ from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_rich_available, is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
-from .grpo_config import GRPOConfig
+from .dapo_config import DAPOConfig
 from .utils import (
     disable_dropout_in_model,
     generate_model_card,
@@ -249,6 +249,21 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     return torch.max(tensor[~torch.isnan(tensor)])
 
 
+def soft_overlong_punishment(
+    completions: List[List[Dict[str, Any]]], L_cache: int, L_max: int, **kwargs: Any
+) -> List[float]:
+    rewards = []
+    for completion in completions:
+        completion_length = len(completion)
+        if completion_length <= L_max - L_cache:
+            rewards.append(0)
+        elif L_max - L_cache < completion_length <= L_max:
+            rewards.append((L_max - L_cache - completion_length) / L_cache)
+        else:
+            rewards.append(-1)
+    return rewards
+
+
 class DAPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -349,7 +364,7 @@ class DAPOTrainer(Trainer):
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        args: Optional[GRPOConfig] = None,
+        args: Optional[DAPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -362,7 +377,7 @@ class DAPOTrainer(Trainer):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
-            args = GRPOConfig(f"{model_name}-GRPO")
+            args = DAPOConfig(f"{model_name}-DAPO")
 
         # Models
         # Trained model
@@ -377,7 +392,7 @@ class DAPOTrainer(Trainer):
                 model_init_kwargs["torch_dtype"] = torch_dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
+                    "Invalid `torch_dtype` passed to `DAPOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
@@ -389,7 +404,7 @@ class DAPOTrainer(Trainer):
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 raise ValueError(
-                    "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `DAPOConfig`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
 
@@ -442,6 +457,21 @@ class DAPOTrainer(Trainer):
                 self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
             else:
                 self.reward_func_names.append(reward_funcs[i].__name__)
+
+        # Apply soft overlong punhishment
+        if self.args.use_soft_overlong_punishment:
+            reward_funcs.append(
+                update_wrapper(
+                    partial(
+                        soft_overlong_punishment,
+                        L_cache=self.args.soft_punish_cache,
+                        L_max=self.args.max_completion_length,
+                    ),
+                    soft_overlong_punishment,
+                )
+            )
+            self.reward_func_names.append(soft_overlong_punishment.__name__)
+
         self.reward_funcs = reward_funcs
 
         # Reward weights
@@ -765,7 +795,7 @@ class DAPOTrainer(Trainer):
             seed=self.args.seed,
         )
 
-    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
+    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: DAPOConfig) -> PreTrainedModel:
         """Enables gradient checkpointing for the model."""
         # Ensure use_cache is disabled
         model.config.use_cache = False
