@@ -422,7 +422,16 @@ class DAPOConfig(TrainingArguments):
     soft_punish_cache: Optional[int] = field(
         default=0,
         metadata={
-            "help": "The L_cache term in the soft overlong punishnment calculation. This term determines how close"
+            "help": "The L_cache term in the soft overlong punishnment calculation. According to the "
+            "[DAPO](https://huggingface.co/papers/2503.14476) paper, this term determines how close"
             "to the max completion length a response can get before being penalized."
         },
     )
+    use_dynamic_sampling: Optional[bool] = field(
+        default=True,
+        metadata={
+            "help": "Whether to use dynamic sampling to filter out prompts that have zero variance from the "
+            "[DAPO](https://huggingface.co/papers/2503.14476) paper."
+        },
+    )
+    

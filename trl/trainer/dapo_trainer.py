@@ -920,6 +920,8 @@ class DAPOTrainer(Trainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
+                if len(accumulated_local_batch) == 0:
+                    return {}
                 self._buffered_inputs = split_tensor_dict(
                     accumulated_local_batch, self.args.gradient_accumulation_steps
                 )
@@ -1104,6 +1106,17 @@ class DAPOTrainer(Trainer):
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
 
+        if mode == "train" and self.args.use_dynamic_sampling and self.num_generations > 1:
+            mask = std_grouped_rewards > 0  # [B]
+            mean_grouped_rewards = mean_grouped_rewards[mask]
+            std_grouped_rewards = std_grouped_rewards[mask]
+            rewards = rewards[mask]
+            prompts = [prompts[i] for i in range(len(prompts)) if mask[i]]
+            completions = [completions[i] for i in range(len(completions)) if mask[i]]
+
+        if mean_grouped_rewards.size(0) == 0:
+            return {}
+
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
@@ -1276,10 +1289,12 @@ class DAPOTrainer(Trainer):
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
         inputs = self._prepare_inputs(inputs)
-        with torch.no_grad():
-            with self.compute_loss_context_manager():
-                loss = self.compute_loss(model, inputs)
-            loss = loss.mean().detach()
+        loss = torch.tensor(0.0, device=self.accelerator.device, requires_grad=True)
+        if len(inputs) > 0:
+            with torch.no_grad():
+                with self.compute_loss_context_manager():
+                    loss = self.compute_loss(model, inputs)
+                loss = loss.mean().detach()
         return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
