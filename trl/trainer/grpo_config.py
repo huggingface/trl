@@ -61,8 +61,8 @@ class GRPOConfig(TrainingArguments):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
-        num_mini_batches: (`int`, *optional*, defaults to `None`):
-            The number of mini-batches to split a batch into. If `None`, the value of [`GRPOConfig.gradient_accumulation_steps`] will be used.
+        generation_batch_size: (`int`, *optional*, defaults to `None`):
+            The size of the generation batch. If set to `auto`, it will be set to the effective batch size per_device_train_batch_size * num_processes * gradient_accumulation_steps
 
         > Parameters that control generation
 
@@ -233,7 +233,7 @@ class GRPOConfig(TrainingArguments):
     generation_batch_size: str | int = field(
         default="auto",
         metadata={
-            "help": "The size of the generation batch. If set to `auto`, it will be set to the effective batch size (num_processes * "
+            "help": "The size of the generation batch. If set to `auto`, it will be set to the effective batch size per_device_train_batch_size * num_processes * gradient_accumulation_steps"
         },
     )
     # Parameters that control generation
