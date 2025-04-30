@@ -319,12 +319,6 @@ class GRPOConfig(TrainingArguments):
             "help": "This parameter is used control the GPU memory utilization for vLLM in colocation mode."
         },
     )
-    vllm_max_model_len: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is used to control model length for the vLLM in colocation mode"
-        },
-    )
 
     # Parameters that control the training
     learning_rate: float = field(

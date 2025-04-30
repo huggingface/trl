@@ -640,11 +640,10 @@ class GRPOTrainer(Trainer):
 
                 self.llm = LLM(
                     model=model.name_or_path,
-                    # device=f"{device_type}:{self.accelerator.process_index}", # ToDo: we do not need to set the device
                     tensor_parallel_size=args.vllm_colocation, 
                     gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
-                    # max_num_seqs=self.args.per_device_train_batch_size * self.args.vllm_colocation, # ToDo: this should be multiplied by gradient_accumulation_steps 
-                    max_model_len=self.args.vllm_max_model_len,
+                    max_num_seqs=self.args.per_device_train_batch_size * self.args.vllm_colocation * self.args.gradient_accumulation_steps,
+                    max_model_len=self.args.max_prompt_length + self.args.max_completion_length,
                     distributed_executor_backend="external_launcher",
                     seed=int(os.getenv("RANK", "0")) // self.args.vllm_colocation, # feed identical seed for tp groups
                 )
@@ -918,6 +917,9 @@ class GRPOTrainer(Trainer):
         else:
             gather_if_zero3 = nullcontext
 
+        if self.args.vllm_colocation:
+            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+
         if is_peft_model(self.model):
             # With PEFT and DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
             # adapters in a sharded manner is not supported.
@@ -936,7 +938,6 @@ class GRPOTrainer(Trainer):
                     name = name.replace("modules_to_save.default.", "")
 
                     if self.args.vllm_colocation:
-                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(name,param.data)])
                     elif self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
@@ -949,7 +950,6 @@ class GRPOTrainer(Trainer):
             for name, param in self.model.named_parameters():
                 with gather_if_zero3([param]):
                     if self.args.vllm_colocation:
-                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(name,param.data)])
                     elif self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
