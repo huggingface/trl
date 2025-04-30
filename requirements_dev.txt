@@ -3,3 +3,4 @@ wandb
 jupyter
 ipykernel
 ninja
+hf_transfer

@@ -59,6 +59,9 @@ from .utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
 )
+import logging
+
+logger = logging.get_logger(__name__)
 
 
 if is_peft_available():
@@ -460,17 +463,17 @@ class DAPOTrainer(Trainer):
 
         # Apply soft overlong punhishment
         if self.args.use_soft_overlong_punishment:
-            reward_funcs.append(
-                update_wrapper(
-                    partial(
-                        soft_overlong_punishment,
-                        L_cache=self.args.soft_punish_cache,
-                        L_max=self.args.max_completion_length,
-                    ),
+            logger.info("Using soft overlong punishment")
+            fn = update_wrapper(
+                partial(
                     soft_overlong_punishment,
-                )
+                    L_cache=self.args.soft_punish_cache,
+                    L_max=self.args.max_completion_length,
+                ),
+                soft_overlong_punishment,
             )
-            self.reward_func_names.append(soft_overlong_punishment.__name__)
+            reward_funcs.append(fn)
+            self.reward_func_names.append(fn.__name__)
 
         self.reward_funcs = reward_funcs
 
