@@ -1315,9 +1315,15 @@ class DAPOTrainer(Trainer):
             mask = std_grouped_rewards > 0  # [B]
             mean_grouped_rewards = mean_grouped_rewards[mask]
             std_grouped_rewards = std_grouped_rewards[mask]
-            rewards = rewards[mask]
+            group_mask = torch.repeat_interleave(mask, repeats=self.num_generations)
+            rewards = rewards[group_mask]
             prompts = [prompts[i] for i in range(len(prompts)) if mask[i]]
             completions = [completions[i] for i in range(len(completions)) if mask[i]]
+            prompt_ids = prompt_ids[mask]
+            prompt_mask = prompt_mask[mask]
+            completion_ids = completion_ids[mask]
+            completion_mask = completion_mask[mask]
+            is_eos = is_eos[mask]
 
         if mean_grouped_rewards.size(0) == 0:
             return {}
@@ -1456,6 +1462,8 @@ class DAPOTrainer(Trainer):
     def compute_loss(
         self, model, inputs, return_outputs=False, num_items_in_batch=None
     ):
+        if len(inputs) == 0:
+            return torch.tensor(0.0, device=self.accelerator.device, requires_grad=True)
         if return_outputs:
             raise ValueError("The DAPOTrainer does not support returning outputs")
         if self.use_liger_loss:
@@ -1571,12 +1579,10 @@ class DAPOTrainer(Trainer):
         ignore_keys: Optional[list[str]] = None,
     ):
         inputs = self._prepare_inputs(inputs)
-        loss = torch.tensor(0.0, device=self.accelerator.device, requires_grad=True)
-        if len(inputs) > 0:
-            with torch.no_grad():
-                with self.compute_loss_context_manager():
-                    loss = self.compute_loss(model, inputs)
-                loss = loss.mean().detach()
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+            loss = loss.mean().detach()
         return loss, None, None
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
