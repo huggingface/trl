@@ -576,7 +576,6 @@ class GRPOTrainer(Trainer):
             "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
         }
 
-
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
         # it's safer to set it in all cases.
@@ -713,7 +712,7 @@ class GRPOTrainer(Trainer):
         #                        2          4     [6   6   7   7   8   8]  9   9  10  10  11  11    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
         #                        2          5      6   6   7   7   8   8 [ 9   9  10  10  11  11]   <- ...
         #                                            ...
- 
+
         return RepeatSampler(
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
