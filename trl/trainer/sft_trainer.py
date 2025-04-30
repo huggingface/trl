@@ -340,7 +340,7 @@ class SFTTrainer(Trainer):
             if self.completion_only_loss and formatting_func:
                 raise ValueError(
                     "A formatting function was provided while `completion_only_loss=True`, which is incompatible. "
-                    "The formatter converts the dataset to a language modeling type, conflicting with completion-only loss. "
+                    "Using a formatter converts the dataset to a language modeling type, conflicting with completion-only loss. "
                     "To resolve this, apply your formatting function before passing the dataset, or disable "
                     "`completion_only_loss` in `SFTConfig`. "
                 )
