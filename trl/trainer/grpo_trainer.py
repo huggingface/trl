@@ -16,8 +16,8 @@ import os
 import textwrap
 import warnings
 from collections import defaultdict, deque
-from collections.abc import Generator, Sized
-from contextlib import contextmanager, nullcontext
+from collections.abc import Sized
+from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
 
 import datasets
