@@ -643,7 +643,7 @@ class GRPOTrainer(Trainer):
                     tensor_parallel_size=args.vllm_colocation, 
                     gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
                     max_num_seqs=self.args.per_device_train_batch_size * self.args.vllm_colocation * self.args.gradient_accumulation_steps,
-                    max_model_len=self.args.max_prompt_length + self.args.max_completion_length,
+                    max_model_len=self.args.max_prompt_length + self.args.max_completion_length, # if dataset has prompt larger than max_len, an error might occur
                     distributed_executor_backend="external_launcher",
                     seed=int(os.getenv("RANK", "0")) // self.args.vllm_colocation, # feed identical seed for tp groups
                 )
