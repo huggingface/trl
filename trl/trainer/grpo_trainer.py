@@ -404,8 +404,6 @@ class GRPOTrainer(Trainer):
         if args.gradient_checkpointing:
             model = self._enable_gradient_checkpointing(model, args)
 
-        self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
-
         # Reference model
         self.beta = args.beta
         if self.beta == 0.0:
