@@ -645,7 +645,6 @@ class GRPOTrainer(Trainer):
                     model=model.name_or_path,
                     # device=f"{device_type}:{self.accelerator.process_index}", # ToDo: we do not need to set the device
                     tensor_parallel_size=args.vllm_colocation, 
-                    enable_sleep_mode=self.args.vllm_sleep_enabled,
                     gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
                     # max_num_seqs=self.args.per_device_train_batch_size * self.args.vllm_colocation, # ToDo: this should be multiplied by gradient_accumulation_steps 
                     max_model_len=self.args.vllm_max_model_len,
