@@ -227,8 +227,13 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
         >>> x = torch.arange(6).reshape(3, 2)
         >>> y = torch.arange(3).reshape(3, 1)
         >>> tensor_dict = {"x": x, "y": y}
-        >>> shuffled = shuffle_tensor_dict(tensor_dict)
-        >>> # x and y are shuffled along the first dimension consistently.
+        >>> shuffle_tensor_dict(tensor_dict)
+        {'x': tensor([[2, 3],
+                      [0, 1],
+                      [4, 5]]),
+         'y': tensor([[1],
+                      [0],
+                      [2]])}
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     batch_size = first_tensor.shape[0]
