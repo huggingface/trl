@@ -266,8 +266,8 @@ def soft_overlong_punishment(
 
 class DAPOTrainer(Trainer):
     """
-    Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
-    paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300).
+    Trainer for the Decoupled Clip and Dynamic sAmpling Policy Optimization (DAPO) method. This algorithm was initially proposed in the
+    paper [DAPO: an Open-Source LLM Reinforcement Learning System at Scale](https://arxiv.org/pdf/2503.14476).
 
     Example:
 
@@ -320,7 +320,7 @@ class DAPOTrainer(Trainer):
                   [Using a custom reward function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
-        args ([`GRPOConfig`], *optional*, defaults to `None`):
+        args ([`DAPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
@@ -358,7 +358,7 @@ class DAPOTrainer(Trainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
-    _tag_names = ["trl", "grpo"]
+    _tag_names = ["trl", "dapo"]
 
     def __init__(
         self,
@@ -507,7 +507,7 @@ class DAPOTrainer(Trainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Data collator
-        def data_collator(features):  # No data collation is needed in GRPO
+        def data_collator(features):  # No data collation is needed in DAPO
             return features
 
         # Training arguments
@@ -561,7 +561,7 @@ class DAPOTrainer(Trainer):
         if self.use_liger_loss:
             if not is_liger_kernel_available():
                 raise ImportError(
-                    "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
+                    "Liger is required to use `liger_loss` as the DAPO loss. Run `pip install liger-kernel`."
                 )
             if is_peft_model(model):
                 raise TypeError("Liger loss is not supported with a PEFT model.")
@@ -572,7 +572,7 @@ class DAPOTrainer(Trainer):
                     "only supports `bnpo` for now."
                 )
 
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
+            self.liger_dapo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
                 epsilon_low=self.epsilon_low,
                 epsilon_high=self.epsilon_high,
@@ -609,7 +609,7 @@ class DAPOTrainer(Trainer):
         # Check if the effective batch size can be divided by the number of generations
         if self.num_generations < 2:
             raise ValueError(
-                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                "DAPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
         num_processes = self.accelerator.num_processes
@@ -1190,8 +1190,8 @@ class DAPOTrainer(Trainer):
         # get the last hidden state of the model
         last_hidden_state = self._get_last_hidden_state(model, input_ids, attention_mask, logits_to_keep)
         unwrapped_model = self.accelerator.unwrap_model(model)
-        # compute loss and metrics using liger grpo loss
-        loss, metrics = self.liger_grpo_loss(
+        # compute loss and metrics using liger dapo loss
+        loss, metrics = self.liger_dapo_loss(
             _input=last_hidden_state,
             lin_weight=unwrapped_model.lm_head.weight,
             selected_token_ids=completion_ids,
@@ -1201,7 +1201,7 @@ class DAPOTrainer(Trainer):
             ref_per_token_logps=inputs["ref_per_token_logps"],
             old_per_token_logps=inputs["old_per_token_logps"],
         )
-        # Extract metrics from the liger_grpo_loss output
+        # Extract metrics from the liger_dapo_loss output
         # KL divergence is the first metric when beta is non-zero
         mean_kl = metrics[0] if self.beta != 0.0 else None
         clip_ratio = metrics[-1]
@@ -1388,10 +1388,10 @@ class DAPOTrainer(Trainer):
             tags=tags,
             wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
-            trainer_name="GRPO",
+            trainer_name="DAPO",
             trainer_citation=citation,
-            paper_title="DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
-            paper_id="2402.03300",
+            paper_title="DAPO: an Open-Source LLM Reinforcement Learning System at Scale",
+            paper_id="2503.14476",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))

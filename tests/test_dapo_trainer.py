@@ -24,7 +24,7 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import DAPOConfig, DAPOTrainer
-from trl.trainer.grpo_trainer import RepeatSampler
+from trl.trainer.dapo_trainer import RepeatSampler
 
 from .testing_utils import require_vllm
 

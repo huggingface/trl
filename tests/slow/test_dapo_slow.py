@@ -44,7 +44,7 @@ class DAPOTrainerSlowTester(unittest.TestCase):
 
     @parameterized.expand(MODELS_TO_TEST)
     @require_liger_kernel
-    def test_training_with_liger_grpo_loss(self, model_name):
+    def test_training_with_liger_dapo_loss(self, model_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DAPOConfig(
                 output_dir=tmp_dir,
@@ -70,7 +70,7 @@ class DAPOTrainerSlowTester(unittest.TestCase):
             )
             from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-            assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+            assert isinstance(trainer.liger_dapo_loss, LigerFusedLinearGRPOLoss)
 
             previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 

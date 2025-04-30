@@ -129,7 +129,7 @@ setup(
     zip_safe=False,
     version=__version__,
     description="Train transformer language models with reinforcement learning.",
-    keywords="transformers, huggingface, language modeling, post-training, rlhf, sft, dpo, grpo",
+    keywords="transformers, huggingface, language modeling, post-training, rlhf, sft, dpo, grpo, dapo",
     author="Leandro von Werra",
     author_email="leandro.vonwerra@gmail.com",
 )

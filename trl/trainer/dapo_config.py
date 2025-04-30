@@ -25,7 +25,7 @@ class DAPOConfig(TrainingArguments):
     r"""
     Configuration class for the [`DAPOTrainer`].
 
-    Only the parameters specific to GRPO training are listed here. For details on other parameters, refer to the
+    Only the parameters specific to DAPO training are listed here. For details on other parameters, refer to the
     [`~transformers.TrainingArguments`] documentation.
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
@@ -151,7 +151,7 @@ class DAPOConfig(TrainingArguments):
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use the Liger GRPO loss.
+            Whether to use the Liger DAPO loss.
 
         > Parameters that control the logging
 
@@ -390,7 +390,7 @@ class DAPOConfig(TrainingArguments):
     )
     use_liger_loss: bool = field(
         default=False,
-        metadata={"help": "Whether to use the Liger GRPO loss."},
+        metadata={"help": "Whether to use the Liger DAPO loss."},
     )
 
     # Parameters that control the logging

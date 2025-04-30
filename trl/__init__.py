@@ -16,7 +16,11 @@ __version__ = "0.18.0.dev0"
 
 from typing import TYPE_CHECKING
 
-from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
+from .import_utils import (
+    OptionalDependencyNotAvailable,
+    _LazyModule,
+    is_diffusers_available,
+)
 
 
 _import_structure = {
@@ -65,6 +69,8 @@ _import_structure = {
         "GKDTrainer",
         "GRPOConfig",
         "GRPOTrainer",
+        "DAPOConfig",
+        "DAPOTrainer",
         "HfPairwiseJudge",
         "IterativeSFTTrainer",
         "KTOConfig",
@@ -94,8 +100,16 @@ _import_structure = {
         "XPOConfig",
         "XPOTrainer",
     ],
-    "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
-    "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
+    "trainer.callbacks": [
+        "MergeModelCallback",
+        "RichProgressCallback",
+        "SyncRefModelCallback",
+    ],
+    "trainer.utils": [
+        "get_kbit_device_map",
+        "get_peft_config",
+        "get_quantization_config",
+    ],
 }
 
 try:
@@ -160,6 +174,8 @@ if TYPE_CHECKING:
         GKDTrainer,
         GRPOConfig,
         GRPOTrainer,
+        DAPOConfig,
+        DAPOTrainer,
         HfPairwiseJudge,
         IterativeSFTTrainer,
         KTOConfig,
@@ -190,7 +206,11 @@ if TYPE_CHECKING:
         XPOTrainer,
     )
     from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
-    from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
+    from .trainer.utils import (
+        get_kbit_device_map,
+        get_peft_config,
+        get_quantization_config,
+    )
 
     try:
         if not is_diffusers_available():
