@@ -18,7 +18,6 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Generator, Sized
 from contextlib import contextmanager, nullcontext
-from functools import partial
 from typing import Any, Callable, Optional, Union
 
 import datasets
@@ -889,37 +888,74 @@ class GRPOTrainer(Trainer):
         else:
             gather_if_zero3 = nullcontext
 
-        fsdp_summon_full_params = (
-            partial(FSDP.summon_full_params, recurse=True) if self.is_fsdp_enabled else nullcontext
-        )
+        def post_order_fsdp_processing(module: nn.Module, prefix: str = "", visited=None):
+            """memory-efficient module gather"""
+            extra_names = ["_fsdp_wrapped_module.", "_checkpoint_wrapped_module."]
+            if visited is None:
+                visited = set()
+
+            for child_name, child_module in module.named_children():
+                if prefix == "":
+                    child_prefix = child_name
+                else:
+                    child_prefix = f"{prefix}.{child_name}"
+
+                # Recurse into the child
+                post_order_fsdp_processing(child_module, prefix=child_prefix, visited=visited)
+
+            if isinstance(module, FSDP):
+                with FSDP.summon_full_params(module, recurse=False, writeback=False):
+                    for param_name, param in module.named_parameters():
+                        if prefix == "":
+                            full_name = param_name
+                        else:
+                            full_name = f"{prefix}.{param_name}"
+
+                        for extra in extra_names:
+                            full_name = full_name.replace(extra, "")
+
+                        if full_name in visited:
+                            # skip FSDP subtrees already traversed
+                            continue
+
+                        visited.add(full_name)
+
+                        if self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(full_name, param.data)
 
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
             # adapters in a sharded manner is not supported.
-            with gather_if_zero3(list(self.model.parameters())), fsdp_summon_full_params(self.model):
-                self.model.merge_adapter()
+            with gather_if_zero3(list(self.model.parameters())):
+                if self.is_fsdp_enabled:
+                    # Update vLLM weights while parameters are gathered
+                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
+                    self.model.merge_adapter()
+                    post_order_fsdp_processing(self.model)
+                    self.model.unmerge_adapter()
+                else:
+                    # DeepSpeed ZeRO-3 with PEFT (not using FSDP)
+                    self.model.merge_adapter()
+                    for name, param in self.model.named_parameters():
+                        # When using PEFT, we need to recover the original parameter name and discard some parameters
+                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        if self.model.prefix in name:
+                            continue
+                        # When module to save, remove its prefix and discard the original module
+                        if "original_module" in name:
+                            continue
+                        name = name.replace("modules_to_save.default.", "")
 
-                # Update vLLM weights while parameters are gathered
-                for name, param in self.model.named_parameters():
-                    # When using PEFT, we need to recover the original parameter name and discard some parameters
-                    name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                    if self.model.prefix in name:
-                        continue
-                    # When module to save, remove its prefix and discard the original module
-                    if "original_module" in name:
-                        continue
-                    name = name.replace("modules_to_save.default.", "")
-
-                    if self.accelerator.is_main_process:
-                        self.vllm_client.update_named_param(name, param.data)
-
-                # Unmerge adapters while parameters are still gathered
-                self.model.unmerge_adapter()
-                # Parameters will automatically be repartitioned when exiting the context
+                        if self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(name, param.data)
+                    self.model.unmerge_adapter()
         else:
-            # For non-PEFT models and DeepSpeed ZeRO-3, simply gather and update each parameter individually.
-            # For non-PEFT models and FSDP, we gather all parameters at once.
-            with fsdp_summon_full_params(self.model):
+            # For non-PEFT models
+            if self.is_fsdp_enabled:
+                # Use memory-efficient post-order traversal for FSDP
+                post_order_fsdp_processing(self.model)
+            elif zero_stage_3:
+                # For DeepSpeed ZeRO-3, simply gather and update each parameter individually
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
                         if self.accelerator.is_main_process:
