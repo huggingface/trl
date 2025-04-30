@@ -225,7 +225,7 @@ class SFTTrainer(Trainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         formatting_func (`Optional[Callable]`):
             Formatting function applied to the dataset before tokenization. Applying the formatting function explicitly converts
-            the dataset into a language modeling format.
+            the dataset into a language modeling type.
     """
 
     _tag_names = ["trl", "sft"]
@@ -339,10 +339,10 @@ class SFTTrainer(Trainer):
         if preprocess_dataset:
             if self.completion_only_loss and formatting_func:
                 raise ValueError(
-                    "You have passed a formatting function while completion_only_loss is True. "
-                    "This is not allowed because the formatting function converts the dataset into a language modeling format, "
-                    "which is incompatible with completion-only loss. The completion_only_loss is True either because "
-                    "you explicitly set it or because your dataset is in prompt-completion format."
+                    "A formatting function was provided while `completion_only_loss=True`, which is incompatible. "
+                    "The formatter converts the dataset to a language modeling type, conflicting with completion-only loss. "
+                    "To resolve this, apply your formatting function before passing the dataset, or disable "
+                    "`completion_only_loss` in `SFTConfig`. "
                 )
 
             train_dataset = self._prepare_dataset(
