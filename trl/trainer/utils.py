@@ -1684,6 +1684,50 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
         return mask, *tensors
 
 
+def flush_and_truncate(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    loss_mask: torch.Tensor,
+    max_length: int,
+    truncation_mode: str = "keep_start",
+):
+    _, L = attention_mask.shape
+
+    # 1) roll-flush
+    f = attention_mask.argmax(dim=1)
+    pos = torch.arange(L).unsqueeze(0)
+    idx_roll = (pos + f.unsqueeze(1)) % L
+    attn_roll = attention_mask.gather(1, idx_roll)
+    ids_roll = input_ids.gather(1, idx_roll)
+    loss_roll = loss_mask.gather(1, idx_roll)
+
+    # 2) global truncate of all-zero tail
+    col_sums = attn_roll.sum(dim=0)
+    empty_cols = col_sums == 0
+    first_empty = int(empty_cols.float().argmax()) if empty_cols.any() else L
+    attn_tr = attn_roll[:, :first_empty]
+    ids_tr = ids_roll[:, :first_empty]
+    loss_tr = loss_roll[:, :first_empty]
+
+    D = first_empty
+    if D > max_length:
+        if truncation_mode == "keep_end":
+            start = D - max_length
+        elif truncation_mode == "keep_start":
+            start = 0
+        else:
+            raise ValueError(
+                f"Unknown truncation mode: '{truncation_mode}'. Should be one of ['keep_end', 'keep_start']."
+            )
+        end = start + max_length
+
+        attn_tr = attn_tr[:, start:end]
+        ids_tr = ids_tr[:, start:end]
+        loss_tr = loss_tr[:, start:end]
+
+    return ids_tr, attn_tr, loss_tr
+
+
 def selective_log_softmax(logits, index):
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
