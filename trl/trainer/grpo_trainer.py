@@ -569,43 +569,13 @@ class GRPOTrainer(Trainer):
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
-        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.num_mini_batches
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args._steps_per_generation
         self._textual_logs = {
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
             "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
         }
 
-        # Check if the effective batch size can be divided by the number of generations
-        if self.num_generations < 2:
-            raise ValueError(
-                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
-                f"{self.num_generations}, which is less than the minimum required."
-            )
-        num_processes = self.accelerator.num_processes
-        effective_batch_size = args.per_device_train_batch_size * num_processes * args.num_mini_batches
-        possible_values = [
-            n_gen for n_gen in range(2, effective_batch_size + 1) if (effective_batch_size) % n_gen == 0
-        ]
-        if self.num_generations not in possible_values:
-            raise ValueError(
-                f"The effective train batch size ({num_processes} x {args.per_device_train_batch_size} x "
-                f"{args.num_mini_batches}) must be evenly divisible by the number of generations per "
-                f"prompt ({self.num_generations}). Given the current effective train batch size, the valid values for "
-                f"the number of generations are: {possible_values}."
-            )
-        if self.args.eval_strategy != "no":
-            effective_batch_size = args.per_device_eval_batch_size * num_processes
-            possible_values = [
-                n_gen for n_gen in range(2, effective_batch_size + 1) if (effective_batch_size) % n_gen == 0
-            ]
-            if self.num_generations not in possible_values:
-                raise ValueError(
-                    f"The effective eval batch size ({num_processes} x {args.per_device_eval_batch_size}) must be "
-                    f"evenly divisible by the number of generations per prompt ({self.num_generations}). Given the "
-                    "current effective eval batch size, the valid values for the number of generations are: "
-                    f"{possible_values}."
-                )
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
         # transformers if num_generations exceeds per_device_train_batch_size. We could skip it if we use vLLM, but
@@ -683,9 +653,9 @@ class GRPOTrainer(Trainer):
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch, our dataloader loads an *accumulated* batch
-    # (i.e., `per_device_batch_size × num_mini_batches`). This allows us to generate completions
+    # (i.e., `per_device_batch_size × steps_per_generation`). This allows us to generate completions
     # once per optimization step—rather than once per gradient accumulation step—which is significantly more efficient.
-    # The only change from the original implementation is multiplying the batch size by `num_mini_batches`.
+    # The only change from the original implementation is multiplying the batch size by `steps_per_generation`.
     # Thus, `_prepare_inputs` is called with the accumulated batch size, and it handles the splitting internally.
     # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
     # modification.As a result, some parts of the method aren't relevant to GRPO, but we keep them to stay one line
@@ -702,7 +672,7 @@ class GRPOTrainer(Trainer):
             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
 
         dataloader_params = {
-            "batch_size": self._train_batch_size * self.args.num_mini_batches,  # < this is the change
+            "batch_size": self._train_batch_size * self.args._steps_per_generation,  # < this is the change
             "collate_fn": data_collator,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
@@ -734,7 +704,7 @@ class GRPOTrainer(Trainer):
         #
         #                   global_step   step    <-───>  num_generations=2
         #                                         <-───────> per_device_train_batch_size=3
-        # num_mini_batches ▲  ▲  0          0     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
+        #  steps_per_gen   ▲  ▲  0          0     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
         #       =2         ▼  |  0          1      0   0   1   1   2   2 [ 3   3   4   4   5   5]   <- Take the stored generations and use the second slice to compute the loss
         #                     |
         #                     |  1          2     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Take the stored generations and use the first slice to compute the loss
@@ -743,14 +713,12 @@ class GRPOTrainer(Trainer):
         #                        2          4     [6   6   7   7   8   8]  9   9  10  10  11  11    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
         #                        2          5      6   6   7   7   8   8 [ 9   9  10  10  11  11]   <- ...
         #                                            ...
-        effective_batch_size = (
-            self.args.per_device_train_batch_size * self.accelerator.num_processes * self.args.num_mini_batches
-        )
+ 
         return RepeatSampler(
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
-            batch_size=effective_batch_size // self.num_generations,
-            repeat_count=self.num_iterations * self.args.num_mini_batches,
+            batch_size=self.args.generation_batch_size // self.num_generations,
+            repeat_count=self.num_iterations * self.args._steps_per_generation,
             shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
@@ -876,7 +844,7 @@ class GRPOTrainer(Trainer):
         #     from the modified training dataloader instead of the standard local batch
         #   - Generates completions once for the entire accumulated batch and splits it into smaller batches
         #   - Buffers these completions and returns the appropriate slice for the current accumulation step
-        #   - Optimizes by regenerating completions only periodically (every num_mini_batches * num_iterations)
+        #   - Optimizes by regenerating completions only periodically (every _steps_per_generation * num_iterations)
         # During evaluation:
         #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
         #   - Completions are generated for each batch without buffering or reuse
@@ -884,12 +852,12 @@ class GRPOTrainer(Trainer):
 
         mode = "train" if self.model.training else "eval"
         if mode == "train":
-            generate_every = self.args.num_mini_batches * self.num_iterations
+            generate_every = self.args._steps_per_generation * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
-                self._buffered_inputs = split_tensor_dict(accumulated_local_batch, self.args.num_mini_batches)
-            inputs = self._buffered_inputs[self._step % self.args.num_mini_batches]
+                self._buffered_inputs = split_tensor_dict(accumulated_local_batch, self.args._steps_per_generation)
+            inputs = self._buffered_inputs[self._step % self.args._steps_per_generation]
             self._step += 1
         else:
             # In evaluation, there is neither gradient accumulation, nor multiple iterations
@@ -988,10 +956,10 @@ class GRPOTrainer(Trainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         with torch.no_grad():
-            # When using num_iterations == 1 and num_mini_batches == gradient_accumulation_steps
+            # When using num_iterations == 1 and _steps_per_generation == gradient_accumulation_steps
             # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
             # per_token_logps.detach() instead.
-            if self.num_iterations > 1 or self.args.num_mini_batches != self.args.gradient_accumulation_steps:
+            if self.num_iterations > 1 or self.args._steps_per_generation != self.args.gradient_accumulation_steps:
                 old_per_token_logps = self._get_per_token_logps(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
