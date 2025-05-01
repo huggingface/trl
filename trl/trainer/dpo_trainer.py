@@ -1124,12 +1124,12 @@ class DPOTrainer(Trainer):
                     input_ids = input_ids[:, : self.max_length]
                     loss_mask = loss_mask[:, : self.max_length]
                 elif self.truncation_mode == "keep_end":
-                    lengths = attention_mask.sum(dim=1).long()  #  THINK
+                    lengths = attention_mask.sum(dim=1).int()
                     starts = (lengths - self.max_length).clamp(min=0)
                     idx = torch.arange(self.max_length, device=attention_mask.device).unsqueeze(0) + starts.unsqueeze(
                         1
                     )
-                    idx = idx.clamp(0, attention_mask.size(2) - 1)
+                    idx = idx.clamp(0, attention_mask.size(1) - 1)
 
                     attention_mask = attention_mask.gather(1, idx)
                     input_ids = input_ids.gather(1, idx)
