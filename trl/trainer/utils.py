@@ -1618,7 +1618,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
         experiment.log_table(tabular_data=table, filename=name)
 
 
-def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ..., int]:
     """
     Shift non-zero elements in the mask and corresponding tensors to the left.
 
@@ -1644,6 +1644,8 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
             Updated binary mask with non-zero values flushed to the left and trailing zero columns removed.
         `*torch.Tensor`
             Updated tensors, processed in the same way as the mask.
+        `int`:
+            the index of the first column in the *rolled* mask that was all-zero
 
     Example:
     ```python
@@ -1651,81 +1653,40 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
     ...                      [0, 1, 1, 0, 0]])
     >>> tensor = torch.tensor([[9, 9, 2, 3, 4],
     ...                        [9, 5, 6, 9, 9]])
-    >>> new_mask, new_tensor = flush_left(mask, tensor)
+    >>> new_mask, new_tensor, first_empty = flush_left(mask, tensor)
     >>> print(new_mask)
     tensor([[1, 1, 1],
             [1, 1, 0]])
     >>> print(new_tensor)
     tensor([[2, 3, 4],
             [5, 6, 0]])
+    >>> print(first_empty)
+    3
     ```
     """
+    _, M = mask.shape
+
     # Create copy of mask and tensors
     mask = mask.clone()
     tensors = [t.clone() for t in tensors]
 
     # Shift non-zero values to the left
-    for i in range(mask.size(0)):
-        first_one_idx = torch.nonzero(mask[i])[0].item()
-        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
-        for tensor in tensors:
-            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+    f = mask.argmax(dim=1)
+    pos = torch.arange(M).unsqueeze(0)
+    idx_roll = (pos + f.unsqueeze(1)) % M
+    mask_roll = mask.gather(1, idx_roll)
+    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
 
     # Get the first column idx that is all zeros and remove every column after that
-    empty_cols = torch.sum(mask, dim=0) == 0
-    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
-    mask = mask[:, :first_empty_col]
-    for i, tensor in enumerate(tensors):
-        tensors[i] = tensor[:, :first_empty_col]
-
-    if not tensors:
-        return mask
-    else:
-        return mask, *tensors
-
-
-def flush_and_truncate(
-    input_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
-    loss_mask: torch.Tensor,
-    max_length: int,
-    truncation_mode: str = "keep_start",
-):
-    _, L = attention_mask.shape
-
-    # 1) roll-flush
-    f = attention_mask.argmax(dim=1)
-    pos = torch.arange(L).unsqueeze(0)
-    idx_roll = (pos + f.unsqueeze(1)) % L
-    attn_roll = attention_mask.gather(1, idx_roll)
-    ids_roll = input_ids.gather(1, idx_roll)
-    loss_roll = loss_mask.gather(1, idx_roll)
-
-    # 2) global truncate of all-zero tail
-    col_sums = attn_roll.sum(dim=0)
+    col_sums = mask_roll.sum(dim=0)
     empty_cols = col_sums == 0
-    first_empty = int(empty_cols.float().argmax()) if empty_cols.any() else L
-    attn_tr = attn_roll[:, :first_empty]
-    ids_tr = ids_roll[:, :first_empty]
-    loss_tr = loss_roll[:, :first_empty]
+    first_empty = int(empty_cols.float().argmax()) if empty_cols.any() else M
+    flushed_mask = mask_roll[:, :first_empty]
+    flushed_tensors = [t[:, :first_empty] for t in rolled_tensors]
 
-    D = first_empty
-    if D > max_length:
-        if truncation_mode == "keep_end":
-            start = D - max_length
-        elif truncation_mode == "keep_start":
-            start = 0
-        else:
-            raise ValueError(
-                f"Unknown truncation mode: '{truncation_mode}'. Should be one of ['keep_end', 'keep_start']."
-            )
-        end = start + max_length
-
-        attn_tr = attn_tr[:, start:end]
-        ids_tr = ids_tr[:, start:end]
-        loss_tr = loss_tr[:, start:end]
-
-    return ids_tr, attn_tr, loss_tr
+    if not flushed_tensors:
+        return flushed_mask, first_empty
+    return flushed_mask, *flushed_tensors, first_empty
 
 
 def selective_log_softmax(logits, index):
