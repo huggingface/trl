@@ -20,6 +20,8 @@ from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl import (
+    AlphaPOConfig,
+    AlphaPOTrainer,
     BCOConfig,
     BCOTrainer,
     CPOConfig,
@@ -329,6 +331,36 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
             )
             trainer = ORPOTrainer(
+                model=model_id, args=training_args, train_dataset=dataset, processing_class=tokenizer
+            )
+            self.assertEqual(trainer.args.max_length, 256)
+            self.assertEqual(trainer.args.max_prompt_length, 64)
+            self.assertEqual(trainer.args.max_completion_length, 64)
+            self.assertEqual(trainer.args.beta, 0.5)
+            self.assertEqual(trainer.args.disable_dropout, False)
+            self.assertEqual(trainer.args.label_pad_token_id, -99)
+
+    def test_alphapo(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = AlphaPOConfig(
+                tmp_dir,
+                max_length=256,
+                max_prompt_length=64,
+                max_completion_length=64,
+                beta=0.5,
+                disable_dropout=False,
+                label_pad_token_id=-99,
+                padding_value=-99,
+                truncation_mode="keep_start",
+                # generate_during_eval=True, # ignore this one, it requires wandb
+                is_encoder_decoder=True,
+                model_init_kwargs={"trust_remote_code": True},
+                dataset_num_proc=4,
+            )
+            trainer = AlphaPOTrainer(
                 model=model_id, args=training_args, train_dataset=dataset, processing_class=tokenizer
             )
             self.assertEqual(trainer.args.max_length, 256)
