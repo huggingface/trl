@@ -20,6 +20,8 @@ from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffu
 _import_structure = {
     "alignprop_config": ["AlignPropConfig"],
     "alignprop_trainer": ["AlignPropTrainer"],
+    "alphapo_config": ["AlphaPOConfig"],
+    "alphapo_trainer": ["AlphaPOTrainer"],
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
     "callbacks": [
@@ -92,6 +94,8 @@ else:
 if TYPE_CHECKING:
     from .alignprop_config import AlignPropConfig
     from .alignprop_trainer import AlignPropTrainer
+    from .alphapo_config import AlphaPOConfig
+    from .alphapo_trainer import AlphaPOTrainer
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
     from .callbacks import (
