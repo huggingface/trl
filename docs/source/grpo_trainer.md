@@ -217,7 +217,7 @@ training_args = GRPOConfig(
 )
 ```
 
-<Tip warning={true}>
+<Tip>
 
 Depending on the model size and more generally on the GPU needed for training, you may need to adjust the #GRPOConfig.vllm_gpu_memory_utilization parameter to avoid under utilization or out-of-memory issues.
 
