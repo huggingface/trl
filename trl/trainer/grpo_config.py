@@ -212,7 +212,8 @@ class GRPOConfig(TrainingArguments):
     # additional columns to compute the reward
     remove_unused_columns: Optional[bool] = field(
         default=False,
-        metadata={"help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
+         metadata={
+            "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
             "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
         },
     )
