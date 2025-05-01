@@ -161,7 +161,7 @@ class GRPOConfig(TrainingArguments):
             [DAPO](https://huggingface.co/papers/2503.14476) paper, this is a good practice for training stability.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
-            the `ref_model_mixup_alpha` parameter. This synchronization originites from the
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
