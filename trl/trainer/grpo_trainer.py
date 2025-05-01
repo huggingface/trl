@@ -1069,7 +1069,9 @@ class GRPOTrainer(Trainer):
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
                     prompts_text = [p for sublist in gathered_prompts for p in sublist]
 
-                all_outputs = self.llm.generate(prompts_text, sampling_params=sampling_params, use_tqdm=False)
+                with profiling_context(self, "vLLM.generate"):
+                    all_outputs = self.llm.generate(prompts_text, sampling_params=sampling_params, use_tqdm=False)
+
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
                 if self.vllm_tensor_parallel_size > 1:
