@@ -631,21 +631,21 @@ class GRPOTrainer(Trainer):
                 self.vllm_client.init_communicator()
 
             elif self.vllm_mode == "colocate":
-                # Ensure vllm_tensor_parallel_size value is valid (at least 1)
-                assert self.args.vllm_tensor_parallel_size >= 1, "vllm_tensor_parallel_size must be greater than 0"
-                # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have the same number of ranks
-                assert self.accelerator.num_processes % self.args.vllm_tensor_parallel_size == 0, (
-                    f"TP size of vllm_tensor_parallel_size ({self.args.vllm_tensor_parallel_size}) must divide world size "
-                    f"({self.accelerator.num_processes}) evenly."
-                )
+                # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have
+                # the same number of ranks
+                if not self.accelerator.num_processes % self.vllm_tensor_parallel_size == 0:
+                    raise ValueError(
+                        f"vllm_tensor_parallel_size ({self.vllm_tensor_parallel_size}) must divide world size "
+                        f"({self.accelerator.num_processes}) evenly."
+                    )
 
-                if self.args.vllm_tensor_parallel_size > 1:
+                if self.vllm_tensor_parallel_size > 1:
                     # Create subgroups of ranks for TP, each group with `vllm_tensor_parallel_size` ranks.
                     # For example, if world_size=8 and vllm_tensor_parallel_size=2 → groups: [0,1], [2,3], [4,5], [6,7]
                     self.tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
                         [
-                            list(range(i * self.args.vllm_tensor_parallel_size, (i + 1) * self.args.vllm_tensor_parallel_size))
-                            for i in range(self.accelerator.num_processes // self.args.vllm_tensor_parallel_size)
+                            list(range(i * self.vllm_tensor_parallel_size, (i + 1) * self.vllm_tensor_parallel_size))
+                            for i in range(self.accelerator.num_processes // self.vllm_tensor_parallel_size)
                         ]
                     )
 
@@ -1019,7 +1019,7 @@ class GRPOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
-            # First, have main process load weights if needed
+            # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
