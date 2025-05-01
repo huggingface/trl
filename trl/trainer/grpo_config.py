@@ -65,7 +65,7 @@ class GRPOConfig(TrainingArguments):
         > Parameters that control generation
 
         generation_batch_size: (`int` or `None`, *optional*, defaults to `None`):
-            Batch size to use during generation. If `None`, it defaults to the effective training batch size:
+            Batch size to use for generation. If `None`, it defaults to the effective training batch size:
             `per_device_train_batch_size * num_processes * gradient_accumulation_steps`.
         temperature (`float`, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
@@ -236,8 +236,8 @@ class GRPOConfig(TrainingArguments):
     generation_batch_size: Optional[int] = field(
         default=None,
         metadata={
-            "help": "Size of the batch to use during generation. If `None`, it defaults to the effective training "
-            "batch size: `per_device_train_batch_size * num_processes * gradient_accumulation_steps`."
+            "help": "Batch size to use for generation. If `None`, it defaults to the effective training batch size: "
+            "`per_device_train_batch_size * num_processes * gradient_accumulation_steps`."
         },
     )
     temperature: float = field(
