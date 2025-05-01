@@ -170,25 +170,58 @@ A higher value means more tokens are clipped, which constrains how much the poli
 
 ### Speed up training with vLLM-powered generation
 
-Generation is often the main bottleneck that makes training slow with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a library that enables fast generation. To enable it, first install the package with
-
+Generation is often the main bottleneck when training with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a high-throughput, low-latency inference engine for LLMs. To enable it, first install the package with
 ```shell
 pip install trl[vllm]
 ```
 
-Then, start the vLLM server with the desired model:
+We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
-```bash
-trl vllm-serve --model <model_name>
-```
+#### 🔌 Option 1: Server mode
 
-Then, pass `use_vllm=True` in the training arguments and run the training script:
+In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
+
+1. **Start the vLLM server**:
+   ```bash
+   trl vllm-serve --model <model_name>
+   ```
+
+2. **Enable server mode in your training script**:
+   ```python
+   from trl import GRPOConfig
+
+   training_args = GRPOConfig(
+       ...,
+       use_vllm=True,
+       vllm_mode="server",  # default value, can be omitted
+   )
+   ```
+
+<Tip warning={true}>
+
+Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.
+
+</Tip>
+
+#### 🧩 Option 2: Colocate mode
+
+In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and may be more convenient for single-node training, but can lead to GPU memory contention.
 
 ```python
 from trl import GRPOConfig
 
-training_args = GRPOConfig(..., use_vllm=True)
+training_args = GRPOConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="colocate",
+)
 ```
+
+<Tip warning={true}>
+
+Depending on the model size and more generally on the GPU needed for training, you may need to adjust the [`GRPOConfig.vllm_gpu_memory_utilization`] parameter to avoid under utilization or out-of-memory issues.
+
+</Tip>
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
