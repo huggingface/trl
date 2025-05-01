@@ -630,22 +630,22 @@ class GRPOTrainer(Trainer):
                 )
                 self.vllm_client.init_communicator()
 
-            elif self.vllm_mode == "colocation":
-                # Ensure vllm_colocation TP value is valid (at least 1)
-                assert self.args.vllm_colocation >= 1, "vllm_colocation must be greater than 0"
-                # Make sure vllm_colocation TP group size evenly divides the world size - each group should have the same number of ranks
-                assert self.accelerator.num_processes % self.args.vllm_colocation == 0, (
-                    f"TP size of vllm_colocation ({self.args.vllm_colocation}) must divide world size "
+            elif self.vllm_mode == "colocate":
+                # Ensure vllm_tensor_parallel_size value is valid (at least 1)
+                assert self.args.vllm_tensor_parallel_size >= 1, "vllm_tensor_parallel_size must be greater than 0"
+                # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have the same number of ranks
+                assert self.accelerator.num_processes % self.args.vllm_tensor_parallel_size == 0, (
+                    f"TP size of vllm_tensor_parallel_size ({self.args.vllm_tensor_parallel_size}) must divide world size "
                     f"({self.accelerator.num_processes}) evenly."
                 )
 
-                if self.args.vllm_colocation > 1:
-                    # Create subgroups of ranks for TP, each group with `vllm_colocation` ranks.
-                    # For example, if world_size=8 and vllm_colocation=2 → groups: [0,1], [2,3], [4,5], [6,7]
+                if self.args.vllm_tensor_parallel_size > 1:
+                    # Create subgroups of ranks for TP, each group with `vllm_tensor_parallel_size` ranks.
+                    # For example, if world_size=8 and vllm_tensor_parallel_size=2 → groups: [0,1], [2,3], [4,5], [6,7]
                     self.tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
                         [
-                            list(range(i * self.args.vllm_colocation, (i + 1) * self.args.vllm_colocation))
-                            for i in range(self.accelerator.num_processes // self.args.vllm_colocation)
+                            list(range(i * self.args.vllm_tensor_parallel_size, (i + 1) * self.args.vllm_tensor_parallel_size))
+                            for i in range(self.accelerator.num_processes // self.args.vllm_tensor_parallel_size)
                         ]
                     )
 
@@ -944,7 +944,7 @@ class GRPOTrainer(Trainer):
 
                     if self.vllm_mode == "server" and self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
-                    elif self.vllm_mode == "colocation":
+                    elif self.vllm_mode == "colocate":
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(name, param.data)])
 
@@ -957,14 +957,14 @@ class GRPOTrainer(Trainer):
                 with gather_if_zero3([param]):
                     if self.vllm_mode == "server" and self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
-                    elif self.vllm_mode == "colocation":
+                    elif self.vllm_mode == "colocate":
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model
                         llm_model.load_weights([(name, param.data)])
 
         # Reset cache on vLLM
         if self.vllm_mode == "server" and self.accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
-        elif self.vllm_mode == "colocation":
+        elif self.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
 
     @profiling_decorator
@@ -1056,13 +1056,13 @@ class GRPOTrainer(Trainer):
                 completion_ids = completion_ids[process_slice]
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
-            elif self.vllm_mode == "colocation":
+            elif self.vllm_mode == "colocate":
                 if self.guided_decoding_regex:
                     guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
                 else:
                     guided_decoding = None
                 sampling_params = SamplingParams(
-                    n=1,  # vLLM on each GPU generates only 1 in vllm_colocation mode
+                    n=1,  # vLLM on each GPU generates only 1 in colocate mode
                     repetition_penalty=self.repetition_penalty,
                     temperature=self.temperature,
                     top_p=self.top_p,
