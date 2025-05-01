@@ -1644,8 +1644,6 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
             Updated binary mask with non-zero values flushed to the left and trailing zero columns removed.
         `*torch.Tensor`
             Updated tensors, processed in the same way as the mask.
-        `int`:
-            the index of the first column in the *rolled* mask that was all-zero
 
     Example:
     ```python
@@ -1653,15 +1651,13 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
     ...                      [0, 1, 1, 0, 0]])
     >>> tensor = torch.tensor([[9, 9, 2, 3, 4],
     ...                        [9, 5, 6, 9, 9]])
-    >>> new_mask, new_tensor, first_empty = flush_left(mask, tensor)
+    >>> new_mask, new_tensor = flush_left(mask, tensor)
     >>> print(new_mask)
     tensor([[1, 1, 1],
             [1, 1, 0]])
     >>> print(new_tensor)
     tensor([[2, 3, 4],
             [5, 6, 0]])
-    >>> print(first_empty)
-    3
     ```
     """
     _, M = mask.shape
@@ -1672,7 +1668,7 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
 
     # Shift non-zero values to the left
     f = mask.argmax(dim=1)
-    pos = torch.arange(M).unsqueeze(0)
+    pos = torch.arange(M, device=mask.device).unsqueeze(0)
     idx_roll = (pos + f.unsqueeze(1)) % M
     mask_roll = mask.gather(1, idx_roll)
     rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
@@ -1685,8 +1681,8 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
     flushed_tensors = [t[:, :first_empty] for t in rolled_tensors]
 
     if not flushed_tensors:
-        return flushed_mask, first_empty
-    return flushed_mask, *flushed_tensors, first_empty
+        return flushed_mask
+    return flushed_mask, *flushed_tensors
 
 
 def selective_log_softmax(logits, index):
