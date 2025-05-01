@@ -658,8 +658,8 @@ class GRPOTrainer(Trainer):
                     * self.args.gradient_accumulation_steps,
                     max_model_len=self.max_prompt_length + self.max_completion_length,
                     distributed_executor_backend="external_launcher",
-                    # Feed identical seed for tp groups to ensure ...
-                    seed=int(os.getenv("RANK", "0")) // self.vllm_tensor_parallel_size,
+                    # Feed identical seed for tp groups to ensure sampling results are the same across workers
+                    seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
                 )
 
             # vLLM specific sampling arguments
