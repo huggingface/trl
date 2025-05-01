@@ -69,6 +69,10 @@ if is_peft_available():
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
+
 if is_wandb_available():
     import wandb
 
@@ -471,6 +475,9 @@ class GRPOTrainer(Trainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
+        self.vllm_mode = args.vllm_mode
+        self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
+        self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
@@ -509,13 +516,14 @@ class GRPOTrainer(Trainer):
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
-        # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
-        self._forward_redirection = _ForwardRedirection()
         if self.use_liger_loss:
             if not is_liger_kernel_available():
                 raise ImportError(
                     "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
                 )
+
+            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called
+            self._forward_redirection = _ForwardRedirection()
 
             self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
                 beta=self.beta,
@@ -617,11 +625,43 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
-            if self.accelerator.is_main_process:
+            if self.vllm_mode == "server" and self.accelerator.is_main_process:
                 self.vllm_client = VLLMClient(
                     args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
                 )
                 self.vllm_client.init_communicator()
+
+            elif self.vllm_mode == "colocate":
+                # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have
+                # the same number of ranks
+                if not self.accelerator.num_processes % self.vllm_tensor_parallel_size == 0:
+                    raise ValueError(
+                        f"vllm_tensor_parallel_size ({self.vllm_tensor_parallel_size}) must divide world size "
+                        f"({self.accelerator.num_processes}) evenly."
+                    )
+
+                if self.vllm_tensor_parallel_size > 1:
+                    # Create subgroups of ranks for TP, each group with `vllm_tensor_parallel_size` ranks.
+                    # For example, if world_size=8 and vllm_tensor_parallel_size=2 → groups: [0,1], [2,3], [4,5], [6,7]
+                    self.tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
+                        [
+                            list(range(i * self.vllm_tensor_parallel_size, (i + 1) * self.vllm_tensor_parallel_size))
+                            for i in range(self.accelerator.num_processes // self.vllm_tensor_parallel_size)
+                        ]
+                    )
+
+                self.llm = LLM(
+                    model=model.name_or_path,
+                    tensor_parallel_size=args.vllm_tensor_parallel_size,
+                    gpu_memory_utilization=self.vllm_gpu_memory_utilization,
+                    max_num_seqs=self.args.per_device_train_batch_size
+                    * self.vllm_tensor_parallel_size
+                    * self.args.gradient_accumulation_steps,
+                    max_model_len=self.max_prompt_length + self.max_completion_length,
+                    distributed_executor_backend="external_launcher",
+                    # Feed identical seed for tp groups to ensure sampling results are the same across workers
+                    seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
+                )
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
@@ -825,6 +865,34 @@ class GRPOTrainer(Trainer):
             all_logps.append(logps)
         return torch.cat(all_logps, dim=0)
 
+    def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
+        """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
+        if visited is None:
+            visited = set()
+
+        for child_name, child_module in module.named_children():
+            child_prefix = f"{prefix}.{child_name}" if prefix else child_name
+            self._sync_fsdp_params_to_vllm(
+                child_module, prefix=child_prefix, visited=visited
+            )  # recurse into the child
+
+        if isinstance(module, FSDP):
+            with FSDP.summon_full_params(module, recurse=False, writeback=False):
+                for param_name, param in module.named_parameters():
+                    full_name = f"{prefix}.{param_name}" if prefix else param_name
+                    for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
+                        full_name = full_name.replace(extra, "")
+
+                    if full_name in visited:
+                        continue  # skip FSDP subtrees already traversed
+                    visited.add(full_name)
+
+                    if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                        self.vllm_client.update_named_param(full_name, param.data)
+                    elif self.vllm_mode == "colocate":
+                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                        llm_model.load_weights([(full_name, param.data)])
+
     @profiling_decorator
     def _move_model_to_vllm(self):
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
@@ -837,54 +905,20 @@ class GRPOTrainer(Trainer):
         else:
             gather_if_zero3 = nullcontext
 
-        def post_order_fsdp_processing(module: nn.Module, prefix: str = "", visited=None):
-            """memory-efficient module gather"""
-            extra_names = ["_fsdp_wrapped_module.", "_checkpoint_wrapped_module."]
-            if visited is None:
-                visited = set()
-
-            for child_name, child_module in module.named_children():
-                if prefix == "":
-                    child_prefix = child_name
-                else:
-                    child_prefix = f"{prefix}.{child_name}"
-
-                # Recurse into the child
-                post_order_fsdp_processing(child_module, prefix=child_prefix, visited=visited)
-
-            if isinstance(module, FSDP):
-                with FSDP.summon_full_params(module, recurse=False, writeback=False):
-                    for param_name, param in module.named_parameters():
-                        if prefix == "":
-                            full_name = param_name
-                        else:
-                            full_name = f"{prefix}.{param_name}"
-
-                        for extra in extra_names:
-                            full_name = full_name.replace(extra, "")
-
-                        if full_name in visited:
-                            # skip FSDP subtrees already traversed
-                            continue
-
-                        visited.add(full_name)
-
-                        if self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(full_name, param.data)
-
         if is_peft_model(self.model):
-            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as merging
-            # adapters in a sharded manner is not supported.
+            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
+            # merging adapters in a sharded manner is not supported.
+            # TODO: does this work with FSDP?
             with gather_if_zero3(list(self.model.parameters())):
-                if self.is_fsdp_enabled:
+                self.model.merge_adapter()
+
+                # Update vLLM weights while parameters are gathered
+                if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
                     # Update vLLM weights while parameters are gathered
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    self.model.merge_adapter()
-                    post_order_fsdp_processing(self.model)
-                    self.model.unmerge_adapter()
+                    self._sync_fsdp_params_to_vllm(self.model)
                 else:
-                    # DeepSpeed ZeRO-3 with PEFT (not using FSDP)
-                    self.model.merge_adapter()
+                    # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name and discard some parameters
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
@@ -895,24 +929,32 @@ class GRPOTrainer(Trainer):
                             continue
                         name = name.replace("modules_to_save.default.", "")
 
-                        if self.accelerator.is_main_process:
+                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
-                    self.model.unmerge_adapter()
+                        elif self.vllm_mode == "colocate":
+                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model.load_weights([(name, param.data)])
+                # Unmerge adapters while parameters are still gathered
+                self.model.unmerge_adapter()
+                # Parameters will automatically be repartitioned when exiting the context
         else:
-            # For non-PEFT models
+            # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self.is_fsdp_enabled:
-                # Use memory-efficient post-order traversal for FSDP
-                post_order_fsdp_processing(self.model)
-            elif zero_stage_3:
-                # For DeepSpeed ZeRO-3, simply gather and update each parameter individually
+                self._sync_fsdp_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
+            else:
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
-                        if self.accelerator.is_main_process:
+                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
+                        elif self.vllm_mode == "colocate":
+                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model.load_weights([(name, param.data)])
 
-        # Reset cache on main process
-        if self.accelerator.is_main_process:
+        # Reset cache on vLLM
+        if self.vllm_mode == "server" and self.accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
+        elif self.vllm_mode == "colocate":
+            self.llm.reset_prefix_cache()
 
     @profiling_decorator
     def _prepare_inputs(
@@ -966,40 +1008,78 @@ class GRPOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
-            # First, have main process load weights if needed
+            # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-            all_prompts_text = gather_object(prompts_text)
-            if self.accelerator.is_main_process:
-                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                # prompt individually.
-                ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+            if self.vllm_mode == "server":
+                all_prompts_text = gather_object(prompts_text)
+                if self.accelerator.is_main_process:
+                    # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
+                    # num_generations outputs for each one. This is faster than generating outputs for each duplicate
+                    # prompt individually.
+                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                    with profiling_context(self, "vLLM.generate"):
+                        completion_ids = self.vllm_client.generate(
+                            prompts=ordered_set_of_prompts,
+                            n=self.num_generations,
+                            repetition_penalty=self.repetition_penalty,
+                            temperature=self.temperature,
+                            top_p=self.top_p,
+                            top_k=-1 if self.top_k is None else self.top_k,
+                            min_p=0.0 if self.min_p is None else self.min_p,
+                            max_tokens=self.max_completion_length,
+                            guided_decoding_regex=self.guided_decoding_regex,
+                        )
+                else:
+                    completion_ids = [None] * len(all_prompts_text)
+                # Broadcast the completions from the main process to all processes, ensuring each process receives its
+                # corresponding slice.
+                completion_ids = broadcast_object_list(completion_ids, from_process=0)
+                process_slice = slice(
+                    self.accelerator.process_index * len(prompts),
+                    (self.accelerator.process_index + 1) * len(prompts),
+                )
+                completion_ids = completion_ids[process_slice]
+
+            # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
+            elif self.vllm_mode == "colocate":
+                if self.guided_decoding_regex:
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
+                else:
+                    guided_decoding = None
+                sampling_params = SamplingParams(
+                    n=1,  # vLLM on each GPU generates only 1 in colocate mode
+                    repetition_penalty=self.repetition_penalty,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    top_k=-1 if self.top_k is None else self.top_k,
+                    min_p=0.0 if self.min_p is None else self.min_p,
+                    max_tokens=self.max_completion_length,
+                    guided_decoding=guided_decoding,
+                )
+
+                if self.vllm_tensor_parallel_size > 1:
+                    # Gather prompts from all ranks in the TP group and flatten.
+                    # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
+                    orig_size = len(prompts_text)
+                    gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
+                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
+                    prompts_text = [p for sublist in gathered_prompts for p in sublist]
+
                 with profiling_context(self, "vLLM.generate"):
-                    completion_ids = self.vllm_client.generate(
-                        prompts=ordered_set_of_prompts,
-                        n=self.num_generations,
-                        repetition_penalty=self.repetition_penalty,
-                        temperature=self.temperature,
-                        top_p=self.top_p,
-                        top_k=-1 if self.top_k is None else self.top_k,
-                        min_p=0.0 if self.min_p is None else self.min_p,
-                        max_tokens=self.max_completion_length,
-                        guided_decoding_regex=self.guided_decoding_regex,
-                    )
-            else:
-                completion_ids = [None] * len(all_prompts_text)
-            # Broadcast the completions from the main process to all processes, ensuring each process receives its
-            # corresponding slice.
-            completion_ids = broadcast_object_list(completion_ids, from_process=0)
-            process_slice = slice(
-                self.accelerator.process_index * len(prompts),
-                (self.accelerator.process_index + 1) * len(prompts),
-            )
-            completion_ids = completion_ids[process_slice]
+                    all_outputs = self.llm.generate(prompts_text, sampling_params=sampling_params, use_tqdm=False)
+
+                completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+
+                if self.vllm_tensor_parallel_size > 1:
+                    # Slice completions for this rank within its TP group.
+                    # Each rank generates all outputs — we keep only our share.
+                    local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
+                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                    completion_ids = completion_ids[tp_slice]
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
