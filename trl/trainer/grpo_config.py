@@ -95,6 +95,7 @@ class GRPOConfig(TrainingArguments):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
             Regex for vLLM guided decoding. If `None`, guided decoding is disabled.
 
         > Parameters that control generation acceleration powered by SGLang
@@ -110,6 +111,8 @@ class GRPOConfig(TrainingArguments):
         > Parameters that control the training
 
         learning_rate (`float`, *optional*, defaults to `1e-6`):
+            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
+            [`~transformers.TrainingArguments`].
             Initial learning rate.
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
@@ -205,13 +208,19 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
+    # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
+    # additional columns to compute the reward
     remove_unused_columns: Optional[bool] = field(
         default=False,
-        metadata={"help": "Whether to only keep the column 'prompt' in the dataset."},
+        metadata={"help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
+            "that requires any column other than 'prompts' and 'completions', you should keep this to `False`."
+        },
     )
     max_prompt_length: Optional[int] = field(
         default=512,
-        metadata={"help": "Maximum length of the prompt."},
+        metadata={
+            "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left."
+        },
     )
     num_generations: Optional[int] = field(
         default=8,
@@ -230,7 +239,12 @@ class GRPOConfig(TrainingArguments):
     )
     ds3_gather_for_generation: bool = field(
         default=True,
-        metadata={"help": "If enabled, the policy model weights are gathered for generation (DeepSpeed ZeRO-3)."},
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
+            "generation, improving generation speed. However, disabling this option allows training models that "
+            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
+            "is not compatible with vLLM generation."
+        },
     )
     shuffle_dataset: Optional[bool] = field(
         default=True,
@@ -301,13 +315,13 @@ class GRPOConfig(TrainingArguments):
     )
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding (if enabled)."},
+        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
 
     # When running the trainer, set the following command-line arguments (or JSON configuration) so that SGLang is used:
-    # •	--use_sglang True
-    # •	--sglang_server_url "http://localhost:30033"
-    # •	Optionally, --sglang_device "cuda:1" if you wish to assign a specific GPU.
+    # • --use_sglang True
+    # • --sglang_server_url "http://localhost:30033"
+    # • Optionally, --sglang_device "cuda:1" if you wish to assign a specific GPU.
     # Parameters for generation acceleration powered by SGLang
     use_sglang: Optional[bool] = field(
         default=False,
@@ -335,7 +349,10 @@ class GRPOConfig(TrainingArguments):
     # Parameters that control the training
     learning_rate: float = field(
         default=1e-6,
-        metadata={"help": "Initial learning rate for the optimizer."},
+        metadata={
+            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
+            "`transformers.TrainingArguments`."
+        },
     )
     beta: float = field(
         default=0.04,
@@ -434,7 +451,10 @@ class GRPOConfig(TrainingArguments):
     )
     sync_ref_model: bool = field(
         default=False,
-        metadata={"help": "Whether to synchronize the reference model with the active model."},
+        metadata={
+            "help": "Whether to synchronize the reference model with the active model every `ref_model_sync_steps` "
+            "steps, using the `ref_model_mixup_alpha` parameter."
+        },
     )
     ref_model_mixup_alpha: float = field(
         default=0.6,
@@ -446,7 +466,10 @@ class GRPOConfig(TrainingArguments):
     )
     ref_model_sync_steps: int = field(
         default=512,
-        metadata={"help": "Frequency (in steps) for synchronizing the reference model."},
+        metadata={
+            "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
+            "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
+        },
     )
     use_liger_loss: bool = field(
         default=False,
