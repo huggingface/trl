@@ -958,7 +958,7 @@ class GRPOTrainer(Trainer):
                     if self.vllm_mode == "server" and self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(name, param.data)
                     elif self.vllm_mode == "colocate":
-                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model
+                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(name, param.data)])
 
         # Reset cache on vLLM
