@@ -205,7 +205,7 @@ Make sure that the server is using different GPUs than the trainer, otherwise yo
 
 #### 🧩 Option 2: Colocate mode
 
-In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and may be more convenient for single-node training, but can lead to GPU memory contention.
+In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
 
 ```python
 from trl import GRPOConfig
