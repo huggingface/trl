@@ -302,7 +302,7 @@ class GRPOConfig(TrainingArguments):
         default="server",
         metadata={
             "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server` or "
-            "`colocate`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a "
+            "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a "
             "TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training."
@@ -313,7 +313,7 @@ class GRPOConfig(TrainingArguments):
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
 
-    # Parameters that control the vLLM server (only used when `vllm_mode` is `server`)
+    # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
     vllm_server_host: str = field(
         default="0.0.0.0",
         metadata={"help": "Host of the vLLM server to connect to."},
@@ -330,12 +330,12 @@ class GRPOConfig(TrainingArguments):
         },
     )
 
-    # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `colocate`)
+    # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
     vllm_gpu_memory_utilization: float = field(
         default=0.3,
         metadata={
             "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set "
-            "to `colocate`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
+            "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
             "launching the vLLM server via the `--vllm_gpu_memory_utilization` flag."
         },
     )
@@ -343,7 +343,7 @@ class GRPOConfig(TrainingArguments):
         default=1,
         metadata={
             "help": "Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set "
-            "to `colocate`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
+            "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
             "launching the vLLM server via the `--vllm_tensor_parallel_size` flag."
         },
     )
