@@ -509,24 +509,6 @@ class GRPOTrainer(Trainer):
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
-        # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
-        self._forward_redirection = _ForwardRedirection()
-        if self.use_liger_loss:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
-                )
-
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
-                beta=self.beta,
-                epsilon_low=self.epsilon_low,
-                epsilon_high=self.epsilon_high,
-                temperature=self.temperature,
-                use_ref_model=self.beta != 0.0,
-                loss_type=self.loss_type,
-                max_completion_length=self.max_completion_length,
-            )
-
         super().__init__(
             model=model,
             args=args,
@@ -558,6 +540,25 @@ class GRPOTrainer(Trainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        # Liger loss
+        if self.use_liger_loss:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
+                )
+            # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
+            self._forward_redirection = _ForwardRedirection()
+
+            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
+                beta=self.beta,
+                epsilon_low=self.epsilon_low,
+                epsilon_high=self.epsilon_high,
+                temperature=self.temperature,
+                use_ref_model=self.beta != 0.0,
+                loss_type=self.loss_type,
+                max_completion_length=self.max_completion_length,
+            )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
