@@ -170,7 +170,9 @@ class DAPOConfig(TrainingArguments):
 
         _VALID_DICT_FIELDS.append("model_init_kwargs")
     else:
-        _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+        _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + [
+            "model_init_kwargs"
+        ]
 
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[Union[dict, str]] = field(
@@ -232,7 +234,9 @@ class DAPOConfig(TrainingArguments):
     # Parameters that control generation
     temperature: float = field(
         default=0.9,
-        metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
+        metadata={
+            "help": "Temperature for sampling. The higher the temperature, the more random the completions."
+        },
     )
     top_p: float = field(
         default=1.0,
@@ -265,7 +269,9 @@ class DAPOConfig(TrainingArguments):
     )
     cache_implementation: Optional[str] = field(
         default=None,
-        metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
+        metadata={
+            "help": "Implementation of the cache method for faster generation when use_vllm is set to False."
+        },
     )
 
     # Parameters that control generation acceleration powered by vLLM
@@ -293,7 +299,9 @@ class DAPOConfig(TrainingArguments):
     )
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+        metadata={
+            "help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."
+        },
     )
 
     # Parameters that control the training
@@ -313,7 +321,9 @@ class DAPOConfig(TrainingArguments):
     )
     num_iterations: int = field(
         default=1,
-        metadata={"help": "Number of iterations per batch (denoted as μ in the algorithm)."},
+        metadata={
+            "help": "Number of iterations per batch (denoted as μ in the algorithm)."
+        },
     )
     epsilon: float = field(
         default=0.2,
@@ -403,7 +413,9 @@ class DAPOConfig(TrainingArguments):
     )
     num_completions_to_print: Optional[int] = field(
         default=None,
-        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
+        metadata={
+            "help": "Number of completions to print with `rich`. If `None`, all completions are logged."
+        },
     )
     wandb_log_unique_prompts: Optional[bool] = field(
         default=False,
