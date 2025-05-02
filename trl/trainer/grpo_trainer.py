@@ -58,9 +58,7 @@ from ..data_utils import (
 )
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-
 from ..import_utils import (
-    is_deepspeed_available,
     is_liger_kernel_available,
     is_rich_available,
     is_sglang_available,
@@ -71,7 +69,6 @@ from ..models import (
     prepare_deepspeed,
     unwrap_model_for_generation,
 )
-
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
@@ -882,7 +879,7 @@ class GRPOTrainer(Trainer):
             "serialized_named_tensors": [
                 MultiprocessingSerializer.serialize(list(self.model.named_parameters()), output_str=True)
             ],
-            "flush_cache": True, # flush cache after update weights
+            "flush_cache": True,  # flush cache after update weights
         }
         try:
             response = requests.post(
@@ -890,14 +887,16 @@ class GRPOTrainer(Trainer):
                 json=payload,
                 timeout=60,
             )
+            response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
         except requests.RequestException as e:
-            raise RuntimeError(f"Weight update request failed: {e}")
+            # Keep the original exception context
+            raise RuntimeError(f"Weight update request failed: {e}") from e
         res_json = response.json()
         if not res_json.get("success", False):
+            # No underlying exception to chain from here, as it's a logic error from the server response
             raise RuntimeError(
                 f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
             )
-
 
     @profiling_decorator
     def _move_model_to_vllm(self):
