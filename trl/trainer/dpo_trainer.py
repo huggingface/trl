@@ -1075,7 +1075,7 @@ class DPOTrainer(Trainer):
 
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
 
-        model_kwargs = {}
+        model_kwargs = {"use_cache": False}
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
