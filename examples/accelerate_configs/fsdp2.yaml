@@ -1,3 +1,4 @@
+# Requires accelerate 1.6.0 or higher
 compute_environment: LOCAL_MACHINE
 debug: false
 distributed_type: FSDP
@@ -9,7 +10,7 @@ fsdp_config:
   fsdp_cpu_ram_efficient_loading: true
   fsdp_offload_params: false
   fsdp_reshard_after_forward: true
-  fsdp_state_dict_type: SHARDED_STATE_DICT
+  fsdp_state_dict_type: FULL_STATE_DICT
   fsdp_version: 2
 machine_rank: 0
 main_training_function: main
