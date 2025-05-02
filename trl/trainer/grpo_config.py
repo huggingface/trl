@@ -198,13 +198,6 @@ class GRPOConfig(TrainingArguments):
             "it prevents the model from generating different logprobs for the same input."
         },
     )
-    disable_dropout: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to disable dropout in the model. This is useful for training with a reference model, as "
-            "it prevents the model from generating different logprobs for the same input."
-        },
-    )
 
     # Parameters that control the data preprocessing
     # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
