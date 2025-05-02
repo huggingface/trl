@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,8 @@ import dataclasses
 import os
 import warnings
 from collections import defaultdict
-from typing import Any, Callable, Optional, Type, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -29,7 +30,6 @@ from transformers import (
     AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
-    DataCollatorForLanguageModeling,
     DataCollatorWithFlattening,
     FeatureExtractionMixin,
     PreTrainedModel,
@@ -39,13 +39,26 @@ from transformers import (
     TrainingArguments,
     is_wandb_available,
 )
+from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import is_conversational, maybe_apply_chat_template, maybe_convert_to_chatml, pack_examples
+from ..data_utils import (
+    apply_chat_template,
+    is_conversational,
+    maybe_convert_to_chatml,
+    pack_dataset,
+    truncate_dataset,
+)
 from .sft_config import SFTConfig
-from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
+from .utils import (
+    ConstantLengthDataset,
+    generate_model_card,
+    get_comet_experiment_url,
+    pad,
+    peft_module_casting_to_bf16,
+)
 
 
 if is_peft_available():
@@ -54,6 +67,89 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+
+@dataclass
+class DataCollatorForLanguageModeling(DataCollatorMixin):
+    """
+    Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch if
+    they are not all of the same length.
+
+    Args:
+        pad_token_id (`int`):
+            Token ID to use for padding.
+        completion_only_loss (`bool`, *optional*, defaults to `True`):
+            When the input contains a completion mask (`completion_mask`), the labels are set to -100 for the tokens
+            that are no in the completion.
+        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
+            If set, the sequences will be padded to a multiple of this value.
+        return_tensors (`str`, *optional*, defaults to `"pt"`):
+            Type of Tensor to return. Only `"pt"` is currently supported.
+
+    Examples:
+    ```python
+    >>> from trl import DataCollatorForLanguageModeling
+    >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
+    >>> examples = [
+    ...     {"input_ids": [1, 2, 3]},
+    ...     {"input_ids": [4, 5]}
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[  1,  2,  3],
+                          [  4,  5,  0]]),
+     'attention_mask': tensor([[  1,  1,  1],
+                               [  1,  1,  0]]),
+     'labels': tensor([[   1,    2,    3],
+                       [   4,    5, -100]])}
+    >>> # With completion mask
+    >>> examples = [
+    ...     {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
+    ...     {"input_ids": [4, 5], "completion_mask": [0, 1]}
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[  1,  2,  3],
+                          [  4,  5,  0]]),
+     'attention_mask': tensor([[  1,  1,  1],
+                               [  1,  1,  0]]),
+     'labels': tensor([[-100,    2,    3],
+                       [-100,    5, -100]])}
+    ```
+    """
+
+    pad_token_id: int
+    completion_only_loss: bool = True
+    pad_to_multiple_of: Optional[int] = None
+    return_tensors: str = "pt"
+
+    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        # Convert to tensor
+        input_ids = [torch.tensor(example["input_ids"]) for example in examples]
+        attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+        labels = [torch.tensor(example["input_ids"]) for example in examples]
+        if self.completion_only_loss and "completion_mask" in examples[0]:
+            completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
+
+        # Pad
+        output = {}
+        output["input_ids"] = pad(
+            input_ids,
+            padding_value=self.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        output["attention_mask"] = pad(
+            attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        )
+        output["labels"] = pad(
+            labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        )
+        if self.completion_only_loss and "completion_mask" in examples[0]:
+            completion_mask = pad(
+                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
+
+        return output
 
 
 class SFTTrainer(Trainer):
@@ -87,7 +183,7 @@ class SFTTrainer(Trainer):
         args ([`SFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator (`DataCollator`, *optional*):
-            Function to use to form a batch from a list of elements of the prcessed `train_dataset` or `eval_dataset`.
+            Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~transformers.default_data_collator`] if no `processing_class` is provided, an instance
             of [`~transformers.DataCollatorWithPadding`] otherwise if the processing_class is a feature extractor or
             tokenizer.
@@ -128,7 +224,8 @@ class SFTTrainer(Trainer):
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         formatting_func (`Optional[Callable]`):
-            Formatting function applied to the dataset before tokenization.
+            Formatting function applied to the dataset before tokenization. Applying the formatting function explicitly
+            converts the dataset into a [language modeling](#language-modeling) type.
     """
 
     _tag_names = ["trl", "sft"]
@@ -147,21 +244,36 @@ class SFTTrainer(Trainer):
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        optimizer_cls_and_kwargs: Optional[tuple[Type[torch.optim.Optimizer], dict[str, Any]]] = None,
+        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Union[Callable[[dict], str], Callable[[dict], list[str]]]] = None,
     ):
         # Args
+        model_id = model if isinstance(model, str) else model.config._name_or_path
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
-            model_name = model_name.split("/")[-1]
+            model_name = model_id.split("/")[-1]
             args = SFTConfig(f"{model_name}-SFT")
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
             dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
+
+        # Handle the tokenizer
+        if processing_class is None:
+            processing_class = AutoTokenizer.from_pretrained(model_id)
+
+        if args.eos_token is not None:
+            eos_token = args.eos_token
+            eos_token_id = processing_class.convert_tokens_to_ids(eos_token)
+            if eos_token_id is None:
+                raise ValueError(
+                    f"The specified `eos_token` ('{eos_token}') is not found in the vocabulary of the given "
+                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
+                    "in the vocabulary before using it as an EOS token."
+                )
+            processing_class.eos_token_id = eos_token_id
 
         # Model
         if args.model_init_kwargs is not None and not isinstance(model, str):
@@ -175,30 +287,6 @@ class SFTTrainer(Trainer):
         # PEFT configuration and model wrapping
         if peft_config is not None:
             model = self._prepare_peft_model(model, peft_config, args)
-
-        # Handle the tokenizer
-        if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path)
-            if processing_class.pad_token is None:
-                processing_class.pad_token = processing_class.eos_token  # required for padding when collating data
-
-        # Dataset
-        preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
-        if preprocess_dataset:
-            train_dataset = self._prepare_dataset(
-                train_dataset, processing_class, args, args.packing, formatting_func, "train"
-            )
-            if eval_dataset is not None:
-                packing = args.packing if args.eval_packing is None else args.eval_packing
-                if isinstance(eval_dataset, dict):
-                    eval_dataset = {
-                        key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
-                        for key, dataset in eval_dataset.items()
-                    }
-                else:
-                    eval_dataset = self._prepare_dataset(
-                        eval_dataset, processing_class, args, packing, formatting_func, "eval"
-                    )
 
         # Data collator
         if args.padding_free:
@@ -226,8 +314,51 @@ class SFTTrainer(Trainer):
                 )
             data_collator = DataCollatorWithFlattening()
 
+        if args.completion_only_loss is None:
+            first_example = next(iter(train_dataset))
+            self.completion_only_loss = "prompt" in first_example
+        else:
+            self.completion_only_loss = args.completion_only_loss
         if data_collator is None:
-            data_collator = DataCollatorForLanguageModeling(tokenizer=processing_class, mlm=False)
+            # Get the pad token: if not provided, use the one from the processing class or the eos token
+            # if the processing class does not have a pad token.
+            pad_token = args.pad_token or processing_class.pad_token or processing_class.eos_token
+            pad_token_id = processing_class.convert_tokens_to_ids(pad_token)
+            if pad_token_id is None:
+                raise ValueError(
+                    f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
+                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
+                    "in the vocabulary before using it as a padding token."
+                )
+            data_collator = DataCollatorForLanguageModeling(
+                pad_token_id, self.completion_only_loss, args.pad_to_multiple_of
+            )
+
+        # Dataset
+        preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
+        if preprocess_dataset:
+            if self.completion_only_loss and formatting_func:
+                raise ValueError(
+                    "A formatting function was provided while `completion_only_loss=True`, which is incompatible. "
+                    "Using a formatter converts the dataset to a language modeling type, conflicting with "
+                    "completion-only loss. To resolve this, apply your formatting function before passing the "
+                    "dataset, or disable `completion_only_loss` in `SFTConfig`."
+                )
+
+            train_dataset = self._prepare_dataset(
+                train_dataset, processing_class, args, args.packing, formatting_func, "train"
+            )
+            if eval_dataset is not None:
+                packing = args.packing if args.eval_packing is None else args.eval_packing
+                if isinstance(eval_dataset, dict):
+                    eval_dataset = {
+                        key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
+                        for key, dataset in eval_dataset.items()
+                    }
+                else:
+                    eval_dataset = self._prepare_dataset(
+                        eval_dataset, processing_class, args, packing, formatting_func, "eval"
+                    )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -284,8 +415,8 @@ class SFTTrainer(Trainer):
                 f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
             )
         # Disable caching if gradient checkpointing is enabled (not supported)
-        if args.gradient_checkpointing:
-            model_init_kwargs["use_cache"] = False
+        # if args.gradient_checkpointing:
+        #     model_init_kwargs["use_cache"] = False
 
         # Create model
         model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
@@ -404,22 +535,21 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
 
-                batched = isinstance(formatting_func(next(iter(dataset))), list)
-
                 def _func(example):
                     return {"text": formatting_func(example)}
 
-                dataset = dataset.map(_func, batched=batched, **map_kwargs)
-
-            # If the dataset is prompt-completion, convert it to language modeling type
-            first_example = next(iter(dataset))
-            if "prompt" in first_example.keys() and "completion" in first_example.keys():
-                key = "messages" if is_conversational(first_example) else "text"
-
-                def concat_prompt_completion(example):
-                    return {key: example["prompt"] + example["completion"]}
-
-                dataset = dataset.map(concat_prompt_completion, remove_columns=["prompt", "completion"])
+                try:
+                    dataset = dataset.map(_func, batched=False, **map_kwargs)
+                except Exception as e:
+                    warnings.warn(
+                        f"Failed to apply the formatting function due to the following error: {e}. This may be "
+                        "because the function is designed for batched input. Please update it to process one example "
+                        "at a time (i.e., accept and return a single example). For now, we will attempt to apply the "
+                        "function in batched mode, but note that batched formatting is deprecated and will be removed "
+                        "in version 0.21.",
+                        DeprecationWarning,
+                    )
+                    dataset = dataset.map(_func, batched=True, **map_kwargs)
 
             if not is_processed:
                 # Convert the dataset to ChatML if needed
@@ -433,33 +563,85 @@ class SFTTrainer(Trainer):
                 )
 
                 # Apply the chat template if needed
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
-                column_names = next(iter(dataset)).keys()
-                dataset = dataset.map(
-                    maybe_apply_chat_template,
-                    fn_kwargs={"tokenizer": processing_class},
-                    remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
-                    **map_kwargs,
-                )
+                first_example = next(iter(dataset))
+                if is_conversational(first_example):
+                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                        map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
+                    column_names = first_example.keys()
+                    dataset = dataset.map(
+                        apply_chat_template,
+                        fn_kwargs={"tokenizer": processing_class},
+                        remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
+                        **map_kwargs,
+                    )
+                    # Subsequent tokenization won't add special tokens (mostly for bos).
+                    # See https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+                    add_special_tokens = False
+                # When dataset is not conversational, we need to add the EOS token at the end of each example
+                # We don't need to do this for conversational datasets as this is already handled by the
+                # `apply_chat_template` function.
+                else:
+                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                        map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
 
-                # Tokenize the dataset if needed
+                    def add_eos(example, eos_token):
+                        if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
+                            example["text"] = example["text"] + eos_token
+                        elif "completion" in example and not example["completion"].endswith(eos_token):
+                            example["completion"] = example["completion"] + eos_token
+                        return example
+
+                    dataset = dataset.map(
+                        add_eos,
+                        fn_kwargs={"eos_token": processing_class.eos_token},
+                        remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
+                        **map_kwargs,
+                    )
+                    # Subsequent tokenization will add special tokens (mostly for bos).
+                    # See https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+                    add_special_tokens = True
+
+                # Tokenize the dataset
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field):
-                    processed = processing_class(text=example[dataset_text_field])
-                    if (
-                        processing_class.eos_token_id is not None
-                        and processed["input_ids"][-1] != processing_class.eos_token_id
-                    ):
-                        processed["input_ids"] = processed["input_ids"] + [processing_class.eos_token_id]
-                        processed["attention_mask"] = processed["attention_mask"] + [1]
+                def tokenize(example, processing_class, dataset_text_field, add_special_tokens):
+                    if "prompt" in example:  # prompt-completion case
+                        processed_prompt = processing_class(
+                            text=example["prompt"],
+                            add_special_tokens=add_special_tokens,
+                        )
+                        processed = processing_class(
+                            text=example["prompt"] + example["completion"], add_special_tokens=add_special_tokens
+                        )
+
+                        # Check if the tokenized prompt starts with the tokenized prompt+completion
+                        prompt_ids = processed_prompt["input_ids"]
+                        prompt_completion_ids = processed["input_ids"]
+                        if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                            warnings.warn(
+                                "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                                "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                                "token handling. Verify that the tokenizer is processing text consistently."
+                            )
+
+                        # Create a completion mask
+                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+                        processed = {**processed, "completion_mask": completion_mask}
+
+                    else:  # language modeling case
+                        processed = processing_class(
+                            text=example[dataset_text_field], add_special_tokens=add_special_tokens
+                        )
                     return processed
 
                 dataset = dataset.map(
                     tokenize,
-                    fn_kwargs={"processing_class": processing_class, "dataset_text_field": args.dataset_text_field},
+                    fn_kwargs={
+                        "processing_class": processing_class,
+                        "dataset_text_field": args.dataset_text_field,
+                        "add_special_tokens": add_special_tokens,
+                    },
                     **map_kwargs,
                 )
 
@@ -470,33 +652,30 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
-                dataset = dataset.map(
-                    pack_examples, batched=True, fn_kwargs={"seq_length": args.max_length}, **map_kwargs
-                )
+                dataset = pack_dataset(dataset, args.max_length, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-
-                def truncate(example, max_length):
-                    return {key: example[key][:max_length] for key in ["input_ids", "attention_mask"]}
-
-                dataset = dataset.map(
-                    truncate,
-                    fn_kwargs={"max_length": args.max_length},
-                    **map_kwargs,
-                )
-
+                dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
                 dataset = dataset.select_columns("input_ids")
 
         return dataset
 
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
+        # dataset. So we need to override the default signature columns to include "completion_mask" as well.
+        if self._signature_columns is None:
+            self._signature_columns = ["input_ids", "attention_mask", "completion_mask"]
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         Compute training loss and additionally compute token accuracies
         """
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
@@ -506,9 +685,8 @@ class SFTTrainer(Trainer):
             if "attention_mask" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             elif "position_ids" in inputs:
-                num_tokens_in_batch = (
-                    self.accelerator.gather_for_metrics(torch.tensor(inputs["position_ids"].size(1))).sum().item()
-                )
+                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
             self._total_train_tokens += num_tokens_in_batch
@@ -542,7 +720,7 @@ class SFTTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        mode = "eval" if self.control.should_evaluate else "train"
+        mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`

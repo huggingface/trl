@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,15 +15,16 @@
 import tempfile
 import unittest
 
+import pytest
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available, is_vllm_available
+from trl import OnlineDPOConfig, OnlineDPOTrainer
 
-from .testing_utils import RandomPairwiseJudge
+from .testing_utils import RandomPairwiseJudge, require_llm_blender, require_vllm
 
 
 if is_peft_available():
@@ -213,7 +214,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_llm_blender_available(), "llm-blender is not available")
+    @require_llm_blender
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training_with_judge(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -240,11 +241,12 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_vllm_available(), "vllm is not available")
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     @require_torch_accelerator
+    @require_vllm
+    @pytest.mark.slow
     def test_training_with_vllm(self, config_name):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We neeed a bigger model
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -253,6 +255,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
                 use_vllm=True,
+                gpu_memory_utilization=0.2,
                 report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)

@@ -1,5 +1,5 @@
 [tool.ruff]
-target-version = "py37"
+target-version = "py39"
 line-length = 119
 
 [tool.ruff.lint]
@@ -21,3 +21,9 @@ extend-select = ["E", "F", "I", "W", "UP", "B", "T", "C"]
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 known-first-party = ["trl"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "low-priority: marks tests as low priority (deselect with '-m \"not low-priority\"')"
+]

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 import os
 import sys
+import warnings
 
 from accelerate.commands.launch import launch_command, launch_command_parser
 
@@ -45,7 +46,7 @@ def main():
     make_vllm_serve_parser(subparsers)
 
     # Parse the arguments
-    args = parser.parse_args()
+    args = parser.parse_args_and_config()[0]
 
     if args.command == "chat":
         (chat_args,) = parser.parse_args_and_config()
@@ -92,6 +93,18 @@ def main():
 
     elif args.command == "vllm-serve":
         (script_args,) = parser.parse_args_and_config()
+
+        # Known issue: Using DeepSpeed with tensor_parallel_size=1 and data_parallel_size>1 may cause a crash when
+        # launched via the CLI. Suggest running the module directly.
+        # More information: https://github.com/vllm-project/vllm/issues/17079
+        if script_args.tensor_parallel_size == 1 and script_args.data_parallel_size > 1:
+            warnings.warn(
+                "Detected configuration: tensor_parallel_size=1 and data_parallel_size>1. This setup is known to "
+                "cause a crash when using the `trl vllm-serve` CLI entry point. As a workaround, please run the "
+                "server using the module path instead: `python -m trl.scripts.vllm_serve`",
+                RuntimeWarning,
+            )
+
         vllm_serve_main(script_args)
 
 

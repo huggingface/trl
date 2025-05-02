@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 
+import transformers
+from packaging import version
 from transformers import TrainingArguments
 
 
@@ -34,9 +35,12 @@ class GRPOConfig(TrainingArguments):
     Parameters:
         > Parameters that control the model and reference model
 
-        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        model_init_kwargs (`str`, `dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`GRPOTrainer`] is provided as a string.
+        disable_dropout (`bool`, *optional*, defaults to `False`):
+            Whether to disable dropout in the model. This is useful for training with a reference model, as it
+            prevents the model from generating different logprobs for the same input.
 
         > Parameters that control the data preprocessing
 
@@ -46,8 +50,8 @@ class GRPOConfig(TrainingArguments):
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `8`):
-            Number of generations per prompt to sample. The global batch size (num_processes * per_device_batch_size)
-            must be divisible by this value.
+            Number of generations per prompt to sample. The effective batch size (num_processes *
+            per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -55,6 +59,8 @@ class GRPOConfig(TrainingArguments):
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation. Disabling this option is not compatible
             with vLLM generation.
+        shuffle_dataset (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the training dataset.
 
         > Parameters that control generation
 
@@ -79,17 +85,39 @@ class GRPOConfig(TrainingArguments):
         > Parameters that control generation acceleration powered by vLLM
 
         use_vllm (`bool`, *optional*, defaults to `False`):
-            Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept unused for
-            training, as vLLM will require one for generation. vLLM must be installed (`pip install vllm`).
+            Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
+            instead of the default model.generate(). Requires `vllm` to be installed.
+        vllm_mode (`str`, *optional*, defaults to `"server"`):
+            Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
+            `"colocate"`.
+
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
+              server is running (start with `trl vllm-serve`).
+            - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
+              separate server but may cause resource contention with training.
+        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+
+        > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the vLLM server to connect to.
         vllm_server_port (`int`, *optional*, defaults to `8000`):
             Port of the vLLM server to connect to.
-        vllm_server_timeout (`float`, *optional*, defaults to `120.0`):
+        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
-        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+
+        > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
+
+        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.3`):
+            Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
+            `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
+            launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
+        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
+            `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
+            launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
 
         > Parameters that control the training
 
@@ -109,9 +137,31 @@ class GRPOConfig(TrainingArguments):
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
+        scale_rewards (`bool`, *optional*, defaults to `True`):
+            Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), the rewards
+            are normalized by the standard deviation, ensuring they have unit variance. If `False`, no scaling is
+            applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends not scaling the rewards,
+            as scaling by the standard deviation introduces a question-level difficulty bias.
+        loss_type (`str`, *optional*, defaults to `"bnpo"`):
+            Specifies the loss formulation to use. Supported values are:
+
+            - `"grpo"`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to
+                length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
+                with negative advantages.
+            - `"bnpo"`: Aggregates token-level losses by normalizing number of active token in the local batch.
+                Note that normalization is performed over the local batch only, so results may slightly vary depending
+                on the local batch size, despite a constant effective batch size. When using
+                `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
+            - `"dr_grpo"`: Aggregates token-level losses by normalizing with a global constant. This method was
+                introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
+                The value of the constant corresponds to `max_completion_length`.
+        mask_truncated_completions (`bool`, *optional*, defaults to `False`):
+            When enabled, truncated completions are excluded from the loss calculation, preventing them from being
+            incorrectly penalized and introducing noise during training. According to the
+            [DAPO](https://huggingface.co/papers/2503.14476) paper, this is a good practice for training stability.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
-            the `ref_model_mixup_alpha` parameter. This synchronization originites from the
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
@@ -122,20 +172,41 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use the Liger GRPO loss.
 
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
             installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
+        num_completions_to_print (`int` or `None`, *optional*, defaults to `None`):
+            Number of completions to print with `rich`. If `None`, all completions are logged.
+        wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
+            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all
+            prompts are logged.
     """
 
+    if version.parse(transformers.__version__) <= version.parse("4.50.3"):
+        from transformers.training_args import _VALID_DICT_FIELDS
+
+        _VALID_DICT_FIELDS.append("model_init_kwargs")
+    else:
+        _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
     # Parameters that control the model and reference model
-    model_init_kwargs: Optional[dict] = field(
+    model_init_kwargs: Optional[Union[dict, str]] = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
             "argument of the `GRPOTrainer` is provided as a string."
+        },
+    )
+    disable_dropout: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to disable dropout in the model. This is useful for training with a reference model, as "
+            "it prevents the model from generating different logprobs for the same input."
         },
     )
 
@@ -158,8 +229,8 @@ class GRPOConfig(TrainingArguments):
     num_generations: Optional[int] = field(
         default=8,
         metadata={
-            "help": "Number of generations to sample. The global batch size (num_processes * per_device_batch_size) "
-            "must be divisible by this value."
+            "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size "
+            "* gradient_accumulation_steps) must be evenly divisible by this value."
         },
     )
     max_completion_length: Optional[int] = field(
@@ -174,6 +245,10 @@ class GRPOConfig(TrainingArguments):
             "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
             "is not compatible with vLLM generation."
         },
+    )
+    shuffle_dataset: Optional[bool] = field(
+        default=True,
+        metadata={"help": "Whether to shuffle the training dataset."},
     )
 
     # Parameters that control generation
@@ -219,10 +294,26 @@ class GRPOConfig(TrainingArguments):
     use_vllm: bool = field(
         default=False,
         metadata={
-            "help": "Whether to use vLLM for generating completions. If set to `True`, ensure that a vLLM server is "
-            "running. To run the server, install vLLM (`pip install vllm`) and run `trl vllm-serve`."
+            "help": "Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for "
+            "generation instead of the default model.generate(). Requires `vllm` to be installed."
         },
     )
+    vllm_mode: str = field(
+        default="server",
+        metadata={
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server` or "
+            "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a "
+            "TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
+            "contention with training."
+        },
+    )
+    vllm_guided_decoding_regex: Optional[str] = field(
+        default=None,
+        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+    )
+
+    # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
     vllm_server_host: str = field(
         default="0.0.0.0",
         metadata={"help": "Host of the vLLM server to connect to."},
@@ -232,15 +323,29 @@ class GRPOConfig(TrainingArguments):
         metadata={"help": "Port of the vLLM server to connect to."},
     )
     vllm_server_timeout: float = field(
-        default=120.0,
+        default=240.0,
         metadata={
             "help": "Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up "
             "after the timeout, a `ConnectionError` is raised."
         },
     )
-    vllm_guided_decoding_regex: Optional[str] = field(
-        default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+
+    # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
+    vllm_gpu_memory_utilization: float = field(
+        default=0.3,
+        metadata={
+            "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set "
+            "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
+            "launching the vLLM server via the `--vllm_gpu_memory_utilization` flag."
+        },
+    )
+    vllm_tensor_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": "Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set "
+            "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
+            "launching the vLLM server via the `--vllm_tensor_parallel_size` flag."
+        },
     )
 
     # Parameters that control the training
@@ -280,6 +385,39 @@ class GRPOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
+    scale_rewards: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), "
+            "the rewards are normalized by the standard deviation, ensuring they have unit variance. If `False`, no "
+            "scaling is applied. The Dr. GRPO paper recommends not scaling the rewards, as scaling by the standard "
+            "deviation introduces a question-level difficulty bias."
+        },
+    )
+    loss_type: str = field(
+        default="bnpo",
+        metadata={
+            "help": "Specifies the loss formulation to use. Supported values are `grpo`, `bnpo`, and `dr_grpo`. "
+            "`'grpo'`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to "
+            "length bias—this approach tends to prefer shorter completions with positive advantages and longer ones "
+            "with negative advantages. "
+            "`'bnpo'`: Aggregates token-level losses by normalizing number of active token in the local batch. "
+            "Note that normalization is performed over the local batch only, so results may slightly vary depending "
+            "on the local batch size, despite a constant effective batch size. When using "
+            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
+            "`'dr_grpo'`: Aggregates token-level losses by normalizing with a global constant. This method was "
+            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
+            "`max_completion_length`."
+        },
+    )
+    mask_truncated_completions: bool = field(
+        default=False,
+        metadata={
+            "help": "When enabled, truncated completions are excluded from the loss calculation, preventing them from "
+            "being incorrectly penalized and introducing noise during training. According to the DAPO paper, this is "
+            "a good practice for training stability."
+        },
+    )
     sync_ref_model: bool = field(
         default=False,
         metadata={
@@ -302,6 +440,10 @@ class GRPOConfig(TrainingArguments):
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
     )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use the Liger GRPO loss."},
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(
@@ -311,83 +453,14 @@ class GRPOConfig(TrainingArguments):
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
     )
-
-    # Deprecated parameters
-    vllm_device: Optional[str] = field(
+    num_completions_to_print: Optional[int] = field(
         default=None,
+        metadata={"help": "Number of completions to print with `rich`. If `None`, all completions are logged."},
+    )
+    wandb_log_unique_prompts: Optional[bool] = field(
+        default=False,
         metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To use vLLM, start a vLLM "
-            "server with the `trl vllm-serve` command."
+            "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
+            "all prompts are logged."
         },
     )
-    vllm_gpu_memory_utilization: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the GPU memory "
-            "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
-            "configuration."
-        },
-    )
-    vllm_dtype: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the data type for "
-            "vLLM generation, you should now use the `dtype` parameter in the vLLM server configuration."
-        },
-    )
-    vllm_max_model_len: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the "
-            "`max_model_len` for vLLM, you should now use the `max_model_len` parameter in the vLLM server "
-            "configuration."
-        },
-    )
-    vllm_enable_prefix_caching: Optional[bool] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control prefix caching in "
-            "vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server configuration."
-        },
-    )
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        if self.vllm_device is not None:
-            warnings.warn(
-                "`vllm_device` is deprecated and will be removed in version 0.18.0. To use vLLM, start a vLLM server "
-                "with the `trl vllm-serve` command.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_gpu_memory_utilization is not None:
-            warnings.warn(
-                "`vllm_gpu_memory_utilization` is deprecated and will be removed in v0.18. To control the GPU memory "
-                "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
-                "configuration.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_dtype is not None:
-            warnings.warn(
-                "`vllm_dtype` is deprecated and will be removed in version 0.18.0. To control the data type for vLLM "
-                "generation, you should now use the `dtype` parameter in the vLLM server configuration.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_max_model_len is not None:
-            warnings.warn(
-                "`vllm_max_model_len` is deprecated and will be removed in version 0.18.0. To control the "
-                "`max_model_len` for vLLM, you should now use the `max_model_len` parameter in the vLLM server "
-                "configuration.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_enable_prefix_caching is not None:
-            warnings.warn(
-                "`vllm_enable_prefix_caching` is deprecated and will be removed in version 0.18.0. To control prefix "
-                "caching in vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server "
-                "configuration.",
-                DeprecationWarning,
-            )

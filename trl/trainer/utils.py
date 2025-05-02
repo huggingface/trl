@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -97,6 +97,11 @@ class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
         **kwargs,
     ):
         super().__init__(*args, mlm=mlm, **kwargs)
+        warnings.warn(
+            "This class is deprecated and will be removed in version 0.20.0. To train on completion only, please use "
+            "the parameter `completion_only_loss` of `SFTConfig` instead.",
+            DeprecationWarning,
+        )
 
         self.instruction_template = instruction_template
         if isinstance(instruction_template, str):
@@ -410,7 +415,12 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
-def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
+def pad(
+    tensors: list[torch.Tensor],
+    padding_value: int = 0,
+    padding_side: str = "right",
+    pad_to_multiple_of: Optional[int] = None,
+) -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
 
@@ -421,6 +431,8 @@ def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str =
             Value to use for padding. Default is 0.
         padding_side (`str`):
             Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
+        pad_to_multiple_of (`int`, *optional*, defaults to `None`):
+            If set will pad the sequence to a multiple of the provided value.
 
     Returns:
         `torch.Tensor`:
@@ -441,18 +453,25 @@ def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str =
     # Determine the maximum shape for each dimension
     output_shape = np.max([t.shape for t in tensors], 0).tolist()
 
+    # Apply pad_to_multiple_of to the first (sequence) dimension
+    if pad_to_multiple_of is not None:
+        remainder = output_shape[0] % pad_to_multiple_of
+        if remainder != 0:
+            output_shape[0] += pad_to_multiple_of - remainder
+
     # Create an output tensor filled with the padding value
     output = torch.full((len(tensors), *output_shape), padding_value, dtype=tensors[0].dtype, device=tensors[0].device)
 
     for i, t in enumerate(tensors):
-        # Determine the slice for the sequence dimension
         if padding_side == "left":
-            seq_slice = slice(output_shape[0] - t.shape[0], output_shape[0])
+            seq_start = output_shape[0] - t.shape[0]
         elif padding_side == "right":
-            seq_slice = slice(0, t.shape[0])
+            seq_start = 0
         else:
             raise ValueError("padding_side must be 'left' or 'right'")
 
+        # Define the slices
+        seq_slice = slice(seq_start, seq_start + t.shape[0])
         slices = (seq_slice,) + tuple(slice(0, s) for s in t.shape[1:])
         output[i][slices] = t
 
@@ -594,6 +613,11 @@ class ConstantLengthDataset(IterableDataset):
         append_concat_token=True,
         add_special_tokens=True,
     ):
+        warnings.warn(
+            "This class is deprecated and will be removed in version 0.20.0. To use packing, use the argument "
+            "`packing` of `SFTConfig` instead.",
+            DeprecationWarning,
+        )
         self.tokenizer = tokenizer
         self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
         self.dataset = dataset
@@ -1691,9 +1715,11 @@ def selective_log_softmax(logits, index):
     return per_token_logps
 
 
-def print_prompt_completions_sample(prompts: list[str], completions: list[str], rewards: list[int], step: int) -> None:
+def print_prompt_completions_sample(
+    prompts: list[str], completions: list[str], rewards: dict[str, list[float]], step: int, num_samples: int = None
+) -> None:
     """
-    Print out a sample of model completions to the console.
+    Print out a sample of model completions to the console with multiple reward metrics.
 
     This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
     during training. It requires the `rich` library to be installed.
@@ -1703,42 +1729,57 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
             List of prompts.
         completions (`list[str]`):
             List of completions corresponding to the prompts.
-        reward (`list[float]`):
-            List of rewards corresponding to the completions.
+        rewards (`dict[str, list[float]]`):
+            Dictionary where keys are reward names and values are lists of rewards.
         step (`int`):
             Current training step number, used in the output title.
+        num_samples (`int` or `None`, *optional*, defaults to `None`):
+            Number of random samples to display. If `None` (default), all items will be displayed.
 
     Example:
     ```python
     >>> from trl.trainer.utils import print_prompt_completions_sample
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
-    >>> rewards = [0.12345, 0.68789]
+    >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
     >>> print_prompt_completions_sample(prompts, completions, rewards, 42)
-    ╭─────────────── Step 42 ────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Reward ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │   0.12 │ │
-    │ ├────────────┼──────────────┼────────┤ │
-    │ │ The sun is │  in the sky. │   0.68 │ │
-    │ └────────────┴──────────────┴────────┘ │
-    ╰────────────────────────────────────────╯
+    ╭────────────────────── Step 42 ───────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
+    │ └────────────┴──────────────┴─────────────┴────────┘ │
+    ╰──────────────────────────────────────────────────────╯
     ```
     """
-    if not is_rich_available():
-        raise ImportError("This feature requires `rich` to be installed. Please install it first: `pip install rich`")
-
     console = Console()
     table = Table(show_header=True, header_style="bold white", expand=True)
 
     # Add columns
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
-    table.add_column("Reward", style="bold cyan", justify="right")
+    for reward_name in rewards.keys():
+        table.add_column(reward_name, style="bold cyan", justify="right")
 
-    for prompt, completion, reward in zip(prompts, completions, rewards):
-        table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places
+    # Some basic input validation
+    if num_samples is not None:
+        if num_samples >= len(prompts):
+            num_samples = None
+        elif num_samples <= 0:
+            return
+
+    # Subsample data if num_samples is specified
+    if num_samples is not None:
+        indices = random.sample(range(len(prompts)), num_samples)
+        prompts = [prompts[i] for i in indices]
+        completions = [completions[i] for i in indices]
+        rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
+
+    for i in range(len(prompts)):
+        reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
+        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values)
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
