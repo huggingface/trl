@@ -25,6 +25,7 @@ from typing import Optional, Union
 import yaml
 from transformers import HfArgumentParser
 from transformers.hf_argparser import DataClass, DataClassType
+from transformers.utils import is_rich_available
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ class ScriptArguments:
             type, inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
-    dataset_name: str = field(metadata={"help": "Dataset name."})
+    dataset_name: Optional[str] = field(default=None, metadata={"help": "Dataset name."})
     dataset_config: Optional[str] = field(
         default=None,
         metadata={
@@ -78,14 +79,21 @@ class ScriptArguments:
 def init_zero_verbose():
     """
     Perform zero verbose init - use this method on top of the CLI modules to make
+    logging and warning output cleaner. Uses Rich if available, falls back otherwise.
     """
     import logging
     import warnings
 
-    from rich.logging import RichHandler
-
     FORMAT = "%(message)s"
-    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.ERROR)
+
+    if is_rich_available():
+        from rich.logging import RichHandler
+
+        handler = RichHandler()
+    else:
+        handler = logging.StreamHandler()
+
+    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[handler], level=logging.ERROR)
 
     # Custom warning handler to redirect warnings to the logging system
     def warning_handler(message, category, filename, lineno, file=None, line=None):
