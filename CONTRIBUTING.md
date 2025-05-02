@@ -456,3 +456,193 @@ Warnings play a critical role in guiding users toward resolving potential issues
    ```
 
 By following this classification, you ensure that warnings, information, and exceptions are used appropriately, providing clear guidance to the user without cluttering the system with unnecessary messages.
+
+
+## Making a release
+
+> [!NOTE]
+> VERSION needs to be formatted following the `v{major}.{minor}.{patch}` convention. We need to follow this convention to be able to retrieve versioned scripts.
+
+To create the package for PyPI.
+
+#### 0. Prerequisites
+
+- Dependencies:
+   - twine: `pip install build twine`
+- Create an account in (and join the `trl` project):
+   - PyPI: https://pypi.org/
+   - Test PyPI: https://test.pypi.org/
+
+#### 1. Ensure your local repository is up to date with the upstream repository
+
+```bash
+git checkout main
+git pull origin main
+```
+
+> [!WARNING]
+> Do not merge other pull requests into `main` until the release is done. This is to ensure that the release is stable and does not include any untested changes. Announce internally (#trl-internal) to other maintainers that you are doing a release and that they must not merge PRs until the release is done.
+
+#### 2. Create a release branch from main
+
+```bash
+git checkout -b release-v{major}.{minor}
+```
+
+#### 3. Change the version in the following files
+
+- `.github/workflows/tests_latest.yml`:
+  ```diff
+  - with: { ref: v{major}.{minor-1}-release }
+  + with: { ref: v{major}.{minor}-release }
+  ```
+- `CITATION.cff`
+  ```diff
+  - version: {major}.{minor-1}
+  + version: {major}.{minor}
+  ```    
+- `__init__.py`
+  ```diff
+  - __version__ = "{major}.{minor}.0.dev0"
+  + __version__ = "{major}.{minor}.0"
+  ```
+- `setup.cfg`
+  ```diff
+  - version = {major}.{minor}.0.dev0
+  + version = {major}.{minor}.0
+  ```
+
+#### 4. Commit and push these changes
+
+```shell
+git commit -m 'Release: {major}.{minor}'
+git push origin release-v{major}.{minor}
+```
+
+#### 5. Create a pull request 
+
+from `release-v{major}.{minor}` to `main`, named `Release: v{major}.{minor}`, wait for tests to pass, and request a review.
+
+#### 6. Once the pull request is approved, merge it into `main`
+
+#### 7. Add a tag in git to mark the release
+
+```shell
+git checkout main
+git pull origin main
+git tag -a v{major}.{minor}.0 -m 'Adds tag v{major}.{minor}.0 for PyPI'
+git push origin v{major}.{minor}.0
+```
+
+#### 8. Create a branch `v{major}.{minor}-release` for future patch releases.
+
+```shell
+git checkout -b v{major}.{minor}-release
+git push origin v{major}.{minor}-release
+```
+
+This ensures that future patch releases (`v{major}.{minor}.1`, `v{major}.{minor}.2`, etc.) can be made separately from `main`.
+
+#### 9. Create the wheels for your release
+
+These are the artifacts that will be uploaded to PyPI and installed by users via `pip install trl`.
+
+Clean previous builds:
+
+```shell
+rm -rf build dist
+```
+
+At the root of your repo, run
+
+```bash
+python -m build .
+```
+
+This will create a folders named `dist` with the new versions of your package.
+
+#### 10. Upload the package to PyPI Test
+
+> [!IMPORTANT]
+> Do not skip this step. It is important to test the package before uploading it to the main PyPI server.
+
+```shell
+twine upload dist/* -r testpypi
+```
+
+Then in a fresh environment containing all dependencies you need, try to install your new package from the PyPI test server.
+
+```bash
+pip install -i https://test.pypi.org/simple/ trl
+```
+
+You might get errors for missing dependencies since the PyPI test server does not contain all packages like PyPI does. To make sure you have everything you can do:
+
+```bash
+pip install trl
+pip uninstall trl
+```
+
+(the second line will remove trl but keep all its dependencies).
+
+Also make sure you can actually use the package! Run the following line:
+
+```bash
+python -c "from trl import *"
+```
+
+along with anything that tests:
+
+- the core feature of your package
+- the new features you’re adding in the release
+
+#### 11. Publish on PyPI
+
+> [!WARNING]
+> This can't be reverted. Make sure you have tested everything before doing this step.
+
+```shell
+twine upload dist/*
+```
+
+#### 12. Create a GitHub Release
+
+1. Go to the repo’s [releases section](https://github.com/huggingface/trl/releases) on GitHub.
+2. Click **Draft a new release**.
+3. Select the `v{major}.{minor}.0` tag you just created in step 7.
+4. Add a title (`v{major}.{minor}.0`) and a short description of what’s new.
+5. Click **Publish Release**.
+
+#### 13. Bump to dev version
+
+1. Create a branch `bump-dev-version-{major}.{minor+1}` from `main` and checkout to it.
+
+   ```shell
+   git checkout -b bump-dev-version-{major}.{minor+1}
+   ```
+
+2. Change the version in the following files:
+   1. `__init__.py`
+      ```diff
+      - __version__ = "{major}.{minor}.0"
+      + __version__ = "{major}.{minor+1}.0.dev0"
+      ```
+   2. `setup.cfg`
+      ```diff
+      - version = {major}.{minor}.0
+      + version = {major}.{minor+1}.0.dev0
+      ```
+
+3. Commit and push these changes
+
+   ```shell
+   git add trl/__init__.py setup.cfg
+   git commit -m '⬆️ Bump dev version'
+   git push origin bump-dev-version-{major}.{minor+1}
+   ```
+
+4. Create a pull request from `bump-dev-version-{major}.{minor+1}` to `main`, named `⬆️ Bump dev version`, and request urgent review.
+
+5. Once the pull request is approved, merge it into `main`.
+
+6. The codebase is now ready for the next development cycle, inform the team in the #trl-internal channel.

@@ -45,12 +45,12 @@ from transformers import (
 )
 from transformers.utils import (
     is_peft_available,
+    is_rich_available,
     is_torch_mlu_available,
     is_torch_npu_available,
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_rich_available
 from ..trainer.model_config import ModelConfig
 
 
@@ -978,7 +978,11 @@ def cap_exp(value, cap=-1):
     return torch.exp(torch.clamp(value, max=cap))
 
 
-def print_rich_table(df: pd.DataFrame) -> Table:
+def print_rich_table(df: pd.DataFrame) -> None:
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
+        )
     console = Console()
     table = Table(show_lines=True)
     for column in df.columns:
@@ -1754,6 +1758,11 @@ def print_prompt_completions_sample(
     ╰──────────────────────────────────────────────────────╯
     ```
     """
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_prompt_completions_sample` requires the `rich` library. Please install it with "
+            "`pip install rich`."
+        )
     console = Console()
     table = Table(show_header=True, header_style="bold white", expand=True)
 
