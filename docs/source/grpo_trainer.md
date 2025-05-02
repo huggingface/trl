@@ -192,6 +192,24 @@ training_args = GRPOConfig(..., use_vllm=True)
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
+
+### Speed up training with SGLang-powered generation
+
+Another alternative to vLLM is to use the [SGLang](https://sglang.ai/) to enable fast generate. To enable it first install the package with:
+
+```shell
+pip install trl[sglang]
+```
+
+Then, pass the `use_sglang=True` in the training arguments and point to the SGLang server via the `sglang_server_url`:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_sglang=True, sglang_server_url="http://127.0.0.1:30000")
+```
+
+
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
