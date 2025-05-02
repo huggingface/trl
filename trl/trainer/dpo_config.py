@@ -384,3 +384,12 @@ class DPOConfig(TrainingArguments):
             "Comet during evaluation."
         },
     )
+
+    def __post_init__(self):
+        super().__post_init__()  # Call the base class post-init if needed
+
+        if self.max_prompt_length is not None and self.max_length is not None:
+            if not self.max_length > self.max_prompt_length:
+                raise ValueError(
+                    f"`max_prompt_length` ({self.max_prompt_length}) must be strictly less than `max_length` ({self.max_length})."
+                )
