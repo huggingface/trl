@@ -569,7 +569,7 @@ class GRPOTrainer(Trainer):
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
-        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args._steps_per_generation
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.steps_per_generation
         self._textual_logs = {
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
@@ -672,7 +672,7 @@ class GRPOTrainer(Trainer):
             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
 
         dataloader_params = {
-            "batch_size": self._train_batch_size * self.args._steps_per_generation,  # < this is the change
+            "batch_size": self._train_batch_size * self.args.steps_per_generation,  # < this is the change
             "collate_fn": data_collator,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
@@ -718,7 +718,7 @@ class GRPOTrainer(Trainer):
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
             batch_size=self.args.generation_batch_size // self.num_generations,
-            repeat_count=self.num_iterations * self.args._steps_per_generation,
+            repeat_count=self.num_iterations * self.args.steps_per_generation,
             shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
@@ -845,7 +845,7 @@ class GRPOTrainer(Trainer):
         #   - Generates completions once for the entire generation batch and splits it into batches of size
         #     `per_device_train_batch_size`
         #   - Buffers these completions and returns the appropriate slice for the current accumulation step
-        #   - Optimizes by regenerating completions only periodically (every _steps_per_generation * num_iterations)
+        #   - Optimizes by regenerating completions only periodically (every steps_per_generation * num_iterations)
         # During evaluation:
         #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
         #   - Completions are generated for each batch without buffering or reuse
@@ -853,12 +853,12 @@ class GRPOTrainer(Trainer):
 
         mode = "train" if self.model.training else "eval"
         if mode == "train":
-            generate_every = self.args._steps_per_generation * self.num_iterations
+            generate_every = self.args.steps_per_generation * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
-                self._buffered_inputs = split_tensor_dict(generation_batch, self.args._steps_per_generation)
-            inputs = self._buffered_inputs[self._step % self.args._steps_per_generation]
+                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
+            inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
             self._step += 1
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
@@ -958,10 +958,10 @@ class GRPOTrainer(Trainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         with torch.no_grad():
-            # When using num_iterations == 1 and _steps_per_generation <= gradient_accumulation_steps
+            # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
             # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
             # per_token_logps.detach() instead.
-            if self.num_iterations > 1 or self.args._steps_per_generation > self.args.gradient_accumulation_steps:
+            if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
                 old_per_token_logps = self._get_per_token_logps(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )

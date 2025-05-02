@@ -439,7 +439,7 @@ class GRPOConfig(TrainingArguments):
                 f"({self.per_device_train_batch_size * num_processes})."
             )
 
-        self._steps_per_generation = self.generation_batch_size // (self.per_device_train_batch_size * num_processes)
+        self.steps_per_generation = self.generation_batch_size // (self.per_device_train_batch_size * num_processes)
 
         # Check if the effective batch size can be divided by the number of generations
         if self.num_generations < 2:
@@ -454,7 +454,7 @@ class GRPOConfig(TrainingArguments):
         if self.num_generations not in possible_values:
             raise ValueError(
                 f"The effective train batch size ({num_processes} x {self.per_device_train_batch_size} x "
-                f"{self._steps_per_generation}) must be evenly divisible by the number of generations per "
+                f"{self.steps_per_generation}) must be evenly divisible by the number of generations per "
                 f"prompt ({self.num_generations}). Given the current effective train batch size, the valid values for "
                 f"the number of generations are: {possible_values}."
             )
