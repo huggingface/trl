@@ -45,12 +45,12 @@ from transformers import (
 )
 from transformers.utils import (
     is_peft_available,
+    is_rich_available,
     is_torch_mlu_available,
     is_torch_npu_available,
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_rich_available
 from ..trainer.model_config import ModelConfig
 
 
