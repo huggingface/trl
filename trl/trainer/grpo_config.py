@@ -404,39 +404,6 @@ class GRPOConfig(TrainingArguments):
             "a good practice for training stability."
         },
     )
-    scale_rewards: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), "
-            "the rewards are normalized by the standard deviation, ensuring they have unit variance. If `False`, no "
-            "scaling is applied. The Dr. GRPO paper recommends not scaling the rewards, as scaling by the standard "
-            "deviation introduces a question-level difficulty bias."
-        },
-    )
-    loss_type: str = field(
-        default="bnpo",
-        metadata={
-            "help": "Specifies the loss formulation to use. Supported values are `grpo`, `bnpo`, and `dr_grpo`. "
-            "`'grpo'`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to "
-            "length bias—this approach tends to prefer shorter completions with positive advantages and longer ones "
-            "with negative advantages. "
-            "`'bnpo'`: Aggregates token-level losses by normalizing number of active token in the local batch. "
-            "Note that normalization is performed over the local batch only, so results may slightly vary depending "
-            "on the local batch size, despite a constant effective batch size. When using "
-            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
-            "`'dr_grpo'`: Aggregates token-level losses by normalizing with a global constant. This method was "
-            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
-            "`max_completion_length`."
-        },
-    )
-    mask_truncated_completions: bool = field(
-        default=False,
-        metadata={
-            "help": "When enabled, truncated completions are excluded from the loss calculation, preventing them from "
-            "being incorrectly penalized and introducing noise during training. According to the DAPO paper, this is "
-            "a good practice for training stability."
-        },
-    )
     sync_ref_model: bool = field(
         default=False,
         metadata={
