@@ -314,13 +314,13 @@ class GRPOConfig(TrainingArguments):
     use_sglang: Optional[bool] = field(
         default=False,
         metadata={
-            "help": "Whether to use SGLang for generating completions. If True, a SGLang server must be running."
+            "help": "Whether to use SGLang for generating completions. If `True`, a SGLang server must be running."
         },
     )
     sglang_server_url: Optional[str] = field(
         default="http://localhost:32232",
         metadata={
-            "help": "The URL of the SGLang server (e.g., 'http://localhost:32232'). Required if use_sglang is True."
+            "help": "The URL of the SGLang server (e.g., 'http://localhost:32232'). Required if `use_sglang` is `True`."
         },
     )
     sglang_device: Optional[str] = field(
@@ -331,7 +331,7 @@ class GRPOConfig(TrainingArguments):
     )
     sglang_gpu_memory_utilization: float = field(
         default=0.9,
-        metadata={"help": "Ratio of GPU memory reserved for sglang generation."},
+        metadata={"help": "Ratio of GPU memory reserved for SGLang generation."},
     )
 
     # Parameters that control the training
