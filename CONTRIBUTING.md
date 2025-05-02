@@ -461,7 +461,7 @@ By following this classification, you ensure that warnings, information, and exc
 ## Making a release
 
 > [!NOTE]
-> VERSION needs to be formatted following the `v{major}.{minor}.{patch}` convention(we need to follow this convention to be able to retrieve versioned scripts)
+> VERSION needs to be formatted following the `v{major}.{minor}.{patch}` convention. We need to follow this convention to be able to retrieve versioned scripts.
 
 To create the package for PyPI.
 
@@ -598,12 +598,13 @@ along with anything that tests:
 
 #### 11. Publish on PyPI
 
-   > [!WARNING]
-   > This can't be reverted. Make sure you have tested everything before doing this step.
+> [!WARNING]
+> This can't be reverted. Make sure you have tested everything before doing this step.
 
-   ```shell
-   twine upload dist/*
-   ```
+```shell
+twine upload dist/*
+```
+
 #### 12. Create a GitHub Release
 
 1. Go to the repo’s [releases section](https://github.com/huggingface/trl/releases) on GitHub.
