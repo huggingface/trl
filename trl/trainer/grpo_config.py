@@ -96,7 +96,6 @@ class GRPOConfig(TrainingArguments):
             timeout, a `ConnectionError` is raised.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
-            Regex for vLLM guided decoding. If `None`, guided decoding is disabled.
 
         > Parameters that control generation acceleration powered by SGLang
 
