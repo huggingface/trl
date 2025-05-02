@@ -113,7 +113,6 @@ class GRPOConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `1e-6`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
-            Initial learning rate.
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
             speed, but may be numerically unstable for long training runs.
