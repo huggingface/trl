@@ -19,7 +19,6 @@ import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional, Union
 
@@ -30,7 +29,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
-from accelerate.utils import is_deepspeed_available, tqdm
+from accelerate.utils import tqdm
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch.utils.data import DataLoader
@@ -53,7 +52,7 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_xpu_available
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
-from ..models import PreTrainedModelWrapper, create_reference_model
+from ..models import create_reference_model, prepare_deepspeed
 from ..models.utils import prepare_fsdp
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
@@ -79,9 +78,6 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
-
-if is_deepspeed_available():
-    import deepspeed
 
 
 @dataclass
@@ -184,7 +180,6 @@ class DPOTrainer(Trainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-            This supercedes the `tokenizer` argument, which is now deprecated.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -510,7 +505,7 @@ class DPOTrainer(Trainer):
                 )
         else:
             if self.is_deepspeed_enabled:
-                self.ref_model = self._prepare_deepspeed(self.ref_model)
+                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
             elif self.is_fsdp_enabled:
                 self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
             else:
@@ -558,7 +553,7 @@ class DPOTrainer(Trainer):
 
             dataset = dataset.map(
                 self.tokenize_row if not self.is_vision_model else self.process_row,
-                remove_columns=["prompt", "chosen", "rejected"],
+                remove_columns=["chosen", "rejected"],
                 fn_kwargs={
                     "processing_class": processing_class,
                     "max_prompt_length": args.max_prompt_length,
@@ -675,37 +670,6 @@ class DPOTrainer(Trainer):
             output["image_sizes"] = processed_features["image_sizes"][0]
 
         return output
-
-    def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
-        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
-
-        if model is not None:
-            if hasattr(model, "config"):
-                hidden_size = (
-                    max(model.config.hidden_sizes)
-                    if getattr(model.config, "hidden_sizes", None)
-                    else getattr(model.config, "hidden_size", None)
-                )
-                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                    # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                    # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                    config_kwargs.update(
-                        {
-                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
-                        }
-                    )
-
-        # If ZeRO-3 is used, we shard both the active and reference model.
-        # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
-        if config_kwargs["zero_optimization"]["stage"] != 3:
-            config_kwargs["zero_optimization"]["stage"] = 0
-        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-        model.eval()
-        return model
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -1111,7 +1075,7 @@ class DPOTrainer(Trainer):
 
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
 
-        model_kwargs = {}
+        model_kwargs = {"use_cache": False}
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
@@ -1488,7 +1452,7 @@ class DPOTrainer(Trainer):
                     )
                 ],
             )
-            if "wandb" in self.args.report_to:
+            if "wandb" in self.args.report_to and self.accelerator.is_main_process:
                 wandb.log({"game_log": wandb.Table(data=table)})
 
             if "comet_ml" in self.args.report_to:
