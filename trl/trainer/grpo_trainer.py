@@ -21,7 +21,6 @@ from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
 
 import datasets
-import requests
 import torch
 import torch.utils.data
 import transformers
@@ -620,6 +619,11 @@ class GRPOTrainer(Trainer):
 
         # Initialization for the inference backend
         if self.use_sglang:
+            if not is_sglang_available():
+                raise ImportError(
+                    "SGLang is not available and `use_sglang` is set to True. Please install SGLang with "
+                    "`pip install sglang` to use it."
+                )
             # Use externally managed SGLang server.
             # The server URL is provided via configuration, e.g., "http://localhost:32232"
             if not args.sglang_server_url:
