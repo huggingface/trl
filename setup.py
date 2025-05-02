@@ -69,7 +69,7 @@ To create the package for PyPI.
 from setuptools import find_packages, setup
 
 
-__version__ = "0.17.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+__version__ = "0.18.0.dev0"  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
 
 REQUIRED_PKGS = [
     "accelerate>=0.34.0",
@@ -81,7 +81,7 @@ EXTRAS = {
     "deepspeed": ["deepspeed>=0.14.4"],
     "diffusers": ["diffusers>=0.18.0,<0.33.0"],  # Temp set <0.33.0 due to ftfy optional dep issue breaking doc builds
     "judges": ["openai>=1.23.2", "llm-blender>=0.0.2"],
-    "liger": ["liger-kernel>=0.5.6"],
+    "liger": ["liger-kernel>=0.5.8"],
     "mergekit": ["mergekit>=0.0.5.1"],
     "peft": ["peft>=0.8.0"],
     "quantization": ["bitsandbytes"],
