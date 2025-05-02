@@ -13,13 +13,13 @@
 # limitations under the License.
 
 import re
+import warnings
 from typing import Optional
 
 import torch
 from accelerate.utils import extract_model_from_parallel
 from transformers import StoppingCriteria, StoppingCriteriaList
-
-from ..import_utils import is_rich_available
+from transformers.utils import is_rich_available
 
 
 if is_rich_available():
@@ -241,6 +241,10 @@ class TextEnvironment:
             max_length (Optional[int]): The maximum number of tokens to allow in an episode.
             generation_kwargs (Optional[dict]): A dictionary of keyword arguments to pass to the model's generate method.
         """
+        warnings.warn(
+            "This class is deprecated and will be removed in version 0.21.0. To enable tool use with LLMs, check out smolagents (https://huggingface.co/docs/smolagents/index)",
+            DeprecationWarning,
+        )
         self.model = model
         self.tokenizer = tokenizer
         self.prompt = prompt
