@@ -222,10 +222,6 @@ class GRPOConfig(TrainingArguments):
             "* gradient_accumulation_steps) must be evenly divisible by this value."
         },
     )
-    temperature: Optional[float] = field(
-        default=0.9,
-        metadata={"help": "Temperature for sampling completions."},
-    )
     max_completion_length: Optional[int] = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
