@@ -593,7 +593,7 @@ class GRPOTrainer(Trainer):
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
         # final optimization step.
-        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args._steps_per_generation
+        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.steps_per_generation
         self._textual_logs = {
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
@@ -675,13 +675,14 @@ class GRPOTrainer(Trainer):
             self._signature_columns = ["prompt"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
-    # Instead of returning a standard per-step batch, our dataloader loads an *accumulated* batch
-    # (i.e., `per_device_batch_size × steps_per_generation`). This allows us to generate completions
-    # once per optimization step—rather than once per gradient accumulation step—which is significantly more efficient.
-    # The only change from the original implementation is multiplying the batch size by `steps_per_generation`.
-    # Thus, `_prepare_inputs` is called with the accumulated batch size, and it handles the splitting internally.
+    # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
+    # *generation* batch (i.e., `per_device_batch_size × steps_per_generation`). This allows us to generate completions
+    # once every steps_per_generation step—rather than once per accumulation step—which is significantly more
+    # efficient. The only change from the original implementation is multiplying the batch size by
+    # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
+    # splitting internally.
     # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification.As a result, some parts of the method aren't relevant to GRPO, but we keep them to stay one line
+    # modification. As a result, some parts of the method aren't relevant to GRPO, but we keep them to stay one line
     # apart from the super method, ensuring easier maintenance in the future.
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -695,7 +696,7 @@ class GRPOTrainer(Trainer):
             data_collator = self._get_collator_with_removed_columns(data_collator, description="training")
 
         dataloader_params = {
-            "batch_size": self._train_batch_size * self.args._steps_per_generation,  # < this is the change
+            "batch_size": self._train_batch_size * self.args.steps_per_generation,  # < this is the change
             "collate_fn": data_collator,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
@@ -722,26 +723,26 @@ class GRPOTrainer(Trainer):
         # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
         # second row shows the second sampled batch, and so on.
         #
-        #                                        |     Accum step 0      |     Accum step 1      |
-        #                                        |   GPU 0   |   GPU 1   |   GPU 0   |   GPU 1   |
+        #                                      |    Accum step 0     |
+        #                                      |   GPU 0  |   GPU 1  |
         #
-        #                   global_step   step    <-───>  num_generations=2
-        #                                         <-───────> per_device_train_batch_size=3
-        #  steps_per_gen   ▲  ▲  0          0     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
-        #       =2         ▼  |  0          1      0   0   1   1   2   2 [ 3   3   4   4   5   5]   <- Take the stored generations and use the second slice to compute the loss
-        #                     |
-        #                     |  1          2     [0   0   1   1   2   2]  3   3   4   4   5   5    <- Take the stored generations and use the first slice to compute the loss
-        #  num_iterations=2   ▼  1          3      0   0   1   1   2   2 [ 3   3   4   4   5   5]   <- Take the stored generations and use the second slice to compute the loss
+        #                 global_step   step    <-───>  num_generations=2
+        #                                       <-───────> per_device_train_batch_size=3
+        #  grad_accum    ▲  ▲  0          0     0   0   1   1   2   2   <- Generate for the first `steps_per_generation` (prompts 0 to 11); store the completions; use the first slice to compute the loss
+        #     =2         ▼  |  0          1     3   3   4   4   5   5   <- Take the stored generations and use the second slice to compute the loss
+        #                   |
+        #                   |  1          2     6   6   7   7   8   8   <- Take the stored generations and use the third slice to compute the loss
+        #  steps_per_gen=4  ▼  1          3     9   9  10  10  11  11   <- Take the stored generations and use the fourth slice to compute the loss
         #
-        #                        2          4     [6   6   7   7   8   8]  9   9  10  10  11  11    <- Generate for the whole accumulated batch; store the completions; use the first slice to compute the loss
-        #                        2          5      6   6   7   7   8   8 [ 9   9  10  10  11  11]   <- ...
-        #                                            ...
+        #                      2          4    12  12  13  13  14  14   <- Generate for the second `steps_per_generation` (prompts 12 to 23); store the completions; use the first slice to compute the loss
+        #                      2          5    15  15  16  16  17  17   <- Take the stored generations and use the second slice to compute the loss
+        #                                          ...
 
         return RepeatSampler(
             data_source=self.train_dataset,
             mini_repeat_count=self.num_generations,
             batch_size=self.args.generation_batch_size // self.num_generations,
-            repeat_count=self.num_iterations * self.args._steps_per_generation,
+            repeat_count=self.num_iterations * self.args.steps_per_generation,
             shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
@@ -859,15 +860,16 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _prepare_inputs(
-        self, accumulated_local_batch: dict[str, Union[torch.Tensor, Any]]
+        self, generation_batch: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
         # During training:
-        #   - Receives the accumulated local batch (Per-GPU batch size × num mini-batches)
+        #   - Receives the local generation batch (Per-GPU batch size × steps per generation)
         #     from the modified training dataloader instead of the standard local batch
-        #   - Generates completions once for the entire accumulated batch and splits it into smaller batches
+        #   - Generates completions once for the entire generation batch and splits it into batches of size
+        #     `per_device_train_batch_size`
         #   - Buffers these completions and returns the appropriate slice for the current accumulation step
-        #   - Optimizes by regenerating completions only periodically (every _steps_per_generation * num_iterations)
+        #   - Optimizes by regenerating completions only periodically (every steps_per_generation * num_iterations)
         # During evaluation:
         #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
         #   - Completions are generated for each batch without buffering or reuse
@@ -875,17 +877,18 @@ class GRPOTrainer(Trainer):
 
         mode = "train" if self.model.training else "eval"
         if mode == "train":
-            generate_every = self.args._steps_per_generation * self.num_iterations
+            generate_every = self.args.steps_per_generation * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
-                accumulated_local_batch = self._generate_and_score_completions(accumulated_local_batch)
-                shuffled_local_batch = shuffle_tensor_dict(accumulated_local_batch)
-                self._buffered_inputs = split_tensor_dict(shuffled_local_batch, self.args._steps_per_generation)
-            inputs = self._buffered_inputs[self._step % self.args._steps_per_generation]
+                generation_batch = self._generate_and_score_completions(generation_batch)
+                generation_batch = shuffle_tensor_dict(generation_batch)
+                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
+            inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
             self._step += 1
         else:
-            # In evaluation, there is neither gradient accumulation, nor multiple iterations
-            inputs = self._generate_and_score_completions(accumulated_local_batch)
+            # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
+            # local generation batch == local eval batch
+            inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
     def _generate_and_score_completions(
@@ -980,10 +983,10 @@ class GRPOTrainer(Trainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         with torch.no_grad():
-            # When using num_iterations == 1 and _steps_per_generation == gradient_accumulation_steps
+            # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
             # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
             # per_token_logps.detach() instead.
-            if self.num_iterations > 1 or self.args._steps_per_generation != self.args.gradient_accumulation_steps:
+            if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
                 old_per_token_logps = self._get_per_token_logps(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
@@ -1187,9 +1190,9 @@ class GRPOTrainer(Trainer):
 
         # Compute the loss
         advantages = inputs["advantages"]
-        # When using num_iterations == 1 and steps_per_generation == gradient_accumulation_steps
+        # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
         # old_per_token_logps == per_token_logps, so we can skip it's computation
-        # (see_generate_and_score_completions) and use per_token_logps.detach() instead.
+        # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = (
             per_token_logps.detach() if inputs["old_per_token_logps"] is None else inputs["old_per_token_logps"]
         )

@@ -61,11 +61,12 @@ class GRPOConfig(TrainingArguments):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
-        generation_batch_size: (`int`, *optional*, defaults to `None`):
-            The size of the generation batch. If set to `auto`, it will be set to the effective batch size per_device_train_batch_size * num_processes * gradient_accumulation_steps
 
         > Parameters that control generation
 
+        generation_batch_size: (`int` or `None`, *optional*, defaults to `None`):
+            Batch size to use for generation. If `None`, it defaults to the effective training batch size:
+            `per_device_train_batch_size * num_processes * gradient_accumulation_steps`.
         temperature (`float`, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
@@ -230,13 +231,15 @@ class GRPOConfig(TrainingArguments):
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
     )
-    generation_batch_size: str | int = field(
-        default="auto",
+
+    # Parameters that control generation
+    generation_batch_size: Optional[int] = field(
+        default=None,
         metadata={
-            "help": "The size of the generation batch. If set to `auto`, it will be set to the effective batch size per_device_train_batch_size * num_processes * gradient_accumulation_steps"
+            "help": "Batch size to use for generation. If `None`, it defaults to the effective training batch size: "
+            "`per_device_train_batch_size * num_processes * gradient_accumulation_steps`."
         },
     )
-    # Parameters that control generation
     temperature: float = field(
         default=0.9,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
@@ -425,17 +428,18 @@ class GRPOConfig(TrainingArguments):
 
         num_processes = self.world_size
         # The current default effective batch size
-        if self.generation_batch_size == "auto":
+        if self.generation_batch_size is None:
             self.generation_batch_size = (
                 self.per_device_train_batch_size * num_processes * self.gradient_accumulation_steps
             )
 
         if self.generation_batch_size % self.per_device_train_batch_size * num_processes != 0:
             raise ValueError(
-                f"steps_per_generation ({self.generation_batch_size}) must be divisible by the effective batch size ({self.per_device_train_batch_size * self.world_size})."
+                f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size "
+                f"({self.per_device_train_batch_size * num_processes})."
             )
 
-        self._steps_per_generation = self.generation_batch_size // (self.per_device_train_batch_size * num_processes)
+        self.steps_per_generation = self.generation_batch_size // (self.per_device_train_batch_size * num_processes)
 
         # Check if the effective batch size can be divided by the number of generations
         if self.num_generations < 2:
@@ -450,7 +454,7 @@ class GRPOConfig(TrainingArguments):
         if self.num_generations not in possible_values:
             raise ValueError(
                 f"The effective train batch size ({num_processes} x {self.per_device_train_batch_size} x "
-                f"{self._steps_per_generation}) must be evenly divisible by the number of generations per "
+                f"{self.steps_per_generation}) must be evenly divisible by the number of generations per "
                 f"prompt ({self.num_generations}). Given the current effective train batch size, the valid values for "
                 f"the number of generations are: {possible_values}."
             )
