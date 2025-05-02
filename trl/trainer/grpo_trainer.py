@@ -25,13 +25,7 @@ import requests
 import torch
 import torch.utils.data
 import transformers
-from accelerate.utils import (
-    broadcast_object_list,
-    gather,
-    gather_object,
-    is_peft_model,
-    set_seed,
-)
+from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
@@ -58,17 +52,8 @@ from ..data_utils import (
 )
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import (
-    is_liger_kernel_available,
-    is_rich_available,
-    is_sglang_available,
-    is_vllm_available,
-)
-from ..models import (
-    create_reference_model,
-    prepare_deepspeed,
-    unwrap_model_for_generation,
-)
+from ..import_utils import is_liger_kernel_available, is_rich_available, is_sglang_available, is_vllm_available
+from ..models import create_reference_model, prepare_deepspeed, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
