@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import os
+from transformers import DataCollatorWithPadding, AutoTokenizer
+
 import random
 import textwrap
 from typing import Any, Callable, Optional, Union
@@ -42,6 +44,7 @@ from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
 from .utils import (
     DataCollatorForChatML,
+    RewardDataCollatorWithPadding,
     disable_dropout_in_model,
     empty_cache,
     generate_model_card,
@@ -76,10 +79,18 @@ class GKDTrainer(SFTTrainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
+
+        chatdata: bool=True
     ):
+        self.chatdata = chatdata
         # add remove_unused_columns=False to the dataclass args
         args.remove_unused_columns = False
-        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
+
+        if data_collator is None and chatdata==False:
+            data_collator=DataCollatorWithPadding(tokenizer=processing_class)
+
+        if self.chatdata:
+            data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
 
         super().__init__(
             model,
@@ -94,6 +105,7 @@ class GKDTrainer(SFTTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             peft_config=peft_config,
             formatting_func=formatting_func,
+            chatdata=chatdata
         )
 
         if args.teacher_model_init_kwargs is None:
@@ -233,10 +245,20 @@ class GKDTrainer(SFTTrainer):
             )
 
         # slice the logits for the generated tokens using the inputs["prompts"] lengths
-        prompt_lengths = inputs["prompts"].shape[1]
-        shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
-        shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
-        shifted_labels = inputs["labels"][:, prompt_lengths:]
+        if self.chatdata:
+            # gkd case
+            prompt_lengths = inputs["prompts"].shape[1]
+            shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1: -1, :]
+            shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1: -1, :]
+            shifted_labels = inputs["labels"][:, prompt_lengths:]
+        else:
+            inputs["labels"]= inputs["input_ids"]
+            shifted_student_logits = outputs_student.logits[:, :-1, :]
+            shifted_teacher_logits = outputs_teacher.logits[:, :-1, :]
+            shifted_labels = inputs["labels"][:, 1:]
+
+
+
 
         # compute loss
         loss = self.generalized_jsd_loss(
@@ -253,14 +275,24 @@ class GKDTrainer(SFTTrainer):
         return (loss, outputs_student) if return_outputs else loss
 
     @staticmethod
-    def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
+    def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None, chatdata=True):
         # Generate output with respect to the prompt only
-        generated_outputs = model.generate(
-            input_ids=inputs["prompts"],
-            attention_mask=inputs.get("prompt_attention_mask", None),
-            generation_config=generation_config,
-            return_dict_in_generate=True,
-        )
+
+        if chatdata:
+            generated_outputs = model.generate(
+                input_ids=inputs["prompts"],
+                attention_mask=inputs.get("prompt_attention_mask", None),
+                generation_config=generation_config,
+                return_dict_in_generate=True,
+            )
+
+        else:
+            generated_outputs = model.generate(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs.get("attention_mask", None),
+                generation_config=generation_config,
+                return_dict_in_generate=True,
+            )
 
         # Get the generated token IDs
         generated_tokens = generated_outputs.sequences
@@ -288,7 +320,7 @@ class GKDTrainer(SFTTrainer):
         if self.seq_kd:
             with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id, self.chatdata
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
@@ -296,7 +328,7 @@ class GKDTrainer(SFTTrainer):
         if random.random() <= self.lmbda:
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id, self.chatdata
                 )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
