@@ -45,9 +45,9 @@ def main():
     make_sft_parser(subparsers)
     make_vllm_serve_parser(subparsers)
 
-    # Parse the arguments; the remaining ones (unknown) are passed to the 'accelerate launch' subparser.
+    # Parse the arguments; the remaining ones (`launch_args`) are passed to the 'accelerate launch' subparser.
     # Duplicates may occur if the same argument is provided in both the config file and CLI.
-    # For example: unknown = ["--num_processes", "4", "--num_processes", "8"].
+    # For example: launch_args = `["--num_processes", "4", "--num_processes", "8"]`.
     # Deduplication and precedence (CLI over config) are handled later by launch_command_parser.
     args, launch_args = parser.parse_args_and_config(return_remaining_strings=True)
 
