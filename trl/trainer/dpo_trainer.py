@@ -180,7 +180,6 @@ class DPOTrainer(Trainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-            This supercedes the `tokenizer` argument, which is now deprecated.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
             The model initializer to use for training. If None is specified, the default model initializer will be used.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -554,7 +553,7 @@ class DPOTrainer(Trainer):
 
             dataset = dataset.map(
                 self.tokenize_row if not self.is_vision_model else self.process_row,
-                remove_columns=["prompt", "chosen", "rejected"],
+                remove_columns=["chosen", "rejected"],
                 fn_kwargs={
                     "processing_class": processing_class,
                     "max_prompt_length": args.max_prompt_length,
@@ -1076,7 +1075,7 @@ class DPOTrainer(Trainer):
 
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
 
-        model_kwargs = {}
+        model_kwargs = {"use_cache": False}
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
 
@@ -1453,7 +1452,7 @@ class DPOTrainer(Trainer):
                     )
                 ],
             )
-            if "wandb" in self.args.report_to:
+            if "wandb" in self.args.report_to and self.accelerator.is_main_process:
                 wandb.log({"game_log": wandb.Table(data=table)})
 
             if "comet_ml" in self.args.report_to:
