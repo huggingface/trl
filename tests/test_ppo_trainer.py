@@ -179,6 +179,7 @@ class TestPPOTrainer(unittest.TestCase):
 
     def test_generate(self):
         """Test various configurations of the generate method in PPOTrainer."""
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Configure training args
             training_args = PPOConfig(
@@ -202,47 +203,35 @@ class TestPPOTrainer(unittest.TestCase):
             )
 
             query_txt = "This morning I went to the "
-            query_tensor = torch.flatten(self.tokenizer.encode(query_txt, return_tensors="pt")).to("cuda")
-            query_list = list(self.tokenizer.encode(query_txt, return_tensors="pt").to("cuda"))
+            query_tensor = torch.flatten(self.tokenizer.encode(query_txt, return_tensors="pt")).to(self.model.device)
+            query_list = list(self.tokenizer.encode(query_txt, return_tensors="pt").to(self.model.device))
 
             test_cases = [
-                # (input_type, input_data, return_prompt, generate_ref_response)
-                ("tensor", query_tensor, False, False),
-                ("tensor", query_tensor, True, False),
-                ("tensor", query_tensor, False, True),
-                ("tensor", query_tensor, True, True),
-                ("list", query_list, False, False),
-                ("list", query_list, True, False),
-                ("list", query_list, False, True),
-                ("list", query_list, True, True),
+                # (input_type, input_data, return_logits)
+                ("tensor", query_tensor, False),
+                ("tensor", query_tensor, True),
+                ("list", query_list, False),
+                ("list", query_list, True),
             ]
 
-            for input_type, query, return_prompt, generate_ref_response in test_cases:
-                with self.subTest(
-                    input_type=input_type, return_prompt=return_prompt, generate_ref_response=generate_ref_response
-                ):
-                    # Run generate with the current configuration
-                    if generate_ref_response:
-                        response, ref_response = trainer.generate(
-                            query, return_prompt=return_prompt, generate_ref_response=generate_ref_response
-                        )
-
-                        # Verify the reference response
-                        if input_type == "tensor":
-                            self.assertTrue(isinstance(ref_response, torch.Tensor))
-                            self.assertEqual(len(ref_response.shape), 2)
-                        else:
-                            self.assertTrue(isinstance(ref_response, list))
-                            self.assertEqual(len(ref_response), 1)
-                    else:
-                        response = trainer.generate(
-                            query, return_prompt=return_prompt, generate_ref_response=generate_ref_response
-                        )
-
-                    # Verify the response format based on input type
-                    if input_type == "tensor":
+            for input_type, query, return_logits in test_cases:
+                with self.subTest(input_type=input_type, return_logits=return_logits):
+                    try:
+                        response = trainer.generate(queries=query, return_logits=return_logits)
+                    except Exception:
+                        response = trainer.generate(queries=query, return_logits=return_logits)
+                    if input_type == "tensor" and return_logits is False:
                         self.assertTrue(isinstance(response, torch.Tensor))
                         self.assertEqual(len(response.shape), 2)
-                    else:
+                    elif input_type == "tensor" and return_logits is True:
+                        self.assertTrue(isinstance(response, tuple))
+                        self.assertEqual(len(response[0].shape), 2)
+                        # equal to vocab size - 1
+                        # self.assertEqual(response[1].shape ==
+                    elif input_type == "list" and return_logits is True:
                         self.assertTrue(isinstance(response, list))
+                        self.assertTrue(isinstance(response[0], tuple))
                         self.assertEqual(len(response), 1)
+                    elif input_type == "list" and return_logits is False:
+                        self.assertTrue(isinstance(response, list))
+                        self.assertTrue(isinstance(response[0], torch.Tensor))

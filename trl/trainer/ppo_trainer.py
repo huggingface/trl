@@ -57,6 +57,7 @@ from .utils import (
     exact_div,
     first_true_indices,
     forward,
+    generate,
     generate_model_card,
     get_comet_experiment_url,
     get_reward,
@@ -359,7 +360,7 @@ class PPOTrainer(Trainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        generation_config = GenerationConfig(
+        self.generation_config = GenerationConfig(
             max_new_tokens=args.response_length,
             temperature=(args.temperature + 1e-7),
             top_k=0.0,
@@ -428,7 +429,7 @@ class PPOTrainer(Trainer):
                         queries,
                         args.local_rollout_forward_batch_size,
                         processing_class.pad_token_id,
-                        generation_config,
+                        self.generation_config,
                     )
 
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
@@ -677,11 +678,80 @@ class PPOTrainer(Trainer):
             )
             torch.cuda.empty_cache()
 
+        torch.cuda.empty_cache()
+
         # HF trainer specifics
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
         if self.control.should_save:
             self._save_checkpoint(model, trial=None, metrics=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+
+    def generate(
+        self,
+        queries: Union[torch.Tensor, list[torch.Tensor]],
+        generation_config: Optional[GenerationConfig] = None,
+        return_logits=False,
+    ) -> Union[
+        torch.Tensor, tuple[torch.Tensor, torch.Tensor], list[tuple[torch.Tensor, torch.Tensor]], list[torch.Tensor]
+    ]:
+        """
+        Generates responses to the given queries.
+
+        Args:
+            queries (`torch.Tensor` or `list[torch.Tensor]]`): A batch of query tensors or a list of query tensors.
+                Each query tensor should be a 1- or 2D tensor of token IDs.
+            generation_config (`GenerationConfig` or `None`): Generation config, defaults to the one defined
+                in the PPOConfig or the model's default config.
+            return_logits (`bool`): Whether to return the logits along with the generated sequences.
+                Defaults to False.
+
+        Returns:
+            Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor], list[tuple[torch.Tensor, torch.Tensor]], list[torch.Tensor]]:
+                If `queries` is a batch tensor and `return_logits` is False:
+                    A tensor of generated sequences.
+                If `queries` is a batch tensor and `return_logits` is True:
+                    A tuple containing the tensor of generated sequences and the tensor of logits.
+                If `queries` is a list of tensors and `return_logits` is False:
+                    A list of tensors, where each tensor is a generated sequence.
+                If `queries` is a list of tensors and `return_logits` is True:
+                    A list of tuples, where each tuple contains the generated sequence tensor and the logits tensor.
+        """
+
+        def _reshape_query(query: torch.Tensor) -> torch.Tensor:
+            if len(query.shape) == 1:
+                query = query.reshape(1, -1)
+            return query
+
+        generation_config = generation_config or getattr(
+            self, "generation_config", self.policy_model.generation_config
+        )
+        with unwrap_model_for_generation(
+            self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+        ) as unwrapped_model:
+            if isinstance(queries, list):
+                result = []
+                for query in queries:
+                    query = _reshape_query(query)
+                    single_result = batch_generation(
+                        unwrapped_model.policy,
+                        query,
+                        self.args.local_rollout_forward_batch_size,
+                        self.processing_class.pad_token_id,
+                        generation_config,
+                    )
+                    if return_logits:
+                        result.append(single_result)
+                    else:
+                        result.append(single_result[0])
+
+            else:
+                queries = _reshape_query(queries)
+                result = generate(
+                    unwrapped_model.policy, queries, self.processing_class.pad_token_id, generation_config
+                )
+                if not return_logits:
+                    result = result[0]
+            return result
 
     def generate_completions(self, sampling: bool = False):
         args = self.args
@@ -862,81 +932,3 @@ class PPOTrainer(Trainer):
 
         self.tokenizer.padding_side = padding_side_default
         return outputs
-
-    def generate(
-        self,
-        query_tensor: Union[torch.Tensor, list[torch.Tensor]],
-        length_sampler: Optional[Callable] = None,
-        batch_size: int = 4,
-        return_prompt: bool = True,
-        generate_ref_response: bool = False,
-        **generation_kwargs,
-    ):
-        """
-        Generate response with the model given the query tensor.
-        call the `generate` method of the model.
-
-        Args:
-            query_tensor (`torch.LongTensor`):
-                A tensor of shape (`seq_len`) containing query tokens or a list of tensors of shape (`seq_len`).
-            length_sampler (`Callable`, *optional*):
-                Callable that returns the number of newly generated tokens.
-            batch_size (`int`, *optional):
-                Batch size used for generation, defaults to `4`.
-            return_prompt (`bool`, *optional*):
-                If set to `False` the prompt is not returned but only the newly generated tokens, defaults to `True`.
-            generate_ref_response (`bool`, *optional*):
-                If set to `True` the reference response is also generated, defaults to `False`.
-            generation_kwargs (dict[str, Any]):
-                Keyword arguments for generation.
-
-        Returns:
-            `torch.LongTensor`: A tensor of shape (`batch_size`, `gen_len`) containing response tokens.
-        """
-        if generate_ref_response:
-            ref_model = self.model if self.is_peft_model else self.ref_model
-        if isinstance(query_tensor, list):
-            response = self._generate_batched(
-                self.model,
-                query_tensor,
-                length_sampler=length_sampler,
-                batch_size=batch_size,
-                return_prompt=return_prompt,
-                **generation_kwargs,
-            )
-            if generate_ref_response:
-                ref_response = self._generate_batched(
-                    ref_model,
-                    query_tensor,
-                    length_sampler=length_sampler,
-                    batch_size=batch_size,
-                    return_prompt=return_prompt,
-                    **generation_kwargs,
-                )
-
-        else:
-            if len(query_tensor.shape) == 2:
-                raise ValueError(
-                    "query_tensor must be a tensor of shape (`seq_len`) or a list of tensors of shape (`seq_len`)"
-                )
-
-            if length_sampler is not None:
-                generation_kwargs["max_new_tokens"] = length_sampler()
-
-            with unwrap_model_for_generation(self.policy_model, self.accelerator) as unwrapped_model:
-                response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
-
-            if generate_ref_response:
-                with unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_model:
-                    ref_response = unwrapped_model.generate(
-                        input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
-                    )
-
-            if not return_prompt and not self.is_encoder_decoder:
-                response = response[:, query_tensor.shape[0] :]
-                if generate_ref_response:
-                    ref_response = ref_response[:, query_tensor.shape[0] :]
-
-        if generate_ref_response:
-            return response, ref_response
-        return response
