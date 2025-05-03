@@ -45,8 +45,11 @@ def main():
     make_sft_parser(subparsers)
     make_vllm_serve_parser(subparsers)
 
-    # Parse the arguments
-    args = parser.parse_args_and_config()[0]
+    # Parse the arguments; the remaining ones (unknown) are passed to the 'accelerate launch' subparser.
+    # Duplicates may occur if the same argument is provided in both the config file and CLI.
+    # For example: unknown = ["--num_processes", "4", "--num_processes", "8"].
+    # Deduplication and precedence (CLI over config) are handled later by launch_command_parser.
+    args, launch_args = parser.parse_args_and_config(return_remaining_strings=True)
 
     if args.command == "chat":
         (chat_args,) = parser.parse_args_and_config()
@@ -83,12 +86,14 @@ def main():
         launch_command(args)  # launch training
 
     elif args.command == "sft":
-        # Get the default args for the launch command
+        # Get the path to the training script
         sft_training_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "sft.py")
-        args = launch_command_parser().parse_args([sft_training_script])
 
-        # Feed the args to the launch command
-        args.training_script_args = sys.argv[2:]  # remove "trl" and "sft"
+        # This simulates running: `accelerate launch <launch args> sft.py <training script args>`.
+        # Note that the training script args may include launch-related arguments (e.g., `--num_processes`),
+        # but we rely on the script to ignore any that don't apply to it.
+        training_script_args = sys.argv[2:]  # Remove "trl" and "sft"
+        args = launch_command_parser().parse_args(launch_args + [sft_training_script] + training_script_args)
         launch_command(args)  # launch training
 
     elif args.command == "vllm-serve":
