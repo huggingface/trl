@@ -69,8 +69,6 @@ trl sft --config sft_config.yaml
 # dpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: anthropic/hh-rlhf
-output_dir: ./results/dpo
-learning_rate: 5e-7
 ```
 
 Launch with:
