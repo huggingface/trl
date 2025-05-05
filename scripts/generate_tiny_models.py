@@ -123,9 +123,7 @@ for model_id, config_class, model_class, suffix in [
     ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, None),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, "2.5"),
     ("Qwen/Qwen2.5-Coder-0.5B", Qwen2Config, Qwen2ForCausalLM, "2.5-Coder"),
-    ("Qwen/Qwen3-1.7B", Qwen3Config, Qwen3ForCausalLM, "3"),
     ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForCausalLM, "3"),
-    ("Qwen/Qwen3-8B", Qwen3Config, Qwen3ForCausalLM, "3"),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
