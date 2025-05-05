@@ -15,101 +15,138 @@ Currently supported commands are:
 
 - `trl env`: get the system information
 - `trl vllm-serve`: serve a model with vLLM
+Absolutely — here's a **refined, ultra-clear, and developer-friendly** version of your CLI documentation. It keeps things concise while improving clarity, flow, and formatting.
 
-## Fine-tuning with the CLI
+---
 
-To fine-tune a model, for example, you can run:
+## Fine-Tuning with the TRL CLI
+
+### Basic Usage
+
+You can launch training directly from the CLI by specifying required arguments like the model and dataset:
 
 <hfoptions id="command_line">
 <hfoption id="sft">
 
 ```bash
-trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name stanfordnlp/imdb
+trl sft \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name stanfordnlp/imdb
 ```
 
 </hfoption>
 <hfoption id="dpo">
 
 ```bash
-trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name ...
+trl dpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name anthropic/hh-rlhf
 ```
 
 </hfoption>
 </hfoptions>
 
-### Configuration file
+### Using Configuration Files
 
-You can also configure your training setup using a YAML configuration file, which helps keep your command-line usage clean and reproducible. Below is an example of a minimal configuration file:
+To keep your CLI commands clean and reproducible, you can define all training arguments in a YAML configuration file:
 
 <hfoptions id="config_file">
 <hfoption id="sft">
 
 ```yaml
-# example_config.yaml
+# sft_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: stanfordnlp/imdb
 ```
 
-To launch training with this config, run:
+Launch with:
 
 ```bash
-trl sft --config example_config.yaml
+trl sft --config sft_config.yaml
 ```
 
 </hfoption>
 <hfoption id="dpo">
 
 ```yaml
-# example_config.yaml
+# dpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
-dataset_name: ...
+dataset_name: anthropic/hh-rlhf
+output_dir: ./results/dpo
+learning_rate: 5e-7
 ```
 
-To launch training with this config, run:
+Launch with:
 
 ```bash
-trl dpo --config example_config.yaml
+trl dpo --config dpo_config.yaml
 ```
 
 </hfoption>
 </hfoptions>
 
-### Use the CLI for distributed training
+### Scaling Up with Accelerate
 
-The TRL CLI supports **all the arguments** of `accelerate launch`. See https://huggingface.co/docs/accelerate/en/basic_tutorials/launch#using-accelerate-launch. Consequelntly you can easily distribute the training leveraging `accelerate`. Example with `num_processes`:
+TRL CLI natively supports [🤗 Accelerate](https://huggingface.co/docs/accelerate), making it easy to scale training across multiple GPUs, machines, or use advanced setups like DeepSpeed — all from the same CLI.
 
+You can pass any `accelerate launch` arguments directly to `trl`, such as `--num_processes`.
 
 <hfoptions id="launch_args">
 <hfoption id="sft">
 
 ```bash
-trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name stanfordnlp/imdb --num_processes 4
+trl sft \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name stanfordnlp/imdb \
+  --num_processes 4
 ```
 
 </hfoption>
 <hfoption id="dpo">
 
 ```bash
-trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name ... --num_processes 4
+trl dpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name anthropic/hh-rlhf \
+  --num_processes 4
 ```
 
 </hfoption>
 </hfoptions>
 
-TRL provides some predefined configurations for distrubtued training. To use then  simply use the `--accelerate_config` argument. For example, to use the DeepSpeed ZeRO Stage 2, run:
+### Using Predefined Accelerate Configs
+
+TRL includes built-in Accelerate configuration profiles to simplify distributed training. Use the `--accelerate_config` flag to load one by name:
+
+#### Available presets:
+
+* `deepspeed_zero1` — DeepSpeed ZeRO Stage 1
+* `deepspeed_zero2` — DeepSpeed ZeRO Stage 2
+* `deepspeed_zero3` — DeepSpeed ZeRO Stage 3
+* `fsdp_qlora` — Fully Sharded Data Parallel with QLoRA
+* `multi_gpu` — Multi-GPU training
+* `single_gpu` — Single-GPU training
+
+#### Example usage:
 
 <hfoptions id="predefined_configs">
 <hfoption id="sft">
 
 ```bash
-trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name stanfordnlp/imdb --accelerate_config deepspeed_zero2
+trl sft \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name stanfordnlp/imdb \
+  --accelerate_config deepspeed_zero2
 ```
 
 </hfoption>
 <hfoption id="dpo">
 
 ```bash
-trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name ... --accelerate_config deepspeed_zero2
+trl dpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name anthropic/hh-rlhf \
+  --accelerate_config deepspeed_zero3
 ```
 
 </hfoption>
