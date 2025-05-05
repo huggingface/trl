@@ -1,4 +1,4 @@
-# Requires accelerate 1.6.0 or higher
+# Requires accelerate 1.7.0 or higher
 compute_environment: LOCAL_MACHINE
 debug: false
 distributed_type: FSDP
