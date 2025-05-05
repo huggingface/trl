@@ -153,7 +153,7 @@ config = Qwen2Config(
 model = Qwen2ForCausalLM(config)
 push_to_hub(model, tokenizer, "small", "2.5")
 
-#qwen3-4b small for testing 
+# qwen3-4b small for testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 config = Qwen3Config(
     vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
