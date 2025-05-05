@@ -156,7 +156,7 @@ TRL includes built-in Accelerate configuration profiles to simplify distributed 
 #### Example usage:
 
 <hfoptions id="predefined_configs">
-<hfoption id="SFT">
+<hfoption id="SFT inline">
 
 ```bash
 trl sft \
@@ -166,15 +166,45 @@ trl sft \
 ```
 
 </hfoption>
-<hfoption id="DPO">
+<hfoption id="SFT w/ config file">
+
+```yaml
+# sft_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: stanfordnlp/imdb
+accelerate_config: deepspeed_zero2
+```
+
+Launch with:
+
+```bash
+trl sft --config sft_config.yaml
+```
+</hfoption>
+<hfoption id="DPO inline">
 
 ```bash
 trl dpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name anthropic/hh-rlhf \
-  --accelerate_config deepspeed_zero3
+  --accelerate_config deepspeed_zero2
 ```
 
+</hfoption>
+<hfoption id="DPO w/ config file">
+
+```yaml
+# dpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: anthropic/hh-rlhf
+accelerate_config: deepspeed_zero2
+```
+
+Launch with:
+
+```bash
+trl dpo --config dpo_config.yaml
+```
 </hfoption>
 </hfoptions>
 
