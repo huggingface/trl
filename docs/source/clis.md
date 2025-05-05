@@ -151,14 +151,15 @@ The `--accelerate_config` flag lets you easily configure distributed training wi
 
 TRL provides several ready-to-use Accelerate configs to simplify common training setups:
 
-| Name              | Description                            |
-| ----------------- | -------------------------------------- |
-| `zero1` | DeepSpeed ZeRO Stage 1                 |
-| `deepspeed_zero2` | DeepSpeed ZeRO Stage 2                 |
-| `deepspeed_zero3` | DeepSpeed ZeRO Stage 3                 |
-| `fsdp_qlora`      | Fully Sharded Data Parallel with QLoRA |
-| `multi_gpu`       | Multi-GPU training                     |
-| `single_gpu`      | Single-GPU training                    |
+| Name         | Description                         |
+| ------------ | ----------------------------------- |
+| `fsdp1`      | Fully Sharded Data Parallel Stage 1 |
+| `fsdp2`      | Fully Sharded Data Parallel Stage 2 |
+| `zero1`      | DeepSpeed ZeRO Stage 1              |
+| `zero2`      | DeepSpeed ZeRO Stage 2              |
+| `zero3`      | DeepSpeed ZeRO Stage 3              |
+| `multi_gpu`  | Multi-GPU training                  |
+| `single_gpu` | Single-GPU training                 |
 
 To use one of these, just pass the name to `--accelerate_config`. TRL will automatically load the corresponding config file from `trl/accelerate_config/`.
 
@@ -171,7 +172,7 @@ To use one of these, just pass the name to `--accelerate_config`. TRL will autom
 trl sft \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name stanfordnlp/imdb \
-  --accelerate_config deepspeed_zero2  # or path/to/my/accelerate/config.yaml
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
 </hfoption>
@@ -181,7 +182,7 @@ trl sft \
 # sft_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: stanfordnlp/imdb
-accelerate_config: deepspeed_zero2  # or path/to/my/accelerate/config.yaml
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
 ```
 
 Launch with:
@@ -197,7 +198,7 @@ trl sft --config sft_config.yaml
 trl dpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name anthropic/hh-rlhf \
-  --accelerate_config deepspeed_zero2  # or path/to/my/accelerate/config.yaml
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
 ```
 
 </hfoption>
@@ -207,7 +208,7 @@ trl dpo \
 # dpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: anthropic/hh-rlhf
-accelerate_config: deepspeed_zero2  # or path/to/my/accelerate/config.yaml
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
 ```
 
 Launch with:
