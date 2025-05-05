@@ -153,7 +153,7 @@ TRL provides several ready-to-use Accelerate configs to simplify common training
 
 | Name              | Description                            |
 | ----------------- | -------------------------------------- |
-| `deepspeed_zero1` | DeepSpeed ZeRO Stage 1                 |
+| `zero1` | DeepSpeed ZeRO Stage 1                 |
 | `deepspeed_zero2` | DeepSpeed ZeRO Stage 2                 |
 | `deepspeed_zero3` | DeepSpeed ZeRO Stage 3                 |
 | `fsdp_qlora`      | Fully Sharded Data Parallel with QLoRA |
