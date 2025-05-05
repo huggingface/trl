@@ -15,9 +15,6 @@ Currently supported commands are:
 
 - `trl env`: get the system information
 - `trl vllm-serve`: serve a model with vLLM
-Absolutely — here's a **refined, ultra-clear, and developer-friendly** version of your CLI documentation. It keeps things concise while improving clarity, flow, and formatting.
-
----
 
 ## Fine-Tuning with the TRL CLI
 
