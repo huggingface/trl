@@ -1,6 +1,0 @@
--e .[dev]
-wandb
-jupyter
-ipykernel
-ninja
-hf_transfer
