@@ -142,7 +142,7 @@ trl dpo --config dpo_config.yaml
 
 ### Using `--accelerate_config` for Accelerate Configuration
 
-The `--accelerate_config` flag in TRL lets you easily configure distributed training with [🤗 Accelerate](https://github.com/huggingface/accelerate). This flag accepts either:
+The `--accelerate_config` flag lets you easily configure distributed training with [🤗 Accelerate](https://github.com/huggingface/accelerate). This flag accepts either:
 
 * the name of a predefined config profile (built into TRL), or
 * a path to a custom Accelerate YAML config file.
