@@ -4,14 +4,14 @@ TRL provides a powerful command-line interface (CLI) to fine-tune large language
 
 Currently supported commands are:
 
-#### Training commands
+#### Training Commands
 
 - `trl dpo`: fine-tune a LLM with DPO
 - `trl grpo`: fine-tune a LLM with GRPO
 - `trl kto`: fine-tune a LLM with KTO
 - `trl sft`: fine-tune a LLM with SFT
 
-#### Other commands
+#### Other Commands
 
 - `trl env`: get the system information
 - `trl vllm-serve`: serve a model with vLLM
@@ -140,29 +140,38 @@ trl dpo --config dpo_config.yaml
 </hfoption>
 </hfoptions>
 
-### Using Predefined Accelerate Configs
+### Using `--accelerate_config` for Accelerate Configuration
 
-TRL includes built-in Accelerate configuration profiles to simplify distributed training. Use the `--accelerate_config` flag to load one by name:
+The `--accelerate_config` flag in TRL lets you easily configure distributed training with [🤗 Accelerate](https://github.com/huggingface/accelerate). This flag accepts either:
 
-#### Available presets:
+* the name of a predefined config profile (built into TRL), or
+* a path to a custom Accelerate YAML config file.
 
-* `deepspeed_zero1` — DeepSpeed ZeRO Stage 1
-* `deepspeed_zero2` — DeepSpeed ZeRO Stage 2
-* `deepspeed_zero3` — DeepSpeed ZeRO Stage 3
-* `fsdp_qlora` — Fully Sharded Data Parallel with QLoRA
-* `multi_gpu` — Multi-GPU training
-* `single_gpu` — Single-GPU training
+#### Predefined Config Profiles
 
-#### Example usage:
+TRL provides several ready-to-use Accelerate configs to simplify common training setups:
 
-<hfoptions id="predefined_configs">
+| Name              | Description                            |
+| ----------------- | -------------------------------------- |
+| `deepspeed_zero1` | DeepSpeed ZeRO Stage 1                 |
+| `deepspeed_zero2` | DeepSpeed ZeRO Stage 2                 |
+| `deepspeed_zero3` | DeepSpeed ZeRO Stage 3                 |
+| `fsdp_qlora`      | Fully Sharded Data Parallel with QLoRA |
+| `multi_gpu`       | Multi-GPU training                     |
+| `single_gpu`      | Single-GPU training                    |
+
+To use one of these, just pass the name to `--accelerate_config`. TRL will automatically load the corresponding config file from `trl/accelerate_config/`.
+
+#### Example Usage
+
+<hfoptions id="accelerate_config">
 <hfoption id="SFT inline">
 
 ```bash
 trl sft \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name stanfordnlp/imdb \
-  --accelerate_config deepspeed_zero2
+  --accelerate_config deepspeed_zero2  # or path/to/my/accelerate/config.yaml
 ```
 
 </hfoption>
@@ -172,7 +181,7 @@ trl sft \
 # sft_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: stanfordnlp/imdb
-accelerate_config: deepspeed_zero2
+accelerate_config: deepspeed_zero2  # or path/to/my/accelerate/config.yaml
 ```
 
 Launch with:
@@ -180,6 +189,7 @@ Launch with:
 ```bash
 trl sft --config sft_config.yaml
 ```
+
 </hfoption>
 <hfoption id="DPO inline">
 
@@ -187,7 +197,7 @@ trl sft --config sft_config.yaml
 trl dpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name anthropic/hh-rlhf \
-  --accelerate_config deepspeed_zero2
+  --accelerate_config deepspeed_zero2  # or path/to/my/accelerate/config.yaml
 ```
 
 </hfoption>
@@ -197,7 +207,7 @@ trl dpo \
 # dpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 dataset_name: anthropic/hh-rlhf
-accelerate_config: deepspeed_zero2
+accelerate_config: deepspeed_zero2  # or path/to/my/accelerate/config.yaml
 ```
 
 Launch with:
@@ -208,7 +218,7 @@ trl dpo --config dpo_config.yaml
 </hfoption>
 </hfoptions>
 
-## Chat interface
+## Chat Interface
 
 <Tip warning={true}>
 
@@ -239,7 +249,7 @@ Besides talking to the model there are a few commands you can use:
 - `save` or `save {SAVE_NAME}`: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
 - `exit`: closes the interface
 
-## Getting the system information
+## Getting the System Information
 
 You can get the system information by running the following command:
 

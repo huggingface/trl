@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib.resources as resources
+import os
 import sys
 import warnings
 
@@ -58,8 +59,17 @@ def main():
         config_index = launch_args.index("--accelerate_config")
         config_name = launch_args[config_index + 1]
 
-        # Construct the file path from the package resources
-        accelerate_config_path = resources.files("trl.accelerate_configs").joinpath(f"{config_name}.yaml")
+        # If the config_name correspond to a path in the filesystem, we don't want to override it
+        if os.path.isfile(config_name):
+            accelerate_config_path = config_name
+        elif resources.files("trl.accelerate_configs").joinpath(f"{config_name}.yaml").exists():
+            # Get the predefined accelerate config path from the package resources
+            accelerate_config_path = resources.files("trl.accelerate_configs").joinpath(f"{config_name}.yaml")
+        else:
+            raise ValueError(
+                f"Accelerate config {config_name} is neither a file nor a valid config in the `trl` package. "
+                "Please provide a valid config name or a path to a config file."
+            )
 
         # Remove '--accelerate_config' and its corresponding config name
         launch_args.pop(config_index)
