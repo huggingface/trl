@@ -1,8 +1,8 @@
 # Command Line Interfaces (CLIs)
 
-You can use TRL to fine-tune your language model with methods like Supervised Fine-Tuning (SFT) or Direct Policy Optimization (DPO) using the command line interface (CLI).
+TRL provides a powerful command-line interface (CLI) to fine-tune large language models (LLMs) using methods like Supervised Fine-Tuning (SFT), Direct Preference Optimization (DPO), and more. The CLI abstracts away much of the boilerplate, letting you launch training jobs quickly and reproducibly.
 
-Currently supported CLIs are:
+Currently supported commands are:
 
 #### Training commands
 
@@ -18,86 +18,102 @@ Currently supported CLIs are:
 
 ## Fine-tuning with the CLI
 
-Before getting started, pick up a Language Model from Hugging Face Hub. Supported models can be found with the filter "text-generation" within models. Also make sure to pick up a relevant dataset for your task.
+To fine-tune a model, for example, you can run:
 
-Before using the `sft` or `dpo` commands make sure to run:
+<hfoptions id="command_line">
+<hfoption id="sft">
+
 ```bash
-accelerate config
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name stanfordnlp/imdb
 ```
-and pick up the right configuration for your training setup (single / multi-GPU, DeepSpeed, etc.). Make sure to complete all steps of `accelerate config` before running any CLI command.
 
-We also recommend you passing a YAML config file to configure your training protocol. Below is a simple example of a YAML file that you can use for training your models with `trl sft` command.
+</hfoption>
+<hfoption id="dpo">
+
+```bash
+trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name ...
+```
+
+</hfoption>
+</hfoptions>
+
+### Configuration file
+
+You can also configure your training setup using a YAML configuration file, which helps keep your command-line usage clean and reproducible. Below is an example of a minimal configuration file:
+
+<hfoptions id="config_file">
+<hfoption id="sft">
 
 ```yaml
-model_name_or_path:
-  Qwen/Qwen2.5-0.5B
-dataset_name:
-  stanfordnlp/imdb
-report_to:
-  none
-learning_rate:
-  0.0001
-lr_scheduler_type:
-  cosine
+# example_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: stanfordnlp/imdb
 ```
 
-Save that config in a `.yaml` and get started immediately! An example CLI config is available as `examples/cli_configs/example_config.yaml`. Note you can overwrite the arguments from the config file by explicitly passing them to the CLI, e.g. from the root folder:
+To launch training with this config, run:
 
 ```bash
-trl sft --config examples/cli_configs/example_config.yaml --output_dir test-trl-cli --lr_scheduler_type cosine_with_restarts
+trl sft --config example_config.yaml
 ```
 
-Will force-use `cosine_with_restarts` for `lr_scheduler_type`.
+</hfoption>
+<hfoption id="dpo">
 
-### Supported Arguments 
+```yaml
+# example_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: ...
+```
 
-We do support all arguments from `transformers.TrainingArguments`, for loading your model, we support all arguments from `~trl.ModelConfig`:
-
-[[autodoc]] ModelConfig
-
-You can pass any of these arguments either to the CLI or the YAML file.
-
-### Supervised Fine-tuning (SFT)
-
-Follow the basic instructions above and run `trl sft --output_dir <output_dir> <*args>`: 
+To launch training with this config, run:
 
 ```bash
-trl sft --model_name_or_path facebook/opt-125m --dataset_name stanfordnlp/imdb --output_dir opt-sft-imdb
+trl dpo --config example_config.yaml
 ```
 
-The SFT CLI is based on the `trl/scripts/sft.py` script.
+</hfoption>
+</hfoptions>
 
-### Direct Policy Optimization (DPO)
+### Use the CLI for distributed training
 
-To use the DPO CLI, you need to have a dataset in the TRL format such as 
-
-* TRL's Anthropic HH dataset: https://huggingface.co/datasets/trl-internal-testing/hh-rlhf-helpful-base-trl-style
-* TRL's OpenAI TL;DR summarization dataset: https://huggingface.co/datasets/trl-internal-testing/tldr-preference-trl-style
-
-These datasets always have at least three columns `prompt, chosen, rejected`:
-
-* `prompt` is a list of strings.
-* `chosen` is the chosen response in [chat format](https://huggingface.co/docs/transformers/main/en/chat_templating)
-* `rejected` is the rejected response [chat format](https://huggingface.co/docs/transformers/main/en/chat_templating) 
+The TRL CLI supports **all the arguments** of `accelerate launch`. See https://huggingface.co/docs/accelerate/en/basic_tutorials/launch#using-accelerate-launch. Consequelntly you can easily distribute the training leveraging `accelerate`. Example with `num_processes`:
 
 
-To do a quick start, you can run the following command:
+<hfoptions id="launch_args">
+<hfoption id="sft">
 
 ```bash
-trl dpo --model_name_or_path facebook/opt-125m --output_dir trl-hh-rlhf --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name stanfordnlp/imdb --num_processes 4
 ```
 
-
-The DPO CLI is based on the `trl/scripts/dpo.py` script.
-
-
-#### Custom preference dataset
-
-Format the dataset into TRL format (you can adapt the `examples/datasets/anthropic_hh.py`):
+</hfoption>
+<hfoption id="dpo">
 
 ```bash
-python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity your-hf-org
+trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name ... --num_processes 4
 ```
+
+</hfoption>
+</hfoptions>
+
+TRL provides some predefined configurations for distrubtued training. To use then  simply use the `--accelerate_config` argument. For example, to use the DeepSpeed ZeRO Stage 2, run:
+
+<hfoptions id="predefined_configs">
+<hfoption id="sft">
+
+```bash
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name stanfordnlp/imdb --accelerate_config deepspeed_zero2
+```
+
+</hfoption>
+<hfoption id="dpo">
+
+```bash
+trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name ... --accelerate_config deepspeed_zero2
+```
+
+</hfoption>
+</hfoptions>
 
 ## Chat interface
 
