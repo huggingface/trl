@@ -23,7 +23,7 @@ Currently supported commands are:
 You can launch training directly from the CLI by specifying required arguments like the model and dataset:
 
 <hfoptions id="command_line">
-<hfoption id="sft">
+<hfoption id="SFT">
 
 ```bash
 trl sft \
@@ -32,7 +32,7 @@ trl sft \
 ```
 
 </hfoption>
-<hfoption id="dpo">
+<hfoption id="DPO">
 
 ```bash
 trl dpo \
@@ -48,7 +48,7 @@ trl dpo \
 To keep your CLI commands clean and reproducible, you can define all training arguments in a YAML configuration file:
 
 <hfoptions id="config_file">
-<hfoption id="sft">
+<hfoption id="SFT">
 
 ```yaml
 # sft_config.yaml
@@ -63,7 +63,7 @@ trl sft --config sft_config.yaml
 ```
 
 </hfoption>
-<hfoption id="dpo">
+<hfoption id="DPO">
 
 ```yaml
 # dpo_config.yaml
@@ -84,10 +84,10 @@ trl dpo --config dpo_config.yaml
 
 TRL CLI natively supports [🤗 Accelerate](https://huggingface.co/docs/accelerate), making it easy to scale training across multiple GPUs, machines, or use advanced setups like DeepSpeed — all from the same CLI.
 
-You can pass any `accelerate launch` arguments directly to `trl`, such as `--num_processes`.
+You can pass any `accelerate launch` arguments directly to `trl`, such as `--num_processes`. For more information see [Using accelerate launch](https://huggingface.co/docs/accelerate/en/basic_tutorials/launch#using-accelerate-launch).
 
 <hfoptions id="launch_args">
-<hfoption id="sft">
+<hfoption id="SFT inline">
 
 ```bash
 trl sft \
@@ -97,7 +97,23 @@ trl sft \
 ```
 
 </hfoption>
-<hfoption id="dpo">
+<hfoption id="SFT w/ config file">
+
+```yaml
+# sft_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: stanfordnlp/imdb
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl sft --config sft_config.yaml
+```
+
+</hfoption>
+<hfoption id="DPO inline">
 
 ```bash
 trl dpo \
@@ -106,6 +122,21 @@ trl dpo \
   --num_processes 4
 ```
 
+</hfoption>
+<hfoption id="DPO w/ config file">
+
+```yaml
+# dpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: anthropic/hh-rlhf
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl dpo --config dpo_config.yaml
+```
 </hfoption>
 </hfoptions>
 
@@ -125,7 +156,7 @@ TRL includes built-in Accelerate configuration profiles to simplify distributed 
 #### Example usage:
 
 <hfoptions id="predefined_configs">
-<hfoption id="sft">
+<hfoption id="SFT">
 
 ```bash
 trl sft \
@@ -135,7 +166,7 @@ trl sft \
 ```
 
 </hfoption>
-<hfoption id="dpo">
+<hfoption id="DPO">
 
 ```bash
 trl dpo \
