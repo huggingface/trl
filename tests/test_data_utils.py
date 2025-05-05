@@ -102,6 +102,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         "trl-internal-testing/tiny-MistralForCausalLM-0.2",
         "trl-internal-testing/tiny-Phi3ForCausalLM",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        "trl-internal-testing/tiny-Qwen3ForCausalLM",
     ]
 
     conversational_examples = [
