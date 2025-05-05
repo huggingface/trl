@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock
@@ -1263,6 +1264,7 @@ class DPOTrainerTester(unittest.TestCase):
 
             self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
 
+    @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
     @require_liger_kernel
     @parameterized.expand([(0.1,), (0.5,)])
     def test_dpo_trainer_with_liger(self, beta):
