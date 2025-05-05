@@ -45,12 +45,12 @@ from transformers import (
 )
 from transformers.utils import (
     is_peft_available,
+    is_rich_available,
     is_torch_mlu_available,
     is_torch_npu_available,
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_rich_available
 from ..trainer.model_config import ModelConfig
 
 
@@ -415,7 +415,12 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
-def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
+def pad(
+    tensors: list[torch.Tensor],
+    padding_value: int = 0,
+    padding_side: str = "right",
+    pad_to_multiple_of: Optional[int] = None,
+) -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
 
@@ -426,6 +431,8 @@ def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str =
             Value to use for padding. Default is 0.
         padding_side (`str`):
             Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
+        pad_to_multiple_of (`int`, *optional*, defaults to `None`):
+            If set will pad the sequence to a multiple of the provided value.
 
     Returns:
         `torch.Tensor`:
@@ -446,18 +453,25 @@ def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str =
     # Determine the maximum shape for each dimension
     output_shape = np.max([t.shape for t in tensors], 0).tolist()
 
+    # Apply pad_to_multiple_of to the first (sequence) dimension
+    if pad_to_multiple_of is not None:
+        remainder = output_shape[0] % pad_to_multiple_of
+        if remainder != 0:
+            output_shape[0] += pad_to_multiple_of - remainder
+
     # Create an output tensor filled with the padding value
     output = torch.full((len(tensors), *output_shape), padding_value, dtype=tensors[0].dtype, device=tensors[0].device)
 
     for i, t in enumerate(tensors):
-        # Determine the slice for the sequence dimension
         if padding_side == "left":
-            seq_slice = slice(output_shape[0] - t.shape[0], output_shape[0])
+            seq_start = output_shape[0] - t.shape[0]
         elif padding_side == "right":
-            seq_slice = slice(0, t.shape[0])
+            seq_start = 0
         else:
             raise ValueError("padding_side must be 'left' or 'right'")
 
+        # Define the slices
+        seq_slice = slice(seq_start, seq_start + t.shape[0])
         slices = (seq_slice,) + tuple(slice(0, s) for s in t.shape[1:])
         output[i][slices] = t
 
@@ -964,7 +978,11 @@ def cap_exp(value, cap=-1):
     return torch.exp(torch.clamp(value, max=cap))
 
 
-def print_rich_table(df: pd.DataFrame) -> Table:
+def print_rich_table(df: pd.DataFrame) -> None:
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
+        )
     console = Console()
     table = Table(show_lines=True)
     for column in df.columns:
@@ -1740,6 +1758,11 @@ def print_prompt_completions_sample(
     ╰──────────────────────────────────────────────────────╯
     ```
     """
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_prompt_completions_sample` requires the `rich` library. Please install it with "
+            "`pip install rich`."
+        )
     console = Console()
     table = Table(show_header=True, header_style="bold white", expand=True)
 

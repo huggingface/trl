@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import warnings
+
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
@@ -85,17 +85,39 @@ class GRPOConfig(TrainingArguments):
         > Parameters that control generation acceleration powered by vLLM
 
         use_vllm (`bool`, *optional*, defaults to `False`):
-            Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept unused for
-            training, as vLLM will require one for generation. vLLM must be installed (`pip install vllm`).
+            Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
+            instead of the default model.generate(). Requires `vllm` to be installed.
+        vllm_mode (`str`, *optional*, defaults to `"server"`):
+            Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
+            `"colocate"`.
+
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
+              server is running (start with `trl vllm-serve`).
+            - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
+              separate server but may cause resource contention with training.
+        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+
+        > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the vLLM server to connect to.
         vllm_server_port (`int`, *optional*, defaults to `8000`):
             Port of the vLLM server to connect to.
-        vllm_server_timeout (`float`, *optional*, defaults to `120.0`):
+        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
-        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+
+        > Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
+
+        vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.3`):
+            Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
+            `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
+            launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
+        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
+            `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
+            launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
 
         > Parameters that control the training
 
@@ -139,7 +161,7 @@ class GRPOConfig(TrainingArguments):
             [DAPO](https://huggingface.co/papers/2503.14476) paper, this is a good practice for training stability.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
-            the `ref_model_mixup_alpha` parameter. This synchronization originites from the
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
@@ -272,10 +294,26 @@ class GRPOConfig(TrainingArguments):
     use_vllm: bool = field(
         default=False,
         metadata={
-            "help": "Whether to use vLLM for generating completions. If set to `True`, ensure that a vLLM server is "
-            "running. To run the server, install vLLM (`pip install vllm`) and run `trl vllm-serve`."
+            "help": "Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for "
+            "generation instead of the default model.generate(). Requires `vllm` to be installed."
         },
     )
+    vllm_mode: str = field(
+        default="server",
+        metadata={
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server` or "
+            "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a "
+            "TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
+            "contention with training."
+        },
+    )
+    vllm_guided_decoding_regex: Optional[str] = field(
+        default=None,
+        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+    )
+
+    # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
     vllm_server_host: str = field(
         default="0.0.0.0",
         metadata={"help": "Host of the vLLM server to connect to."},
@@ -285,15 +323,29 @@ class GRPOConfig(TrainingArguments):
         metadata={"help": "Port of the vLLM server to connect to."},
     )
     vllm_server_timeout: float = field(
-        default=120.0,
+        default=240.0,
         metadata={
             "help": "Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up "
             "after the timeout, a `ConnectionError` is raised."
         },
     )
-    vllm_guided_decoding_regex: Optional[str] = field(
-        default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+
+    # Parameters that control colocated vLLM execution (only used when `vllm_mode` is `"colocate"`)
+    vllm_gpu_memory_utilization: float = field(
+        default=0.3,
+        metadata={
+            "help": "Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set "
+            "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
+            "launching the vLLM server via the `--vllm_gpu_memory_utilization` flag."
+        },
+    )
+    vllm_tensor_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": "Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set "
+            "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
+            "launching the vLLM server via the `--vllm_tensor_parallel_size` flag."
+        },
     )
 
     # Parameters that control the training
@@ -412,83 +464,3 @@ class GRPOConfig(TrainingArguments):
             "all prompts are logged."
         },
     )
-
-    # Deprecated parameters
-    vllm_device: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To use vLLM, start a vLLM "
-            "server with the `trl vllm-serve` command."
-        },
-    )
-    vllm_gpu_memory_utilization: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the GPU memory "
-            "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
-            "configuration."
-        },
-    )
-    vllm_dtype: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the data type for "
-            "vLLM generation, you should now use the `dtype` parameter in the vLLM server configuration."
-        },
-    )
-    vllm_max_model_len: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control the "
-            "`max_model_len` for vLLM, you should now use the `max_model_len` parameter in the vLLM server "
-            "configuration."
-        },
-    )
-    vllm_enable_prefix_caching: Optional[bool] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. To control prefix caching in "
-            "vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server configuration."
-        },
-    )
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        if self.vllm_device is not None:
-            warnings.warn(
-                "`vllm_device` is deprecated and will be removed in version 0.18.0. To use vLLM, start a vLLM server "
-                "with the `trl vllm-serve` command.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_gpu_memory_utilization is not None:
-            warnings.warn(
-                "`vllm_gpu_memory_utilization` is deprecated and will be removed in v0.18. To control the GPU memory "
-                "utilization for vLLM, you should now use the `gpu_memory_utilization` parameter in the vLLM server "
-                "configuration.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_dtype is not None:
-            warnings.warn(
-                "`vllm_dtype` is deprecated and will be removed in version 0.18.0. To control the data type for vLLM "
-                "generation, you should now use the `dtype` parameter in the vLLM server configuration.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_max_model_len is not None:
-            warnings.warn(
-                "`vllm_max_model_len` is deprecated and will be removed in version 0.18.0. To control the "
-                "`max_model_len` for vLLM, you should now use the `max_model_len` parameter in the vLLM server "
-                "configuration.",
-                DeprecationWarning,
-            )
-
-        if self.vllm_enable_prefix_caching is not None:
-            warnings.warn(
-                "`vllm_enable_prefix_caching` is deprecated and will be removed in version 0.18.0. To control prefix "
-                "caching in vLLM, you should now use the `enable_prefix_caching` parameter in the vLLM server "
-                "configuration.",
-                DeprecationWarning,
-            )
