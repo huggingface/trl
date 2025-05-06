@@ -241,6 +241,7 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
    - The function must accept the following as keyword arguments:
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
+     - `completions_ids` (contains the tokenized completions),
      - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -255,8 +256,28 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
 Below is an example of a reward function for a standard format that rewards longer completions:
 
 ```python
+def reward_func(completions_ids, **kwargs):
+    """Reward function that gives higher scores to longer completions (in term of tokens)."""
+    return [float(len(ids)) for ids in completions_ids]
+```
+
+You can test it as follows:
+
+```python  # todo: fix this example
+>>> prompts = ["The sky is", "The sun is"]
+>>> completions = [" blue.", " in the sky."]
+>>> completions_ids = [[0, 1, 2, 4], [3, 4, 5]]
+>>> print(reward_func(prompts=prompts, completions=completions))
+[4.0, 3.0]
+```
+
+#### Example 1bis: Reward longer completions (based in the number of caracters)
+
+Same as the previous example, but this time the reward function is based on the number of characters instead of tokens.
+
+```python
 def reward_func(completions, **kwargs):
-    """Reward function that gives higher scores to longer completions."""
+    """Reward function that gives higher scores to longer completions (in term of caracters)."""
     return [float(len(completion)) for completion in completions]
 ```
 
