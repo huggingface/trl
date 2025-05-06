@@ -1100,6 +1100,12 @@ class GRPOTrainer(Trainer):
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
+        # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
+        # to re-tokenize completions if the reward is computed from tokens.
+        completion_ids_list = [
+            [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
+        ]
+
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
             truncated_completions = ~is_eos.any(dim=1)
@@ -1152,10 +1158,13 @@ class GRPOTrainer(Trainer):
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
-                    # Repeat all input columns (but "prompt" and "completion") to match the number of generations
-                    keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
+                    # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the number
+                    # of generations
+                    keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
                     reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
-                    output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)
+                    output_reward_func = reward_func(
+                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
+                    )
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
 
