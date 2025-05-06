@@ -39,6 +39,8 @@ from trl.trainer.utils import (
     selective_log_softmax,
 )
 
+from .testing_utils import require_rich
+
 
 if is_peft_available():
     from peft import LoraConfig
@@ -512,6 +514,7 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
 
+@require_rich
 class TestPrintPromptCompletionsSample(unittest.TestCase):
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):

@@ -17,17 +17,22 @@ import functools
 import time
 from collections.abc import Generator
 
-from transformers import Trainer, is_wandb_available
+from transformers import Trainer
+from transformers.integrations import is_mlflow_available, is_wandb_available
 
 
 if is_wandb_available():
     import wandb
 
+if is_mlflow_available():
+    import mlflow
+
 
 @contextlib.contextmanager
 def profiling_context(trainer: Trainer, name: str) -> Generator[None, None, None]:
     """
-    A context manager function for profiling a block of code. Results are logged to Weights & Biases if enabled.
+    A context manager function for profiling a block of code. Results are logged to Weights & Biases or MLflow
+    depending on the trainer's configuration.
 
     Args:
         trainer (`~transformers.Trainer`):
@@ -54,8 +59,12 @@ def profiling_context(trainer: Trainer, name: str) -> Generator[None, None, None
     end_time = time.perf_counter()
     duration = end_time - start_time
 
+    profiling_metrics = {f"profiling/Time taken: {trainer.__class__.__name__}.{name}": duration}
     if "wandb" in trainer.args.report_to and wandb.run is not None and trainer.accelerator.is_main_process:
-        wandb.log({f"profiling/Time taken: {trainer.__class__.__name__}.{name}": duration})
+        wandb.log(profiling_metrics)
+
+    if "mlflow" in trainer.args.report_to and mlflow.run is not None and trainer.accelerator.is_main_process:
+        mlflow.log_metrics(profiling_metrics, step=trainer.state.global_step)
 
 
 def profiling_decorator(func: callable) -> callable:

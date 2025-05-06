@@ -163,3 +163,80 @@ class TestTrlParser(unittest.TestCase):
         self.assertIsInstance(result_args[0], MyDataclass)
         self.assertEqual(result_args[0].arg1, 2)
         self.assertEqual(result_args[1], ["--remaining_string_in_config", "abc", "--remaining_string_in_args", "def"])
+
+    @patch("builtins.open", mock_open(read_data="arg1: 2\narg2: config_value"))
+    @patch("yaml.safe_load")
+    def test_subparsers_with_config_defaults(self, mock_yaml_load):
+        """Test that config defaults are applied to all subparsers."""
+        mock_yaml_load.return_value = {"arg1": 2, "arg2": "config_value"}
+
+        # Create the main parser
+        parser = TrlParser()
+
+        # Add subparsers
+        subparsers = parser.add_subparsers(dest="command", parser_class=TrlParser)
+
+        # Create a subparser for a specific command
+        subparsers.add_parser("subcommand", dataclass_types=[MyDataclass])
+
+        # Parse with config file
+        args = ["subcommand", "--config", "config.yaml"]
+        result_args = parser.parse_args_and_config(args)
+
+        # Check main parser arguments
+        self.assertEqual(len(result_args), 1)
+
+        # Check that config values were applied to the subparser
+        self.assertEqual(result_args[0].arg1, 2)  # Default from config
+        self.assertEqual(result_args[0].arg2, "config_value")  # Default from config
+
+    @patch("builtins.open", mock_open(read_data="arg1: 2\narg2: config_value"))
+    @patch("yaml.safe_load")
+    def test_subparsers_with_config_defaults_and_arg_override(self, mock_yaml_load):
+        """Test that config defaults are applied to all subparsers."""
+        mock_yaml_load.return_value = {"arg1": 2, "arg2": "config_value"}
+
+        # Create the main parser
+        parser = TrlParser()
+
+        # Add subparsers
+        subparsers = parser.add_subparsers(dest="command", parser_class=TrlParser)
+
+        # Create a subparser for a specific command
+        subparsers.add_parser("subcommand", dataclass_types=[MyDataclass])
+
+        # Test with command line arguments overriding config
+        args = ["subcommand", "--arg1", "3", "--config", "config.yaml"]
+        result_args = parser.parse_args_and_config(args)
+
+        # Command line arguments should override config
+        self.assertEqual(result_args[0].arg1, 3)
+        self.assertEqual(result_args[0].arg2, "config_value")  # Still from config
+
+    @patch("builtins.open", mock_open(read_data="arg1: 2\narg2: config_value"))
+    @patch("yaml.safe_load")
+    def test_subparsers_multiple_with_config_defaults(self, mock_yaml_load):
+        """Test that config defaults are applied to all subparsers."""
+        mock_yaml_load.return_value = {"arg1": 2, "arg2": "config_value"}
+
+        # Create the main parser
+        parser = TrlParser()
+
+        # Add subparsers
+        subparsers = parser.add_subparsers(dest="command", parser_class=TrlParser)
+
+        # Create a subparser for a specific command
+        subparsers.add_parser("subcommand0", dataclass_types=[MyDataclass])
+        subparsers.add_parser("subcommand1", dataclass_types=[MyDataclass])
+
+        for idx in range(2):
+            # Parse with config file
+            args = [f"subcommand{idx}", "--config", "config.yaml"]
+            result_args = parser.parse_args_and_config(args)
+
+            # Check main parser arguments
+            self.assertEqual(len(result_args), 1)
+
+            # Check that config values were applied to the subparser
+            self.assertEqual(result_args[0].arg1, 2)  # Default from config
+            self.assertEqual(result_args[0].arg2, "config_value")  # Default from config
