@@ -157,6 +157,12 @@ class VLLMClient:
                     ) from exc
             else:
                 if response.status_code == 200:
+                    if "X-Forwarded-For" in response.headers:
+                        self.host = response.headers["X-Forwarded-For"]
+                    else:
+                        sock = response.raw._connection.sock
+                        ip, port = sock.getpeername()
+                        self.host = ip
                     logger.info("Server is up!")
                     return None
 
