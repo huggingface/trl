@@ -771,7 +771,7 @@ class GRPOTrainer(Trainer):
                 # prompt individually.
                 ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                 with profiling_context(self, "vLLM.generate"):
-                    completion_ids_list = self.vllm_client.generate(
+                    completion_ids = self.vllm_client.generate(
                         prompts=ordered_set_of_prompts,
                         n=self.num_generations,
                         repetition_penalty=self.repetition_penalty,
