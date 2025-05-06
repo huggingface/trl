@@ -1158,7 +1158,8 @@ class GRPOTrainer(Trainer):
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
-                    # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the number of generations
+                    # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the number
+                    # of generations
                     keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
                     reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                     output_reward_func = reward_func(
