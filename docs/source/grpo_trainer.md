@@ -323,7 +323,7 @@ Below is an example of a reward function for a standard format that rewards long
 
 ```python
 def reward_func(completions_ids, **kwargs):
-    """Reward function that gives higher scores to longer completions (in term of tokens)."""
+    """Reward function that assigns higher scores to longer completions (in terms of token count)."""
     return [float(len(ids)) for ids in completions_ids]
 ```
 
@@ -343,7 +343,7 @@ Same as the previous example, but this time the reward function is based on the 
 
 ```python
 def reward_func(completions, **kwargs):
-    """Reward function that gives higher scores to longer completions (in term of caracters)."""
+    """Reward function that assigns higher scores to longer completions (in terms of character count)."""
     return [float(len(completion)) for completion in completions]
 ```
 
