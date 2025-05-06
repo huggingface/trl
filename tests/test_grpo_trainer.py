@@ -24,7 +24,7 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.trainer.grpo_trainer import RepeatRandomSampler
+from trl.trainer.grpo_trainer import RepeatSampler
 
 from .testing_utils import require_vllm
 
@@ -36,7 +36,7 @@ if is_peft_available():
 class RepeatRandomSamplerTester(unittest.TestCase):
     def test_sampler(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=2)
         # Should output something like [4, 4, 3, 3, 0, 0, 1, 1, 2, 2, 6, 6, 5, 5]
         sampled = list(sampler)
         # Check that the length is doubled
@@ -46,9 +46,16 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         # Check that each element is repeated twice
         assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
 
+    def test_sampler_no_shuffle(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, shuffle=False)
+        sampled = list(sampler)
+        expected = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
+        self.assertEqual(sampled, expected)
+
     def test_sampler_no_repeat(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=1)
+        sampler = RepeatSampler(dataset, mini_repeat_count=1)
         # Should output something like [4, 3, 0, 1, 2, 6, 5]
         sampled = list(sampler)
         # Check that the length is the same
@@ -58,7 +65,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_batch_size(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g", "h"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
         # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6, 5, 7, 5, 7]
         sampled = list(sampler)
         # Check that the length is doubled
@@ -70,7 +77,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_batch_size_and_drop(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
         # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6]
         sampled = list(sampler)
         # Check that the length is doubled
@@ -84,7 +91,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_mini_repeat_count_and_batch_size_1(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
         # Should output something like [4, 4, 3, 3, 0, 0, 4, 4, 3, 3, 0, 0,
         #                               1, 1, 2, 2, 6, 6, 1, 1, 2, 2, 6, 6]
         sampled = list(sampler)
@@ -100,7 +107,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_mini_repeat_count_and_batch_size_2(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
+        sampler = RepeatSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
         # Should output something like [4, 4, 4, 3, 3, 3, 4, 4, 4, 3, 3, 3,
         #                               0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1,
         #                               2, 2, 2, 6, 6, 6, 2, 2, 2, 6, 6, 6]
@@ -118,7 +125,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
     def test_sampler_with_mini_repeat_count_and_batch_size_3(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatRandomSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
         # Should output something like [4, 4, 3, 3, 4, 4, 3, 3, 4, 4, 3, 3,
         #                               0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
         #                               2, 2, 6, 6, 2, 2, 6, 6, 2, 2, 6, 6]
@@ -156,6 +163,38 @@ class GRPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @parameterized.expand([("bnpo",), ("dr_grpo",)])
+    def test_training_loss_types(self, loss_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
+                loss_type=loss_type,
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -1006,3 +1045,34 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
+
+    def test_training_num_generations_larger_than_batch_size(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                num_generations=6,  # the number of generations is larger than the batch size, but
+                gradient_accumulation_steps=2,  # gradient accumulation should allow that
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
