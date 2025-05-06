@@ -1,7 +1,7 @@
 # vLLM Integration
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summerize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood. Let's go! 🔥
 
-## 🚀 How can I use vLLM with TRL to accelerate training? 
+## 🚀 How can I use vLLM with TRL to speed up training? 
 First install vLLM using the following command:
 
 ```bash
@@ -56,27 +56,7 @@ Online methods like GRPO or Online DPO require the model to generate completions
 ## 🤔 How does vLLM solve the slow generation issue?
 If you've ever done autoregressive decoder training, you know  all the input tokens to the LLM produce their attention key and value tensors, and these tensors are kept in GPU memory to later generate subsequent tokens based on them. These cached key and value tensors are often referred to as KV cache.  However, storing the KV cache occupies a lot of memory, so vLLM uses a technique called PagedAttention to solve this problem. PagedAttention , which is inspired by the OS’s virtual memory concept stores continuous keys and values in **non-contiguous memory space** which is way more efficient. The detail of this is beyond the scope of this document, but in short, it allows the model to store the keys and values in a more efficient way, reducing the memory footprint and speeding up the generation process. If you are interested, make sure to check out the [vLLM PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html) for more details.
 
-
-## [Detailed 🥸] How to use vLLM in practice for generation in online methods in TRL?
-
-1. To use [vLLM](https://github.com/vllm-project/vllm), first install it using:
-
-```bash
-pip install "trl[vllm]"
-```
-
-<hfoptions id="vllm examples">
-<hfoption id="Online DPO">
-
-</hfoption>
-<hfoption id="GRPO">
-
-2. Then, **start a vLLM server** by running:
-
-```bash
-trl vllm-serve --model <model_name>
-```
-## 🔎 What exactly happens when you run `trl vllm-serve --model <model_name>`?
+## 🤔 What exactly happens when you run `trl vllm-serve --model <model_name>`?
 When you run for example `trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 1 --data-parallel-size 4`, the following happens:
 ![vllm](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/vllm-doc.png)
 1. vLLM first spawns multiple workers to handle incoming requests in parallel. The number of workers is determined by multiplying the `--tensor-parallel-size` and `--data-parallel-size` values. In this example, it spawns 4 workers (1 × 4).
@@ -88,7 +68,7 @@ Each worker operates independently and processes a chunk of the incoming request
 This GPU-to-GPU communication is managed efficiently by NVIDIA’s NCCL library. The communication mainly ensures that each GPU gets its correct portion of the incoming requests — it’s lightweight and doesn’t interfere with generation itself.
 Separately, the number of completions to generate per prompt is controlled by the num_generations setting in the GRPO config. For instance, if you set num_generations=2 (like the picture above), each prompt will have 2 completions. So, with 8 prompts and num_generations=2, you would end up with 16 completions total — regardless of the number of GPUs or parallelism settings.
 
-## 🤔 What happens under the hood when we run the server?**
+## 🥸 What exactly happens when we run the server?**
 - The vLLM server starts by running the command: `trl vllm-serve --model Qwen/Qwen2.5-7B`.
 - Once the server is running, it generates completions based on requests from the client (trainer) using vllm_client.generate here.
 - The client (trainer) then requests these completions from the server.
@@ -142,7 +122,7 @@ options:
                         feature. (default: None)
 ```
 
-## 🥸 Okay, now that we have the server running, how can we use it to generate completions? 
+## 🥳 Okay, now that we have the server running, how can we use it to generate completions? 
 
 Then, run the training script and pass `use_vllm=True` in the training arguments.
 
