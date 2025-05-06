@@ -1,18 +1,21 @@
 # vLLM Integration
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summerize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood. Let's go! 🔥
 
-## 🚀 How can I use vLLM with TRL to accelerate training?
-First run the server:
+## 🚀 How can I use vLLM with TRL to accelerate training? 
+First install vLLM using the following command:
+
+```bash
+pip install "trl[vllm]"
+```
+Then run the server:
 ```sh
 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2
 ```  
-In this example, we are sharding two copies of the model across 4 GPUs; increasing data parallelism increase throughput, while increasing tensor parallelism increases the size of models that can be served. Then, run the training script by passing `use_vllm=True` in the training arguments as follows:
-  
-```sh
-CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
-```  
+Once the server is running, you can use it to generate completions for the training. In the example below, we are using the `GRPOTrainer` to train a model using the vLLM server for generation. The `--tensor-parallel-size` and `--data-parallel-size` arguments control how the model/data is sharded across GPUs.
 
-Sample of a simple `train.py` script:
+In this example, we are sharding two copies of the model across 4 GPUs; increasing data parallelism increase throughput, while increasing tensor parallelism increases the size of models that can be served. Then, run the training script by passing `use_vllm=True` in the training arguments as follows:
+
+sample of a simple `train.py` script:
 
 ```python
 from datasets import load_dataset
@@ -20,11 +23,9 @@ from trl import GRPOTrainer, GRPOConfig
 
 dataset = load_dataset("trl-lib/tldr", split="train")
 
-
 # Dummy reward function: count the number of unique characters in the completions
 def reward_num_unique_chars(completions, **kwargs):
     return [len(set(c)) for c in completions]
-
 
 training_args = GRPOConfig(
     output_dir="my_test",
@@ -40,8 +41,14 @@ trainer = GRPOTrainer(
     reward_funcs=reward_num_unique_chars,
     train_dataset=dataset,
 )
+
 trainer.train()
 ```
+And the train command:
+
+```sh
+CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+```  
 
 ## 🎬 Flashback: why do we need to use vLLM in online methods?
 Online methods like GRPO or Online DPO require the model to generate completions during training, which are then used to compute reward signals. However, generation can be extremely time-consuming, especially with large models and reasoning models. In the default setup (without vLLM), completions are generated using the [(unwrapped)model's `generate` method here](https://github.com/huggingface/trl/blob/f3e8c2304428ef16e9ae5de9e5741ed84d533b7b/trl/trainer/grpo_trainer.py#L965C39-L965C66). This approach quickly becomes a major bottleneck — generation is slow and inefficient, particularly for large batches or models. As a result, training times increase significantly, and overall efficiency drops. To address this, we turn to vLLM, which enables much faster and more scalable generation, helping eliminate this bottleneck in online methods.
@@ -50,15 +57,9 @@ Online methods like GRPO or Online DPO require the model to generate completions
 If you've ever done autoregressive decoder training, you know  all the input tokens to the LLM produce their attention key and value tensors, and these tensors are kept in GPU memory to later generate subsequent tokens based on them. These cached key and value tensors are often referred to as KV cache.  However, storing the KV cache occupies a lot of memory, so vLLM uses a technique called PagedAttention to solve this problem. PagedAttention , which is inspired by the OS’s virtual memory concept stores continuous keys and values in **non-contiguous memory space** which is way more efficient. The detail of this is beyond the scope of this document, but in short, it allows the model to store the keys and values in a more efficient way, reducing the memory footprint and speeding up the generation process. If you are interested, make sure to check out the [vLLM PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html) for more details.
 
 
-## ⚙️ How to use vLLM in practice for generation in online methods in TRL?
+## [Detailed 🥸] How to use vLLM in practice for generation in online methods in TRL?
 
 1. To use [vLLM](https://github.com/vllm-project/vllm), first install it using:
-
-```bash
-pip install vllm
-```
-
-or 
 
 ```bash
 pip install "trl[vllm]"
@@ -87,7 +88,7 @@ Each worker operates independently and processes a chunk of the incoming request
 This GPU-to-GPU communication is managed efficiently by NVIDIA’s NCCL library. The communication mainly ensures that each GPU gets its correct portion of the incoming requests — it’s lightweight and doesn’t interfere with generation itself.
 Separately, the number of completions to generate per prompt is controlled by the num_generations setting in the GRPO config. For instance, if you set num_generations=2 (like the picture above), each prompt will have 2 completions. So, with 8 prompts and num_generations=2, you would end up with 16 completions total — regardless of the number of GPUs or parallelism settings.
 
-4. **🔬 How it works in practice in trl/grpo?**
+## 🤔 What happens under the hood when we run the server?**
 - The vLLM server starts by running the command: `trl vllm-serve --model Qwen/Qwen2.5-7B`.
 - Once the server is running, it generates completions based on requests from the client (trainer) using vllm_client.generate here.
 - The client (trainer) then requests these completions from the server.
@@ -95,7 +96,7 @@ Separately, the number of completions to generate per prompt is controlled by th
 - Based on the reward signal and the model’s output, the loss is computed, and the backward pass is performed to update the model’s weights.
 - **Note**: The server only handles completion generation — it doesn’t train the model. Therefore, the model’s weights aren’t updated on the server. Once the backward pass is complete, the client sends the updated weights to the server using `vllm_client.update_named_param(name, param.data)`.
 
-## 📝 Important vLLM notes
+When using vLLM, ensure the GPUs assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation for training using `CUDA_VISIBLE_DEVICES`.  See the example below;
 When using vLLM, ensure the gpus assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation for training using `CUDA_VISIBLE_DEVICES`.  See the example below;
 
 - **Set GPUs **0-3** for vLLM generation:** Assume `CUDA_VISIBLE_DEVICES=0,1,2,3` are allocated for vLLM generation.   
