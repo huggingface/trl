@@ -1395,38 +1395,6 @@ def batch_generation(
 
     return padded_query_responses, padded_logitss
 
-@torch.no_grad()
-def batch_forward(
-    model: torch.nn.Module,
-    query_responses: torch.Tensor,
-    local_rollout_forward_batch_size: int,
-    pad_token_id: int,
-):
-    raise NotImplementedError("This method has not finished being implemented yet.")
-    query_responses = []
-    logitss = []
-    batch_size = queries.shape[0]
-    for i in range(0, batch_size, local_rollout_forward_batch_size):
-        query = query_responses[i : i + local_rollout_forward_batch_size]
-        query_response, logits = forward(
-            model,
-            query,
-            pad_token_id,
-        )
-        query_responses.append(query_response)
-        logitss.append(logits)
-
-    # padding tensors
-    padded_query_responses = pad(query_responses, padding_value=pad_token_id, padding_side="right")
-    padded_logitss = pad(logitss, padding_value=0, padding_side="right")
-
-    # reshaping
-    padded_query_responses = padded_query_responses.view(-1, padded_query_responses.shape[-1])[:batch_size]
-    padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
-
-    return padded_query_responses, padded_logitss
-
-
 def add_bos_token_if_needed(
     bos_token_id: Optional[int],
     prompt_len_input_ids: int,
