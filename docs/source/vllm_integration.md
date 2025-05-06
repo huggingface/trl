@@ -68,7 +68,7 @@ Each worker operates independently and processes a chunk of the incoming request
 This GPU-to-GPU communication is managed efficiently by NVIDIA’s NCCL library. The communication mainly ensures that each GPU gets its correct portion of the incoming requests — it’s lightweight and doesn’t interfere with generation itself.
 Separately, the number of completions to generate per prompt is controlled by the num_generations setting in the GRPO config. For instance, if you set num_generations=2 (like the picture above), each prompt will have 2 completions. So, with 8 prompts and num_generations=2, you would end up with 16 completions total — regardless of the number of GPUs or parallelism settings.
 
-## 🥸 What exactly happens when we run the server?**
+## 🥸 More detail on what happens under the hood when running the server?**
 - The vLLM server starts by running the command: `trl vllm-serve --model Qwen/Qwen2.5-7B`.
 - Once the server is running, it generates completions based on requests from the client (trainer) using vllm_client.generate here.
 - The client (trainer) then requests these completions from the server.
