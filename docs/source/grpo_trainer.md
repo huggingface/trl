@@ -329,7 +329,7 @@ def reward_func(completions_ids, **kwargs):
 
 You can test it as follows:
 
-```python  # todo: fix this example
+```python
 >>> prompts = ["The sky is", "The sun is"]  # not used in the reward function, but the trainer will pass it
 >>> completions = [" blue.", " in the sky."]  # not used in the reward function, but the trainer will pass it
 >>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]
