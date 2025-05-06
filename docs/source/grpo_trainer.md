@@ -330,11 +330,11 @@ def reward_func(completions_ids, **kwargs):
 You can test it as follows:
 
 ```python  # todo: fix this example
->>> prompts = ["The sky is", "The sun is"]
->>> completions = [" blue.", " in the sky."]
->>> completions_ids = [[0, 1, 2, 4], [3, 4, 5]]
->>> print(reward_func(prompts=prompts, completions=completions))
-[4.0, 3.0]
+>>> prompts = ["The sky is", "The sun is"]  # not used in the reward function, but the trainer will pass it
+>>> completions = [" blue.", " in the sky."]  # not used in the reward function, but the trainer will pass it
+>>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]
+>>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+[2.0, 4.0]
 ```
 
 #### Example 1bis: Reward longer completions (based in the number of caracters)
@@ -352,7 +352,8 @@ You can test it as follows:
 ```python
 >>> prompts = ["The sky is", "The sun is"]
 >>> completions = [" blue.", " in the sky."]
->>> print(reward_func(prompts=prompts, completions=completions))
+>>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
+>>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
 [6.0, 12.0]
 ```
 
