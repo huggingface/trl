@@ -337,7 +337,7 @@ You can test it as follows:
 [2.0, 4.0]
 ```
 
-#### Example 1bis: Reward longer completions (based in the number of caracters)
+#### Example 1.1: Reward longer completions (based in the number of characters)
 
 Same as the previous example, but this time the reward function is based on the number of characters instead of tokens.
 
