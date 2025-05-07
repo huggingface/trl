@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import importlib
 import inspect
 import logging
@@ -215,20 +216,33 @@ class TrlParser(HfArgumentParser):
 
     def set_defaults_with_config(self, **kwargs) -> list[str]:
         """
-        Overrides the parser's default values with those provided via keyword arguments.
+        Overrides the parser's default values with those provided via keyword arguments, including for subparsers.
 
         Any argument with an updated default will also be marked as not required
         if it was previously required.
 
         Returns a list of strings that were not consumed by the parser.
         """
-        # If an argument is in the kwargs, update its default and set it as not required
-        for action in self._actions:
-            if action.dest in kwargs:
-                action.default = kwargs.pop(action.dest)
-                action.required = False
-        remaining_strings = [item for key, value in kwargs.items() for item in [f"--{key}", str(value)]]
-        return remaining_strings
+
+        def apply_defaults(parser, kw):
+            used_keys = set()
+            for action in parser._actions:
+                # Handle subparsers recursively
+                if isinstance(action, argparse._SubParsersAction):
+                    for subparser in action.choices.values():
+                        used_keys.update(apply_defaults(subparser, kw))
+                elif action.dest in kw:
+                    action.default = kw[action.dest]
+                    action.required = False
+                    used_keys.add(action.dest)
+            return used_keys
+
+        used_keys = apply_defaults(self, kwargs)
+        # Remaining args not consumed by the parser
+        remaining = [
+            item for key, value in kwargs.items() if key not in used_keys for item in (f"--{key}", str(value))
+        ]
+        return remaining
 
 
 def get_git_commit_hash(package_name):
