@@ -20,6 +20,7 @@ import time
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from typing import List, Optional, Union
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -454,62 +455,25 @@ class PPOTrainer(Trainer):
                     name="completions.csv",
                     table=df,
                 )
+    
 
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
+    def process_responses(self, postprocessed_responses: torch.TensorType, scores, responses, sequence_lengths) -> torch.TensorType:
+        # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
+        # Completions not passing that filter will receive a lower score.
+        contain_eos_token = torch.any(postprocessed_responses == self.processing_class.eos_token_id, dim=-1)
+        if self.args.missing_eos_penalty is not None:
+            scores[~contain_eos_token] -= self.args.missing_eos_penalty
+        # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
-
-        citation = textwrap.dedent("""\
-        @article{mziegler2019fine-tuning,
-            title        = {{Fine-Tuning Language Models from Human Preferences}},
-            author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
-            year         = 2019,
-            eprint       = {arXiv:1909.08593}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="PPO",
-            trainer_citation=citation,
-            paper_title="Fine-Tuning Language Models from Human Preferences",
-            paper_id="1909.08593",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
+        # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
+        response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
+        padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
+        logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
+        ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
+        sequence_lengths_p1 = sequence_lengths + 1
+        padding_mask_p1 = response_idxs > (sequence_lengths_p1.unsqueeze(1))
+        values = torch.masked_fill(values, padding_mask_p1, 0)
+        return responses, logprobs, ref_logprobs, sequence_lengths, scores, values, padding_mask, sequence_lengths_p1, padding_mask_p1
 
     def get_logprobs_per_rollout(self, logits, queries, query_responses, logitss, index) -> torch.TensorType:
         query = queries[index : index + self.args.local_rollout_forward_batch_size]
@@ -532,25 +496,7 @@ class PPOTrainer(Trainer):
         torch.cuda.empty_cache()
         return query, query_response, response, logprob, ref_logprob
 
-    def process_responses(self, postprocessed_responses: torch.TensorType, scores, responses, sequence_lengths) -> torch.TensorType:
-        # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
-        # Completions not passing that filter will receive a lower score.
-        contain_eos_token = torch.any(postprocessed_responses == self.processing_class.eos_token_id, dim=-1)
-        if self.args.missing_eos_penalty is not None:
-            scores[~contain_eos_token] -= self.args.missing_eos_penalty
-        # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
-
-        # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
-        response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
-        padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
-        logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
-        ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
-        sequence_lengths_p1 = sequence_lengths + 1
-        padding_mask_p1 = response_idxs > (sequence_lengths_p1.unsqueeze(1))
-        values = torch.masked_fill(values, padding_mask_p1, 0)
-        return responses, logprobs, ref_logprobs, sequence_lengths, scores, values, padding_mask, sequence_lengths_p1, padding_mask_p1
-
-    def get_ppo_precomponents(self, queries, query_responses: torch.TensorType, logitss, scores) -> torch.TensorType:
+    def get_ppo_precomponents(self, queries, query_responses: torch.TensorType, logitss, scores: Optional[None]) -> torch.TensorType:
         responses = []
         postprocessed_responses = []
         logprobs = []
@@ -584,6 +530,7 @@ class PPOTrainer(Trainer):
                     self.reward_model, postprocessed_query_response, self.processing_class.pad_token_id, self.context_length
                 )
                 scores.append(score)
+
             responses.append(response)
             postprocessed_responses.append(postprocessed_response)
             logprobs.append(logprob)
@@ -595,8 +542,9 @@ class PPOTrainer(Trainer):
         logprobs = torch.cat(logprobs, 0)
         ref_logprobs = torch.cat(ref_logprobs, 0)
         sequence_lengths = torch.cat(sequence_lengths, 0)
-        scores = torch.cat(scores, 0)
         values = torch.cat(values, 0)
+        if scores is None:
+            scores = torch.cat(scores, 0)
         del (logprob, ref_logprob, full_value, value, score, unwrapped_model)
         torch.cuda.empty_cache()
         gc.collect()
@@ -775,14 +723,55 @@ class PPOTrainer(Trainer):
             self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
             self.state.global_step += 1
             self.log(metrics)
+
+    def input_step_shape_check(self, queries: torch.TensorType, query_responses: torch.TensorType, scores, query_responses_logitss) -> None:
+        for tensor, name in zip([query_responses, queries, scores], ["query_responses", "queries", "scores"]):
+            if tensor is not None and tensor.dim() != 2:
+                raise ValueError(
+                    f"{name} should be a 2D tensor, but got {tensor.dim()} dimensions."
+                )
+        if query_responses_logitss.dim() != 3:
+            raise ValueError(
+                f"query_responses_logitss should be a 3D tensor, [batch, seq_length, vocab_size] but got {query_responses_logitss.dim()} dimensions."
+            )
+        if query_responses.shape[0] != queries.shape[0]:
+            raise ValueError(
+                f"Number of queries and query_responses should be the same, but got {queries.shape[0]} and {query_responses.shape[0]}."
+            )
+        if scores is not None and query_responses.shape[0] != scores.shape[0]:
+            raise ValueError(
+                f"Number of queries and scores should be the same, but got {queries.shape[0]} and {scores.shape[0]}."
+            )
+
+        if query_responses[ :, :self.context_length].shape[1] != queries.shape[1]:
+            raise ValueError(
+                f"query_responses.shape[1] - queries.shape[1] is not equal to responses.shape[1]: query_responses have queries of shape: {query_responses[ :, :self.context_length].shape[1]} vs given queries shape : {queries.shape[1]}"
+            )
+        if scores is not None and scores.shape[1] != query_responses[ :, :self.context_length].shape[1][1]:
+            raise ValueError(
+                f"scores.shape[1] is not equal to responses.shape[1]: query_responses have queries of shape: {query_responses.shape[1]} vs given scores shape : {scores.shape[1]}"
+            )
+        else:
+            warnings.warn(
+                f"Shapes of responses and scores are equal, but a mismatch could still occur if padding is not handled correctly. Please check the shapes of your data."
+            )
+        if scores is None and self.reward_model is None:
+                raise ValueError(
+                    "Either scores or reward_model should be provided. If you are using a reward model, please provide it in the initialisation."
+                )
+        if scores is not None and self.reward_model is not None:
+            raise ValueError(
+                "Both scores and reward_model are provided. Please provide only one of them."
+            )
         
     
     def step(
             self, 
-            queries: List[torch.TensorType], 
-            query_responses: List[torch.TensorType],  
-            scores: List[torch.TensorType], 
-            query_responses_logitss: Optional[torch.TensorType]
+            queries: torch.TensorType, 
+            query_responses: torch.TensorType,  
+            scores: Optional[torch.TensorType] = None, 
+            query_responses_logitss: Optional[torch.TensorType] = None,
+            check_input_shape: bool = True,
         ) -> None:
         
         if self.state.episode == 0:
@@ -790,6 +779,9 @@ class PPOTrainer(Trainer):
         device = self.accelerator.device
         self.state.episode += 1 * self.args.batch_size
         self.context_length = queries.shape[1]
+
+        if check_input_shape:
+            self.input_step_shape_check(queries, query_responses, scores, query_responses_logitss)
 
         with torch.no_grad():
             queries.to(device)
@@ -801,7 +793,7 @@ class PPOTrainer(Trainer):
                 logitss = query_responses_logitss
 
             responses, logprobs, ref_logprobs, sequence_lengths, scores, values, padding_mask, sequence_lengths_p1, padding_mask_p1 = (
-                self.get_ppo_precomponents(queries, query_responses, scores, logitss)
+                self.get_ppo_precomponents(queries, query_responses, logitss, scores)
             )
             del logitss
 
@@ -872,7 +864,7 @@ class PPOTrainer(Trainer):
                         generation_config,
                     )
 
-            self.step(queries, query_responses, self.reward_model, query_responses_logitss=logitss)
+            self.step(queries, query_responses, query_responses_logitss=logitss)
 
             self.lr_scheduler.step()
             self.control = self.callback_handler.on_step_end(self.args, self.state, self.control)
@@ -889,3 +881,59 @@ class PPOTrainer(Trainer):
         if self.control.should_save:
             self._save_checkpoint(self.model, trial=None, metrics=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, list[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        tags = tags or []
+        if isinstance(tags, str):
+            tags = [tags]
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.append("unsloth")
+
+        citation = textwrap.dedent("""\
+        @article{mziegler2019fine-tuning,
+            title        = {{Fine-Tuning Language Models from Human Preferences}},
+            author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
+            year         = 2019,
+            eprint       = {arXiv:1909.08593}
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
+            trainer_name="PPO",
+            trainer_citation=citation,
+            paper_title="Fine-Tuning Language Models from Human Preferences",
+            paper_id="1909.08593",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
