@@ -325,6 +325,7 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
    - The function must accept the following as keyword arguments:
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
+     - `completions_ids` (contains the tokenized completions),
      - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -339,8 +340,28 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
 Below is an example of a reward function for a standard format that rewards longer completions:
 
 ```python
+def reward_func(completions_ids, **kwargs):
+    """Reward function that assigns higher scores to longer completions (in terms of token count)."""
+    return [float(len(ids)) for ids in completions_ids]
+```
+
+You can test it as follows:
+
+```python
+>>> prompts = ["The sky is", "The sun is"]  # not used in the reward function, but the trainer will pass it
+>>> completions = [" blue.", " in the sky."]  # not used in the reward function, but the trainer will pass it
+>>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]
+>>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+[2.0, 4.0]
+```
+
+#### Example 1.1: Reward longer completions (based in the number of characters)
+
+Same as the previous example, but this time the reward function is based on the number of characters instead of tokens.
+
+```python
 def reward_func(completions, **kwargs):
-    """Reward function that gives higher scores to longer completions."""
+    """Reward function that assigns higher scores to longer completions (in terms of character count)."""
     return [float(len(completion)) for completion in completions]
 ```
 
@@ -349,7 +370,8 @@ You can test it as follows:
 ```python
 >>> prompts = ["The sky is", "The sun is"]
 >>> completions = [" blue.", " in the sky."]
->>> print(reward_func(prompts=prompts, completions=completions))
+>>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
+>>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
 [6.0, 12.0]
 ```
 
