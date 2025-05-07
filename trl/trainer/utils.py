@@ -20,7 +20,7 @@ import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from importlib.metadata import version
-from typing import Any, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Tuple, Union
 
 import datasets
 import numpy as np
@@ -1219,7 +1219,7 @@ def forward(
     model: torch.nn.Module,
     query_responses: torch.Tensor,
     pad_token_id: int,
-) -> torch.nn.Module:
+) -> Dict[str, torch.FloatTensor | Tuple[torch.FloatTensor] | Optional[Tuple[torch.FloatTensor]] | Optional[Tuple]]:
     """
     Performs a forward pass through the model with the given query responses and pad token ID.
 
