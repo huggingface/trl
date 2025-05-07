@@ -724,45 +724,56 @@ class PPOTrainer(Trainer):
             self.state.global_step += 1
             self.log(metrics)
 
-    def input_step_shape_check(self, queries: torch.TensorType, query_responses: torch.TensorType, scores, query_responses_logitss) -> None:
-        for tensor, name in zip([query_responses, queries, scores], ["query_responses", "queries", "scores"]):
-            if tensor is not None and tensor.dim() != 2:
-                raise ValueError(
-                    f"{name} should be a 2D tensor, but got {tensor.dim()} dimensions."
-                )
-        if query_responses_logitss.dim() != 3:
-            raise ValueError(
-                f"query_responses_logitss should be a 3D tensor, [batch, seq_length, vocab_size] but got {query_responses_logitss.dim()} dimensions."
-            )
-        if query_responses.shape[0] != queries.shape[0]:
-            raise ValueError(
-                f"Number of queries and query_responses should be the same, but got {queries.shape[0]} and {query_responses.shape[0]}."
-            )
-        if scores is not None and query_responses.shape[0] != scores.shape[0]:
-            raise ValueError(
-                f"Number of queries and scores should be the same, but got {queries.shape[0]} and {scores.shape[0]}."
-            )
-
-        if query_responses[ :, :self.context_length].shape[1] != queries.shape[1]:
-            raise ValueError(
-                f"query_responses.shape[1] - queries.shape[1] is not equal to responses.shape[1]: query_responses have queries of shape: {query_responses[ :, :self.context_length].shape[1]} vs given queries shape : {queries.shape[1]}"
-            )
-        if scores is not None and scores.shape[1] != query_responses[ :, :self.context_length].shape[1][1]:
-            raise ValueError(
-                f"scores.shape[1] is not equal to responses.shape[1]: query_responses have queries of shape: {query_responses.shape[1]} vs given scores shape : {scores.shape[1]}"
-            )
-        else:
-            warnings.warn(
-                f"Shapes of responses and scores are equal, but a mismatch could still occur if padding is not handled correctly. Please check the shapes of your data."
-            )
+    def input_step_shape_check(
+            self, 
+            queries: torch.TensorType, 
+            query_responses: torch.TensorType,  
+            scores: Optional[torch.TensorType] = None, 
+            query_responses_logitss: Optional[torch.TensorType] = None,
+    ) -> None:
+        # Check exclusivity of scores and reward_model
         if scores is None and self.reward_model is None:
-                raise ValueError(
-                    "Either scores or reward_model should be provided. If you are using a reward model, please provide it in the initialisation."
-                )
+            raise ValueError(
+                "Either `scores` or `reward_model` must be provided."
+            )
         if scores is not None and self.reward_model is not None:
             raise ValueError(
-                "Both scores and reward_model are provided. Please provide only one of them."
+                "Both `scores` and `reward_model` are provided. Please provide only one."
             )
+
+        # Check dimensionality
+        for tensor, name, expected_dim in zip(
+            [query_responses, queries, scores, query_responses_logitss],
+            ["query_responses", "queries", "scores", "query_responses_logitss"],
+            [2, 2, 2, 3]
+        ):
+            if tensor is not None and tensor.dim() != expected_dim:
+                raise ValueError(f"{name} should be a {expected_dim}D tensor, but got {tensor.dim()}D.")
+
+        # Check batch consistency
+        batch_size = queries.shape[0]
+        if query_responses.shape[0] != batch_size:
+            raise ValueError(f"Batch size mismatch: `queries` has {batch_size}, `query_responses` has {query_responses.shape[0]}.")
+        if scores is not None and scores.shape[0] != batch_size:
+            raise ValueError(f"Batch size mismatch: `scores` has {scores.shape[0]}, expected {batch_size}.")
+
+        # Check sequence alignment
+        query_part = query_responses[:, :self.context_length]
+        if query_part.shape[1] != queries.shape[1]:
+            raise ValueError(
+                f"Mismatch between query portion of `query_responses` (shape: {query_part.shape[1]}) and `queries` (shape: {queries.shape[1]})."
+            )
+
+        if scores is not None:
+            if scores.shape[1] != query_part.shape[1]:
+                raise ValueError(
+                    f"Mismatch between `scores` (shape: {scores.shape[1]}) and query portion of `query_responses` (shape: {query_part.shape[1]})."
+                )
+            else:
+                warnings.warn(
+                    "Shapes of `query_responses` and `scores` match, but padding or masking inconsistencies may still lead to incorrect results. Please verify your preprocessing."
+                )
+
         
     
     def step(
@@ -771,7 +782,7 @@ class PPOTrainer(Trainer):
             query_responses: torch.TensorType,  
             scores: Optional[torch.TensorType] = None, 
             query_responses_logitss: Optional[torch.TensorType] = None,
-            check_input_shape: bool = True,
+            check_input_shape: Optional[bool] = True,
         ) -> None:
         
         if self.state.episode == 0:
