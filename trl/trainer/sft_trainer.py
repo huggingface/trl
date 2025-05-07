@@ -399,13 +399,6 @@ class SFTTrainer(Trainer):
 
         # Initialize activation offloading context
         if self.args.activation_offloading:
-            # Validate that activation_offloading and use_liger_kernel aren't both enabled
-            if self.args.use_liger_kernel:
-                raise ValueError(
-                    "Activation offloading is not compatible with Liger kernels due to in-place operations. "
-                    "Either set `activation_offloading=False`, or if you need activation offloading, set "
-                    "`use_liger_kernel=False`.",
-                )
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()

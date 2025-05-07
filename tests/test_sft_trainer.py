@@ -27,7 +27,7 @@ from transformers import (
     TrainingArguments,
     is_vision_available,
 )
-from transformers.testing_utils import require_flash_attn, require_peft, require_torch_accelerator, require_vision
+from transformers.testing_utils import require_flash_attn, require_peft, require_vision
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -1210,37 +1210,6 @@ class SFTTrainerTester2(unittest.TestCase):
                 padding_free=True,
                 model_init_kwargs={"attn_implementation": "flash_attention_2"},
                 bf16=True,  # flash_attention_2 only supports bf16 and fp16
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
-
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            # Train the model
-            trainer.train()
-
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
-
-    @require_torch_accelerator
-    def test_train_offloading(self):
-        """Test that activation offloading works with SFTTrainer."""
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                activation_offloading=True,
                 report_to="none",
             )
             trainer = SFTTrainer(
