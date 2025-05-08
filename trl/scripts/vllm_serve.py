@@ -189,6 +189,9 @@ class ScriptArguments:
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
+        quantization (`str` or `None`, *optional*, defaults to `"fp8"`):
+            If set, all Linear modules (except for the final lm_head) have their weights quantized down to FP8_E4M3
+            precision with a per-tensor scale.
     """
 
     model: str = field(
@@ -266,6 +269,13 @@ class ScriptArguments:
             "'trace'."
         },
     )
+    quantization: Optional[str] = field(
+        default="fp8",
+        metadata={
+            "help": "If set,  all Linear modules (except for the final lm_head) have their weights quantized down"
+            "to FP8_E4M3 precision with a per-tensor scale."
+        },
+    )
 
 
 def llm_worker(
@@ -291,6 +301,7 @@ def llm_worker(
         kv_cache_dtype=script_args.kv_cache_dtype,
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+        quantization=script_args.quantization,
     )
 
     # Send ready signal to parent process
