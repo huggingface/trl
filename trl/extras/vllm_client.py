@@ -160,7 +160,9 @@ class VLLMClient:
                     if "X-Forwarded-For" in response.headers:
                         self.host = response.headers["X-Forwarded-For"]
                     else:
-                        sock = response.raw._connection.sock
+                        resp = requests.get(url, stream=True)
+                        resp.raise_for_status()
+                        sock = resp.raw._connection.sock
                         ip, port = sock.getpeername()
                         self.host = ip
                     logger.info("Server is up!")
