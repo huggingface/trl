@@ -253,7 +253,7 @@ class ScriptArguments:
             "execution in hybrid."
         },
     )
-    kv_cache_dtype: Optional[str] = field(
+    kv_cache_dtype: str = field(
         default="auto",
         metadata={
             "help": "Data type to use for KV cache. If set to 'auto', the dtype will default to the model data type."
