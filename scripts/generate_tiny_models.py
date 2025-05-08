@@ -123,7 +123,7 @@ for model_id, config_class, model_class, suffix in [
     ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, None),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, "2.5"),
     ("Qwen/Qwen2.5-Coder-0.5B", Qwen2Config, Qwen2ForCausalLM, "2.5-Coder"),
-    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForCausalLM, "3"),
+    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForCausalLM, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
@@ -138,7 +138,7 @@ for model_id, config_class, model_class, suffix in [
     push_to_hub(model, tokenizer, "tiny", suffix)
 
 
-# A slightly bigger model, required for vLLM testing
+# Two slightly bigger models, required for vLLM testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
 config = Qwen2Config(
     vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
@@ -151,7 +151,6 @@ config = Qwen2Config(
 model = Qwen2ForCausalLM(config)
 push_to_hub(model, tokenizer, "small", "2.5")
 
-# qwen3-4b small for testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 config = Qwen3Config(
     vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
@@ -162,13 +161,13 @@ config = Qwen3Config(
     intermediate_size=32,
 )
 model = Qwen3ForCausalLM(config)
-push_to_hub(model, tokenizer, "small", "3")
+push_to_hub(model, tokenizer, "small")
 
 # Reward models
 for model_id, config_class, model_class, suffix in [
     ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForSequenceClassification, "3.2"),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForSequenceClassification, "2.5"),
-    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForSequenceClassification, "3"),
+    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
