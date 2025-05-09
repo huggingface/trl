@@ -25,7 +25,8 @@ def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> li
             List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
             containing the key `"content"` with the value being the text of the completion.
         **kwargs:
-            Additional keyword arguments.
+            Additional keyword arguments. This function does not use them, but they are required in the function
+            signature to ensure compatibility with trainers like [`GRPOTrainer`].
 
     Returns:
         `list[float]`:
