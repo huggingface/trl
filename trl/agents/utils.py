@@ -32,14 +32,13 @@ from inspect import getsource
 from pathlib import Path
 from typing import Callable
 
-from ..import_utils import is_e2b_available, is_langchain_experimental_available
+from ..import_utils import is_e2b_available
+from .local_code_executer import PythonREPL  # used for local code execution
 
 
 if is_e2b_available():
     from e2b_code_interpreter import AsyncSandbox  # used for E2B async code execution
 
-if is_langchain_experimental_available():
-    from langchain_experimental.utilities import PythonREPL  # used for local code execution
 
 default_system_prompt = "You can answer questions and solve problems. If running code helps, write it inside <code> </code>, and you will see the result. Example: To calculate 2 + 2, write <code> print(2 + 2) </code>."
 
@@ -61,7 +60,7 @@ def read_script(user_script_path: str) -> str:
     return Path(user_script_path).read_text()
 
 
-class Localexecuter:
+class LocalExecuter:
     def execute(self, codes: list[str]) -> list[str]:
         """
         Executes multiple code snippets using PythonREPL sequentially.

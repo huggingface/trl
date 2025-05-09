@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from .environments import CodeAgentEnvironment, DefaultEnvironment, Environment, VLLMClientGenerationConfig
-from .utils import E2BExecuter, Localexecuter, prepare_data_for_e2b_agent, prepare_data_for_local_agent
+from .utils import E2BExecuter, LocalExecuter, prepare_data_for_e2b_agent, prepare_data_for_local_agent
 
 
 __all__ = [
@@ -22,7 +22,7 @@ __all__ = [
     "CodeAgentEnvironment",
     "VLLMClientGenerationConfig",
     "E2BExecuter",
-    "Localexecuter",
+    "LocalExecuter",
     "prepare_data_for_e2b_agent",
     "prepare_data_for_local_agent",
 ]

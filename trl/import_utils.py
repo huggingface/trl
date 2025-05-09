@@ -40,7 +40,6 @@ _vllm_available = _is_package_available("vllm")
 _vllm_ascend_available = _is_package_available("vllm_ascend")
 _joblib_available = _is_package_available("joblib")
 _e2b_available = _is_package_available("e2b_code_interpreter")
-_langchain_experimental_available = _is_package_available("langchain_experimental")
 
 
 def is_deepspeed_available() -> bool:
@@ -101,10 +100,6 @@ def is_joblib_available() -> bool:
 
 def is_e2b_available() -> bool:
     return _e2b_available
-
-
-def is_langchain_experimental_available() -> bool:
-    return _langchain_experimental_available
 
 
 class _LazyModule(ModuleType):

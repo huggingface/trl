@@ -97,7 +97,6 @@ EXTRAS = {
         "uvicorn",
         "e2b-code-interpreter",
         "python-dotenv",
-        "langchain_experimental",
     ],
     "vlm": ["Pillow"],
 }
