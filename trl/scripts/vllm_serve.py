@@ -184,6 +184,8 @@ class ScriptArguments:
         enforce_eager (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
+        kv_cache_dtype (`str`, *optional*, defaults to `"auto"`):
+            Data type to use for KV cache. If set to `"auto"`, the dtype will default to the model data type.
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
@@ -251,6 +253,12 @@ class ScriptArguments:
             "execution in hybrid."
         },
     )
+    kv_cache_dtype: str = field(
+        default="auto",
+        metadata={
+            "help": "Data type to use for KV cache. If set to 'auto', the dtype will default to the model data type."
+        },
+    )
     log_level: str = field(
         default="info",
         metadata={
@@ -280,6 +288,7 @@ def llm_worker(
         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
         # This is particularly useful here because we generate completions from the same prompts.
         enable_prefix_caching=script_args.enable_prefix_caching,
+        kv_cache_dtype=script_args.kv_cache_dtype,
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
     )
